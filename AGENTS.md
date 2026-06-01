@@ -6,19 +6,21 @@ This document is written for AI coding agents (Claude Code, Codex, etc.) that ne
 
 ## Authentication
 
-Never run `mio login` in an agent. Use an API key instead:
+Never run `mio login` in an agent (it prompts interactively). Use an API key instead:
 
 ```sh
-export MIO_API_KEY=mio_live_xxxxxxxxxxxxx
+export MIO_API_KEY=mio_sk_live_xxxxxxxxxxxxx
 ```
 
-Resolution order (first wins):
+API keys are `mio_sk_live_…`. Resolution order (first wins):
 
 1. `--api-key <key>` flag on the command line
 2. `MIO_API_KEY` environment variable
-3. Keychain token stored by `mio login`
+3. Key stored in the OS keychain by `mio login`
 
 If no key is found the command exits with code **3** (`ExitAuth`). Always set `MIO_API_KEY` before running any resource command.
+
+> **Caveat:** key auth requires the backend **Team API Keys** feature (mio-backend PR #128) to be deployed. Until it ships to prod, keys will not authenticate against `https://api.membership.io`. Point at a dev/staging backend with `--api-base <url>` or `MIO_API_BASE_URL` if needed.
 
 ---
 
@@ -62,10 +64,12 @@ Branch on these stable codes. Do not parse stderr for error detection.
 |------|---------|---------------|
 | `0` | Success | — |
 | `1` | Generic / unexpected error | Investigate before retry |
-| `2` | Bad flags or missing argument | Fix the command, do not retry |
-| `3` | Missing or invalid credentials | Set `MIO_API_KEY`, then retry |
+| `2` | Bad flags, missing argument, or rejected input (400/409/422) | Fix the command, do not retry |
+| `3` | Missing or invalid credentials (401/403) | Set `MIO_API_KEY`, then retry |
 | `4` | Resource not found (404) | Do not retry; resource does not exist |
 | `5` | Destructive op blocked in non-interactive shell | Re-run with `--yes` |
+| `6` | Rate limited (429) | Back off, then retry |
+| `7` | Upstream server error (5xx) | Transient — retry with backoff |
 
 ---
 
@@ -87,7 +91,7 @@ Always include `--yes` in agent scripts for these commands.
 
 Most resources are team-scoped. Hub-scoped resources additionally need `--hub`.
 
-Set defaults once via config so individual commands are shorter:
+Set defaults once via config so individual commands are shorter. Config is written as TOML to `~/.config/mio/config.toml` (or `$XDG_CONFIG_HOME/mio/config.toml`); only `team`, `hub`, and `api-base` are writable, and the API key is never stored there.
 
 ```sh
 mio config set team <team-id>
@@ -152,13 +156,27 @@ Every implemented resource and its verbs.
 
 ---
 
+## Command Gotchas
+
+- **Contact name flags use underscores**, not hyphens: `--first_name`, `--last_name` (`--first-name` is rejected with exit 2). `--email`, `--phone`, `--status` are also available.
+- **`products prices` takes the product id as a positional argument**, not `--product`:
+  `mio products prices create <product_id> --amount 4900 --currency usd --interval month`.
+- **`segments search --conditions` takes the full condition tree** (the backend write shape), not a flat list. Prefix with `@` to read from a file. There is no `--match` flag.
+  ```sh
+  mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
+  mio segments search --conditions @conditions.json --page-size 50 --page-after <cursor>
+  ```
+- **Generate the full reference** for any command set with `mio gen-docs --dir ./docs` (one Markdown file per command).
+
+---
+
 ## Minimal Agent Snippet
 
 ```sh
 #!/usr/bin/env bash
 set -euo pipefail
 
-export MIO_API_KEY="${MIO_API_KEY:?MIO_API_KEY must be set}"
+export MIO_API_KEY="${MIO_API_KEY:?MIO_API_KEY must be set}"   # mio_sk_live_…
 
 # Resolve team from config (or pass --team explicitly)
 CONTACTS=$(mio contacts list --output json)
@@ -166,7 +184,7 @@ CONTACTS=$(mio contacts list --output json)
 # Filter with --jq
 FIRST_ID=$(mio contacts list --jq '.[0].id')
 
-# Delete safely in a script
+# Delete safely in a script (destructive ops need --yes off a TTY)
 mio contacts delete "$FIRST_ID" --yes
 ```
 

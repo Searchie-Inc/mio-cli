@@ -6,43 +6,127 @@ The official command-line interface for [Membership.io](https://membership.io).
 
 ---
 
+## Prerequisites
+
+- **From source:** [Go 1.25+](https://go.dev/dl/) (the module targets Go 1.25).
+- **Released binary** (once published): none — the binary is self-contained.
+
+---
+
 ## Install
 
-**Homebrew (macOS / Linux)**
+> **Status:** the CLI currently lives on the `feat/initial-cli` branch (PR #1). `main` has only the license, and **no release tag has been cut yet**. Until the first release ships, use the **From source** path below — the published-package installs (Homebrew, `curl`, `go install …@latest`) are not live yet.
+
+### From source (works today)
+
+Requires Go 1.25+.
+
 ```sh
+git clone -b feat/initial-cli https://github.com/Searchie-Inc/mio-cli
+cd mio-cli
+go build -o mio .
+./mio version
+```
+
+Prefer it on your `PATH`? From the same clone:
+
+```sh
+go install ./...   # installs `mio` into $(go env GOPATH)/bin
+```
+
+### After the first release (`v0.1.0`)
+
+These become available once PR #1 merges to `main` and a version tag is cut. **They do not work yet.**
+
+```sh
+# Homebrew (macOS / Linux)
 brew install searchie-inc/tap/mio
-```
 
-**curl one-liner (Linux / macOS)**
-```sh
+# curl one-liner (Linux / macOS)
 curl -fsSL https://get.membership.io/mio/install.sh | sh
-```
 
-**Go install**
-```sh
+# Go install (pinned to the released tag)
 go install github.com/Searchie-Inc/mio-cli@latest
 ```
 
-After install, verify:
+After installing, verify:
+
 ```sh
 mio version
 ```
 
 ---
 
+## First run
+
+```sh
+# 1. Install (see above) — from source today, or a released binary later.
+
+# 2. Authenticate (pick one)
+mio login                              # interactive — stores a key in your OS keychain
+# …or, for scripts / CI / agents:
+export MIO_API_KEY=mio_sk_live_xxxxx   # no login step needed
+
+# 3. Set your default team so you don't repeat --team on every command
+mio config set team <team-id>
+
+# 4. You're ready
+mio contacts list
+```
+
+> **Heads up:** API-key auth requires the backend **Team API Keys** feature ([mio-backend PR #128](https://github.com/Searchie-Inc/mio-backend/pull/128)). Until that ships to production, `mio login` and key auth will not succeed against `https://api.membership.io`. You can point the CLI at a dev/staging backend in the meantime with `--api-base <url>` or `MIO_API_BASE_URL` (see [Authentication](#authentication)).
+
+---
+
 ## Authentication
 
-**Option A — interactive login (stores token in system keychain)**
+### `mio login` (interactive)
+
+Run `mio login` and choose one of two paths:
+
+1. **Paste an existing API key** — a `mio_sk_live_…` key, validated against the API and stored.
+2. **Email + password** — logs you in (JWT), then auto-mints an API key named `mio-cli@<host>` on your team and stores it. **Your password is never saved** — only the minted key is kept.
+
+The key is stored in your **OS keychain** (with an encrypted-file fallback on headless/CI environments where no keychain is available). `mio logout` deletes it.
+
+### API key (CI / scripts / agents)
+
+Skip `mio login` entirely — just set the environment variable:
+
 ```sh
-mio login
+export MIO_API_KEY=mio_sk_live_xxxxx
 ```
 
-**Option B — API key (CI / scripts / agents)**
-```sh
-export MIO_API_KEY=mio_live_xxxxxxxxxxxxx
+### Resolution order
+
+The key is read in this order (first match wins):
+
+```
+--api-key <key>   →   MIO_API_KEY env   →   key stored in the OS keychain
 ```
 
-The key is read in this order: `--api-key` flag → `MIO_API_KEY` env var → stored keychain token.
+### Pointing at a non-production backend
+
+```sh
+mio --api-base https://api.staging.membership.io contacts list
+# or
+export MIO_API_BASE_URL=https://api.staging.membership.io
+```
+
+---
+
+## Discovering commands
+
+`mio` is fully self-documenting:
+
+```sh
+mio --help                          # top-level: all resources + global flags
+mio <resource> --help               # e.g. mio contacts --help — actions for a resource
+mio <resource> <action> --help      # e.g. mio contacts create --help — flags for an action
+mio gen-docs --dir ./docs           # generate the full Markdown reference (one file per command)
+```
+
+When in doubt, append `--help` to any command.
 
 ---
 
@@ -52,26 +136,32 @@ The key is read in this order: `--api-key` flag → `MIO_API_KEY` env var → st
 # Set your default team (do this once)
 mio config set team <team-id>
 
-# Contacts
+# Contacts  (note: name flags use underscores: --first_name / --last_name)
 mio contacts list
-mio contacts create --email alice@example.com --first-name Alice
+mio contacts create --email alice@example.com --first_name Alice --last_name Smith
 mio contacts retrieve <id>
-mio contacts update <id> --last-name "Smith"
-mio contacts delete <id>
+mio contacts update <id> --last_name "Jones"
+mio contacts delete <id> --yes
 
 # Hubs
 mio hubs list
 mio hubs create --name "My Hub" --slug my-hub
 
-# Products
+# Products & prices  (the product id is a positional argument, not a flag)
 mio products list
 mio products create --name "Pro Plan" --description "Full access"
-mio products prices list --product <product-id>
-mio products prices create --product <product-id> --amount 4900 --currency usd --interval month
+mio products prices list <product-id>
+mio products prices create <product-id> --amount 4900 --currency usd --interval month
 
-# Segments — preview who matches a condition set
-mio segments search --conditions '[{"field":"tag","value":"vip"}]'
+# Segments — preview who matches a condition tree (does not save)
+mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
 mio segments members <segment-id>
+```
+
+`segments search` takes the **full condition tree** (matching the backend write shape), not a flat list. You can also read it from a file and paginate:
+
+```sh
+mio segments search --conditions @conditions.json --page-size 50 --page-after <cursor>
 ```
 
 ---
@@ -82,12 +172,12 @@ Every command inherits these flags.
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--api-key` | | env/keychain | API key. Overrides `MIO_API_KEY` and stored token. |
+| `--api-key` | | env/keychain | API key. Overrides `MIO_API_KEY` and the stored key. |
 | `--team` | | config | Team ID for team-scoped resources. |
 | `--hub` | | config | Hub ID for hub-scoped resources. |
 | `--output` | `-o` | json (piped) / table (TTY) | Output format: `json`, `table`, `plain`. |
 | `--jq` | | | Filter JSON output with a [gojq](https://github.com/itchyny/gojq) expression. |
-| `--raw` | | false | Emit the raw JSON:API envelope instead of flattened resource. |
+| `--raw` | | false | Emit the raw JSON:API envelope instead of the flattened resource. |
 | `--yes` | `-y` | false | Skip confirmation prompts on destructive operations. |
 | `--profile` | | default | Named config profile. |
 | `--api-base` | | config | Override the API base URL (`MIO_API_BASE_URL`). |
@@ -108,7 +198,7 @@ mio contacts list --output table
 # key=value pairs (great for grep)
 mio contacts retrieve <id> --output plain
 
-# Raw JSON:API envelope
+# Raw JSON:API envelope (meta, links, included)
 mio contacts list --raw
 
 # Extract a field with jq
@@ -132,10 +222,12 @@ Scripts and agents can branch on these stable codes.
 |------|----------|---------|
 | `0` | — | Success |
 | `1` | `ExitGeneric` | Unexpected / generic error |
-| `2` | `ExitUsage` | Bad flags or missing required argument |
-| `3` | `ExitAuth` | Missing or invalid credentials |
+| `2` | `ExitUsage` | Bad flags, missing required argument, or rejected input (400/409/422) |
+| `3` | `ExitAuth` | Missing or invalid credentials (HTTP 401/403) |
 | `4` | `ExitNotFound` | Resource not found (HTTP 404) |
-| `5` | `ExitNeedsConfir` | Destructive op in non-interactive shell — pass `--yes` |
+| `5` | `ExitNeedsConfir` | Destructive op in a non-interactive shell — pass `--yes` |
+| `6` | `ExitRateLimited` | Rate limited (HTTP 429) |
+| `7` | `ExitServer` | Upstream server error (HTTP 5xx) |
 
 ---
 
@@ -162,27 +254,47 @@ Scripts and agents can branch on these stable codes.
 | `access-rules` | `rules create/list/retrieve/update/delete`; `overrides create/list/retrieve/update/delete` |
 | `activity` | `contact`, `top-engaged` |
 
-Run `mio <resource> --help` or `mio <resource> <action> --help` for flag details on any command.
+Run `mio <resource> --help` or `mio <resource> <action> --help` for flag details on any command, or `mio gen-docs --dir ./docs` to generate the complete reference.
 
 ---
 
 ## Config File
 
-`mio` stores its config at `~/.config/mio/config.yaml` (XDG-compliant). Use the `config` command to manage it:
+`mio` stores its config as **TOML** at `~/.config/mio/config.toml` (or `$XDG_CONFIG_HOME/mio/config.toml` when `XDG_CONFIG_HOME` is set). It holds non-secret context only — current team/hub, API base, and named profiles. **Your API key is never written here**; it lives in the OS keychain (managed by `mio login` / `mio logout`).
+
+Manage it with the `config` command (writable keys: `team`, `hub`, `api-base`):
 
 ```sh
-mio config set team  <team-id>
-mio config set hub   <hub-id>
+mio config set team     <team-id>
+mio config set hub      <hub-id>
+mio config set api-base <url>
 mio config get team
-mio config list
+mio config list            # shows all values and the config file path
 ```
 
 Multiple named profiles are supported via `--profile`.
 
 ---
 
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| Exit code **3** (`ExitAuth`) | No key, or the key is invalid/expired | Run `mio login`, or `export MIO_API_KEY=mio_sk_live_…`. Remember key auth needs backend [PR #128](https://github.com/Searchie-Inc/mio-backend/pull/128) deployed. |
+| Exit code **2** (`ExitUsage`) | Bad flag, missing argument, or rejected input | Check your flags against `mio <resource> <action> --help`. Note name flags use underscores (`--first_name`). |
+| Exit code **5** (`ExitNeedsConfir`) | A destructive op (`delete`, `cancel`, `refund`) in a non-interactive shell | Re-run with `--yes` / `-y`. |
+| Exit code **6** (`ExitRateLimited`) | Too many requests (HTTP 429) | Back off and retry. |
+| Exit code **7** (`ExitServer`) | Upstream 5xx | Transient — retry; if it persists, the backend is down. |
+| Calls fail against production | Key auth not deployed to prod yet | Point at a dev/staging backend with `--api-base <url>` or `MIO_API_BASE_URL`. |
+
+Every error is returned as a JSON:API `errors` array (even on a TTY), with the exit code echoed in `meta.exit_code`, so you can branch on the body or the process exit code.
+
+---
+
 ## See Also
 
 - [AGENTS.md](./AGENTS.md) — guide for AI coding agents (non-interactive auth, exit codes, command table)
+- [llms.txt](./llms.txt) — machine-readable one-line-per-command index
 - `mio --help` — top-level help
 - `mio <resource> --help` — resource-level help
+- `mio gen-docs --dir ./docs` — generate the full Markdown reference

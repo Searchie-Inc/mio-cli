@@ -1,9 +1,13 @@
 # mio CLI — machine-readable command index
 # Format: mio <resource> [sub-resource] <action> — purpose
-# Auth: export MIO_API_KEY=<key>  (exit 3 if missing)
-# Output: JSON by default when piped; --output json|table|plain; --jq <expr>
-# Destructive ops: require --yes/-y in non-interactive shells (exit 5 otherwise)
-# Exit codes: 0=ok 1=error 2=bad-args 3=auth 4=not-found 5=needs-confirm
+# Auth: export MIO_API_KEY=mio_sk_live_<key>  (exit 3 if missing/invalid)
+#       resolution order: --api-key flag > MIO_API_KEY env > OS-keychain key (mio login)
+#       key auth needs backend Team API Keys (mio-backend PR #128) deployed
+# Config: TOML at ~/.config/mio/config.toml ($XDG_CONFIG_HOME/mio/config.toml); keys: team|hub|api-base
+# Output: JSON by default when piped; --output json|table|plain; --jq <expr>; --raw for envelope
+# Destructive ops (delete|cancel|refund|restore): require --yes/-y in non-interactive shells (exit 5 otherwise)
+# Exit codes: 0=ok 1=error 2=bad-args(400/409/422) 3=auth(401/403) 4=not-found 5=needs-confirm 6=rate-limited(429) 7=server(5xx)
+# Full reference: mio gen-docs --dir ./docs  (one Markdown file per command)
 
 mio version — print version information
 mio login — interactive login (stores token); use MIO_API_KEY instead in agents
@@ -46,7 +50,7 @@ mio hubs retrieve — retrieve a hub by id
 mio hubs update — update hub attributes
 mio hubs delete — delete a hub
 
-mio contacts create — create a new contact in the active team
+mio contacts create — create a new contact in the active team; flags: --email --first_name --last_name --phone --status (underscores, not hyphens)
 mio contacts list — list contacts (supports filter flags)
 mio contacts retrieve — retrieve a contact by id
 mio contacts update — update contact attributes
@@ -83,7 +87,7 @@ mio segments list — list segments
 mio segments retrieve — retrieve a segment by id
 mio segments update — update segment attributes or conditions
 mio segments delete — delete a segment
-mio segments search — preview contacts matching a condition set (does not save)
+mio segments search — preview contacts matching a condition TREE, does not save; --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}' (or @file.json); --page-size --page-after
 mio segments members — list contacts currently in a segment
 mio segments count — return the member count for a segment
 
@@ -113,8 +117,8 @@ mio products list — list products in the active team
 mio products retrieve — retrieve a product by id
 mio products update — update a product
 mio products delete — delete a product
-mio products prices create — create a price for a product
-mio products prices list — list prices for a product
+mio products prices create — create a price for a product; product id is a POSITIONAL arg: mio products prices create <product_id> --amount 4900 --currency usd --interval month [--nickname ...]
+mio products prices list — list prices for a product; product id is a POSITIONAL arg: mio products prices list <product_id>
 mio products prices retrieve — retrieve a price by id
 mio products prices update — update a price
 mio products prices delete — delete a price
