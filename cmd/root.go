@@ -54,6 +54,18 @@ deterministically. Authenticate once with 'mio login', or export MIO_API_KEY.`,
 	Version:       version.Version,
 }
 
+func init() {
+	// Flag-parse errors (unknown flag, bad flag value) flow through this hook.
+	// Tag them with ExitUsage so the bad-flags exit-code contract holds. The
+	// other Cobra usage errors (required-flag-not-set, wrong arg count, unknown
+	// command) are NOT routed here — Cobra returns them straight from Execute();
+	// main.go classifies any non-*CLIError as a usage error to cover those. See
+	// the probe in cmd/root_test.go.
+	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return errs.New(errs.ExitUsage, "%s", err.Error())
+	})
+}
+
 // Execute runs the root command and returns the error (if any) for main.go to
 // map onto a process exit code. It does not call os.Exit itself.
 func Execute() error {
@@ -170,9 +182,13 @@ func (c *cmdContext) requireHub() (string, error) {
 	return c.resolved.HubID, nil
 }
 
-// render writes v using the command's resolved output options.
+// render writes v using the command's resolved output options. Any failure from
+// the output layer (jq compile error, json encode failure, unknown format) is a
+// runtime/output problem, not a flags-usage problem — wrap it in a *CLIError
+// with ExitGeneric so it is NOT misclassified as a Cobra usage error (exit 2) by
+// main.go's non-*CLIError → ExitUsage rule.
 func (c *cmdContext) render(cmd *cobra.Command, v any) error {
-	return output.Render(cmd.OutOrStdout(), v, c.out)
+	return errs.Wrap(errs.ExitGeneric, output.Render(cmd.OutOrStdout(), v, c.out))
 }
 
 // resolveFormat applies the --output value, defaulting to json off a TTY and

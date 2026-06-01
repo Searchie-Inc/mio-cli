@@ -8,6 +8,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -21,9 +22,27 @@ func main() {
 		os.Exit(errs.ExitOK)
 	}
 
-	code := errs.CodeOf(err)
+	code := exitCodeFor(err)
 	writeErrorEnvelope(err, code)
 	os.Exit(code)
+}
+
+// exitCodeFor maps the error returned by Execute() to a process exit code.
+//
+// Every command's RunE returns a *errs.CLIError on every failure path (verified
+// by the audit in round 4 and guarded by cmd/root_test.go), and the flag-parse
+// hook (SetFlagErrorFunc) wraps flag errors in a *CLIError too. So any error that
+// reaches here WITHOUT being a *CLIError is, by elimination, a Cobra usage error
+// that Cobra returns directly from Execute() — required-flag-not-set, wrong arg
+// count, or unknown command/subcommand. Those are usage errors → ExitUsage (2),
+// not ExitGeneric (1). A *CLIError keeps its own carried code.
+func exitCodeFor(err error) int {
+	var ce *errs.CLIError
+	if errors.As(err, &ce) {
+		return ce.Code
+	}
+	// Non-*CLIError from Execute() ⇒ Cobra usage error.
+	return errs.ExitUsage
 }
 
 // writeErrorEnvelope prints the error to stderr as a JSON:API-style error

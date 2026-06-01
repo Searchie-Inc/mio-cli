@@ -22,6 +22,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
+
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
 // genDocsDir holds the value of --dir for the gen-docs command.
@@ -36,18 +38,18 @@ var genDocsCmd = &cobra.Command{
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		if genDocsDir == "" {
-			return fmt.Errorf("--dir is required")
+			return errs.New(errs.ExitUsage, "--dir is required")
 		}
 
 		// Create the target directory if it does not exist yet.
 		if err := os.MkdirAll(genDocsDir, 0o755); err != nil {
-			return fmt.Errorf("creating output directory %q: %w", genDocsDir, err)
+			return errs.Wrap(errs.ExitGeneric, fmt.Errorf("creating output directory %q: %w", genDocsDir, err))
 		}
 
 		// GenMarkdownTree walks the entire command tree rooted at rootCmd and
 		// writes one .md file per command into genDocsDir.
 		if err := doc.GenMarkdownTree(rootCmd, genDocsDir); err != nil {
-			return fmt.Errorf("generating markdown docs: %w", err)
+			return errs.Wrap(errs.ExitGeneric, fmt.Errorf("generating markdown docs: %w", err))
 		}
 
 		fmt.Fprintf(cmd.OutOrStdout(), "Docs written to %s\n", genDocsDir)
