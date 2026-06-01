@@ -217,9 +217,23 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/contact-attributes/d1/options", "contact-attribute-options"},
 		// email family.
 		{"/v1/hubs/h1/drip-campaigns", "drip_campaigns"},
+		{"/v1/hubs/h1/drip-campaigns/dc1/steps", "drip_steps"},
+		{"/v1/hubs/h1/drip-campaigns/dc1/steps/st1", "drip_steps"},
 		{"/v1/hubs/h1/email-templates", "email_templates"},
 		// tag assignment.
 		{"/api/teams/t1/contacts/c1/tags", "tag_assignments"},
+		// page sections under a page.
+		{"/api/teams/t1/hubs/h1/pages/pg1/sections/sec1", "sections"},
+		// hub-config: contact-attributes under a hub != team-level definitions.
+		{"/api/teams/t1/hubs/h1/contact-attributes", "contact-attribute-hub-configs"},
+		{"/api/teams/t1/hubs/h1/contact-attributes/d1", "contact-attribute-hub-configs"},
+		// content reorder action keeps the content-nodes type.
+		{"/api/teams/t1/hubs/h1/content/reorder", "content-nodes"},
+		// checkout action routes with non-segment envelope types.
+		{"/api/teams/t1/hubs/h1/payments/pay1/refund", "refunds"},
+		{"/api/teams/t1/payment-accounts/onboarding-link", "onboarding_links"},
+		// team members write resource.
+		{"/api/teams/t1/members", "team-members"},
 	}
 	for _, tc := range cases {
 		if got := resourceTypeFromPath(tc.path); got != tc.want {
@@ -253,6 +267,166 @@ func TestClient_CreateIncludesDerivedType(t *testing.T) {
 	}
 	if body.Data.Attributes["name"] != "VIP" {
 		t.Errorf("data.attributes.name = %v, want VIP", body.Data.Attributes["name"])
+	}
+}
+
+// TestClient_FlatStyleSendsNoEnvelope verifies that a StyleFlat write sends the
+// attributes map as the top-level JSON object with NO `data` wrapper and NO
+// injected `type` — the shape the flat-schema backend endpoints (users, roles,
+// api-keys, email-config, stripe-sync) require.
+func TestClient_FlatStyleSendsNoEnvelope(t *testing.T) {
+	var raw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"id":"1","type":"api-keys","attributes":{}}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	if _, err := c.CreateWith(context.Background(), StyleFlat, "/api/teams/t1/api-keys", map[string]any{"name": "CI"}); err != nil {
+		t.Fatalf("CreateWith(StyleFlat) error: %v", err)
+	}
+	if _, hasData := raw["data"]; hasData {
+		t.Errorf("flat body unexpectedly carried a `data` envelope: %#v", raw)
+	}
+	if _, hasType := raw["type"]; hasType {
+		t.Errorf("flat body unexpectedly carried a top-level `type`: %#v", raw)
+	}
+	if raw["name"] != "CI" {
+		t.Errorf("flat body name = %v, want CI (top-level attribute)", raw["name"])
+	}
+}
+
+// TestClient_EnvelopeStyleWrapsWithType verifies StyleEnvelope (the default)
+// wraps attributes in {"data":{"type":<derived>,"attributes":{…}}}.
+func TestClient_EnvelopeStyleWrapsWithType(t *testing.T) {
+	var body struct {
+		Data struct {
+			Type       string         `json:"type"`
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"1","type":"tags","attributes":{}}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	if _, err := c.UpdateWith(context.Background(), StyleEnvelope, "/api/teams/t1/tags/tg1", map[string]any{"name": "VIP"}); err != nil {
+		t.Fatalf("UpdateWith(StyleEnvelope) error: %v", err)
+	}
+	if body.Data.Type != "tags" {
+		t.Errorf("data.type = %q, want tags", body.Data.Type)
+	}
+	if body.Data.Attributes["name"] != "VIP" {
+		t.Errorf("data.attributes.name = %v, want VIP", body.Data.Attributes["name"])
+	}
+}
+
+// TestBuildWriteBody verifies the body-shaping helper for both styles and the
+// nil-attrs (no-body) case.
+func TestBuildWriteBody(t *testing.T) {
+	attrs := map[string]any{"name": "X"}
+
+	if got := buildWriteBody(StyleFlat, "/api/teams/t1/roles", attrs); got == nil {
+		t.Fatal("flat body should not be nil")
+	} else if m, ok := got.(map[string]any); !ok || m["name"] != "X" {
+		t.Errorf("flat body = %#v, want the raw attrs map", got)
+	}
+
+	if got := buildWriteBody(StyleEnvelope, "/api/teams/t1/segments", attrs); got == nil {
+		t.Fatal("envelope body should not be nil")
+	} else if env, ok := got.(envelope); !ok || env.Data.Type != "segment" {
+		t.Errorf("envelope body = %#v, want envelope{data.type=segment}", got)
+	}
+
+	if got := buildWriteBody(StyleFlat, "/x", nil); got != nil {
+		t.Errorf("nil attrs should yield a nil body, got %#v", got)
+	}
+	if got := buildWriteBody(StyleEnvelope, "/x", nil); got != nil {
+		t.Errorf("nil attrs should yield a nil body, got %#v", got)
+	}
+}
+
+// TestNewRawEnvelope verifies the structured-attributes envelope used by segment
+// search marshals to {"data":{"type":…,"attributes":<arbitrary>}}.
+func TestNewRawEnvelope(t *testing.T) {
+	env := NewRawEnvelope("segment-search", map[string]any{
+		"conditions": map[string]any{"version": 1},
+		"page":       map[string]any{"size": 50},
+	})
+	b, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got struct {
+		Data struct {
+			Type       string `json:"type"`
+			Attributes struct {
+				Conditions map[string]any `json:"conditions"`
+				Page       map[string]any `json:"page"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Data.Type != "segment-search" {
+		t.Errorf("type = %q, want segment-search", got.Data.Type)
+	}
+	if got.Data.Attributes.Conditions["version"] != float64(1) {
+		t.Errorf("conditions.version = %v, want 1", got.Data.Attributes.Conditions["version"])
+	}
+	if got.Data.Attributes.Page["size"] != float64(50) {
+		t.Errorf("page.size = %v, want 50", got.Data.Attributes.Page["size"])
+	}
+}
+
+// TestClient_ActionCollectionRawSegmentSearch verifies the exact wire body for
+// segment search: an envelope with type "segment-search" whose attributes carry
+// a nested conditions tree (NOT a flat attrs map).
+func TestClient_ActionCollectionRawSegmentSearch(t *testing.T) {
+	var raw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		w.Header().Set("Content-Type", contentTypeJSONAPI)
+		_, _ = w.Write([]byte(`{"data":[],"meta":{"count":0}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	payload := NewRawEnvelope("segment-search", map[string]any{
+		"conditions": map[string]any{
+			"version": 1,
+			"groups":  []any{map[string]any{"logic": "AND", "conditions": []any{}}},
+		},
+	})
+	if _, err := c.ActionCollectionRaw(context.Background(), "POST", "/api/teams/t1/segments/search", payload); err != nil {
+		t.Fatalf("ActionCollectionRaw error: %v", err)
+	}
+	data, ok := raw["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("body missing data object: %#v", raw)
+	}
+	if data["type"] != "segment-search" {
+		t.Errorf("data.type = %v, want segment-search", data["type"])
+	}
+	attrs, ok := data["attributes"].(map[string]any)
+	if !ok {
+		t.Fatalf("body missing data.attributes: %#v", data)
+	}
+	conds, ok := attrs["conditions"].(map[string]any)
+	if !ok {
+		t.Fatalf("attributes.conditions not an object: %#v", attrs)
+	}
+	if conds["version"] != float64(1) {
+		t.Errorf("conditions.version = %v, want 1", conds["version"])
+	}
+	if _, hasMatch := attrs["match"]; hasMatch {
+		t.Errorf("attributes unexpectedly carried a `match` field: %#v", attrs)
 	}
 }
 

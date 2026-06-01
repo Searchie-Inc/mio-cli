@@ -65,6 +65,31 @@ func New(baseURL, apiKey string, opts ...Option) *Client {
 	return c
 }
 
+// BodyStyle selects how a write request body is shaped on the wire.
+//
+// The mio backend is NOT uniform: most resources accept (or require) a JSON:API
+// envelope {"data":{"type","attributes":{…}}}, but a handful of endpoints bind a
+// FLAT pydantic model with the fields at the top level and no `data` wrapper
+// (users, roles, api-keys, email-config, the checkout stripe-sync admin actions).
+// Sending an envelope to a flat endpoint 422s (the required fields land under
+// `data`, never reaching the model), and sending a flat body to an envelope
+// endpoint 422s (missing `data`). The style is therefore a per-resource fact the
+// command MUST declare; it is not derivable from the path.
+//
+// Verified against mio-backend app/*/schemas.py + router.py (2026-06-01, the
+// worktree that contains the api_keys module + every resource on origin/main).
+type BodyStyle int
+
+const (
+	// StyleEnvelope wraps attributes in {"data":{"type":<derived>,"attributes":{…}}}.
+	// This is the default and correct for the large majority of resources.
+	StyleEnvelope BodyStyle = iota
+	// StyleFlat sends the attributes map directly as the top-level JSON object,
+	// with NO envelope and NO injected `type`. Required for endpoints whose
+	// backend request schema is a flat pydantic BaseModel.
+	StyleFlat
+)
+
 // envelope wraps create/update attributes in a JSON:API resource document.
 // Per JSON:API v1.1 a resource object MUST carry `type`; the mio backend pins
 // each write schema's type to a Literal with extra="forbid", so omitting it
@@ -98,8 +123,18 @@ var typeOverrides = []struct {
 	{"hubs/prices", "hub-price-displays"},
 	{"products/deliverables", "product-deliverables"},
 	{"contact-attributes/options", "contact-attribute-options"},
+	// hub-config lives at /hubs/{hub}/contact-attributes — same trailing
+	// segment as team-level definitions, disambiguated by the hubs parent.
+	{"hubs/contact-attributes", "contact-attribute-hub-configs"},
+	{"content/reorder", "content-nodes"},
 	{"segments/search", "segment-search"},
 	{"contacts/tags", "tag_assignments"},
+	{"drip-campaigns/steps", "drip_steps"},
+	{"pages/sections", "sections"},
+	{"teams/members", "team-members"},
+	// Action routes that take an enveloped body with a non-segment type.
+	{"payment-accounts/onboarding-link", "onboarding_links"},
+	{"payments/refund", "refunds"},
 	// Bare-segment overrides (URL segment != backend type).
 	{"segments", "segment"},
 	{"content", "content-nodes"},
@@ -167,11 +202,13 @@ var knownCollections = map[string]bool{
 	"deliverables": true, "coupons": true, "segments": true, "search": true,
 	"members": true, "contacts": true, "content": true, "children": true,
 	"tags": true, "contact-attributes": true, "options": true,
-	"pages": true, "sections": true, "api-keys": true, "roles": true,
+	"reorder": true,
+	"pages":   true, "sections": true, "api-keys": true, "roles": true,
 	"users": true, "access-rules": true, "access-overrides": true,
 	"drip-campaigns": true, "steps": true, "email-templates": true,
 	"enrollments": true, "orders": true, "subscriptions": true,
-	"payments": true, "attributes": true,
+	"payments": true, "refund": true, "attributes": true,
+	"payment-accounts": true, "onboarding-link": true,
 }
 
 // collectionSegments returns the path segments that are static collection
@@ -223,9 +260,16 @@ func (c *Client) Retrieve(ctx context.Context, path string) (*Resource, error) {
 }
 
 // Create performs a POST with the attributes wrapped in a JSON:API envelope.
-// The resource `type` is derived from the path (resourceTypeFromPath).
+// The resource `type` is derived from the path (resourceTypeFromPath). Use
+// CreateWith(StyleFlat, …) for the handful of endpoints whose backend schema is
+// a flat pydantic model (users/roles/api-keys/email-config/stripe-sync).
 func (c *Client) Create(ctx context.Context, path string, attrs map[string]any) (*Resource, error) {
-	body, err := c.do(ctx, http.MethodPost, path, nil, newEnvelope(path, attrs), contentTypeJSONAPI)
+	return c.CreateWith(ctx, StyleEnvelope, path, attrs)
+}
+
+// CreateWith performs a POST shaping the body per the given BodyStyle.
+func (c *Client) CreateWith(ctx context.Context, style BodyStyle, path string, attrs map[string]any) (*Resource, error) {
+	body, err := c.do(ctx, http.MethodPost, path, nil, buildWriteBody(style, path, attrs), contentTypeJSONAPI)
 	if err != nil {
 		return nil, err
 	}
@@ -234,19 +278,61 @@ func (c *Client) Create(ctx context.Context, path string, attrs map[string]any) 
 
 // Update performs a PATCH with the attributes wrapped in a JSON:API envelope.
 // Per JSON:API, only the supplied fields are changed (partial update). The
-// resource `type` is derived from the path (resourceTypeFromPath).
+// resource `type` is derived from the path (resourceTypeFromPath). Use
+// UpdateWith(StyleFlat, …) for flat-schema endpoints.
 func (c *Client) Update(ctx context.Context, path string, attrs map[string]any) (*Resource, error) {
-	body, err := c.do(ctx, http.MethodPatch, path, nil, newEnvelope(path, attrs), contentTypeJSONAPI)
+	return c.UpdateWith(ctx, StyleEnvelope, path, attrs)
+}
+
+// UpdateWith performs a PATCH shaping the body per the given BodyStyle.
+func (c *Client) UpdateWith(ctx context.Context, style BodyStyle, path string, attrs map[string]any) (*Resource, error) {
+	body, err := c.do(ctx, http.MethodPatch, path, nil, buildWriteBody(style, path, attrs), contentTypeJSONAPI)
 	if err != nil {
 		return nil, err
 	}
 	return decodeResourceWrapped(body)
 }
 
+// buildWriteBody shapes a write payload per the requested BodyStyle. A nil attrs
+// map yields a nil payload (no body sent) regardless of style. StyleEnvelope
+// wraps the attributes in a JSON:API resource document with the `type` derived
+// from the path; StyleFlat returns the attributes map verbatim as the top-level
+// object.
+func buildWriteBody(style BodyStyle, path string, attrs map[string]any) any {
+	if attrs == nil {
+		return nil
+	}
+	if style == StyleFlat {
+		return attrs
+	}
+	return newEnvelope(path, attrs)
+}
+
 // newEnvelope builds a JSON:API resource document, deriving the `type` member
 // from the request path so the backend's Literal-typed write schemas accept it.
 func newEnvelope(path string, attrs map[string]any) envelope {
 	return envelope{Data: envelopeData{Type: resourceTypeFromPath(path), Attributes: attrs}}
+}
+
+// RawEnvelope is a JSON:API resource document whose `attributes` may be any
+// shape (not just a flat string→any map). It exists for write endpoints whose
+// attributes carry nested structure the backend validates strictly — e.g.
+// segment search, whose attributes are {"conditions": <tree>, "page": <obj>}.
+type RawEnvelope struct {
+	Data RawEnvelopeData `json:"data"`
+}
+
+// RawEnvelopeData is the resource object inside a RawEnvelope.
+type RawEnvelopeData struct {
+	Type       string `json:"type"`
+	Attributes any    `json:"attributes"`
+}
+
+// NewRawEnvelope builds a JSON:API resource document with an explicit `type`
+// and arbitrary `attributes`. Used by commands that must send a structured
+// (non-flat) attributes object the path-derived flat envelope cannot express.
+func NewRawEnvelope(typ string, attributes any) RawEnvelope {
+	return RawEnvelope{Data: RawEnvelopeData{Type: typ, Attributes: attributes}}
 }
 
 // Delete performs a DELETE and discards any body. A 204 (or any 2xx) is success.
@@ -265,10 +351,14 @@ func (c *Client) Delete(ctx context.Context, path string) error {
 // ActionCollection instead — Action's single-resource decoder cannot read a
 // list.
 func (c *Client) Action(ctx context.Context, method, path string, body map[string]any) (*Resource, error) {
-	var payload any
-	if body != nil {
-		payload = newEnvelope(path, body)
-	}
+	return c.ActionWith(ctx, StyleEnvelope, method, path, body)
+}
+
+// ActionWith is Action with an explicit BodyStyle for the request payload. Flat
+// action endpoints (email-config PUT, checkout stripe-sync import/adopt) pass
+// StyleFlat so their fields are sent at the top level without an envelope.
+func (c *Client) ActionWith(ctx context.Context, style BodyStyle, method, path string, body map[string]any) (*Resource, error) {
+	payload := buildWriteBody(style, path, body)
 	raw, err := c.do(ctx, method, path, nil, payload, contentTypeJSONAPI)
 	if err != nil {
 		return nil, err
@@ -289,6 +379,19 @@ func (c *Client) ActionCollection(ctx context.Context, method, path string, body
 	if body != nil {
 		payload = newEnvelope(path, body)
 	}
+	return c.actionCollectionPayload(ctx, method, path, payload)
+}
+
+// ActionCollectionRaw is ActionCollection for endpoints whose request body is
+// NOT a simple flat-attributes envelope. The caller supplies the exact JSON the
+// backend expects (e.g. segment search's
+// {"data":{"type":"segment-search","attributes":{"conditions":…,"page":…}}}).
+// A nil payload sends no body.
+func (c *Client) ActionCollectionRaw(ctx context.Context, method, path string, payload any) (*Collection, error) {
+	return c.actionCollectionPayload(ctx, method, path, payload)
+}
+
+func (c *Client) actionCollectionPayload(ctx context.Context, method, path string, payload any) (*Collection, error) {
 	raw, err := c.do(ctx, method, path, nil, payload, contentTypeJSONAPI)
 	if err != nil {
 		return nil, err

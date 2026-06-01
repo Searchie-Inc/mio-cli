@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -77,7 +78,9 @@ var rolesCreateCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
 		}
 
-		res, err := c.client.Create(c.ctx, rolesPath(""), attrs)
+		// Flat body: the backend RoleCreate schema is a plain pydantic model,
+		// not a JSON:API envelope.
+		res, err := c.client.CreateWith(c.ctx, client.StyleFlat, rolesPath(""), attrs)
 		if err != nil {
 			return err
 		}
@@ -159,7 +162,9 @@ var rolesUpdateCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
-		res, err := c.client.Update(c.ctx, rolesPath(args[0]), attrs)
+		// Flat body: the backend RoleUpdate schema is a plain pydantic model,
+		// not a JSON:API envelope.
+		res, err := c.client.UpdateWith(c.ctx, client.StyleFlat, rolesPath(args[0]), attrs)
 		if err != nil {
 			return err
 		}

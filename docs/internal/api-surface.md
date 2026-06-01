@@ -16,7 +16,25 @@ plain JSON.
 - **CLI verbs:** `create`(POST) `retrieve`(GET id) `update`(PATCH) `delete`(DELETE)
   `list`(GET collection) `search`(POST/GET query) + custom actions.
 - **Resource identifier flags:** create/update take `--field value` flags mapped
-  to JSON:API `data.attributes.<field>`. The client wraps them in the envelope.
+  to `<field>` (snake_case). For most resources the client wraps them in a JSON:API
+  envelope `{"data":{"type":<derived>,"attributes":{…}}}` (`client.StyleEnvelope`,
+  the default). The backend is NOT uniform, though — a handful of endpoints bind a
+  **flat** pydantic model and must be sent WITHOUT an envelope (`client.StyleFlat`):
+  - `users update`, `roles create/update`, `api-keys create`
+  - `email config set` (PUT email-config; flat `mail_*` fields)
+  - `checkout stripe-sync import` (flat `{hub_id}`) and `adopt-product`
+    (flat `{stripe_product_id, hub_id}`)
+  Sending the wrong shape 422s either way, so the style is declared per command.
+- **Type derivation:** the envelope `type` is derived from the request path via
+  `resourceTypeFromPath` + a `typeOverrides` table for the cases where the backend
+  `type` literal differs from the URL segment (e.g. `segments`→`segment`,
+  `contacts`→`team-contacts`, `members`→`team-members`, `hubs/contact-attributes`
+  →`contact-attribute-hub-configs`, `steps`→`drip_steps`, `payments/refund`
+  →`refunds`, `payment-accounts/onboarding-link`→`onboarding_links`).
+- **segments search:** body is an envelope `{"data":{"type":"segment-search",
+  "attributes":{"conditions":<tree>,"page":{"size","after"}}}}`. `--conditions`
+  takes the full condition tree as JSON (`{"version":1,"groups":[…]}`), `--page-size`
+  and `--page-after` drive pagination. There is no `--match` flag.
 - Each `cmd/<resource>.go` self-registers via `func init(){ rootCmd.AddCommand(...) }`.
 
 ---

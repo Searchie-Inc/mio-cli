@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -662,7 +663,7 @@ var emailConfigSetCmd = &cobra.Command{
 	Use:     "set",
 	Short:   "Set (create or replace) the hub email configuration.",
 	Long:    "Set the email sending configuration for the active hub using a PUT. All provided fields replace the existing config.",
-	Example: `  mio email config set --smtp-host=smtp.example.com --smtp-port=587 --smtp-username=user --smtp-password=secret`,
+	Example: `  mio email config set --mail-host=smtp.example.com --mail-port=587 --mail-username=user --mail-password=secret --from-email=hello@example.com --from-name="My Community"`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, hubID, err := emailContext(cmd)
@@ -670,20 +671,23 @@ var emailConfigSetCmd = &cobra.Command{
 			return err
 		}
 
+		// Flat body with the backend EmailConfigRequest field names (mail_*),
+		// NOT a JSON:API envelope. The route binds a flat pydantic model.
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "smtp-host")
-		setIntFlag(cmd, attrs, "smtp-port")
-		setStringFlag(cmd, attrs, "smtp-username")
-		setStringFlag(cmd, attrs, "smtp-password")
-		setStringFlag(cmd, attrs, "from-name")
-		setStringFlag(cmd, attrs, "from-email")
-		setBoolFlag(cmd, attrs, "smtp-tls")
+		setMappedString(cmd, attrs, "mail-host", "mail_host")
+		setMappedInt(cmd, attrs, "mail-port", "mail_port")
+		setMappedString(cmd, attrs, "mail-username", "mail_username")
+		setMappedString(cmd, attrs, "mail-password", "mail_password")
+		setMappedString(cmd, attrs, "mail-encryption", "mail_encryption")
+		setMappedString(cmd, attrs, "from-name", "mail_from_name")
+		setMappedString(cmd, attrs, "from-email", "mail_from_email")
+		setMappedString(cmd, attrs, "reply-to", "reply_to")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to set: supply at least one configuration flag")
 		}
 
-		res, err := c.client.Action(c.ctx, "PUT", configPath(hubID), attrs)
+		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "PUT", configPath(hubID), attrs)
 		if err != nil {
 			return err
 		}
@@ -772,13 +776,15 @@ var emailConfigTestCmd = &cobra.Command{
 
 func init() {
 	for _, cmd := range []*cobra.Command{emailConfigSetCmd} {
-		cmd.Flags().String("smtp-host", "", "SMTP server hostname.")
-		cmd.Flags().Int("smtp-port", 0, "SMTP server port (e.g. 587, 465).")
-		cmd.Flags().String("smtp-username", "", "SMTP authentication username.")
-		cmd.Flags().String("smtp-password", "", "SMTP authentication password.")
-		cmd.Flags().String("from-name", "", "Default sender display name.")
-		cmd.Flags().String("from-email", "", "Default sender email address.")
-		cmd.Flags().Bool("smtp-tls", false, "Whether to use TLS for the SMTP connection.")
+		// Flag names map to the backend EmailConfigRequest fields (mail_*).
+		cmd.Flags().String("mail-host", "", "SMTP server hostname.")
+		cmd.Flags().Int("mail-port", 0, "SMTP server port (e.g. 587, 465).")
+		cmd.Flags().String("mail-username", "", "SMTP authentication username.")
+		cmd.Flags().String("mail-password", "", "SMTP authentication password. Required on first set; omit on update to keep the existing one.")
+		cmd.Flags().String("mail-encryption", "", "Encryption mode: tls (STARTTLS), ssl (implicit TLS), or none.")
+		cmd.Flags().String("from-name", "", "Default sender display name (mail_from_name).")
+		cmd.Flags().String("from-email", "", "Default sender email address (mail_from_email).")
+		cmd.Flags().String("reply-to", "", "Optional reply-to address; omit to use the from address.")
 	}
 	emailConfigTestCmd.Flags().String("to", "", "Recipient email address for the test message.")
 }

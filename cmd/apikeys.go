@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -93,7 +94,9 @@ it cannot be retrieved again after this call.`,
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
 		}
 
-		res, err := c.client.Create(c.ctx, apikeysPath(teamID, ""), attrs)
+		// Flat body: the backend ApiKeyCreateRequest schema is a plain pydantic
+		// model ({name, scopes?, expires_at?}), not a JSON:API envelope.
+		res, err := c.client.CreateWith(c.ctx, client.StyleFlat, apikeysPath(teamID, ""), attrs)
 		if err != nil {
 			return err
 		}

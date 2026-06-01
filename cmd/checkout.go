@@ -29,6 +29,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -97,12 +98,11 @@ func init() {
 	checkoutPaymentsRefundCmd.Flags().String("reason", "", "Reason for the refund (e.g. duplicate, fraudulent, requested_by_customer).")
 
 	// stripe-sync import flags
-	checkoutStripeSyncImportCmd.Flags().String("stripe-account-id", "", "Stripe Connect account ID to import data from.")
-	checkoutStripeSyncImportCmd.Flags().String("mode", "", "Import mode: full or incremental.")
+	checkoutStripeSyncImportCmd.Flags().String("hub-id", "", "Hub ID whose Stripe data should be imported. (required)")
 
 	// adopt-product flags
 	checkoutStripeSyncAdoptProductCmd.Flags().String("stripe-product-id", "", "Stripe product ID to adopt into the mio catalogue. (required)")
-	checkoutStripeSyncAdoptProductCmd.Flags().String("stripe-account-id", "", "Stripe Connect account ID the product belongs to.")
+	checkoutStripeSyncAdoptProductCmd.Flags().String("hub-id", "", "Hub ID (UUID) the adopted product belongs to. (required)")
 }
 
 // ---- root group ---------------------------------------------------------------
@@ -636,32 +636,27 @@ var checkoutStripeSyncImportCmd = &cobra.Command{
 	Use:   "import",
 	Short: "Start a Stripe data import run.",
 	Long: `Trigger an asynchronous import of historical Stripe data (customers, subscriptions,
-payments) into the active team's mio account.
+payments) for a hub into the active team's mio account.
 
 Use 'mio checkout stripe-sync import-status <run_id>' to poll the import progress.`,
-	Example: `  # Full import
-  mio checkout stripe-sync import --stripe-account-id acct_abc123
-
-  # Incremental import
-  mio checkout stripe-sync import --stripe-account-id acct_abc123 --mode incremental`,
-	Args: cobra.NoArgs,
+	Example: `  mio checkout stripe-sync import --hub-id hub_abc123`,
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, err := checkoutTeamContext(cmd)
 		if err != nil {
 			return err
 		}
 
+		// Flat body: backend StartImportRequest is a plain {hub_id} model.
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "stripe-account-id")
-		setStringFlag(cmd, attrs, "mode")
+		setMappedString(cmd, attrs, "hub-id", "hub_id")
 
-		var body map[string]any
-		if len(attrs) > 0 {
-			body = attrs
+		if !cmd.Flags().Changed("hub-id") {
+			return errs.New(errs.ExitUsage, "nothing to import: --hub-id is required")
 		}
 
 		path := fmt.Sprintf("/api/teams/%s/checkout/sync/import-from-stripe", teamID)
-		res, err := c.client.Action(c.ctx, "POST", path, body)
+		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
 		if err != nil {
 			return err
 		}
@@ -701,26 +696,27 @@ var checkoutStripeSyncAdoptProductCmd = &cobra.Command{
 without triggering a full data import. Useful for adopting individual products
 during a staged migration.
 
---stripe-product-id is required.`,
-	Example: `  mio checkout stripe-sync adopt-product --stripe-product-id prod_abc123
-  mio checkout stripe-sync adopt-product --stripe-product-id prod_abc123 --stripe-account-id acct_xyz`,
-	Args: cobra.NoArgs,
+--stripe-product-id and --hub-id are required.`,
+	Example: `  mio checkout stripe-sync adopt-product --stripe-product-id prod_0123456789ABCD --hub-id 11111111-1111-4111-8111-111111111111`,
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, err := checkoutTeamContext(cmd)
 		if err != nil {
 			return err
 		}
 
+		// Flat body: backend AdoptProductRequest is a plain
+		// {stripe_product_id, hub_id} model with extra="forbid".
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "stripe-product-id")
-		setStringFlag(cmd, attrs, "stripe-account-id")
+		setMappedString(cmd, attrs, "stripe-product-id", "stripe_product_id")
+		setMappedString(cmd, attrs, "hub-id", "hub_id")
 
-		if !cmd.Flags().Changed("stripe-product-id") {
-			return errs.New(errs.ExitUsage, "nothing to adopt: --stripe-product-id is required")
+		if !cmd.Flags().Changed("stripe-product-id") || !cmd.Flags().Changed("hub-id") {
+			return errs.New(errs.ExitUsage, "nothing to adopt: --stripe-product-id and --hub-id are required")
 		}
 
 		path := fmt.Sprintf("/api/teams/%s/products/adopt-from-stripe", teamID)
-		res, err := c.client.Action(c.ctx, "POST", path, attrs)
+		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
 		if err != nil {
 			return err
 		}

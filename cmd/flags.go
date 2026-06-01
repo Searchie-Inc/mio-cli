@@ -7,7 +7,10 @@ package cmd
 // flag is never sent, so it is never overwritten server-side.
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -53,6 +56,50 @@ func setBoolFlag(cmd *cobra.Command, attrs map[string]any, name string) {
 	if v, err := cmd.Flags().GetBool(name); err == nil {
 		attrs[attrKey(name)] = v
 	}
+}
+
+// setMappedString copies a string flag into attrs[key] under an EXPLICIT backend
+// field name, iff the user set it. Use this when the snake_cased flag name does
+// not equal the backend attribute name (e.g. --from-email → mail_from_email).
+func setMappedString(cmd *cobra.Command, attrs map[string]any, name, key string) {
+	if !cmd.Flags().Changed(name) {
+		return
+	}
+	if v, err := cmd.Flags().GetString(name); err == nil {
+		attrs[key] = v
+	}
+}
+
+// setMappedInt copies an int flag into attrs[key] under an EXPLICIT backend
+// field name, iff the user set it.
+func setMappedInt(cmd *cobra.Command, attrs map[string]any, name, key string) {
+	if !cmd.Flags().Changed(name) {
+		return
+	}
+	if v, err := cmd.Flags().GetInt(name); err == nil {
+		attrs[key] = v
+	}
+}
+
+// parseJSONFlag parses a flag value as JSON, returning the decoded value (an
+// object, array, or scalar). A value beginning with "@" is treated as a path to
+// a file whose contents are the JSON (e.g. --conditions @conditions.json). Used
+// by commands that accept a structured payload fragment the backend validates
+// strictly, such as segment search's condition tree.
+func parseJSONFlag(raw string) (any, error) {
+	data := []byte(strings.TrimSpace(raw))
+	if after, ok := strings.CutPrefix(string(data), "@"); ok {
+		b, err := os.ReadFile(after)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", after, err)
+		}
+		data = b
+	}
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 // addPaginationFlags registers the JSON:API pagination flags on a list command.

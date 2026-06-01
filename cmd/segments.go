@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -231,10 +232,17 @@ var segmentsDeleteCmd = &cobra.Command{
 var segmentsSearchCmd = &cobra.Command{
 	Use:   "search",
 	Short: "Preview contacts matching segment conditions.",
-	Long: `Post a set of segment conditions to preview which contacts would match.
-Useful for testing condition logic before saving a dynamic segment.`,
-	Example: `  mio segments search --conditions '[{"field":"email","op":"contains","value":"@example.com"}]'`,
-	Args:    cobra.NoArgs,
+	Long: `Post a condition tree to preview which contacts would match, before saving a
+dynamic segment.
+
+--conditions takes the full condition TREE as JSON, matching the backend write
+shape: {"version":1,"groups":[{"logic":"AND","conditions":[ ... ]}]}. Each leaf
+is a discriminated object identified by "type" (e.g. {"type":"email","operator":
+"contains","value":"@example.com"}). Pagination is controlled with --page-size
+and --page-after.`,
+	Example: `  mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
+  mio segments search --conditions @conditions.json --page-size 50`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
 		if err != nil {
@@ -248,12 +256,28 @@ Useful for testing condition logic before saving a dynamic segment.`,
 			return err
 		}
 
-		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "conditions")
-		setStringFlag(cmd, attrs, "match")
+		if !cmd.Flags().Changed("conditions") {
+			return errs.New(errs.ExitUsage, "nothing to search: --conditions is required (a JSON condition tree)")
+		}
+		rawConditions, _ := cmd.Flags().GetString("conditions")
+		conditions, perr := parseJSONFlag(rawConditions)
+		if perr != nil {
+			return errs.Wrap(errs.ExitUsage, fmt.Errorf("--conditions is not valid JSON: %w", perr))
+		}
+
+		// Build the segment-search attributes: {conditions, page?}. page is only
+		// included when the caller set a pagination flag (the backend defaults it).
+		attributes := map[string]any{"conditions": conditions}
+		page := map[string]any{}
+		setMappedInt(cmd, page, "page-size", "size")
+		setMappedString(cmd, page, "page-after", "after")
+		if len(page) > 0 {
+			attributes["page"] = page
+		}
 
 		path := segmentsPath(teamID, "") + "/search"
-		col, err := c.client.ActionCollection(c.ctx, "POST", path, attrs)
+		payload := client.NewRawEnvelope("segment-search", attributes)
+		col, err := c.client.ActionCollectionRaw(c.ctx, "POST", path, payload)
 		if err != nil {
 			return err
 		}
@@ -332,6 +356,7 @@ func init() {
 	addPaginationFlags(segmentsMembersCmd)
 
 	// Search flags.
-	segmentsSearchCmd.Flags().String("conditions", "", "JSON array of condition objects to preview.")
-	segmentsSearchCmd.Flags().String("match", "", "Condition match mode: all or any.")
+	segmentsSearchCmd.Flags().String("conditions", "", `Condition tree as JSON: {"version":1,"groups":[...]}. Prefix with @ to read from a file (e.g. @conditions.json).`)
+	segmentsSearchCmd.Flags().Int("page-size", 0, "Preview page size (1–200). Omit for the backend default.")
+	segmentsSearchCmd.Flags().String("page-after", "", "Pagination cursor for the next page of preview results.")
 }

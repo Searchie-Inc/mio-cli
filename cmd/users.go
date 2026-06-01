@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -175,7 +176,9 @@ Equivalent to PATCH /api/users/{id}.`,
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
-		res, err := c.client.Update(c.ctx, usersPath(args[0]), attrs)
+		// Flat body: the backend UserUpdate schema is a plain pydantic model,
+		// not a JSON:API envelope. Sending an envelope here 422s.
+		res, err := c.client.UpdateWith(c.ctx, client.StyleFlat, usersPath(args[0]), attrs)
 		if err != nil {
 			return err
 		}
