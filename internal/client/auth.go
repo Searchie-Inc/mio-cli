@@ -55,16 +55,20 @@ func (c *Client) Login(ctx context.Context, email, password string) (*LoginResul
 // token obtained from Login. It returns the minted Resource; the full secret is
 // in attributes["secret"] and is only ever returned once by the backend.
 //
-// The api-keys route IS JSON:API, but the caller is authenticated with a JWT
-// access token rather than an API key — so we issue the request with a
-// temporary client carrying that token.
+// The caller is authenticated with a JWT access token rather than an API key
+// (the backend requires JWT to manage keys), so we issue the request with a
+// temporary client carrying that token. The api-keys create endpoint binds a
+// FLAT pydantic model (ApiKeyCreateRequest = {name, scopes?, expires_at?}), NOT
+// a JSON:API envelope — so the body MUST be sent flat (StyleFlat). Sending an
+// envelope here lands `name` under `data` and 422s, breaking `mio login`'s
+// password→mint flow.
 func (c *Client) MintAPIKey(ctx context.Context, accessToken, teamID, name string) (*Resource, error) {
 	if teamID == "" {
 		return nil, errs.New(errs.ExitUsage, "cannot mint API key: no team id resolved (set --team or `mio config set team <id>`)")
 	}
 	tokenClient := New(c.baseURL, accessToken, WithHTTPClient(c.http), WithDebug(c.debug))
 	path := fmt.Sprintf("/api/teams/%s/api-keys", teamID)
-	return tokenClient.Create(ctx, path, map[string]any{"name": name})
+	return tokenClient.CreateWith(ctx, StyleFlat, path, map[string]any{"name": name})
 }
 
 // Me fetches the authenticated principal via GET /api/auth/me. Used by `mio

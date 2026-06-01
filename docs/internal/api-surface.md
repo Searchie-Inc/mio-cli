@@ -20,11 +20,22 @@ plain JSON.
   envelope `{"data":{"type":<derived>,"attributes":{…}}}` (`client.StyleEnvelope`,
   the default). The backend is NOT uniform, though — a handful of endpoints bind a
   **flat** pydantic model and must be sent WITHOUT an envelope (`client.StyleFlat`):
-  - `users update`, `roles create/update`, `api-keys create`
+  - `users update`, `roles create/update`, `api-keys create` (incl. the
+    `mio login` password→mint flow via `MintAPIKey`, which posts a flat body
+    with the JWT bearer token)
   - `email config set` (PUT email-config; flat `mail_*` fields)
   - `checkout stripe-sync import` (flat `{hub_id}`) and `adopt-product`
     (flat `{stripe_product_id, hub_id}`)
   Sending the wrong shape 422s either way, so the style is declared per command.
+- **No-body action endpoints:** several POST actions take NO request body — send
+  `nil`, not an (enveloped) payload: `email config test` (re-tests stored
+  creds, mails the authenticated user), `email templates preview` (sandbox
+  render), `teams switch`, `checkout subscriptions cancel`, `checkout webhooks
+  replay`, `content/contacts restore`, `email drip-campaigns activate/pause`.
+- **Body-carrying action endpoints:** `checkout payments refund` (envelope
+  `refunds`), `content reorder` (envelope `content-nodes`), and
+  `checkout accounts onboarding-link` (envelope `onboarding_links`, ALL of
+  `--hub-id`/`--return-url`/`--refresh-url` required).
 - **Type derivation:** the envelope `type` is derived from the request path via
   `resourceTypeFromPath` + a `typeOverrides` table for the cases where the backend
   `type` literal differs from the URL segment (e.g. `segments`→`segment`,
@@ -150,6 +161,7 @@ plain JSON.
 - webhooks:      `list/retrieve` `…/payment-webhooks[/{id}]`; `replay` POST `…/payment-webhooks/{id}/replay`
 - accounts:      `list/retrieve` `/api/teams/{team_id}/payment-accounts[/{id}]`;
                  `onboarding-link` POST `…/payment-accounts/onboarding-link`
+                 (envelope `onboarding_links`; requires `--hub-id`/`--return-url`/`--refresh-url`)
 - stripe-sync:   `import` POST `/api/teams/{team_id}/checkout/sync/import-from-stripe`;
                  `import-status` GET `…/checkout/sync/import-runs/{run_id}`;
                  `adopt-product` POST `/api/teams/{team_id}/products/adopt-from-stripe`
@@ -157,8 +169,8 @@ plain JSON.
 ## email  (`cmd/email.go`) — base `/v1/hubs/{hub_id}/…`
 - drip-campaigns: `create/list/retrieve/update/delete`; `activate`/`pause` POST `…/{id}/activate|pause`
 - steps:          `list/create/update/delete` `…/drip-campaigns/{id}/steps[/{sid}]`
-- templates:      `create/list/retrieve/update/delete` `…/email-templates[/{id}]`; `preview` POST `…/email-templates/{id}/preview`
-- config:         `set` PUT `…/email-config`; `get` GET; `delete` DELETE; `test` POST `…/email-config/test`
+- templates:      `create/list/retrieve/update/delete` `…/email-templates[/{id}]`; `preview` POST `…/email-templates/{id}/preview` (no body)
+- config:         `set` PUT `…/email-config` (flat `mail_*`); `get` GET; `delete` DELETE; `test` POST `…/email-config/test` (no body — mails the authenticated user)
 - enrollments:    `list` GET `…/drip-campaigns/{id}/enrollments`; `exit` DELETE `…/{id}/enrollments/{eid}`
 - stats:          `get` GET `…/email-stats`
 

@@ -601,27 +601,21 @@ var emailTemplatesDeleteCmd = &cobra.Command{
 }
 
 var emailTemplatesPreviewCmd = &cobra.Command{
-	Use:   "preview <id>",
-	Short: "Preview an email template.",
-	Long:  "Render a preview of an email template, optionally with contact context.",
-	Example: `  mio email templates preview tmpl_abc123
-  mio email templates preview tmpl_abc123 --contact-id=c_xyz`,
-	Args: cobra.ExactArgs(1),
+	Use:     "preview <id>",
+	Short:   "Preview an email template.",
+	Long:    "Render a sandbox preview of an email template. The backend preview endpoint takes NO request body.",
+	Example: `  mio email templates preview tmpl_abc123`,
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, hubID, err := emailContext(cmd)
 		if err != nil {
 			return err
 		}
 
-		body := map[string]any{}
-		setStringFlag(cmd, body, "contact-id")
-
+		// The backend preview_email_template route binds no request body; it
+		// renders the stored template in a sandbox. Send no payload.
 		path := emailHubPath(hubID, "email-templates/"+args[0]+"/preview")
-		var payload map[string]any
-		if len(body) > 0 {
-			payload = body
-		}
-		res, err := c.client.Action(c.ctx, "POST", path, payload)
+		res, err := c.client.Action(c.ctx, "POST", path, nil)
 		if err != nil {
 			return err
 		}
@@ -643,7 +637,6 @@ func init() {
 		cmd.Flags().String("reply-to", "", "Reply-to email address.")
 	}
 	addPaginationFlags(emailTemplatesListCmd)
-	emailTemplatesPreviewCmd.Flags().String("contact-id", "", "Contact id to use for personalisation context in the preview.")
 }
 
 // ---- config -----------------------------------------------------------------
@@ -743,10 +736,14 @@ var emailConfigDeleteCmd = &cobra.Command{
 }
 
 var emailConfigTestCmd = &cobra.Command{
-	Use:     "test",
-	Short:   "Send a test email using the hub email configuration.",
-	Long:    "Send a test email to verify the hub's email sending configuration.",
-	Example: `  mio email config test --to=you@example.com`,
+	Use:   "test",
+	Short: "Re-test the hub's stored email configuration.",
+	Long: `Re-run the SMTP test against the hub's stored BYO-SMTP credentials. The backend
+re-reads the saved credentials and sends a test message to the authenticated
+user's own email address — this endpoint takes NO request body and no recipient
+flag. Returns a JSON:API email_test_results resource on success, or a 422 with
+the SMTP error on failure.`,
+	Example: `  mio email config test`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, hubID, err := emailContext(cmd)
@@ -754,15 +751,10 @@ var emailConfigTestCmd = &cobra.Command{
 			return err
 		}
 
-		body := map[string]any{}
-		setStringFlag(cmd, body, "to")
-
+		// The backend test_email_config route binds no request body; sending one
+		// (let alone an enveloped {to:…} with a path-derived type) is rejected.
 		path := emailHubPath(hubID, "email-config/test")
-		var payload map[string]any
-		if len(body) > 0 {
-			payload = body
-		}
-		res, err := c.client.Action(c.ctx, "POST", path, payload)
+		res, err := c.client.Action(c.ctx, "POST", path, nil)
 		if err != nil {
 			return err
 		}
@@ -786,7 +778,6 @@ func init() {
 		cmd.Flags().String("from-email", "", "Default sender email address (mail_from_email).")
 		cmd.Flags().String("reply-to", "", "Optional reply-to address; omit to use the from address.")
 	}
-	emailConfigTestCmd.Flags().String("to", "", "Recipient email address for the test message.")
 }
 
 // ---- enrollments ------------------------------------------------------------

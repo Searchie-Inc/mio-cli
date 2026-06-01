@@ -97,6 +97,11 @@ func init() {
 	checkoutPaymentsRefundCmd.Flags().Int("amount", 0, "Amount to refund in the payment's currency minor unit (e.g. cents). Omit to refund in full.")
 	checkoutPaymentsRefundCmd.Flags().String("reason", "", "Reason for the refund (e.g. duplicate, fraudulent, requested_by_customer).")
 
+	// onboarding-link flags (all required by the backend)
+	checkoutAccountsOnboardingLinkCmd.Flags().String("hub-id", "", "Hub ID the onboarding link is for. (required)")
+	checkoutAccountsOnboardingLinkCmd.Flags().String("return-url", "", "URL Stripe returns the user to after completing onboarding. (required)")
+	checkoutAccountsOnboardingLinkCmd.Flags().String("refresh-url", "", "URL Stripe sends the user to if the onboarding link expires. (required)")
+
 	// stripe-sync import flags
 	checkoutStripeSyncImportCmd.Flags().String("hub-id", "", "Hub ID whose Stripe data should be imported. (required)")
 
@@ -600,8 +605,11 @@ var checkoutAccountsOnboardingLinkCmd = &cobra.Command{
 	Short: "Generate a Stripe Connect onboarding link.",
 	Long: `Generate a Stripe Connect account onboarding or re-onboarding link for the
 active team. Returns a short-lived URL the team owner should visit to complete
-or update their Stripe account setup.`,
-	Example: `  mio checkout accounts onboarding-link`,
+or update their Stripe account setup.
+
+The backend requires --hub-id, --return-url and --refresh-url (all sent inside a
+JSON:API onboarding_links envelope).`,
+	Example: `  mio checkout accounts onboarding-link --hub-id hub_abc123 --return-url https://app.example.com/return --refresh-url https://app.example.com/refresh`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, err := checkoutTeamContext(cmd)
@@ -609,8 +617,21 @@ or update their Stripe account setup.`,
 			return err
 		}
 
+		// Backend OnboardingLinkRequest requires an envelope (type
+		// onboarding_links) with hub_id, return_url and refresh_url — all
+		// mandatory. A nil body 422s.
+		attrs := map[string]any{}
+		setMappedString(cmd, attrs, "hub-id", "hub_id")
+		setMappedString(cmd, attrs, "return-url", "return_url")
+		setMappedString(cmd, attrs, "refresh-url", "refresh_url")
+		for _, f := range []string{"hub-id", "return-url", "refresh-url"} {
+			if !cmd.Flags().Changed(f) {
+				return errs.New(errs.ExitUsage, "onboarding-link requires --hub-id, --return-url and --refresh-url")
+			}
+		}
+
 		path := accountsPath(teamID, "") + "/onboarding-link"
-		res, err := c.client.Action(c.ctx, "POST", path, nil)
+		res, err := c.client.Action(c.ctx, "POST", path, attrs)
 		if err != nil {
 			return err
 		}

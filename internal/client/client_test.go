@@ -270,6 +270,45 @@ func TestClient_CreateIncludesDerivedType(t *testing.T) {
 	}
 }
 
+// TestMintAPIKey_SendsFlatBodyWithBearer verifies the password→mint flow posts a
+// FLAT body (no `data` envelope) to the api-keys endpoint authenticated with the
+// JWT access token. The backend ApiKeyCreateRequest is a flat pydantic model, so
+// an envelope here 422s.
+func TestMintAPIKey_SendsFlatBodyWithBearer(t *testing.T) {
+	var raw map[string]any
+	var gotAuth, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"id":"apk_1","type":"api-keys","attributes":{"secret":"mio_sk_live_xyz","name":"CI"}}}`))
+	}))
+	defer srv.Close()
+
+	// The outer client carries no key; MintAPIKey issues with the JWT token.
+	c := newTestClient(srv, "")
+	res, err := c.MintAPIKey(context.Background(), "jwt_access_token", "t1", "CI")
+	if err != nil {
+		t.Fatalf("MintAPIKey error: %v", err)
+	}
+	if gotPath != "/api/teams/t1/api-keys" {
+		t.Errorf("path = %q, want /api/teams/t1/api-keys", gotPath)
+	}
+	if gotAuth != "Bearer jwt_access_token" {
+		t.Errorf("Authorization = %q, want Bearer jwt_access_token", gotAuth)
+	}
+	if _, hasData := raw["data"]; hasData {
+		t.Errorf("mint body unexpectedly carried a `data` envelope: %#v", raw)
+	}
+	if raw["name"] != "CI" {
+		t.Errorf("mint body name = %v, want CI (top-level flat attribute)", raw["name"])
+	}
+	if res == nil || res.Attributes["secret"] != "mio_sk_live_xyz" {
+		t.Errorf("minted resource secret not surfaced: %#v", res)
+	}
+}
+
 // TestClient_FlatStyleSendsNoEnvelope verifies that a StyleFlat write sends the
 // attributes map as the top-level JSON object with NO `data` wrapper and NO
 // injected `type` — the shape the flat-schema backend endpoints (users, roles,
