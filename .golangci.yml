@@ -1,0 +1,53 @@
+version: "2"
+
+linters:
+  enable:
+    - govet        # Reports suspicious constructs (e.g., printf-format mismatches)
+    - staticcheck  # Comprehensive static analysis (SA*, S1*, QF*, ST*)
+    - errcheck     # Ensures error return values are checked
+    - ineffassign  # Detects assignments to variables that are never used
+    - revive       # Successor to golint; idiomatic Go style checks
+    - gofmt        # Ensures code is gofmt-formatted (redundant with CI check but good for fast feedback)
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - checkPrivateReceivers: false
+            disableStutteringCheck: false
+      - name: error-return
+      - name: error-strings
+      - name: increment-decrement
+      - name: indent-error-flow
+      - name: var-naming
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: unreachable-code
+      - name: unused-parameter
+        disabled: true  # Too noisy for CLI commands that satisfy interfaces
+  errcheck:
+    # Ignore common cases where errors are intentionally discarded
+    exclude-functions:
+      - fmt.Println
+      - fmt.Printf
+      - fmt.Fprintf
+      - (io.Closer).Close
+
+issues:
+  # Don't fail on generated files
+  exclude-dirs:
+    - vendor
+
+  # Allow slightly longer lines in test files
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - ineffassign
