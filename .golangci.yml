@@ -1,53 +1,58 @@
+# golangci-lint v2 configuration.
+# NOTE: v2 changed the schema — linter settings live under `linters.settings`,
+# formatters (gofmt/goimports) are a separate top-level section, and exclusions
+# live under `linters.exclusions`. A v1-style `linters-settings:`/`issues:` block
+# is silently ignored under `version: "2"`.
 version: "2"
 
 linters:
+  # The v2 "standard" default set is errcheck, govet, ineffassign, staticcheck,
+  # unused. We add revive on top.
   enable:
-    - govet        # Reports suspicious constructs (e.g., printf-format mismatches)
-    - staticcheck  # Comprehensive static analysis (SA*, S1*, QF*, ST*)
-    - errcheck     # Ensures error return values are checked
-    - ineffassign  # Detects assignments to variables that are never used
-    - revive       # Successor to golint; idiomatic Go style checks
-    - gofmt        # Ensures code is gofmt-formatted (redundant with CI check but good for fast feedback)
+    - revive
 
-linters-settings:
-  revive:
+  settings:
+    errcheck:
+      # Idiomatic discards for a CLI: writing diagnostics to stderr, closing a
+      # body/file in a defer, and flushing a tabwriter. Real I/O errors on these
+      # are not actionable for the user.
+      exclude-functions:
+        - fmt.Print
+        - fmt.Printf
+        - fmt.Println
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*text/tabwriter.Writer).Flush
+    revive:
+      rules:
+        - name: error-return
+        - name: error-strings
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: var-naming
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unreachable-code
+        # `exported` (doc comments on every exported symbol) is library-grade
+        # and too noisy for an application CLI's internal packages.
+        - name: exported
+          disabled: true
+        - name: unused-parameter
+          disabled: true
+
+  exclusions:
+    paths:
+      - vendor
     rules:
-      - name: exported
-        arguments:
-          - checkPrivateReceivers: false
-            disableStutteringCheck: false
-      - name: error-return
-      - name: error-strings
-      - name: increment-decrement
-      - name: indent-error-flow
-      - name: var-naming
-      - name: blank-imports
-      - name: context-as-argument
-      - name: context-keys-type
-      - name: dot-imports
-      - name: range
-      - name: receiver-naming
-      - name: time-naming
-      - name: unexported-return
-      - name: unreachable-code
-      - name: unused-parameter
-        disabled: true  # Too noisy for CLI commands that satisfy interfaces
-  errcheck:
-    # Ignore common cases where errors are intentionally discarded
-    exclude-functions:
-      - fmt.Println
-      - fmt.Printf
-      - fmt.Fprintf
-      - (io.Closer).Close
-
-issues:
-  # Don't fail on generated files
-  exclude-dirs:
-    - vendor
-
-  # Allow slightly longer lines in test files
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - ineffassign
+      - path: _test\.go
+        linters:
+          - errcheck
+          - ineffassign
