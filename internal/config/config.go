@@ -30,9 +30,9 @@ const (
 	EnvAPIKey = "MIO_API_KEY"
 	// EnvAPIBase overrides the API base URL.
 	EnvAPIBase = "MIO_API_BASE_URL"
-	// DefaultAPIBase is the fallback API base. NOTE: placeholder pending
-	// confirmation of the real production hostname (design doc §8 open item 1).
-	DefaultAPIBase = "https://api.mio.app"
+	// DefaultAPIBase is the fallback API base (production). Overridable via the
+	// MIO_API_BASE_URL env var, the --api-base flag, or `mio config set api-base`.
+	DefaultAPIBase = "https://api.membership.io"
 )
 
 // Profile is a named set of context overrides, mirroring Stripe's profiles.
