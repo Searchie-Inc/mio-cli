@@ -33,7 +33,8 @@ plain JSON.
   render), `teams switch`, `checkout subscriptions cancel`, `checkout webhooks
   replay`, `content/contacts restore`, `email drip-campaigns activate/pause`.
 - **Body-carrying action endpoints:** `checkout payments refund` (envelope
-  `refunds`), `content reorder` (envelope `content-nodes`), and
+  `refunds`; body REQUIRED — `--reason` mandatory, `--amount` optional and
+  omitted for a full refund), `content reorder` (envelope `content-nodes`), and
   `checkout accounts onboarding-link` (envelope `onboarding_links`, ALL of
   `--hub-id`/`--return-url`/`--refresh-url` required).
 - **Type derivation:** the envelope `type` is derived from the request path via
@@ -157,7 +158,7 @@ plain JSON.
 ## checkout  (`cmd/checkout.go`) — admin reads + actions, team-scoped
 - orders:        `list/retrieve` `/api/teams/{team_id}/hubs/{hub_id}/orders[/{id}]`
 - subscriptions: `list/retrieve` `…/subscriptions[/{id}]`; `cancel` POST `…/subscriptions/{id}/cancel`
-- payments:      `list/retrieve` `…/payments[/{id}]`; `refund` POST `…/payments/{id}/refund`
+- payments:      `list/retrieve` `…/payments[/{id}]`; `refund` POST `…/payments/{id}/refund` (refunds envelope; `--reason` required, `--amount` optional)
 - webhooks:      `list/retrieve` `…/payment-webhooks[/{id}]`; `replay` POST `…/payment-webhooks/{id}/replay`
 - accounts:      `list/retrieve` `/api/teams/{team_id}/payment-accounts[/{id}]`;
                  `onboarding-link` POST `…/payment-accounts/onboarding-link`

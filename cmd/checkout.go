@@ -95,7 +95,8 @@ func init() {
 
 	// refund flags
 	checkoutPaymentsRefundCmd.Flags().Int("amount", 0, "Amount to refund in the payment's currency minor unit (e.g. cents). Omit to refund in full.")
-	checkoutPaymentsRefundCmd.Flags().String("reason", "", "Reason for the refund (e.g. duplicate, fraudulent, requested_by_customer).")
+	checkoutPaymentsRefundCmd.Flags().String("reason", "", "Reason for the refund (e.g. duplicate, fraudulent, requested_by_customer). (required)")
+	_ = checkoutPaymentsRefundCmd.MarkFlagRequired("reason")
 
 	// onboarding-link flags (all required by the backend)
 	checkoutAccountsOnboardingLinkCmd.Flags().String("hub-id", "", "Hub ID the onboarding link is for. (required)")
@@ -415,18 +416,18 @@ var checkoutPaymentsRefundCmd = &cobra.Command{
 	Short: "Refund a payment.",
 	Long: `Issue a full or partial refund for a payment. This is irreversible.
 
-Requires --hub. Use --amount to issue a partial refund (in the currency's minor
-unit, e.g. cents). Omit --amount to refund the full amount.
+Requires --hub and --reason. Use --amount to issue a partial refund (in the
+currency's minor unit, e.g. cents); omit --amount to refund the full amount.
 
 Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 	Example: `  # Full refund
-  mio checkout payments refund pay_abc123
+  mio checkout payments refund pay_abc123 --reason requested_by_customer
 
   # Partial refund of $5.00 USD
-  mio checkout payments refund pay_abc123 --amount 500 --reason requested_by_customer
+  mio checkout payments refund pay_abc123 --reason requested_by_customer --amount 500
 
   # Non-interactive (CI/agent)
-  mio checkout payments refund pay_abc123 --yes`,
+  mio checkout payments refund pay_abc123 --reason duplicate --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := checkoutHubContext(cmd)
@@ -438,17 +439,16 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 			return err
 		}
 
+		// The backend RefundRequest body is REQUIRED: a refunds envelope whose
+		// attributes carry a mandatory `reason` (extra="forbid") and an optional
+		// `amount` (omit for a full refund). Always send the envelope with reason;
+		// add amount only when --amount was provided. Never send a nil body.
 		attrs := map[string]any{}
-		setIntFlag(cmd, attrs, "amount")
 		setStringFlag(cmd, attrs, "reason")
-
-		var body map[string]any
-		if len(attrs) > 0 {
-			body = attrs
-		}
+		setIntFlag(cmd, attrs, "amount")
 
 		path := paymentsPath(teamID, hubID, args[0]) + "/refund"
-		res, err := c.client.Action(c.ctx, "POST", path, body)
+		res, err := c.client.Action(c.ctx, "POST", path, attrs)
 		if err != nil {
 			return err
 		}

@@ -469,6 +469,77 @@ func TestClient_ActionCollectionRawSegmentSearch(t *testing.T) {
 	}
 }
 
+// TestClient_RefundSendsRefundsEnvelope verifies that the refund action sends a
+// JSON:API envelope with type "refunds" (derived from the path) and the required
+// `reason` attribute — the shape the backend RefundRequest schema requires. A
+// nil/empty body would 422 since the body is non-optional.
+func TestClient_RefundSendsRefundsEnvelope(t *testing.T) {
+	var body struct {
+		Data struct {
+			Type       string         `json:"type"`
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"pay_1","type":"payments","attributes":{"status":"refunded"}}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	path := "/api/teams/t1/hubs/h1/payments/pay_1/refund"
+	if _, err := c.Action(context.Background(), "POST", path, map[string]any{
+		"reason": "requested_by_customer",
+		"amount": 500,
+	}); err != nil {
+		t.Fatalf("Action(refund) error: %v", err)
+	}
+	if body.Data.Type != "refunds" {
+		t.Errorf("data.type = %q, want refunds", body.Data.Type)
+	}
+	if body.Data.Attributes["reason"] != "requested_by_customer" {
+		t.Errorf("data.attributes.reason = %v, want requested_by_customer", body.Data.Attributes["reason"])
+	}
+	if body.Data.Attributes["amount"] != float64(500) {
+		t.Errorf("data.attributes.amount = %v, want 500", body.Data.Attributes["amount"])
+	}
+}
+
+// TestClient_RefundFullOmitsAmount verifies a full refund sends reason without an
+// amount key (the backend treats a missing amount as a full refund).
+func TestClient_RefundFullOmitsAmount(t *testing.T) {
+	var body struct {
+		Data struct {
+			Type       string         `json:"type"`
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"pay_1","type":"payments","attributes":{}}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	path := "/api/teams/t1/hubs/h1/payments/pay_1/refund"
+	if _, err := c.Action(context.Background(), "POST", path, map[string]any{
+		"reason": "duplicate",
+	}); err != nil {
+		t.Fatalf("Action(full refund) error: %v", err)
+	}
+	if body.Data.Type != "refunds" {
+		t.Errorf("data.type = %q, want refunds", body.Data.Type)
+	}
+	if body.Data.Attributes["reason"] != "duplicate" {
+		t.Errorf("data.attributes.reason = %v, want duplicate", body.Data.Attributes["reason"])
+	}
+	if _, hasAmount := body.Data.Attributes["amount"]; hasAmount {
+		t.Errorf("full refund unexpectedly carried an amount: %#v", body.Data.Attributes)
+	}
+}
+
 // TestClient_ActionCollection verifies a custom action that returns a
 // `data: [...]` collection is decoded into a Collection.
 func TestClient_ActionCollection(t *testing.T) {
