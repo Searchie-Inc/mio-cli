@@ -8,37 +8,50 @@ package cmd
 
 import (
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
-// setStringFlag copies a string flag into attrs[name] iff it was set by the user.
+// attrKey converts a user-facing kebab-case flag name into the snake_case
+// attribute key the JSON:API backend expects. CLI flags are kebab by
+// convention (--user-id, --first-name), but every backend write schema uses
+// snake_case attribute names (user_id, first_name), so the key — not the flag —
+// must be translated when building the attributes map.
+func attrKey(flagName string) string {
+	return strings.ReplaceAll(flagName, "-", "_")
+}
+
+// setStringFlag copies a string flag into attrs[<snake_case name>] iff it was
+// set by the user.
 func setStringFlag(cmd *cobra.Command, attrs map[string]any, name string) {
 	if !cmd.Flags().Changed(name) {
 		return
 	}
 	if v, err := cmd.Flags().GetString(name); err == nil {
-		attrs[name] = v
+		attrs[attrKey(name)] = v
 	}
 }
 
-// setIntFlag copies an int flag into attrs[name] iff it was set by the user.
+// setIntFlag copies an int flag into attrs[<snake_case name>] iff it was set by
+// the user.
 func setIntFlag(cmd *cobra.Command, attrs map[string]any, name string) {
 	if !cmd.Flags().Changed(name) {
 		return
 	}
 	if v, err := cmd.Flags().GetInt(name); err == nil {
-		attrs[name] = v
+		attrs[attrKey(name)] = v
 	}
 }
 
-// setBoolFlag copies a bool flag into attrs[name] iff it was set by the user.
+// setBoolFlag copies a bool flag into attrs[<snake_case name>] iff it was set by
+// the user.
 func setBoolFlag(cmd *cobra.Command, attrs map[string]any, name string) {
 	if !cmd.Flags().Changed(name) {
 		return
 	}
 	if v, err := cmd.Flags().GetBool(name); err == nil {
-		attrs[name] = v
+		attrs[attrKey(name)] = v
 	}
 }
 

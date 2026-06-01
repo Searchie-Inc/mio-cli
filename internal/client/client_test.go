@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -75,7 +76,9 @@ func TestClient_ErrorMapping(t *testing.T) {
 		{"not found", http.StatusNotFound, `{"errors":[{"detail":"missing"}]}`, errs.ExitNotFound, "missing"},
 		{"rate limited", http.StatusTooManyRequests, `{"errors":[{"detail":"slow down"}]}`, errs.ExitRateLimited, "slow down"},
 		{"server error", http.StatusBadGateway, `boom`, errs.ExitServer, "boom"},
-		{"validation", http.StatusUnprocessableEntity, `{"errors":[{"detail":"email invalid","source":{"pointer":"/data/attributes/email"}}]}`, errs.ExitGeneric, "/data/attributes/email"},
+		{"validation", http.StatusUnprocessableEntity, `{"errors":[{"detail":"email invalid","source":{"pointer":"/data/attributes/email"}}]}`, errs.ExitUsage, "/data/attributes/email"},
+		{"conflict", http.StatusConflict, `{"errors":[{"detail":"already exists"}]}`, errs.ExitUsage, "already exists"},
+		{"bad request", http.StatusBadRequest, `{"errors":[{"detail":"malformed"}]}`, errs.ExitUsage, "malformed"},
 	}
 
 	for _, tc := range cases {
@@ -160,17 +163,123 @@ func TestClient_LoginUsesPlainJSON(t *testing.T) {
 func TestExitCodeForStatus(t *testing.T) {
 	cases := map[int]int{
 		200: errs.ExitGeneric, // not called on 2xx in practice; default branch
+		400: errs.ExitUsage,
 		401: errs.ExitAuth,
 		403: errs.ExitAuth,
 		404: errs.ExitNotFound,
+		405: errs.ExitGeneric, // other 4xx stays generic
+		409: errs.ExitUsage,
+		415: errs.ExitGeneric, // other 4xx stays generic
+		422: errs.ExitUsage,
 		429: errs.ExitRateLimited,
 		500: errs.ExitServer,
 		503: errs.ExitServer,
-		422: errs.ExitGeneric,
 	}
 	for status, want := range cases {
 		if got := errs.ExitCodeForStatus(status); got != want {
 			t.Errorf("ExitCodeForStatus(%d) = %d, want %d", status, got, want)
 		}
+	}
+}
+
+// TestResourceTypeFromPath verifies the JSON:API `type` derivation, including
+// the override cases where the backend type differs from the URL collection
+// segment (verified against mio-backend schemas).
+func TestResourceTypeFromPath(t *testing.T) {
+	cases := []struct {
+		path string
+		want string
+	}{
+		// Simple: type == last collection segment.
+		{"/api/teams/t1/products", "products"},
+		{"/api/teams/t1/products/p1", "products"},
+		{"/api/teams/t1/products/p1/prices", "prices"},
+		{"/api/teams/t1/products/p1/prices/pr1", "prices"},
+		{"/api/teams/t1/coupons", "coupons"},
+		{"/api/teams/t1/tags", "tags"},
+		{"/api/teams/t1/hubs/h1/pages", "pages"},
+		{"/api/teams/t1/hubs/h1/pages/pg1/sections", "sections"},
+		// Overrides: backend type != URL segment.
+		{"/api/teams/t1/segments", "segment"},
+		{"/api/teams/t1/segments/s1", "segment"},
+		{"/api/teams/t1/segments/search", "segment-search"},
+		{"/api/teams/t1/contacts", "team-contacts"},
+		{"/api/teams/t1/contacts/c1", "team-contacts"},
+		{"/api/teams/t1/hubs/h1/content", "content-nodes"},
+		{"/api/teams/t1/hubs/h1/content/n1", "content-nodes"},
+		{"/api/teams/t1/products/p1/deliverables", "product-deliverables"},
+		// Contextual collisions on the same trailing segment.
+		{"/api/teams/t1/coupons/co1/products", "coupon-products"},
+		{"/api/teams/t1/hubs/h1/products", "hub-product-displays"},
+		{"/api/teams/t1/hubs/h1/prices", "hub-price-displays"},
+		// contact-attributes family.
+		{"/api/teams/t1/contact-attributes", "contact-attribute-definitions"},
+		{"/api/teams/t1/contact-attributes/d1/options", "contact-attribute-options"},
+		// email family.
+		{"/v1/hubs/h1/drip-campaigns", "drip_campaigns"},
+		{"/v1/hubs/h1/email-templates", "email_templates"},
+		// tag assignment.
+		{"/api/teams/t1/contacts/c1/tags", "tag_assignments"},
+	}
+	for _, tc := range cases {
+		if got := resourceTypeFromPath(tc.path); got != tc.want {
+			t.Errorf("resourceTypeFromPath(%q) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+// TestClient_CreateIncludesDerivedType verifies that Create sends data.type
+// derived from the path so the backend's Literal-typed schemas accept it.
+func TestClient_CreateIncludesDerivedType(t *testing.T) {
+	var body struct {
+		Data struct {
+			Type       string         `json:"type"`
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"id":"1","type":"segment","attributes":{}}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	if _, err := c.Create(context.Background(), "/api/teams/t1/segments", map[string]any{"name": "VIP"}); err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	if body.Data.Type != "segment" {
+		t.Errorf("data.type = %q, want segment", body.Data.Type)
+	}
+	if body.Data.Attributes["name"] != "VIP" {
+		t.Errorf("data.attributes.name = %v, want VIP", body.Data.Attributes["name"])
+	}
+}
+
+// TestClient_ActionCollection verifies a custom action that returns a
+// `data: [...]` collection is decoded into a Collection.
+func TestClient_ActionCollection(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentTypeJSONAPI)
+		_, _ = w.Write([]byte(`{
+		  "data": [
+		    {"id":"tc1","type":"team-contact-ref","attributes":{"contact_id":"c1"}},
+		    {"id":"tc2","type":"team-contact-ref","attributes":{"contact_id":"c2"}}
+		  ],
+		  "meta": {"count": 2}
+		}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	col, err := c.ActionCollection(context.Background(), "POST", "/api/teams/t1/segments/search", map[string]any{"conditions": "[]"})
+	if err != nil {
+		t.Fatalf("ActionCollection error: %v", err)
+	}
+	if len(col.Data) != 2 {
+		t.Fatalf("len(Data) = %d, want 2", len(col.Data))
+	}
+	if col.Data[0].ID != "tc1" || col.Data[1].ID != "tc2" {
+		t.Errorf("unexpected resources: %#v", col.Data)
 	}
 }

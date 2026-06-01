@@ -264,6 +264,10 @@ var contactsRestoreCmd = &cobra.Command{
 			return err
 		}
 
+		if err := confirmDestructive(cmd, fmt.Sprintf("Restore contact %s?", args[0])); err != nil {
+			return err
+		}
+
 		path := fmt.Sprintf("%s/restore", contactsPath(teamID, args[0]))
 		res, err := c.client.Action(c.ctx, "POST", path, nil)
 		if err != nil {

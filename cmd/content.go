@@ -265,6 +265,10 @@ var contentRestoreCmd = &cobra.Command{
 			return err
 		}
 
+		if err := confirmDestructive(cmd, fmt.Sprintf("Restore content item %s?", args[0])); err != nil {
+			return err
+		}
+
 		path := contentBasePath(teamID, hubID, args[0]) + "/restore"
 		res, err := c.client.Action(c.ctx, http.MethodPost, path, nil)
 		if err != nil {

@@ -253,7 +253,7 @@ Useful for testing condition logic before saving a dynamic segment.`,
 		setStringFlag(cmd, attrs, "match")
 
 		path := segmentsPath(teamID, "") + "/search"
-		col, err := c.client.Action(c.ctx, "POST", path, attrs)
+		col, err := c.client.ActionCollection(c.ctx, "POST", path, attrs)
 		if err != nil {
 			return err
 		}

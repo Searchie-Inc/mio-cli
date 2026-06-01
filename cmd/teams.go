@@ -310,7 +310,7 @@ var teamsMembersAddCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "user-id")
 		setStringFlag(cmd, attrs, "role-id")
 
-		if _, ok := attrs["user-id"]; !ok {
+		if _, ok := attrs["user_id"]; !ok {
 			return errs.New(errs.ExitUsage, "nothing to add: --user-id is required")
 		}
 

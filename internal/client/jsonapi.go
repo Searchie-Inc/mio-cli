@@ -8,10 +8,17 @@ import (
 // Resource is a single JSON:API resource object: a typed, identified bag of
 // attributes. Relationships and links are intentionally not modelled — the CLI
 // surfaces flattened attribute data to agents and does not traverse graphs.
+//
+// RawBody holds the original, unflattened response envelope bytes (the whole
+// document, including top-level links/included/meta). It is populated by the
+// decoders and used by the output layer when --raw is requested so the full
+// JSON:API envelope round-trips instead of the flattened view. It is excluded
+// from JSON marshalling so it never leaks into rendered output.
 type Resource struct {
 	ID         string         `json:"id"`
 	Type       string         `json:"type"`
 	Attributes map[string]any `json:"attributes"`
+	RawBody    []byte         `json:"-"`
 }
 
 // Flatten merges id, type and every attribute into a single flat map suitable
@@ -35,9 +42,14 @@ func (r Resource) Flatten() map[string]any {
 
 // Collection is a JSON:API collection document: a list of resources plus the
 // top-level meta object (which carries pagination cursors such as `next`).
+//
+// RawBody holds the original, unflattened response envelope bytes (the whole
+// document, including top-level links/included/meta). See Resource.RawBody. It
+// is excluded from JSON marshalling so it never leaks into rendered output.
 type Collection struct {
-	Data []Resource     `json:"data"`
-	Meta map[string]any `json:"meta"`
+	Data    []Resource     `json:"data"`
+	Meta    map[string]any `json:"meta"`
+	RawBody []byte         `json:"-"`
 }
 
 // Flatten returns one flattened map per resource, preserving order.
@@ -77,6 +89,9 @@ func DecodeResource(body []byte) (*Resource, error) {
 	if doc.Data == nil {
 		return nil, fmt.Errorf("decode resource: response had no `data` member")
 	}
+	// Retain the original envelope bytes so --raw can preserve top-level
+	// links/included/meta that the flattened Resource does not model.
+	doc.Data.RawBody = append([]byte(nil), body...)
 	return doc.Data, nil
 }
 
@@ -92,7 +107,9 @@ func DecodeCollection(body []byte) (*Collection, error) {
 		return nil, &apiErrorList{Errors: doc.Errors}
 	}
 
-	col := &Collection{Meta: doc.Meta}
+	// Retain the original envelope bytes so --raw can preserve top-level
+	// links/included/meta that the flattened Collection does not model.
+	col := &Collection{Meta: doc.Meta, RawBody: append([]byte(nil), body...)}
 	if len(doc.Data) == 0 || string(doc.Data) == "null" {
 		col.Data = []Resource{}
 		return col, nil

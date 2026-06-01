@@ -126,10 +126,10 @@ condition_data, and position.`,
 			return err
 		}
 
-		if _, ok := attrs["target-type"]; !ok {
+		if _, ok := attrs["target_type"]; !ok {
 			return errs.New(errs.ExitUsage, "nothing to create: --target-type and --target-id are required")
 		}
-		if _, ok := attrs["target-id"]; !ok {
+		if _, ok := attrs["target_id"]; !ok {
 			return errs.New(errs.ExitUsage, "nothing to create: --target-type and --target-id are required")
 		}
 
@@ -286,7 +286,7 @@ When scope is "product", --product-id is also required.`,
 		setStringFlag(cmd, attrs, "expires-at")
 		setStringFlag(cmd, attrs, "reason")
 
-		if _, ok := attrs["contact-id"]; !ok {
+		if _, ok := attrs["contact_id"]; !ok {
 			return errs.New(errs.ExitUsage, "nothing to create: --contact-id and --scope are required")
 		}
 		if _, ok := attrs["scope"]; !ok {
@@ -453,6 +453,6 @@ func setJSONArrayFlag(cmd *cobra.Command, attrs map[string]any, name string) err
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return errs.New(errs.ExitUsage, "--%s must be a valid JSON array: %s", name, err)
 	}
-	attrs[name] = parsed
+	attrs[attrKey(name)] = parsed
 	return nil
 }

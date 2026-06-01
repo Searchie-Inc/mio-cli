@@ -87,8 +87,16 @@ func ExitCodeForStatus(status int) int {
 		return ExitRateLimited
 	case status >= 500:
 		return ExitServer
+	case status == http.StatusBadRequest,
+		status == http.StatusConflict,
+		status == http.StatusUnprocessableEntity:
+		// 400/409/422 — bad input / usage errors the caller can fix by
+		// changing flags or arguments. Mapped to ExitUsage so agents and CI
+		// can distinguish "you sent something wrong" from a generic failure.
+		return ExitUsage
 	case status >= 400:
-		// 400/409/422 etc. — a client-side problem we surface generically.
+		// Other 4xx (e.g. 405, 415) — a client-side problem we surface
+		// generically.
 		return ExitGeneric
 	default:
 		return ExitGeneric

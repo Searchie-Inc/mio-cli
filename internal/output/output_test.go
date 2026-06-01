@@ -51,7 +51,8 @@ func TestRender_JSONResource_Golden(t *testing.T) {
 	}
 }
 
-// Golden: raw JSON keeps the JSON:API envelope.
+// Golden: raw JSON keeps the JSON:API envelope. With no retained RawBody the
+// renderer falls back to re-encoding the modelled resource under `data`.
 func TestRender_JSONRaw_Golden(t *testing.T) {
 	got := render(t, sampleResource(), Options{Format: FormatJSON, Raw: true})
 	want := `{
@@ -66,6 +67,54 @@ func TestRender_JSONRaw_Golden(t *testing.T) {
 `
 	if got != want {
 		t.Errorf("raw JSON golden mismatch:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// --raw must preserve the ORIGINAL response envelope, including top-level
+// links/included/meta that the flattened Resource view drops. When the client
+// retained the raw bytes, those are emitted verbatim.
+func TestRender_JSONRaw_PreservesEnvelope(t *testing.T) {
+	raw := []byte(`{
+	  "data": {"id":"prod_1","type":"products","attributes":{"name":"Pro"}},
+	  "included": [{"id":"pr_1","type":"prices","attributes":{"amount":4900}}],
+	  "links": {"self":"/api/teams/t1/products/prod_1"},
+	  "meta": {"request_id":"req_abc"}
+	}`)
+	res := &client.Resource{
+		ID:         "prod_1",
+		Type:       "products",
+		Attributes: map[string]any{"name": "Pro"},
+		RawBody:    raw,
+	}
+
+	got := render(t, res, Options{Format: FormatJSON, Raw: true})
+
+	for _, must := range []string{`"included"`, `"pr_1"`, `"links"`, `"/api/teams/t1/products/prod_1"`, `"meta"`, `"req_abc"`} {
+		if !strings.Contains(got, must) {
+			t.Errorf("--raw output dropped %s; got:\n%s", must, got)
+		}
+	}
+}
+
+// Same guarantee for collections: top-level links/meta round-trip under --raw.
+func TestRender_JSONRawCollection_PreservesEnvelope(t *testing.T) {
+	raw := []byte(`{
+	  "data": [{"id":"1","type":"products","attributes":{"name":"A"}}],
+	  "links": {"self":"/api/teams/t1/products","next":"/api/teams/t1/products?page[after]=cur"},
+	  "meta": {"page":{"has_more":true}}
+	}`)
+	col := &client.Collection{
+		Data:    []client.Resource{{ID: "1", Type: "products", Attributes: map[string]any{"name": "A"}}},
+		Meta:    map[string]any{"page": map[string]any{"has_more": true}},
+		RawBody: raw,
+	}
+
+	got := render(t, col, Options{Format: FormatJSON, Raw: true})
+
+	for _, must := range []string{`"links"`, `"next"`, `page[after]=cur`, `"has_more"`} {
+		if !strings.Contains(got, must) {
+			t.Errorf("--raw collection output dropped %s; got:\n%s", must, got)
+		}
 	}
 }
 

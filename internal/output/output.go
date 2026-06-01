@@ -112,9 +112,21 @@ func normalize(v any, raw bool) any {
 	}
 }
 
-// rawify round-trips a value through JSON so the original envelope keys
-// (data/type/attributes/meta) are preserved as generic maps.
+// rawify produces the original JSON:API response envelope for --raw output.
+//
+// When the client retained the original response bytes (Resource.RawBody /
+// Collection.RawBody), those are decoded verbatim so the full envelope —
+// including top-level links, included, and meta that the flattened views do
+// not model — round-trips unchanged. When no raw bytes are available (e.g. a
+// resource synthesized in-process, or an older code path), it falls back to
+// re-encoding the modelled value.
 func rawify(v any) any {
+	if raw := rawBytesOf(v); len(raw) > 0 {
+		var out any
+		if err := json.Unmarshal(raw, &out); err == nil {
+			return out
+		}
+	}
 	b, err := json.Marshal(v)
 	if err != nil {
 		return v
@@ -124,6 +136,22 @@ func rawify(v any) any {
 		return v
 	}
 	return out
+}
+
+// rawBytesOf returns the retained original envelope bytes for a Resource or
+// Collection, or nil if none were retained.
+func rawBytesOf(v any) []byte {
+	switch t := v.(type) {
+	case *client.Resource:
+		if t != nil {
+			return t.RawBody
+		}
+	case *client.Collection:
+		if t != nil {
+			return t.RawBody
+		}
+	}
+	return nil
 }
 
 func toAnySlice(rows []map[string]any) []any {
