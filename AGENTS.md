@@ -75,7 +75,7 @@ Branch on these stable codes. Do not parse stderr for error detection.
 
 ## Destructive Operations
 
-Any `delete`, `cancel`, `refund`, or `restore` command in a non-TTY shell will exit **5** unless `--yes` (or `-y`) is passed:
+Any `delete`, `cancel`, or `refund` command in a non-TTY shell will exit **5** unless `--yes` (or `-y`) is passed. (`restore` is the undo of a soft-delete, not destructive, so it does NOT require `--yes`.)
 
 ```sh
 mio contacts delete <id> --yes

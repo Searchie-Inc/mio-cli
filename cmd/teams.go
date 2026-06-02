@@ -251,8 +251,19 @@ To set the local team context WITHOUT a server-side switch, use
 			return errs.Wrap(errs.ExitGeneric, serr)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(),
-			"Switched to team %s (updated local context; cleared current hub).\n", args[0])
+		// The human confirmation goes to STDERR and only when stderr is a TTY,
+		// so stdout stays machine-clean: in non-TTY `--output json` mode stdout
+		// must contain exactly the rendered payload (or nothing), never prose.
+		// Printing to stderr here (before render) is safe because stderr is not
+		// the parsed channel and a later render error still surfaces correctly.
+		if isTTY(cmd.ErrOrStderr()) {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"Switched to team %s (updated local context; cleared current hub).\n", args[0])
+		}
+
+		// Render the server response (if any) as the SOLE stdout payload. When
+		// the switch endpoint returns no body, stdout stays empty per the
+		// existing no-body convention.
 		if res != nil {
 			return c.render(cmd, res)
 		}

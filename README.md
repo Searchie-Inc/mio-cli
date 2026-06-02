@@ -305,7 +305,7 @@ Multiple named profiles are supported via `--profile`.
 | Exit code **7** (`ExitServer`) | Upstream 5xx | Transient — retry; if it persists, the backend is down. |
 | Calls fail against production | Key auth not deployed to prod yet | Point at a dev/staging backend with `--api-base <url>` or `MIO_API_BASE_URL`. |
 
-Every error is returned as a JSON:API `errors` array (even on a TTY), with the exit code echoed in `meta.exit_code`, so you can branch on the body or the process exit code.
+Errors are rendered TTY-aware: on an interactive terminal you get a friendly one-line `Error: <detail>` plus a dimmed `(exit code N)`; when stderr is piped or otherwise non-interactive you get the machine-readable JSON:API `errors` array with the exit code echoed in `meta.exit_code`. Either way the process exit code is the same, so scripts can branch on the exit code (and, off a TTY, on the body).
 
 ---
 

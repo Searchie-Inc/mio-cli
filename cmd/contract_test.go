@@ -817,6 +817,80 @@ func TestContract_Destructive_WithYes_DeleteCalled(t *testing.T) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// teams switch stdout-purity contract
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// TestContract_TeamsSwitch_StdoutMachineClean: `teams switch <id> --output json`
+// off a TTY must emit ONLY the rendered payload on stdout — no human prose. The
+// "Switched to team …" confirmation is a TTY-only nicety and must live on
+// stderr, never stdout, or it would corrupt the JSON an agent parses (and break
+// any downstream --jq pipe).
+//
+// CONTRACT: teams switch --output json (non-TTY) → stdout is valid JSON only
+//
+// Two server shapes are exercised: an endpoint that returns a resource body
+// (stdout must be exactly that JSON object) and one that returns 204 No Content
+// (stdout must be empty, per the existing no-body convention). In both cases the
+// config write + hub clear happens regardless; we sandbox it via XDG_CONFIG_HOME
+// so the test never touches the developer's real config file.
+func TestContract_TeamsSwitch_StdoutMachineClean(t *testing.T) {
+	t.Run("with-body", func(t *testing.T) {
+		body := `{"data":{"id":"t_new","type":"teams","attributes":{"name":"New Team"}}}`
+		srv := newMockServer(t, []mockHandler{
+			{Method: "POST", PathPfx: "/api/teams/", Status: 200, Body: body},
+		})
+
+		env := append(baseEnv(srv.URL), "XDG_CONFIG_HOME="+t.TempDir())
+		res := runContract(t, env,
+			withTeam("t_old", "--output", "json", "teams", "switch", "t_new")...)
+		if res.Code != errs.ExitOK {
+			t.Fatalf("command failed (code %d): %s", res.Code, res.Stderr)
+		}
+
+		// stdout must be a single valid JSON value with NO leading/trailing prose.
+		var parsed any
+		if err := json.Unmarshal([]byte(res.Stdout), &parsed); err != nil {
+			t.Fatalf("CONTRACT: teams switch --output json stdout is not pure JSON: %v\nstdout=%q",
+				err, res.Stdout)
+		}
+		obj, ok := parsed.(map[string]any)
+		if !ok {
+			t.Fatalf("CONTRACT: teams switch stdout must be a JSON object; got %T:\n%s", parsed, res.Stdout)
+		}
+		if obj["id"] != "t_new" {
+			t.Errorf("CONTRACT: teams switch stdout id = %v, want t_new", obj["id"])
+		}
+		// The human confirmation must NOT appear on stdout.
+		if strings.Contains(res.Stdout, "Switched to team") {
+			t.Errorf("CONTRACT: human confirmation leaked into stdout: %q", res.Stdout)
+		}
+	})
+
+	t.Run("no-body", func(t *testing.T) {
+		srv := newMockServer(t, []mockHandler{
+			{Method: "POST", PathPfx: "/api/teams/", Status: 204, Body: ""},
+		})
+
+		env := append(baseEnv(srv.URL), "XDG_CONFIG_HOME="+t.TempDir())
+		res := runContract(t, env,
+			withTeam("t_old", "--output", "json", "teams", "switch", "t_new")...)
+		if res.Code != errs.ExitOK {
+			t.Fatalf("command failed (code %d): %s", res.Code, res.Stderr)
+		}
+
+		// No body from the server → stdout empty (no prose). The confirmation,
+		// if any, is on stderr and only on a TTY (the test buffer is non-TTY, so
+		// there should be no confirmation at all here).
+		if strings.TrimSpace(res.Stdout) != "" {
+			t.Errorf("CONTRACT: teams switch (no body) must produce empty stdout; got: %q", res.Stdout)
+		}
+		if strings.Contains(res.Stderr, "Switched to team") {
+			t.Errorf("CONTRACT: non-TTY stderr should not carry the confirmation; got: %q", res.Stderr)
+		}
+	})
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Error-envelope shape contracts (subprocess)
 // ═══════════════════════════════════════════════════════════════════════════════
 

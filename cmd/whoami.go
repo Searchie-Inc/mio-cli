@@ -58,17 +58,21 @@ This is the canonical "did my setup work?" command. Off a TTY it prints JSON
 			"hub_id":     c.resolved.HubID,
 		}
 
-		// Authenticated principal. /api/auth/me is plain JSON; surface the whole
-		// user object under "user" plus a flattened "user_email"/"user_id" when
-		// present for easy --jq access.
-		if me, merr := c.client.Me(c.ctx); merr == nil {
-			info["user"] = me
-			if v, ok := me["email"].(string); ok {
-				info["user_email"] = v
-			}
-			if v, ok := me["id"].(string); ok {
-				info["user_id"] = v
-			}
+		// Authenticated principal. /api/auth/me is plain JSON. The whole point
+		// of whoami is to confirm the credentials work, so an auth failure here
+		// MUST propagate (e.g. an invalid/expired key → ExitAuth) rather than be
+		// swallowed into partial, exit-0 output. Only the NAME lookups below are
+		// best-effort; identity is not.
+		me, merr := c.client.Me(c.ctx)
+		if merr != nil {
+			return merr
+		}
+		info["user"] = me
+		if v, ok := me["email"].(string); ok {
+			info["user_email"] = v
+		}
+		if v, ok := me["id"].(string); ok {
+			info["user_id"] = v
 		}
 
 		// Resolve display names best-effort — a name lookup failing must NOT
