@@ -15,7 +15,7 @@ The official command-line interface for [Membership.io](https://membership.io).
 
 ## Install
 
-**`mio` v0.1.0 is released.** Pick whichever you prefer.
+**`mio` is released.** Pick whichever you prefer.
 
 ### curl (recommended — macOS / Linux)
 
@@ -31,21 +31,23 @@ curl -fsSL https://raw.githubusercontent.com/Searchie-Inc/mio-cli/main/scripts/i
 #   export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Pin a specific version with `VERSION=0.1.0`.
+Pin a specific version with e.g. `VERSION=0.2.0`.
 
 ### Prebuilt binary (any platform)
 
 Download the archive for your OS/arch from the [latest release](https://github.com/Searchie-Inc/mio-cli/releases/latest), extract it, and put `mio` on your `PATH`:
 
-- macOS / Linux: `mio_0.1.0_<os>_<arch>.tar.gz`
-- Windows: `mio_0.1.0_windows_amd64.zip`
+- macOS / Linux: `mio_<version>_<os>_<arch>.tar.gz`
+- Windows: `mio_<version>_windows_amd64.zip`
+
+where `<version>` is the release tag, e.g. `0.2.0`.
 
 `checksums.txt` is published alongside for verification.
 
 ### go install (Go 1.25+)
 
 ```sh
-go install github.com/Searchie-Inc/mio-cli@v0.1.0
+go install github.com/Searchie-Inc/mio-cli@latest
 ```
 
 > **Note:** `go install` names the binary **`mio-cli`** (after the module path), not `mio`, and installs it to `$(go env GOPATH)/bin` (make sure that's on your `PATH`). Rename it if you like:
@@ -70,7 +72,7 @@ go build -o mio .
 Verify any install:
 
 ```sh
-mio version   # → mio 0.1.0 (commit …, built …)
+mio version   # → mio 0.2.0 (commit …, built …)
 ```
 
 ---
@@ -85,14 +87,16 @@ mio login                              # interactive — stores a key in your OS
 # …or, for scripts / CI / agents:
 export MIO_API_KEY=mio_sk_live_xxxxx   # no login step needed
 
-# 3. Set your default team so you don't repeat --team on every command
-mio config set team <team-id>
+# 3. Confirm setup
+mio whoami                             # prints resolved user, team, hub, api-base, key source
 
 # 4. You're ready
 mio contacts list
 ```
 
-> **Heads up:** API-key auth requires the backend **Team API Keys** feature ([mio-backend PR #128](https://github.com/Searchie-Inc/mio-backend/pull/128)). Until that ships to production, `mio login` and key auth will not succeed against `https://api.membership.io`. You can point the CLI at a dev/staging backend in the meantime with `--api-base <url>` or `MIO_API_BASE_URL` (see [Authentication](#authentication)).
+Auth works against `https://api.membership.io` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL` (see [Authentication](#authentication)).
+
+If you belong to multiple teams, `mio login` will prompt you to pick one. You can switch later with `mio teams switch <team-id>`, which updates your local context. For single-team accounts the team is resolved automatically — no manual config step needed.
 
 ---
 
@@ -151,8 +155,8 @@ When in doubt, append `--help` to any command.
 ## Quickstart
 
 ```sh
-# Set your default team (do this once)
-mio config set team <team-id>
+# Confirm auth + active team
+mio whoami
 
 # Contacts
 mio contacts list
@@ -254,9 +258,10 @@ Scripts and agents can branch on these stable codes.
 | Resource | Available actions |
 |----------|-------------------|
 | `login` / `logout` | Interactive auth |
+| `whoami` | Print resolved identity — user, team, hub, api-base, profile, key source |
 | `config` | `set`, `get`, `list` |
 | `api-keys` | `create`, `list`, `retrieve`, `delete` |
-| `teams` | `create`, `list`, `retrieve`, `update`, `delete`, `switch`; `members list/add/remove` |
+| `teams` | `create`, `list`, `retrieve`, `update`, `delete`, `switch` (server-side switch + updates local context); `members list/add/remove` |
 | `users` | `me`, `list`, `retrieve`, `update` |
 | `roles` | `create`, `list`, `retrieve`, `update`, `delete`; `permissions list` |
 | `hubs` | `create`, `list`, `retrieve`, `update`, `delete` |
@@ -298,12 +303,12 @@ Multiple named profiles are supported via `--profile`.
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| Exit code **3** (`ExitAuth`) | No key, or the key is invalid/expired | Run `mio login`, or `export MIO_API_KEY=mio_sk_live_…`. Remember key auth needs backend [PR #128](https://github.com/Searchie-Inc/mio-backend/pull/128) deployed. |
+| Exit code **3** (`ExitAuth`) | No key, or the key is invalid/expired | Run `mio login`, or `export MIO_API_KEY=mio_sk_live_…`. Run `mio whoami` to confirm the resolved key and active team. |
 | Exit code **2** (`ExitUsage`) | Bad flag, missing argument, unknown subcommand, or rejected input | Check your flags against `mio <resource> <action> --help`. Flags are kebab-case (`--first-name`). |
 | Exit code **5** (`ExitNeedsConfir`) | A destructive op (`delete`, `cancel`, `refund`) in a non-interactive shell | Re-run with `--yes` / `-y`. |
 | Exit code **6** (`ExitRateLimited`) | Too many requests (HTTP 429) | Back off and retry. |
 | Exit code **7** (`ExitServer`) | Upstream 5xx | Transient — retry; if it persists, the backend is down. |
-| Calls fail against production | Key auth not deployed to prod yet | Point at a dev/staging backend with `--api-base <url>` or `MIO_API_BASE_URL`. |
+| Calls fail against production | Wrong API base or stale/revoked key | Verify with `mio whoami`. Point at a different backend with `--api-base <url>` or `MIO_API_BASE_URL`. |
 
 Errors are rendered TTY-aware: on an interactive terminal you get a friendly one-line `Error: <detail>` plus a dimmed `(exit code N)`; when stderr is piped or otherwise non-interactive you get the machine-readable JSON:API `errors` array with the exit code echoed in `meta.exit_code`. Either way the process exit code is the same, so scripts can branch on the exit code (and, off a TTY, on the body).
 

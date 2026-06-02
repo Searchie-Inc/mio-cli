@@ -20,7 +20,7 @@ API keys are `mio_sk_live_…`. Resolution order (first wins):
 
 If no key is found the command exits with code **3** (`ExitAuth`). Always set `MIO_API_KEY` before running any resource command.
 
-> **Caveat:** key auth requires the backend **Team API Keys** feature (mio-backend PR #128) to be deployed. Until it ships to prod, keys will not authenticate against `https://api.membership.io`. Point at a dev/staging backend with `--api-base <url>` or `MIO_API_BASE_URL` if needed.
+Key auth works against `https://api.membership.io` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL`.
 
 ---
 
