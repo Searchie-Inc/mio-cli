@@ -2,13 +2,54 @@ package client
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
+
+// claimsNamespace is the custom claim namespace used by the mio backend JWT
+// issuer. Claims are nested under this key in the token payload.
+// See app/infrastructure/security/jwt.py: CLAIMS_NAMESPACE.
+const claimsNamespace = "https://membership.io/claims"
+
+// TeamIDFromAccessToken decodes the payload segment of a JWT access token
+// (without verifying the signature — the token was just received over TLS from
+// our own backend) and extracts the team_id from the namespaced claims object.
+//
+// Returns "" if the token is malformed or the claim is absent.
+func TeamIDFromAccessToken(accessToken string) string {
+	parts := strings.Split(accessToken, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	// Base64url decode with padding tolerance.
+	payload := parts[1]
+	switch len(payload) % 4 {
+	case 2:
+		payload += "=="
+	case 3:
+		payload += "="
+	}
+	decoded, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return ""
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return ""
+	}
+	ns, ok := claims[claimsNamespace].(map[string]any)
+	if !ok {
+		return ""
+	}
+	teamID, _ := ns["team_id"].(string)
+	return teamID
+}
 
 // stderr is indirected so tests can capture debug output if needed. It defaults
 // to the process stderr.
@@ -83,4 +124,27 @@ func (c *Client) Me(ctx context.Context) (map[string]any, error) {
 		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("decode /api/auth/me: %w", uerr))
 	}
 	return out, nil
+}
+
+// TeamInfo is a minimal representation of a team returned by GET /api/teams.
+type TeamInfo struct {
+	ID   string
+	Name string
+}
+
+// ListTeams fetches the teams visible to the bearer access token (JWT) and
+// returns them as a slice of TeamInfo. It uses the JSON:API collection endpoint
+// GET /api/teams, authenticated with the access token as a JWT bearer.
+func (c *Client) ListTeams(ctx context.Context, accessToken string) ([]TeamInfo, error) {
+	tokenClient := New(c.baseURL, accessToken, WithHTTPClient(c.http), WithDebug(c.debug))
+	col, err := tokenClient.List(ctx, "/api/teams", nil)
+	if err != nil {
+		return nil, err
+	}
+	teams := make([]TeamInfo, 0, len(col.Data))
+	for _, r := range col.Data {
+		name, _ := r.Attributes["name"].(string)
+		teams = append(teams, TeamInfo{ID: r.ID, Name: name})
+	}
+	return teams, nil
 }
