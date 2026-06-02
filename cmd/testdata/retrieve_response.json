@@ -1,0 +1,25 @@
+{
+  "data": {
+    "id": "ctt_1",
+    "type": "team-contacts",
+    "attributes": {
+      "email": "alice@example.com",
+      "first_name": "Alice",
+      "last_name": "Smith",
+      "status": "active"
+    }
+  },
+  "links": {
+    "self": "/api/teams/t_team1/contacts/ctt_1"
+  },
+  "included": [
+    {
+      "id": "tag_1",
+      "type": "tags",
+      "attributes": {"name": "vip"}
+    }
+  ],
+  "meta": {
+    "request_id": "req_abc"
+  }
+}

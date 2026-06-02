@@ -20,7 +20,7 @@ API keys are `mio_sk_live_…`. Resolution order (first wins):
 
 If no key is found the command exits with code **3** (`ExitAuth`). Always set `MIO_API_KEY` before running any resource command.
 
-> **Caveat:** key auth requires the backend **Team API Keys** feature (mio-backend PR #128) to be deployed. Until it ships to prod, keys will not authenticate against `https://api.membership.io`. Point at a dev/staging backend with `--api-base <url>` or `MIO_API_BASE_URL` if needed.
+Key auth works against `https://api.membership.io` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL`.
 
 ---
 
@@ -75,7 +75,7 @@ Branch on these stable codes. Do not parse stderr for error detection.
 
 ## Destructive Operations
 
-Any `delete`, `cancel`, `refund`, or `restore` command in a non-TTY shell will exit **5** unless `--yes` (or `-y`) is passed:
+Any `delete`, `cancel`, or `refund` command in a non-TTY shell will exit **5** unless `--yes` (or `-y`) is passed. (`restore` is the undo of a soft-delete, not destructive, so it does NOT require `--yes`.)
 
 ```sh
 mio contacts delete <id> --yes
@@ -117,6 +117,7 @@ Every implemented resource and its verbs.
 |----------|-------|
 | `login` | _(interactive only — use `MIO_API_KEY` instead)_ |
 | `logout` | _(interactive only)_ |
+| `whoami` | _(no subcommand — prints resolved user, team, hub, api-base, profile, key source)_ |
 | `version` | _(no subcommand)_ |
 | `config` | `set` `get` `list` |
 | `api-keys` | `create` `list` `retrieve` `delete` |
@@ -158,7 +159,7 @@ Every implemented resource and its verbs.
 
 ## Command Gotchas
 
-- **Contact name flags use underscores**, not hyphens: `--first_name`, `--last_name` (`--first-name` is rejected with exit 2). `--email`, `--phone`, `--status` are also available.
+- **Contact name flags are kebab-case**, like every other resource: `--first-name`, `--last-name`. `--email`, `--phone`, `--status` are also available. (The legacy underscore spellings `--first_name`/`--last_name` still work as hidden, deprecated aliases for back-compat, but new scripts should use the kebab form.)
 - **`products prices` takes the product id as a positional argument**, not `--product`:
   `mio products prices create <product_id> --amount 4900 --currency usd --interval month`.
 - **`segments search --conditions` takes the full condition tree** (the backend write shape), not a flat list. Prefix with `@` to read from a file. There is no `--match` flag.

@@ -1,0 +1,30 @@
+{
+  "data": [
+    {
+      "id": "ctt_1",
+      "type": "team-contacts",
+      "attributes": {
+        "email": "alice@example.com",
+        "first_name": "Alice",
+        "status": "active"
+      }
+    },
+    {
+      "id": "ctt_2",
+      "type": "team-contacts",
+      "attributes": {
+        "email": "bob@example.com",
+        "first_name": "Bob",
+        "status": "active"
+      }
+    }
+  ],
+  "meta": {
+    "page": {
+      "has_more": false
+    }
+  },
+  "links": {
+    "self": "/api/teams/t_team1/contacts"
+  }
+}
