@@ -14,6 +14,67 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
+// resolveTeamID determines the team id to use when minting an API key after a
+// successful email+password login. Precedence:
+//
+//  1. explicit --team flag (or config current_team already resolved).
+//  2. team_id embedded in the JWT access token.
+//  3. GET /api/teams with the JWT bearer to enumerate the user's teams:
+//     - exactly one → use it automatically.
+//     - multiple    → prompt on TTY; error with list on non-TTY.
+//     - zero        → clear error.
+//
+// Returns the resolved team id, its display name (may be empty if resolved
+// from the token claim), and any error.
+func resolveTeamID(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamID string) (id, name string, err error) {
+	// 1. Explicit flag / config.
+	if flagTeamID != "" {
+		return flagTeamID, "", nil
+	}
+
+	// 2. JWT claim.
+	if tokenTeam := client.TeamIDFromAccessToken(accessToken); tokenTeam != "" {
+		return tokenTeam, "", nil
+	}
+
+	// 3. List teams via API.
+	teams, lerr := cli.ListTeams(cmd.Context(), accessToken)
+	if lerr != nil {
+		return "", "", errs.Wrap(errs.ExitGeneric, fmt.Errorf("login succeeded but could not list teams: %w", lerr))
+	}
+	switch len(teams) {
+	case 0:
+		return "", "", errs.New(errs.ExitGeneric,
+			"login succeeded but your account has no teams — contact support")
+	case 1:
+		return teams[0].ID, teams[0].Name, nil
+	default:
+		// Multiple teams: prompt on TTY, error on non-TTY.
+		if !isTTY(os.Stdin) {
+			var sb strings.Builder
+			sb.WriteString("login succeeded but multiple teams found — re-run with --team <id>:\n")
+			for _, t := range teams {
+				fmt.Fprintf(&sb, "  %s  %s\n", t.ID, t.Name)
+			}
+			return "", "", errs.New(errs.ExitUsage, "%s", strings.TrimRight(sb.String(), "\n"))
+		}
+		fmt.Fprintln(cmd.ErrOrStderr(), "Multiple teams found. Choose one:")
+		for i, t := range teams {
+			fmt.Fprintf(cmd.ErrOrStderr(), "  [%d] %s  %s\n", i+1, t.ID, t.Name)
+		}
+		fmt.Fprint(cmd.ErrOrStderr(), "Team number: ")
+		reader := bufio.NewReader(cmd.InOrStdin())
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		for i, t := range teams {
+			if line == fmt.Sprintf("%d", i+1) {
+				return t.ID, t.Name, nil
+			}
+		}
+		return "", "", errs.New(errs.ExitUsage, "invalid choice")
+	}
+}
+
 func init() {
 	rootCmd.AddCommand(loginCmd, logoutCmd)
 }
@@ -122,13 +183,13 @@ func loginPassword(cmd *cobra.Command, reader *bufio.Reader, apiBase, teamID str
 		return err
 	}
 
-	if teamID == "" {
-		return errs.New(errs.ExitUsage,
-			"login succeeded but no team id is set: re-run with --team <id> to mint a key")
+	resolvedTeam, teamName, err := resolveTeamID(cmd, cli, loginRes.AccessToken, teamID)
+	if err != nil {
+		return err
 	}
 
 	keyName := fmt.Sprintf("mio-cli@%s", hostname())
-	minted, err := cli.MintAPIKey(cmd.Context(), loginRes.AccessToken, teamID, keyName)
+	minted, err := cli.MintAPIKey(cmd.Context(), loginRes.AccessToken, resolvedTeam, keyName)
 	if err != nil {
 		return err
 	}
@@ -140,12 +201,16 @@ func loginPassword(cmd *cobra.Command, reader *bufio.Reader, apiBase, teamID str
 	if err := config.SetAPIKey(secret); err != nil {
 		return errs.Wrap(errs.ExitGeneric, err)
 	}
-	cfg.CurrentTeam = teamID
+	cfg.CurrentTeam = resolvedTeam
 	if err := cfg.Save(); err != nil {
 		return errs.Wrap(errs.ExitGeneric, err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Logged in: minted key %q for team %s and stored it.\n", keyName, teamID)
+	displayTeam := resolvedTeam
+	if teamName != "" {
+		displayTeam = fmt.Sprintf("%s (%s)", teamName, resolvedTeam)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Logged in as %s. Using team %s. Saved API key.\n", email, displayTeam)
 	return nil
 }
 
