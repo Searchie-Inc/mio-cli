@@ -50,7 +50,7 @@ mio hubs retrieve — retrieve a hub by id
 mio hubs update — update hub attributes
 mio hubs delete — delete a hub
 
-mio contacts create — create a new contact in the active team; flags: --email --first_name --last_name --phone --status (underscores, not hyphens)
+mio contacts create — create a new contact in the active team; flags: --email --first-name --last-name --phone --status (kebab-case; legacy --first_name/--last_name still accepted as hidden aliases)
 mio contacts list — list contacts (supports filter flags)
 mio contacts retrieve — retrieve a contact by id
 mio contacts update — update contact attributes

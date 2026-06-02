@@ -343,18 +343,21 @@ func TestContract_ExitCodes_UnknownRootCommand(t *testing.T) {
 // TestContract_ExitCodes_UnknownSubcommandOnResourceGroup: unknown subcommand
 // on a resource group (e.g. `mio contacts frobnicate`).
 //
-// CONTRACT-BUG(P0): CURRENT behaviour is exit 0. Cobra treats a group-only
-// command with no RunE as a successful no-op when it receives unrecognised args.
-// The P0 rejig will set RunE (or equivalent) on resource group commands so
-// unknown subcommands return exit 2 (ExitUsage).
-// When P0 fixes this: change the assertion from ExitOK → ExitUsage and remove
-// this comment block.
+// CONTRACT (P0-FIXED): an unknown subcommand on a resource group exits 2
+// (ExitUsage). Previously this was exit 0 — cobra treated a group-only command
+// with no RunE as a successful no-op when it received unrecognised args, which
+// silently swallowed typos. The P0 rejig attaches a RunE guard to every group
+// command (see attachGroupGuards in root.go) so unknown/missing subcommands now
+// return ExitUsage and print usage to stderr.
 func TestContract_ExitCodes_UnknownSubcommandOnResourceGroup(t *testing.T) {
 	res := runContract(t, nil, "contacts", "frobnicate-unknown-subcommand")
-	// CONTRACT-BUG(P0): currently 0. P0 will change this to 2 (ExitUsage).
-	if res.Code != errs.ExitOK {
-		t.Errorf("CONTRACT-BUG(P0): unknown-subcommand-on-group exit code = %d, want %d (ExitOK — P0 will change to ExitUsage=2)",
-			res.Code, errs.ExitOK)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("CONTRACT: unknown-subcommand-on-group exit code = %d, want %d (ExitUsage)",
+			res.Code, errs.ExitUsage)
+	}
+	// The error path must not contaminate stdout — usage goes to stderr only.
+	if strings.TrimSpace(res.Stdout) != "" {
+		t.Errorf("CONTRACT: unknown-subcommand-on-group must produce no stdout; got: %q", res.Stdout)
 	}
 }
 

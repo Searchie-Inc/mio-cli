@@ -718,7 +718,7 @@ without triggering a full data import. Useful for adopting individual products
 during a staged migration.
 
 --stripe-product-id and --hub-id are required.`,
-	Example: `  mio checkout stripe-sync adopt-product --stripe-product-id prod_0123456789ABCD --hub-id 11111111-1111-4111-8111-111111111111`,
+	Example: `  mio checkout stripe-sync adopt-product --stripe-product-id prod_abc123 --hub-id hub_abc123`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, err := checkoutTeamContext(cmd)

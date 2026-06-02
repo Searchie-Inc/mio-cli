@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -69,11 +70,73 @@ func init() {
 // Execute runs the root command and returns the error (if any) for main.go to
 // map onto a process exit code. It does not call os.Exit itself.
 func Execute() error {
+	ensureGroupGuards()
 	return rootCmd.Execute()
 }
 
-// RootCmd exposes the root command for docs generation and tests.
-func RootCmd() *cobra.Command { return rootCmd }
+// groupGuardsOnce ensures the group guards are attached exactly once, no matter
+// how many times Execute()/RootCmd() are called (the in-process contract tests
+// call RootCmd().Execute() directly, bypassing Execute()).
+var groupGuardsOnce sync.Once
+
+// ensureGroupGuards attaches the group guards to the fully-built command tree
+// the first time it is called. It is safe to call from both Execute() (the
+// production path) and RootCmd() (the test path) — the sync.Once makes it
+// idempotent, and by the time either runs every resource init() has registered
+// its subcommands.
+func ensureGroupGuards() {
+	groupGuardsOnce.Do(func() {
+		attachGroupGuards(rootCmd)
+	})
+}
+
+// attachGroupGuards walks the fully-built command tree and makes every "group"
+// command (one with subcommands but no Run/RunE of its own — e.g. `contacts`,
+// `teams`, `teams members`, `checkout`, `config`, and the bare root `mio`) fail
+// with ExitUsage (exit 2) when invoked with no subcommand or an unknown one.
+//
+// Without this, cobra treats a group command that receives unrecognised args as
+// a successful no-op (exit 0), which silently swallows typos like
+// `mio contacts frobnicate`. Agents and CI cannot distinguish that from success.
+//
+// The guard prints help to stderr (not stdout) so it never contaminates the
+// machine-readable stdout contract, and returns a *CLIError carrying ExitUsage
+// so main.go maps it to exit 2 and renders it through the normal error path.
+func attachGroupGuards(cmd *cobra.Command) {
+	for _, sub := range cmd.Commands() {
+		attachGroupGuards(sub)
+	}
+
+	// A "group" is a command that has subcommands but defines no runnable action
+	// of its own. Leaf commands (with RunE/Run) and already-guarded groups are
+	// left untouched.
+	if !cmd.HasSubCommands() || cmd.RunE != nil || cmd.Run != nil {
+		return
+	}
+
+	cmd.RunE = func(c *cobra.Command, args []string) error {
+		// Help requested explicitly (`mio contacts --help`) is handled by cobra
+		// before RunE; reaching here means the group was invoked with no
+		// subcommand or an unknown one. Print usage to STDERR — never stdout —
+		// so the machine-readable stdout contract stays empty on this error.
+		fmt.Fprint(c.ErrOrStderr(), c.UsageString())
+		if len(args) == 0 {
+			return errs.New(errs.ExitUsage,
+				"%q requires a subcommand; see the usage above", c.CommandPath())
+		}
+		return errs.New(errs.ExitUsage,
+			"unknown subcommand %q for %q; see the usage above", args[0], c.CommandPath())
+	}
+}
+
+// RootCmd exposes the root command for docs generation and tests. It attaches
+// the group guards on first use so callers that drive the tree directly (docs
+// generation, in-process tests) get the same unknown-subcommand behaviour as
+// the production Execute() path.
+func RootCmd() *cobra.Command {
+	ensureGroupGuards()
+	return rootCmd
+}
 
 func init() {
 	pf := rootCmd.PersistentFlags()
@@ -164,20 +227,24 @@ func (c *cmdContext) requireAuth() error {
 	return nil
 }
 
-// requireTeam returns the resolved team id or a usage error if none is set.
+// requireTeam returns the resolved team id or a usage error if none is set. The
+// error carries an actionable hint pointing at the commands that resolve it.
 func (c *cmdContext) requireTeam() (string, error) {
 	if c.resolved.TeamID == "" {
 		return "", errs.New(errs.ExitUsage,
-			"no team id in context: pass --team <id> or run `mio config set team <id>`")
+			"no team id in context: pass --team <id> or run `mio config set team <id>` "+
+				"— run 'mio teams list' then 'mio teams switch <id>'")
 	}
 	return c.resolved.TeamID, nil
 }
 
-// requireHub returns the resolved hub id or a usage error if none is set.
+// requireHub returns the resolved hub id or a usage error if none is set. The
+// error carries an actionable hint pointing at the commands that resolve it.
 func (c *cmdContext) requireHub() (string, error) {
 	if c.resolved.HubID == "" {
 		return "", errs.New(errs.ExitUsage,
-			"no hub id in context: pass --hub <id> or run `mio config set hub <id>`")
+			"no hub id in context: pass --hub <id> or run `mio config set hub <id>` "+
+				"— run 'mio hubs list' then 'mio config set hub <id>'")
 	}
 	return c.resolved.HubID, nil
 }

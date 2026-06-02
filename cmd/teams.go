@@ -24,6 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/config"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -211,9 +212,14 @@ var teamsDeleteCmd = &cobra.Command{
 }
 
 var teamsSwitchCmd = &cobra.Command{
-	Use:     "switch <id>",
-	Short:   "Switch the active team.",
-	Long:    "Set a team as the active team context. Stores the selection in the local config.",
+	Use:   "switch <id>",
+	Short: "Switch the active team.",
+	Long: `Switch the active team. This performs the server-side switch AND updates the
+local CLI context: it writes the team as the current team in config and clears
+the current hub (hubs are team-scoped, so the old hub no longer applies).
+
+To set the local team context WITHOUT a server-side switch, use
+'mio config set team <id>'.`,
 	Example: `  mio teams switch team_abc123`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -229,11 +235,28 @@ var teamsSwitchCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if res == nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "Switched to team %s.\n", args[0])
-			return nil
+
+		// Server-side switch succeeded — now update the LOCAL context so
+		// subsequent team-scoped commands target the new team. Clear the
+		// current hub because hubs are team-scoped: a hub from the old team is
+		// not valid under the new one. This is intentionally a separate concern
+		// from `mio config set team`, which is local-only and does not POST.
+		cfg, cerr := config.Load()
+		if cerr != nil {
+			return errs.Wrap(errs.ExitGeneric, cerr)
 		}
-		return c.render(cmd, res)
+		cfg.CurrentTeam = args[0]
+		cfg.CurrentHub = ""
+		if serr := cfg.Save(); serr != nil {
+			return errs.Wrap(errs.ExitGeneric, serr)
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(),
+			"Switched to team %s (updated local context; cleared current hub).\n", args[0])
+		if res != nil {
+			return c.render(cmd, res)
+		}
+		return nil
 	},
 }
 

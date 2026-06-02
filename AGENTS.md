@@ -117,6 +117,7 @@ Every implemented resource and its verbs.
 |----------|-------|
 | `login` | _(interactive only — use `MIO_API_KEY` instead)_ |
 | `logout` | _(interactive only)_ |
+| `whoami` | _(no subcommand — prints resolved user, team, hub, api-base, profile, key source)_ |
 | `version` | _(no subcommand)_ |
 | `config` | `set` `get` `list` |
 | `api-keys` | `create` `list` `retrieve` `delete` |
@@ -158,7 +159,7 @@ Every implemented resource and its verbs.
 
 ## Command Gotchas
 
-- **Contact name flags use underscores**, not hyphens: `--first_name`, `--last_name` (`--first-name` is rejected with exit 2). `--email`, `--phone`, `--status` are also available.
+- **Contact name flags are kebab-case**, like every other resource: `--first-name`, `--last-name`. `--email`, `--phone`, `--status` are also available. (The legacy underscore spellings `--first_name`/`--last_name` still work as hidden, deprecated aliases for back-compat, but new scripts should use the kebab form.)
 - **`products prices` takes the product id as a positional argument**, not `--product`:
   `mio products prices create <product_id> --amount 4900 --currency usd --interval month`.
 - **`segments search --conditions` takes the full condition tree** (the backend write shape), not a flat list. Prefix with `@` to read from a file. There is no `--match` flag.

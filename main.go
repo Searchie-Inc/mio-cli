@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 
+	"golang.org/x/term"
+
 	"github.com/Searchie-Inc/mio-cli/cmd"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
@@ -45,10 +47,37 @@ func exitCodeFor(err error) int {
 	return errs.ExitUsage
 }
 
-// writeErrorEnvelope prints the error to stderr as a JSON:API-style error
-// document so agents can parse failures uniformly. The HTTP-ish status mirrors
-// the exit code's class for convenience.
+// writeErrorEnvelope renders the error to stderr. The rendering is TTY-aware:
+//
+//   - When stderr is a real terminal (a human is watching), it prints a
+//     friendly one-line `Error: <detail>` followed by a dimmed `(exit code N)`,
+//     so interactive use isn't a wall of JSON.
+//   - When stderr is NOT a terminal (piped to a file, another process, or an
+//     agent), it emits the EXACT JSON:API error envelope. This shape is a
+//     machine contract that agents and CI parse — it must never change.
 func writeErrorEnvelope(err error, code int) {
+	if term.IsTerminal(int(os.Stderr.Fd())) {
+		writeFriendlyError(err, code)
+		return
+	}
+	writeJSONErrorEnvelope(err, code)
+}
+
+// writeFriendlyError prints a human-readable, single-line error for interactive
+// terminals. The exit-code hint is dimmed with ANSI so it reads as secondary.
+func writeFriendlyError(err error, code int) {
+	const (
+		dim   = "\x1b[2m"
+		reset = "\x1b[0m"
+	)
+	fmt.Fprintf(os.Stderr, "Error: %s\n", err.Error())
+	fmt.Fprintf(os.Stderr, "%s(exit code %d)%s\n", dim, code, reset)
+}
+
+// writeJSONErrorEnvelope prints the error to stderr as a JSON:API-style error
+// document so agents can parse failures uniformly. The HTTP-ish status mirrors
+// the exit code's class for convenience. This is the non-TTY contract path.
+func writeJSONErrorEnvelope(err error, code int) {
 	doc := map[string]any{
 		"errors": []map[string]any{
 			{

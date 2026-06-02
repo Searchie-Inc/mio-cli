@@ -154,11 +154,11 @@ When in doubt, append `--help` to any command.
 # Set your default team (do this once)
 mio config set team <team-id>
 
-# Contacts  (note: name flags use underscores: --first_name / --last_name)
+# Contacts
 mio contacts list
-mio contacts create --email alice@example.com --first_name Alice --last_name Smith
+mio contacts create --email alice@example.com --first-name Alice --last-name Smith
 mio contacts retrieve <id>
-mio contacts update <id> --last_name "Jones"
+mio contacts update <id> --last-name "Jones"
 mio contacts delete <id> --yes
 
 # Hubs
@@ -299,7 +299,7 @@ Multiple named profiles are supported via `--profile`.
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Exit code **3** (`ExitAuth`) | No key, or the key is invalid/expired | Run `mio login`, or `export MIO_API_KEY=mio_sk_live_…`. Remember key auth needs backend [PR #128](https://github.com/Searchie-Inc/mio-backend/pull/128) deployed. |
-| Exit code **2** (`ExitUsage`) | Bad flag, missing argument, or rejected input | Check your flags against `mio <resource> <action> --help`. Note name flags use underscores (`--first_name`). |
+| Exit code **2** (`ExitUsage`) | Bad flag, missing argument, unknown subcommand, or rejected input | Check your flags against `mio <resource> <action> --help`. Flags are kebab-case (`--first-name`). |
 | Exit code **5** (`ExitNeedsConfir`) | A destructive op (`delete`, `cancel`, `refund`) in a non-interactive shell | Re-run with `--yes` / `-y`. |
 | Exit code **6** (`ExitRateLimited`) | Too many requests (HTTP 429) | Back off and retry. |
 | Exit code **7** (`ExitServer`) | Upstream 5xx | Transient — retry; if it persists, the backend is down. |

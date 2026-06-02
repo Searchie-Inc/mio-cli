@@ -12,6 +12,7 @@ import (
 	"net/url"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
@@ -121,8 +122,8 @@ var contactsCreateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "email")
-		setStringFlag(cmd, attrs, "first_name")
-		setStringFlag(cmd, attrs, "last_name")
+		setStringFlag(cmd, attrs, "first-name")
+		setStringFlag(cmd, attrs, "last-name")
 		setStringFlag(cmd, attrs, "phone")
 		setStringFlag(cmd, attrs, "status")
 
@@ -190,8 +191,8 @@ var contactsUpdateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "email")
-		setStringFlag(cmd, attrs, "first_name")
-		setStringFlag(cmd, attrs, "last_name")
+		setStringFlag(cmd, attrs, "first-name")
+		setStringFlag(cmd, attrs, "last-name")
 		setStringFlag(cmd, attrs, "phone")
 		setStringFlag(cmd, attrs, "status")
 
@@ -264,10 +265,6 @@ var contactsRestoreCmd = &cobra.Command{
 			return err
 		}
 
-		if err := confirmDestructive(cmd, fmt.Sprintf("Restore contact %s?", args[0])); err != nil {
-			return err
-		}
-
 		path := fmt.Sprintf("%s/restore", contactsPath(teamID, args[0]))
 		res, err := c.client.Action(c.ctx, "POST", path, nil)
 		if err != nil {
@@ -282,17 +279,36 @@ var contactsRestoreCmd = &cobra.Command{
 }
 
 func init() {
-	// Attribute flags for create/update.
+	// Attribute flags for create/update. Names are kebab-case to match every
+	// other resource; the underscore spellings (--first_name/--last_name) are
+	// kept working as hidden, deprecated aliases via contactsNameFlagAlias so
+	// existing scripts do not break.
 	for _, cmd := range []*cobra.Command{contactsCreateCmd, contactsUpdateCmd} {
 		cmd.Flags().String("email", "", "Contact email address.")
-		cmd.Flags().String("first_name", "", "Contact first name.")
-		cmd.Flags().String("last_name", "", "Contact last name.")
+		cmd.Flags().String("first-name", "", "Contact first name.")
+		cmd.Flags().String("last-name", "", "Contact last name.")
 		cmd.Flags().String("phone", "", "Contact phone number.")
 		cmd.Flags().String("status", "", "Contact status (e.g. active, unsubscribed).")
+		cmd.Flags().SetNormalizeFunc(contactsNameFlagAlias)
 	}
 
 	// Pagination + filter flags for list.
 	addPaginationFlags(contactsListCmd)
 	contactsListCmd.Flags().String("filter-email", "", "Filter contacts by exact email address.")
 	contactsListCmd.Flags().String("filter-status", "", "Filter contacts by status.")
+}
+
+// contactsNameFlagAlias keeps the deprecated underscore spellings of the
+// contact name flags working. It normalizes the legacy --first_name/--last_name
+// onto their canonical kebab-case names so `--first_name X` sets the SAME pflag
+// as `--first-name X`. This is a back-compat shim: the underscore forms are not
+// advertised in help, but existing scripts that pass them keep working.
+func contactsNameFlagAlias(_ *pflag.FlagSet, name string) pflag.NormalizedName {
+	switch name {
+	case "first_name":
+		name = "first-name"
+	case "last_name":
+		name = "last-name"
+	}
+	return pflag.NormalizedName(name)
 }
