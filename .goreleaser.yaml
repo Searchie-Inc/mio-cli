@@ -81,25 +81,29 @@ release:
   prerelease: auto
   name_template: "v{{ .Version }}"
 
-brews:
-  - name: mio
-    ids:
-      - unix-archives
-    repository:
-      owner: Searchie-Inc
-      name: homebrew-tap
-      branch: main
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    commit_author:
-      name: goreleaserbot
-      email: bot@goreleaser.com
-    commit_msg_template: "brew formula update for {{ .ProjectName }} version {{ .Tag }}"
-    directory: Formula
-    homepage: "https://membership.io"
-    description: "The official Membership.io CLI"
-    license: "MIT"
-    skip_upload: auto
-    install: |
-      bin.install "mio"
-    test: |
-      system "#{bin}/mio", "version"
+# Homebrew tap — DISABLED until the tap is provisioned.
+# To enable `brew install searchie-inc/tap/mio`:
+#   1. Create the repo  Searchie-Inc/homebrew-tap  (public).
+#   2. Create a PAT with `repo`/`public_repo` scope that can push to it.
+#   3. Add it as the repository secret HOMEBREW_TAP_GITHUB_TOKEN on Searchie-Inc/mio-cli
+#      (the env name release.yml passes — keep the two names in sync).
+#   4. Uncomment this block and cut a new tag.
+# Until then, install via the prebuilt binaries (GitHub Releases), the curl
+# installer (scripts/install.sh), or `go install`.
+#
+# brews:
+#   - name: mio
+#     ids: [unix-archives]
+#     repository:
+#       owner: Searchie-Inc
+#       name: homebrew-tap
+#       branch: main
+#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+#     directory: Formula
+#     homepage: "https://membership.io"
+#     description: "The official Membership.io CLI"
+#     license: "MIT"
+#     install: |
+#       bin.install "mio"
+#     test: |
+#       system "#{bin}/mio", "version"
