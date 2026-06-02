@@ -1,0 +1,109 @@
+# .goreleaser.yaml — mio CLI release configuration
+# Docs: https://goreleaser.com/customization/
+version: 2
+
+project_name: mio
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - id: mio
+    main: .
+    binary: mio
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Exclude unsupported combos (Windows arm64 is still experimental)
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/Searchie-Inc/mio-cli/internal/version.Version={{.Version}}
+      - -X github.com/Searchie-Inc/mio-cli/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/Searchie-Inc/mio-cli/internal/version.Date={{.Date}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# macOS universal binary (lipo-merged amd64 + arm64)
+universal_binaries:
+  - id: mio-darwin-universal
+    ids:
+      - mio
+    replace: false
+    name_template: mio
+
+archives:
+  # tar.gz for Linux and macOS (including universal)
+  - id: unix-archives
+    ids:
+      - mio
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: Searchie-Inc
+    name: mio-cli
+  draft: false
+  prerelease: auto
+  name_template: "v{{ .Version }}"
+
+# Homebrew tap — DISABLED until the tap is provisioned.
+# To enable `brew install searchie-inc/tap/mio`:
+#   1. Create the repo  Searchie-Inc/homebrew-tap  (public).
+#   2. Create a PAT with `repo`/`public_repo` scope that can push to it.
+#   3. Add it as the repository secret HOMEBREW_TAP_GITHUB_TOKEN on Searchie-Inc/mio-cli
+#      (the env name release.yml passes — keep the two names in sync).
+#   4. Uncomment this block and cut a new tag.
+# Until then, install via the prebuilt binaries (GitHub Releases), the curl
+# installer (scripts/install.sh), or `go install`.
+#
+# brews:
+#   - name: mio
+#     ids: [unix-archives]
+#     repository:
+#       owner: Searchie-Inc
+#       name: homebrew-tap
+#       branch: main
+#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+#     directory: Formula
+#     homepage: "https://membership.io"
+#     description: "The official Membership.io CLI"
+#     license: "MIT"
+#     install: |
+#       bin.install "mio"
+#     test: |
+#       system "#{bin}/mio", "version"

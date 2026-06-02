@@ -1,0 +1,181 @@
+# mio CLI — machine-readable command index
+# Format: mio <resource> [sub-resource] <action> — purpose
+# Auth: export MIO_API_KEY=mio_sk_live_<key>  (exit 3 if missing/invalid)
+#       resolution order: --api-key flag > MIO_API_KEY env > OS-keychain key (mio login)
+#       key auth needs backend Team API Keys (mio-backend PR #128) deployed
+# Config: TOML at ~/.config/mio/config.toml ($XDG_CONFIG_HOME/mio/config.toml); keys: team|hub|api-base
+# Output: JSON by default when piped; --output json|table|plain; --jq <expr>; --raw for envelope
+# Destructive ops (delete|cancel|refund|restore): require --yes/-y in non-interactive shells (exit 5 otherwise)
+# Exit codes: 0=ok 1=error 2=bad-args(400/409/422) 3=auth(401/403) 4=not-found 5=needs-confirm 6=rate-limited(429) 7=server(5xx)
+# Full reference: mio gen-docs --dir ./docs  (one Markdown file per command)
+
+mio version — print version information
+mio login — interactive login (stores token); use MIO_API_KEY instead in agents
+mio logout — clear stored credentials
+
+mio config set — set a config value (team, hub, api-base, profile keys)
+mio config get — get a config value
+mio config list — list all config values
+
+mio api-keys create — create a new API key for the current team (secret returned once)
+mio api-keys list — list API keys for the current team
+mio api-keys retrieve — retrieve a single API key by id
+mio api-keys delete — revoke an API key by id
+
+mio teams create — create a new team
+mio teams list — list teams the authenticated user belongs to
+mio teams retrieve — retrieve a team by id
+mio teams update — update team attributes
+mio teams delete — delete a team
+mio teams switch — switch the active team context
+mio teams members list — list members of a team
+mio teams members add — add a user to a team
+mio teams members remove — remove a user from a team
+
+mio users me — retrieve the authenticated user's own profile
+mio users list — list users
+mio users retrieve — retrieve a user by id
+mio users update — update a user's attributes
+
+mio roles create — create a custom role
+mio roles list — list roles
+mio roles retrieve — retrieve a role by id
+mio roles update — update a role
+mio roles delete — delete a role
+mio roles permissions list — list all available permissions
+
+mio hubs create — create a new hub within the active team
+mio hubs list — list hubs in the active team
+mio hubs retrieve — retrieve a hub by id
+mio hubs update — update hub attributes
+mio hubs delete — delete a hub
+
+mio contacts create — create a new contact in the active team; flags: --email --first_name --last_name --phone --status (underscores, not hyphens)
+mio contacts list — list contacts (supports filter flags)
+mio contacts retrieve — retrieve a contact by id
+mio contacts update — update contact attributes
+mio contacts delete — soft-delete a contact
+mio contacts restore — restore a soft-deleted contact
+
+mio contact-attributes create — create a contact attribute definition
+mio contact-attributes list — list attribute definitions
+mio contact-attributes retrieve — retrieve an attribute definition by id
+mio contact-attributes update — update an attribute definition
+mio contact-attributes delete — delete an attribute definition
+mio contact-attributes options create — create a select option for an attribute definition
+mio contact-attributes options list — list options for an attribute definition
+mio contact-attributes options update — update a select option
+mio contact-attributes options delete — delete a select option
+mio contact-attributes hub-config create — enable/configure an attribute for a hub
+mio contact-attributes hub-config list — list hub-level attribute configurations
+mio contact-attributes hub-config update — update a hub attribute configuration
+mio contact-attributes hub-config delete — remove a hub attribute configuration
+mio contact-attributes values get — get all attribute values for a contact
+mio contact-attributes values set — set attribute values for a contact
+
+mio tags create — create a tag in the active team
+mio tags list — list tags
+mio tags retrieve — retrieve a tag by id
+mio tags update — update a tag
+mio tags delete — delete a tag
+mio tags assign — assign a tag to a contact
+mio tags assign-bulk — bulk-assign tags to a contact
+mio tags remove — remove a tag from a contact
+
+mio segments create — create a segment with condition rules
+mio segments list — list segments
+mio segments retrieve — retrieve a segment by id
+mio segments update — update segment attributes or conditions
+mio segments delete — delete a segment
+mio segments search — preview contacts matching a condition TREE, does not save; --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}' (or @file.json); --page-size --page-after
+mio segments members — list contacts currently in a segment
+mio segments count — return the member count for a segment
+
+mio content create — create a content node in a hub
+mio content list — list root-level content nodes in a hub
+mio content retrieve — retrieve a content node by id
+mio content children — list child nodes of a content node
+mio content update — update a content node
+mio content delete — soft-delete a content node
+mio content restore — restore a soft-deleted content node
+mio content reorder — reorder content nodes within a parent
+
+mio pages create — create a page in a hub
+mio pages list — list pages in a hub
+mio pages retrieve — retrieve a page by id
+mio pages update — update a page
+mio pages delete — delete a page
+mio pages home — retrieve the hub's home page
+mio pages sections create — add a section to a page
+mio pages sections list — list sections on a page
+mio pages sections update — update a section
+mio pages sections delete — delete a section from a page
+mio pages sections reorder — reorder sections on a page
+
+mio products create — create a product
+mio products list — list products in the active team
+mio products retrieve — retrieve a product by id
+mio products update — update a product
+mio products delete — delete a product
+mio products prices create — create a price for a product; product id is a POSITIONAL arg: mio products prices create <product_id> --amount 4900 --currency usd --interval month [--nickname ...]
+mio products prices list — list prices for a product; product id is a POSITIONAL arg: mio products prices list <product_id>
+mio products prices retrieve — retrieve a price by id
+mio products prices update — update a price
+mio products prices delete — delete a price
+
+mio checkout orders list — list orders in a hub
+mio checkout orders retrieve — retrieve an order by id
+mio checkout subscriptions list — list subscriptions in a hub
+mio checkout subscriptions retrieve — retrieve a subscription by id
+mio checkout subscriptions cancel — cancel a subscription
+mio checkout payments list — list payments in a hub
+mio checkout payments retrieve — retrieve a payment by id
+mio checkout payments refund — issue a refund for a payment
+mio checkout webhooks list — list payment webhook events
+mio checkout webhooks retrieve — retrieve a webhook event by id
+mio checkout webhooks replay — replay a payment webhook event
+mio checkout accounts list — list connected payment accounts
+mio checkout accounts retrieve — retrieve a payment account by id
+mio checkout accounts onboarding-link — generate a Stripe Connect onboarding link
+mio checkout stripe-sync import — start a Stripe data import for the active team
+mio checkout stripe-sync import-status — check the status of a Stripe import run
+mio checkout stripe-sync adopt-product — adopt an existing Stripe product into mio
+
+mio email drip-campaigns create — create a drip campaign
+mio email drip-campaigns list — list drip campaigns
+mio email drip-campaigns retrieve — retrieve a drip campaign by id
+mio email drip-campaigns update — update a drip campaign
+mio email drip-campaigns delete — delete a drip campaign
+mio email drip-campaigns activate — activate a paused or draft drip campaign
+mio email drip-campaigns pause — pause an active drip campaign
+mio email steps create — add a step to a drip campaign
+mio email steps list — list steps in a drip campaign
+mio email steps update — update a drip campaign step
+mio email steps delete — delete a step from a drip campaign
+mio email templates create — create an email template
+mio email templates list — list email templates
+mio email templates retrieve — retrieve a template by id
+mio email templates update — update an email template
+mio email templates delete — delete an email template
+mio email templates preview — render a preview of an email template
+mio email config set — configure outbound email (SMTP / provider settings)
+mio email config get — retrieve current email configuration
+mio email config delete — remove email configuration
+mio email config test — send a test email to verify configuration
+mio email enrollments list — list contacts enrolled in a drip campaign
+mio email enrollments exit — remove a contact from a drip campaign enrollment
+mio email stats get — retrieve email send/open/click stats for a hub
+
+mio access-rules rules create — create an access rule for a hub
+mio access-rules rules list — list access rules
+mio access-rules rules retrieve — retrieve an access rule by id
+mio access-rules rules update — update an access rule
+mio access-rules rules delete — delete an access rule
+mio access-rules overrides create — create an access override for a specific contact
+mio access-rules overrides list — list access overrides
+mio access-rules overrides retrieve — retrieve an access override by id
+mio access-rules overrides update — update an access override
+mio access-rules overrides delete — delete an access override
+
+mio activity contact — retrieve activity feed for a specific contact in a hub
+mio activity top-engaged — retrieve the most engaged contacts in a hub
