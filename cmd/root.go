@@ -187,8 +187,16 @@ func (c *cmdContext) requireHub() (string, error) {
 // runtime/output problem, not a flags-usage problem — wrap it in a *CLIError
 // with ExitGeneric so it is NOT misclassified as a Cobra usage error (exit 2) by
 // main.go's non-*CLIError → ExitUsage rule.
+//
+// We nil-check before wrapping: errs.Wrap returns a typed *CLIError nil when
+// passed a nil error, and a typed-nil *CLIError returned from RunE becomes a
+// non-nil error interface value, causing cobra's errors.Is chain to panic in
+// (*CLIError).Unwrap when the receiver is a typed nil.
 func (c *cmdContext) render(cmd *cobra.Command, v any) error {
-	return errs.Wrap(errs.ExitGeneric, output.Render(cmd.OutOrStdout(), v, c.out))
+	if err := output.Render(cmd.OutOrStdout(), v, c.out); err != nil {
+		return errs.Wrap(errs.ExitGeneric, err)
+	}
+	return nil
 }
 
 // resolveFormat applies the --output value, defaulting to json off a TTY and
