@@ -230,9 +230,7 @@ func buildBinary(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	if strings.HasSuffix(moduleRoot, "/cmd") {
-		moduleRoot = moduleRoot[:len(moduleRoot)-4]
-	}
+	moduleRoot = strings.TrimSuffix(moduleRoot, "/cmd")
 
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Dir = moduleRoot
@@ -742,7 +740,7 @@ func TestContract_OutputFormats_PlainRetrieve(t *testing.T) {
 	typeIdx := indexContaining(lines, "type=")
 	if emailIdx < 0 || idIdx < 0 || typeIdx < 0 {
 		t.Errorf("CONTRACT: plain output missing email/id/type lines; lines=%v", lines)
-	} else if !(emailIdx < idIdx && idIdx < typeIdx) {
+	} else if emailIdx >= idIdx || idIdx >= typeIdx {
 		t.Errorf("CONTRACT: plain output not alphabetically sorted; email@%d id@%d type@%d; lines=%v",
 			emailIdx, idIdx, typeIdx, lines)
 	}
