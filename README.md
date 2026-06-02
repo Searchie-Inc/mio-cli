@@ -8,51 +8,69 @@ The official command-line interface for [Membership.io](https://membership.io).
 
 ## Prerequisites
 
-- **From source:** [Go 1.25+](https://go.dev/dl/) (the module targets Go 1.25).
-- **Released binary** (once published): none — the binary is self-contained.
+- **Prebuilt binary / curl install:** none — the binary is self-contained and statically linked.
+- **`go install` or building from source:** [Go 1.25+](https://go.dev/dl/) (the module targets Go 1.25).
 
 ---
 
 ## Install
 
-> **Status:** the CLI currently lives on the `feat/initial-cli` branch (PR #1). `main` has only the license, and **no release tag has been cut yet**. Until the first release ships, use the **From source** path below — the published-package installs (Homebrew, `curl`, `go install …@latest`) are not live yet.
+**`mio` v0.1.0 is released.** Pick whichever you prefer.
 
-### From source (works today)
-
-Requires Go 1.25+.
+### curl (recommended — macOS / Linux)
 
 ```sh
-git clone -b feat/initial-cli https://github.com/Searchie-Inc/mio-cli
+curl -fsSL https://raw.githubusercontent.com/Searchie-Inc/mio-cli/main/scripts/install.sh | sh
+```
+
+Detects your OS/arch, verifies the SHA-256 checksum, and installs `mio` into `/usr/local/bin` (you'll be asked for sudo). Install somewhere you own instead with `PREFIX`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Searchie-Inc/mio-cli/main/scripts/install.sh | PREFIX="$HOME/.local/bin" sh
+# then make sure that dir is on your PATH, e.g. add to ~/.zshrc:
+#   export PATH="$HOME/.local/bin:$PATH"
+```
+
+Pin a specific version with `VERSION=0.1.0`.
+
+### Prebuilt binary (any platform)
+
+Download the archive for your OS/arch from the [latest release](https://github.com/Searchie-Inc/mio-cli/releases/latest), extract it, and put `mio` on your `PATH`:
+
+- macOS / Linux: `mio_0.1.0_<os>_<arch>.tar.gz`
+- Windows: `mio_0.1.0_windows_amd64.zip`
+
+`checksums.txt` is published alongside for verification.
+
+### go install (Go 1.25+)
+
+```sh
+go install github.com/Searchie-Inc/mio-cli@v0.1.0
+```
+
+> **Note:** `go install` names the binary **`mio-cli`** (after the module path), not `mio`, and installs it to `$(go env GOPATH)/bin` (make sure that's on your `PATH`). Rename it if you like:
+> ```sh
+> mv "$(go env GOPATH)/bin/mio-cli" "$(go env GOPATH)/bin/mio"
+> ```
+> Or just use the curl / prebuilt-binary install above for a ready-to-go `mio`.
+
+### Homebrew — coming soon
+
+`brew install searchie-inc/tap/mio` isn't enabled yet (the tap is being provisioned). Use the curl installer or a prebuilt binary for now.
+
+### From source
+
+```sh
+git clone https://github.com/Searchie-Inc/mio-cli
 cd mio-cli
 go build -o mio .
 ./mio version
 ```
 
-Prefer it on your `PATH`? From the same clone:
+Verify any install:
 
 ```sh
-go install ./...   # installs `mio` into $(go env GOPATH)/bin
-```
-
-### After the first release (`v0.1.0`)
-
-These become available once PR #1 merges to `main` and a version tag is cut. **They do not work yet.**
-
-```sh
-# Homebrew (macOS / Linux)
-brew install searchie-inc/tap/mio
-
-# curl one-liner (Linux / macOS)
-curl -fsSL https://get.membership.io/mio/install.sh | sh
-
-# Go install (pinned to the released tag)
-go install github.com/Searchie-Inc/mio-cli@latest
-```
-
-After installing, verify:
-
-```sh
-mio version
+mio version   # → mio 0.1.0 (commit …, built …)
 ```
 
 ---
@@ -60,7 +78,7 @@ mio version
 ## First run
 
 ```sh
-# 1. Install (see above) — from source today, or a released binary later.
+# 1. Install (see above) — e.g. the curl one-liner.
 
 # 2. Authenticate (pick one)
 mio login                              # interactive — stores a key in your OS keychain
