@@ -209,6 +209,7 @@ var knownCollections = map[string]bool{
 	"enrollments": true, "orders": true, "subscriptions": true,
 	"payments": true, "refund": true, "attributes": true,
 	"payment-accounts": true, "onboarding-link": true,
+	"policies": true,
 }
 
 // collectionSegments returns the path segments that are static collection
@@ -253,6 +254,17 @@ func (c *Client) List(ctx context.Context, path string, query url.Values) (*Coll
 // Retrieve performs a GET against a single-resource route.
 func (c *Client) Retrieve(ctx context.Context, path string) (*Resource, error) {
 	body, err := c.do(ctx, http.MethodGet, path, nil, nil, contentTypeJSONAPI)
+	if err != nil {
+		return nil, err
+	}
+	return decodeResourceWrapped(body)
+}
+
+// RetrieveWithQuery performs a GET against a single-resource route with
+// additional query parameters. Use this instead of string-concatenating query
+// params onto the path (e.g. pages retrieve --tree passes resolve=false).
+func (c *Client) RetrieveWithQuery(ctx context.Context, path string, query url.Values) (*Resource, error) {
+	body, err := c.do(ctx, http.MethodGet, path, query, nil, contentTypeJSONAPI)
 	if err != nil {
 		return nil, err
 	}
@@ -369,6 +381,82 @@ func (c *Client) ActionWith(ctx context.Context, style BodyStyle, method, path s
 	return decodeResourceWrapped(raw)
 }
 
+// ActionWithHeaders is ActionWith plus a set of extra HTTP request headers. It
+// is the least-invasive way to send conditional headers (e.g. If-Match for the
+// pages publish endpoint) without altering the signatures of any existing method.
+// body may be nil (no request body is sent); style is applied only when body is
+// non-nil. extra is merged on top of the standard Accept/Content-Type/Authorization
+// headers; callers that need no extras should use Action or ActionWith instead.
+func (c *Client) ActionWithHeaders(ctx context.Context, style BodyStyle, method, path string, body map[string]any, extra map[string]string) (*Resource, error) {
+	payload := buildWriteBody(style, path, body)
+	raw, err := c.doWithHeaders(ctx, method, path, nil, payload, contentTypeJSONAPI, extra)
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	return decodeResourceWrapped(raw)
+}
+
+// doWithHeaders is do() with an additional map of extra request headers. It is
+// used only by ActionWithHeaders; all other callers go through the plain do()
+// path so the standard behaviour is not affected.
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, query url.Values, payload any, accept string, extra map[string]string) ([]byte, error) {
+	u := c.baseURL + ensureLeadingSlash(path)
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+
+	var reqBody io.Reader
+	if payload != nil {
+		buf, err := json.Marshal(payload)
+		if err != nil {
+			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("encode request body: %w", err))
+		}
+		reqBody = bytes.NewReader(buf)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
+	if err != nil {
+		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("build request: %w", err))
+	}
+	req.Header.Set("Accept", accept)
+	if reqBody != nil {
+		req.Header.Set("Content-Type", accept)
+	}
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	for k, v := range extra {
+		req.Header.Set(k, v)
+	}
+
+	if c.debug {
+		fmt.Fprintf(stderr(), "[debug] %s %s\n", method, u)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("%s %s: %w", method, u, err))
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("read response: %w", err))
+	}
+
+	if c.debug {
+		fmt.Fprintf(stderr(), "[debug] -> %d (%d bytes)\n", resp.StatusCode, len(respBody))
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, c.errorForResponse(resp.StatusCode, respBody)
+	}
+	return respBody, nil
+}
+
 // ActionCollection performs a custom action route that returns a JSON:API
 // collection document (`data: [...]`), e.g. `segments search` which previews
 // matching contacts. body may be nil; when non-nil it is wrapped in the
@@ -421,55 +509,7 @@ func decodeResourceWrapped(body []byte) (*Resource, error) {
 // typed *errs.CLIError. accept controls both the Accept and (for bodies) the
 // Content-Type header, so auth helpers can request plain JSON.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, payload any, accept string) ([]byte, error) {
-	u := c.baseURL + ensureLeadingSlash(path)
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
-
-	var reqBody io.Reader
-	if payload != nil {
-		buf, err := json.Marshal(payload)
-		if err != nil {
-			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("encode request body: %w", err))
-		}
-		reqBody = bytes.NewReader(buf)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
-	if err != nil {
-		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("build request: %w", err))
-	}
-	req.Header.Set("Accept", accept)
-	if reqBody != nil {
-		req.Header.Set("Content-Type", accept)
-	}
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-
-	if c.debug {
-		fmt.Fprintf(stderr(), "[debug] %s %s\n", method, u)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("%s %s: %w", method, u, err))
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("read response: %w", err))
-	}
-
-	if c.debug {
-		fmt.Fprintf(stderr(), "[debug] -> %d (%d bytes)\n", resp.StatusCode, len(respBody))
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, c.errorForResponse(resp.StatusCode, respBody)
-	}
-	return respBody, nil
+	return c.doWithHeaders(ctx, method, path, query, payload, accept, nil)
 }
 
 // errorForResponse maps a non-2xx response into a *errs.CLIError. If the body

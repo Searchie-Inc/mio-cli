@@ -4,11 +4,12 @@ package cmd
 //
 // Routes (see docs/internal/api-surface.md "hubs"):
 //
-//	create   POST  /api/teams/{team_id}/hubs
-//	list     GET   /api/teams/{team_id}/hubs
-//	retrieve GET   /api/teams/{team_id}/hubs/{id}
-//	update   PATCH /api/teams/{team_id}/hubs/{id}
-//	delete   DELETE /api/teams/{team_id}/hubs/{id}
+//	create          POST   /api/teams/{team_id}/hubs
+//	list            GET    /api/teams/{team_id}/hubs
+//	retrieve        GET    /api/teams/{team_id}/hubs/{id}
+//	update          PATCH  /api/teams/{team_id}/hubs/{id}
+//	delete          DELETE /api/teams/{team_id}/hubs/{id}
+//	policies update PATCH  /api/teams/{team_id}/hubs/{hub_id}/policies
 //
 // All routes are team-scoped. Hub id comes from a positional argument (not the
 // --hub context flag) so operators can manage any hub, not just the active one.
@@ -16,6 +17,8 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -30,6 +33,10 @@ func init() {
 		hubsUpdateCmd,
 		hubsDeleteCmd,
 	)
+
+	// hubs policies <action>  (nested sub-resource)
+	hubsPoliciesCmd.AddCommand(hubsPoliciesUpdateCmd)
+	hubsCmd.AddCommand(hubsPoliciesCmd)
 
 	rootCmd.AddCommand(hubsCmd)
 }
@@ -227,4 +234,120 @@ func init() {
 	}
 
 	addPaginationFlags(hubsListCmd)
+}
+
+// ---- hubs policies sub-resource ---------------------------------------------
+
+var hubsPoliciesCmd = &cobra.Command{
+	Use:   "policies",
+	Short: "Manage hub legal policies.",
+	Long:  "Create or update legal policies (Terms of Service, Privacy Policy) for a hub.",
+}
+
+// hubsPoliciesPath returns /api/teams/{team_id}/hubs/{hub_id}/policies.
+func hubsPoliciesPath(teamID, hubID string) string {
+	return fmt.Sprintf("/api/teams/%s/hubs/%s/policies", teamID, hubID)
+}
+
+// validPolicyTypes is the set of accepted --policy-type values. Validation is
+// done client-side so a typo exits with ExitUsage rather than a 422 round-trip.
+var validPolicyTypes = map[string]bool{
+	"tos":            true,
+	"privacy_policy": true,
+}
+
+var hubsPoliciesUpdateCmd = &cobra.Command{
+	Use:   "update <hub_id>",
+	Short: "Update (or create) a hub legal policy.",
+	Long: `Create or replace a hub legal policy (Terms of Service or Privacy Policy).
+
+The hub identifier is a positional argument (not the --hub context flag) so you
+can target any hub regardless of the active context.
+
+Policy content may be supplied inline or read from a file by prefixing the path
+with '@':  --content @policy.md
+
+Exactly one of --content or --reset-content must be provided:
+  --content        Supply the policy body (inline string or @file).
+  --reset-content  Revert the policy to the backend default (sends content: null).`,
+	Example: `  mio hubs policies update hub_abc123 --policy-type tos --content "# Terms of Service\n…"
+  mio hubs policies update hub_abc123 --policy-type tos --content @tos.md --require-acceptance
+  mio hubs policies update hub_abc123 --policy-type privacy_policy --content @privacy.md
+  mio hubs policies update hub_abc123 --policy-type tos --reset-content`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		policyType, ferr := cmd.Flags().GetString("policy-type")
+		if ferr != nil {
+			return errs.New(errs.ExitUsage, "--policy-type: %s", ferr.Error())
+		}
+		if !validPolicyTypes[policyType] {
+			return errs.New(errs.ExitUsage,
+				"--policy-type %q is not valid: must be one of tos, privacy_policy", policyType)
+		}
+
+		contentChanged := cmd.Flags().Changed("content")
+		resetChanged := cmd.Flags().Changed("reset-content")
+
+		// Exactly one of --content / --reset-content must be provided.
+		if contentChanged && resetChanged {
+			return errs.New(errs.ExitUsage, "--content and --reset-content are mutually exclusive: provide exactly one")
+		}
+		if !contentChanged && !resetChanged {
+			return errs.New(errs.ExitUsage, "provide exactly one of --content or --reset-content")
+		}
+
+		attrs := map[string]any{
+			"policy_type": policyType,
+		}
+
+		if resetChanged {
+			// Explicitly send content: null to revert to the backend default.
+			// A Go map value of nil marshals to JSON null.
+			attrs["content"] = nil
+		} else {
+			rawContent, ferr := cmd.Flags().GetString("content")
+			if ferr != nil {
+				return errs.New(errs.ExitUsage, "--content: %s", ferr.Error())
+			}
+
+			// Support the @path convention: a value starting with '@' is treated as a
+			// file path whose contents become the policy text.
+			content := rawContent
+			if after, ok := strings.CutPrefix(rawContent, "@"); ok {
+				b, rerr := os.ReadFile(after)
+				if rerr != nil {
+					return errs.New(errs.ExitGeneric, "read %s: %s", after, rerr.Error())
+				}
+				content = string(b)
+			}
+			attrs["content"] = content
+		}
+
+		// --require-acceptance is only included when the flag was explicitly set.
+		// Sending it with policy_type=privacy_policy is a backend 422; we let the
+		// backend enforce that constraint rather than pre-blocking here.
+		setBoolFlag(cmd, attrs, "require-acceptance")
+
+		hubID := args[0]
+		res, err := c.client.Update(c.ctx, hubsPoliciesPath(teamID, hubID), attrs)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
+func init() {
+	hubsPoliciesUpdateCmd.Flags().String("policy-type", "", "Policy type: tos or privacy_policy. Required.")
+	_ = hubsPoliciesUpdateCmd.MarkFlagRequired("policy-type")
+
+	hubsPoliciesUpdateCmd.Flags().String("content", "", "Policy body in Markdown. Prefix with '@' to read from a file (e.g. @tos.md). Mutually exclusive with --reset-content.")
+	hubsPoliciesUpdateCmd.Flags().Bool("reset-content", false, "Revert the policy to the backend default (sends content: null). Mutually exclusive with --content.")
+
+	hubsPoliciesUpdateCmd.Flags().Bool("require-acceptance", false, "Require hub members to accept the policy before accessing content (TOS only).")
 }
