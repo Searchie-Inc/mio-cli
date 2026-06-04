@@ -127,6 +127,7 @@ Every implemented resource and its verbs.
 | `roles` | `create` `list` `retrieve` `update` `delete` |
 | `roles permissions` | `list` |
 | `hubs` | `create` `list` `retrieve` `update` `delete` |
+| `hubs policies` | `update` |
 | `contacts` | `create` `list` `retrieve` `update` `delete` `restore` |
 | `contact-attributes` | `create` `list` `retrieve` `update` `delete` |
 | `contact-attributes options` | `create` `list` `update` `delete` |
@@ -135,7 +136,7 @@ Every implemented resource and its verbs.
 | `tags` | `create` `list` `retrieve` `update` `delete` `assign` `assign-bulk` `remove` |
 | `segments` | `create` `list` `retrieve` `update` `delete` `search` `members` `count` |
 | `content` | `create` `list` `retrieve` `children` `update` `delete` `restore` `reorder` |
-| `pages` | `create` `list` `retrieve` `update` `delete` `home` |
+| `pages` | `create` `list` `retrieve` (add `--tree` for raw node tree) `update` `delete` `home` `publish` |
 | `pages sections` | `create` `list` `update` `delete` `reorder` |
 | `products` | `create` `list` `retrieve` `update` `delete` |
 | `products prices` | `create` `list` `retrieve` `update` `delete` |
@@ -145,7 +146,7 @@ Every implemented resource and its verbs.
 | `checkout webhooks` | `list` `retrieve` `replay` |
 | `checkout accounts` | `list` `retrieve` `onboarding-link` |
 | `checkout stripe-sync` | `import` `import-status` `adopt-product` |
-| `email drip-campaigns` | `create` `list` `retrieve` `update` `delete` `activate` `pause` |
+| `email drip-campaigns` | `create` `list` `retrieve` `update` `delete` `activate` `pause` (create/update accept `--enrollment-mode` `--trigger-event-type` `--segment-id` `--segment-check-interval-minutes` `--allow-reenrollment`) |
 | `email steps` | `create` `list` `update` `delete` |
 | `email templates` | `create` `list` `retrieve` `update` `delete` `preview` |
 | `email config` | `set` `get` `delete` `test` |
@@ -158,6 +159,15 @@ Every implemented resource and its verbs.
 ---
 
 ## Command Gotchas
+
+- **`pages publish` requires `--if-match <draft_version>`** — read the `draft_version` attribute from a prior `pages retrieve`, then pass it as `--if-match`. The backend uses it as an optimistic-concurrency guard and will return 409 if the draft has changed since you read it.
+- **`pages retrieve --tree`** returns a `page-trees` resource (raw published node tree) instead of page metadata. Use this for admin editor access.
+- **`hubs policies update <hub_id>`** takes the hub identifier as a positional argument, NOT the `--hub` context flag. Policy content supports the `@file` convention: `--content @tos.md`.
+- **`hubs policies update --policy-type`** must be exactly `tos` or `privacy_policy`; the CLI validates this client-side. The `--require-acceptance` flag is only meaningful for `tos`; passing it with `privacy_policy` will result in a backend 422.
+- **`hubs policies update` content flags** — exactly one of `--content` or `--reset-content` is required (they are mutually exclusive):
+  - `--content <text|@file>` — supply the policy body inline or read it from a file.
+  - `--reset-content` — revert the policy to the backend default (sends `content: null`).
+  Providing both exits 2; providing neither also exits 2.
 
 - **Contact name flags are kebab-case**, like every other resource: `--first-name`, `--last-name`. `--email`, `--phone`, `--status` are also available. (The legacy underscore spellings `--first_name`/`--last_name` still work as hidden, deprecated aliases for back-compat, but new scripts should use the kebab form.)
 - **`products prices` takes the product id as a positional argument**, not `--product`:

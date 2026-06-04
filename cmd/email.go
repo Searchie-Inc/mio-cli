@@ -141,7 +141,8 @@ var emailDripCreateCmd = &cobra.Command{
 	Short: "Create a drip campaign.",
 	Long:  "Create a new drip campaign for the active hub.",
 	Example: `  mio email drip-campaigns create --name="Welcome Series" --status=draft
-  mio email drip-campaigns create --name="Onboarding" --description="New member flow"`,
+  mio email drip-campaigns create --name="Onboarding" --description="New member flow"
+  mio email drip-campaigns create --name="Segment Drip" --enrollment-mode=segment --segment-id=seg_abc --segment-check-interval-minutes=60`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, hubID, err := emailContext(cmd)
@@ -153,6 +154,12 @@ var emailDripCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "status")
+		// Enrollment-mode flags.
+		setStringFlag(cmd, attrs, "enrollment-mode")
+		setStringFlag(cmd, attrs, "trigger-event-type")
+		setStringFlag(cmd, attrs, "segment-id")
+		setIntFlag(cmd, attrs, "segment-check-interval-minutes")
+		setBoolFlag(cmd, attrs, "allow-reenrollment")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
@@ -209,11 +216,12 @@ var emailDripRetrieveCmd = &cobra.Command{
 }
 
 var emailDripUpdateCmd = &cobra.Command{
-	Use:     "update <id>",
-	Short:   "Update a drip campaign by id.",
-	Long:    "Update a drip campaign's attributes for the active hub. Only the flags you set are changed.",
-	Example: `  mio email drip-campaigns update dc_abc123 --name="New Name" --status=active`,
-	Args:    cobra.ExactArgs(1),
+	Use:   "update <id>",
+	Short: "Update a drip campaign by id.",
+	Long:  "Update a drip campaign's attributes for the active hub. Only the flags you set are changed.",
+	Example: `  mio email drip-campaigns update dc_abc123 --name="New Name" --status=active
+  mio email drip-campaigns update dc_abc123 --enrollment-mode=segment --segment-id=seg_abc`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, hubID, err := emailContext(cmd)
 		if err != nil {
@@ -224,6 +232,12 @@ var emailDripUpdateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "status")
+		// Enrollment-mode flags.
+		setStringFlag(cmd, attrs, "enrollment-mode")
+		setStringFlag(cmd, attrs, "trigger-event-type")
+		setStringFlag(cmd, attrs, "segment-id")
+		setIntFlag(cmd, attrs, "segment-check-interval-minutes")
+		setBoolFlag(cmd, attrs, "allow-reenrollment")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -316,6 +330,12 @@ func init() {
 		cmd.Flags().String("name", "", "Drip campaign name.")
 		cmd.Flags().String("description", "", "Drip campaign description.")
 		cmd.Flags().String("status", "", "Drip campaign status (e.g. draft, active, paused).")
+		// Enrollment-mode flags — control how contacts enter the campaign.
+		cmd.Flags().String("enrollment-mode", "", "Enrollment trigger mode: event, segment, or both.")
+		cmd.Flags().String("trigger-event-type", "", "Event type that triggers enrollment when enrollment-mode is event or both.")
+		cmd.Flags().String("segment-id", "", "Segment whose members are auto-enrolled when enrollment-mode is segment or both.")
+		cmd.Flags().Int("segment-check-interval-minutes", 0, "How often (in minutes) the backend re-checks the segment for new members to enroll.")
+		cmd.Flags().Bool("allow-reenrollment", false, "Allow a contact to be re-enrolled after they have already completed or exited the campaign.")
 	}
 	addPaginationFlags(emailDripListCmd)
 }

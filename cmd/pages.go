@@ -8,15 +8,18 @@ package cmd
 //
 //	pages:    CRUD + home  /api/teams/{team_id}/hubs/{hub_id}/pages[/{id}]
 //	          home         /api/teams/{team_id}/hubs/{hub_id}/pages/home
+//	          publish      /api/teams/{team_id}/hubs/{hub_id}/pages/{id}/publish
 //	sections: create/list  /api/teams/{team_id}/hubs/{hub_id}/pages/{pid}/sections
 //	          update/delete/reorder  …/sections[/{sid}]
 
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -29,6 +32,7 @@ func init() {
 		pagesUpdateCmd,
 		pagesDeleteCmd,
 		pagesHomeCmd,
+		pagesPublishCmd,
 	)
 
 	// pages sections <action>  (nested sub-resource)
@@ -126,18 +130,37 @@ var pagesListCmd = &cobra.Command{
 }
 
 var pagesRetrieveCmd = &cobra.Command{
-	Use:     "retrieve <id>",
-	Short:   "Retrieve a page by id.",
-	Long:    "Retrieve a single page from the active hub by its id.",
-	Example: `  mio pages retrieve page_abc123 --hub hub_123`,
-	Args:    cobra.ExactArgs(1),
+	Use:   "retrieve <id>",
+	Short: "Retrieve a page by id.",
+	Long:  "Retrieve a single page from the active hub by its id.",
+	Example: `  mio pages retrieve page_abc123 --hub hub_123
+  mio pages retrieve page_abc123 --hub hub_123 --tree`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := pagesContext(cmd)
 		if err != nil {
 			return err
 		}
 
-		res, err := c.client.Retrieve(c.ctx, pagesPath(teamID, hubID, args[0]))
+		path := pagesPath(teamID, hubID, args[0])
+
+		// --tree requests the raw published node tree (page-trees resource) instead
+		// of page metadata. The backend distinguishes the two responses via the
+		// resolve=false query parameter on the same GET route.
+		if cmd.Flags().Changed("tree") {
+			v, ferr := cmd.Flags().GetBool("tree")
+			if ferr == nil && v {
+				q := url.Values{}
+				q.Set("resolve", "false")
+				res, err := c.client.RetrieveWithQuery(c.ctx, path, q)
+				if err != nil {
+					return err
+				}
+				return c.render(cmd, res)
+			}
+		}
+
+		res, err := c.client.Retrieve(c.ctx, path)
 		if err != nil {
 			return err
 		}
@@ -202,6 +225,59 @@ var pagesDeleteCmd = &cobra.Command{
 	},
 }
 
+var pagesPublishCmd = &cobra.Command{
+	Use:   "publish <id>",
+	Short: "Publish a page draft.",
+	Long: `Publish a page draft, making it live. The --if-match flag is required and must
+match the current draft_version returned by a prior retrieve. The backend uses
+it to guard against publishing a stale draft (optimistic concurrency control).
+
+Returns a page-publishes resource with attributes: page_id, published_revision,
+section_count, and gate_count.`,
+	Example: `  mio pages publish page_abc123 --hub hub_123 --if-match 7`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// --if-match is declared required (MarkFlagRequired) so cobra enforces it
+		// at parse time for normal CLI use. We also guard here explicitly so that
+		// the in-process test harness (which shares a singleton cobra command tree
+		// across tests) also gets the ExitUsage signal when the flag is absent.
+		if !cmd.Flags().Changed("if-match") {
+			return errs.New(errs.ExitUsage, "--if-match is required: supply the draft_version from a prior retrieve")
+		}
+
+		c, teamID, hubID, err := pagesContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		ifMatch, ferr := cmd.Flags().GetInt("if-match")
+		if ferr != nil {
+			return errs.New(errs.ExitUsage, "--if-match: %s", ferr.Error())
+		}
+
+		// POST …/pages/{id}/publish — no request body; optimistic lock via If-Match.
+		// client.StyleEnvelope is the zero value of BodyStyle; it is irrelevant here
+		// because the body is nil, but the named constant is clearer than a bare 0.
+		path := pagesPath(teamID, hubID, args[0]) + "/publish"
+		res, err := c.client.ActionWithHeaders(
+			c.ctx,
+			client.StyleEnvelope, // irrelevant; body is nil
+			"POST",
+			path,
+			nil, // no body
+			map[string]string{"If-Match": strconv.Itoa(ifMatch)},
+		)
+		if err != nil {
+			return err
+		}
+		if res == nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "Published page %s.\n", args[0])
+			return nil
+		}
+		return c.render(cmd, res)
+	},
+}
+
 var pagesHomeCmd = &cobra.Command{
 	Use:     "home",
 	Short:   "Retrieve the hub home page.",
@@ -233,6 +309,15 @@ func init() {
 		cmd.Flags().Bool("is-home", false, "Whether this page is the hub home page.")
 	}
 	addPaginationFlags(pagesListCmd)
+
+	// --if-match is required on publish; cobra enforces the requirement at parse time.
+	pagesPublishCmd.Flags().Int("if-match", 0, "Draft version number from a prior retrieve (optimistic concurrency lock). Required.")
+	if err := pagesPublishCmd.MarkFlagRequired("if-match"); err != nil {
+		panic("MarkFlagRequired if-match: " + err.Error())
+	}
+
+	// --tree on retrieve: return the raw published node tree (page-trees) instead of page metadata.
+	pagesRetrieveCmd.Flags().Bool("tree", false, "Return the raw published node tree (page-trees) instead of page metadata.")
 }
 
 // pagesContext is the shared boilerplate for page commands: build the context,
