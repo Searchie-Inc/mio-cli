@@ -227,26 +227,112 @@ func (c *cmdContext) requireAuth() error {
 	return nil
 }
 
-// requireTeam returns the resolved team id or a usage error if none is set. The
-// error carries an actionable hint pointing at the commands that resolve it.
+// requireTeam returns the resolved team id, or a usage error if none can be
+// determined. Resolution order:
+//
+//  1. A value already in context (--team / env / config). If that value is a
+//     human NAME or SLUG rather than an id, it is resolved to an id via
+//     ResolveTeam (raw ids pass straight through with no API call).
+//  2. If still unset, auto-default: list the caller's teams and, if EXACTLY one
+//     exists, use it (zero-config for the common single-team user). Zero or
+//     more-than-one keeps the existing helpful error.
+//
+// The resolved id is written back into c.resolved.TeamID so later lookups
+// (whoami, requireHub) see the canonical id and downstream calls are consistent.
 func (c *cmdContext) requireTeam() (string, error) {
-	if c.resolved.TeamID == "" {
-		return "", errs.New(errs.ExitUsage,
-			"no team id in context: pass --team <id> or run `mio config set team <id>` "+
-				"— run 'mio teams list' then 'mio teams switch <id>'")
+	if c.resolved.TeamID != "" {
+		id, err := c.client.ResolveTeam(c.ctx, c.resolved.TeamID)
+		if err != nil {
+			return "", errs.Wrap(errs.ExitUsage, err)
+		}
+		c.resolved.TeamID = id
+		return id, nil
 	}
-	return c.resolved.TeamID, nil
+
+	// Auto-default: a single-team user needs no --team at all.
+	if id, ok := c.singleTeamDefault(); ok {
+		c.resolved.TeamID = id
+		return id, nil
+	}
+
+	return "", errs.New(errs.ExitUsage,
+		"no team id in context: pass --team <id> or run `mio config set team <id>` "+
+			"— run 'mio teams list' then 'mio teams switch <id>'")
 }
 
-// requireHub returns the resolved hub id or a usage error if none is set. The
-// error carries an actionable hint pointing at the commands that resolve it.
+// requireHub returns the resolved hub id, or a usage error if none can be
+// determined. Resolution mirrors requireTeam:
+//
+//  1. A value in context (--hub / config), resolving a NAME/SLUG to an id via
+//     ResolveHub (raw ids pass through with no API call).
+//  2. If still unset, auto-default to the team's single hub when exactly one
+//     exists.
+//
+// A hub is team-scoped, so this first resolves the team (which itself may
+// auto-default) to know where to look.
 func (c *cmdContext) requireHub() (string, error) {
-	if c.resolved.HubID == "" {
-		return "", errs.New(errs.ExitUsage,
-			"no hub id in context: pass --hub <id> or run `mio config set hub <id>` "+
-				"— run 'mio hubs list' then 'mio config set hub <id>'")
+	if c.resolved.HubID != "" {
+		teamID, terr := c.requireTeam()
+		if terr != nil {
+			return "", terr
+		}
+		id, err := c.client.ResolveHub(c.ctx, teamID, c.resolved.HubID)
+		if err != nil {
+			return "", errs.Wrap(errs.ExitUsage, err)
+		}
+		c.resolved.HubID = id
+		return id, nil
 	}
-	return c.resolved.HubID, nil
+
+	// Auto-default needs a team to scope the hub list.
+	teamID, terr := c.requireTeam()
+	if terr != nil {
+		return "", terr
+	}
+	if id, ok := c.singleHubDefault(teamID); ok {
+		c.resolved.HubID = id
+		return id, nil
+	}
+
+	return "", errs.New(errs.ExitUsage,
+		"no hub id in context: pass --hub <id> or run `mio config set hub <id>` "+
+			"— run 'mio hubs list' then 'mio config set hub <id>'")
+}
+
+// singleTeamDefault returns the id of the caller's sole team when EXACTLY one
+// exists, so a single-team user never has to pass --team. Zero or more-than-one
+// teams (or any list error) returns ok=false so the caller falls back to the
+// existing helpful error. A successful auto-default is persisted to config so
+// subsequent commands skip the list call.
+func (c *cmdContext) singleTeamDefault() (string, bool) {
+	col, err := c.client.List(c.ctx, "/api/teams", nil)
+	if err != nil || len(col.Data) != 1 {
+		return "", false
+	}
+	id := col.Data[0].ID
+	c.persistDefaultTeam(id)
+	return id, true
+}
+
+// singleHubDefault returns the id of the team's sole hub when EXACTLY one
+// exists. Zero or more-than-one (or a list error) returns ok=false.
+func (c *cmdContext) singleHubDefault(teamID string) (string, bool) {
+	col, err := c.client.List(c.ctx, fmt.Sprintf("/api/teams/%s/hubs", teamID), nil)
+	if err != nil || len(col.Data) != 1 {
+		return "", false
+	}
+	return col.Data[0].ID, true
+}
+
+// persistDefaultTeam best-effort writes an auto-defaulted team id to config so
+// the next command resolves it from config instead of re-listing. A failure to
+// persist is non-fatal — the in-process resolution already succeeded.
+func (c *cmdContext) persistDefaultTeam(teamID string) {
+	if c.cfg == nil || c.cfg.CurrentTeam != "" {
+		return
+	}
+	c.cfg.CurrentTeam = teamID
+	_ = c.cfg.Save()
 }
 
 // render writes v using the command's resolved output options. Any failure from

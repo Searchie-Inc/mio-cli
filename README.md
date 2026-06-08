@@ -75,6 +75,16 @@ Verify any install:
 mio version   # → mio 0.2.0 (commit …, built …)
 ```
 
+Update a release install later from the CLI:
+
+```sh
+mio update              # latest release
+mio update --version 0.2.1
+```
+
+`mio update` reruns the official installer into the directory containing the
+current executable. Use `--prefix <dir>` to install somewhere else.
+
 ---
 
 ## First run
@@ -94,7 +104,7 @@ mio whoami                             # prints resolved user, team, hub, api-ba
 mio contacts list
 ```
 
-Auth works against `https://api.membership.io` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL` (see [Authentication](#authentication)).
+Auth works against `https://api.member.dev` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL` (see [Authentication](#authentication)).
 
 If you belong to multiple teams, `mio login` will prompt you to pick one. You can switch later with `mio teams switch <team-id>`, which updates your local context. For single-team accounts the team is resolved automatically — no manual config step needed.
 

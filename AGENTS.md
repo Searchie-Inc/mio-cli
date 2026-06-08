@@ -20,7 +20,7 @@ API keys are `mio_sk_live_…`. Resolution order (first wins):
 
 If no key is found the command exits with code **3** (`ExitAuth`). Always set `MIO_API_KEY` before running any resource command.
 
-Key auth works against `https://api.membership.io` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL`.
+Key auth works against `https://api.member.dev` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL`.
 
 ---
 
@@ -119,6 +119,7 @@ Every implemented resource and its verbs.
 | `logout` | _(interactive only)_ |
 | `whoami` | _(no subcommand — prints resolved user, team, hub, api-base, profile, key source)_ |
 | `version` | _(no subcommand)_ |
+| `update` | _(self-update via the official release installer; supports `--version` and `--prefix`)_ |
 | `config` | `set` `get` `list` |
 | `api-keys` | `create` `list` `retrieve` `delete` |
 | `teams` | `create` `list` `retrieve` `update` `delete` `switch` |

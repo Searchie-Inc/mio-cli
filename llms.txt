@@ -2,7 +2,7 @@
 # Format: mio <resource> [sub-resource] <action> — purpose
 # Auth: export MIO_API_KEY=mio_sk_live_<key>  (exit 3 if missing/invalid)
 #       resolution order: --api-key flag > MIO_API_KEY env > OS-keychain key (mio login)
-#       key auth works against https://api.membership.io; override with MIO_API_BASE_URL or --api-base
+#       key auth works against https://api.member.dev; override with MIO_API_BASE_URL or --api-base
 # Config: TOML at ~/.config/mio/config.toml ($XDG_CONFIG_HOME/mio/config.toml); keys: team|hub|api-base
 # Output: JSON by default when piped; --output json|table|plain; --jq <expr>; --raw for envelope
 # Destructive ops (delete|cancel|refund): require --yes/-y in non-interactive shells (exit 5 otherwise). restore is an undo, not destructive — no --yes needed.
@@ -10,6 +10,7 @@
 # Full reference: mio gen-docs --dir ./docs  (one Markdown file per command)
 
 mio version — print version information
+mio update — update mio via the official release installer; --version pins a release; --prefix chooses install dir
 mio login — interactive login (stores key; auto-resolves team for single-team accounts); use MIO_API_KEY instead in agents
 mio whoami — print resolved user, active team, hub, api-base, profile, and key source; use as "did my setup work?" check
 mio logout — clear stored credentials

@@ -35,6 +35,11 @@ type Client struct {
 	apiKey  string
 	http    *http.Client
 	debug   bool
+
+	// resolveCache memoizes name/slug → id lookups (see resolve.go) for the
+	// lifetime of this client so repeat references in a single command/process
+	// do not re-list. Its zero value is ready to use.
+	resolveCache resolveCache
 }
 
 // Option customizes a Client at construction time.
@@ -403,7 +408,7 @@ func (c *Client) ActionWithHeaders(ctx context.Context, style BodyStyle, method,
 // used only by ActionWithHeaders; all other callers go through the plain do()
 // path so the standard behaviour is not affected.
 func (c *Client) doWithHeaders(ctx context.Context, method, path string, query url.Values, payload any, accept string, extra map[string]string) ([]byte, error) {
-	u := c.baseURL + ensureLeadingSlash(path)
+	u := c.baseURL + canonicalRequestPath(path)
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
@@ -540,4 +545,30 @@ func ensureLeadingSlash(p string) string {
 		return p
 	}
 	return "/" + p
+}
+
+func canonicalRequestPath(path string) string {
+	p := ensureLeadingSlash(path)
+	if p == "/api" {
+		return "/api/v1"
+	}
+	if !strings.HasPrefix(p, "/api/") {
+		return p
+	}
+	rest := strings.TrimPrefix(p, "/api/")
+	if hasAPIVersionPrefix(rest) {
+		return p
+	}
+	return "/api/v1/" + rest
+}
+
+func hasAPIVersionPrefix(rest string) bool {
+	if len(rest) < 2 || rest[0] != 'v' {
+		return false
+	}
+	i := 1
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	return i > 1 && (i == len(rest) || rest[i] == '/')
 }

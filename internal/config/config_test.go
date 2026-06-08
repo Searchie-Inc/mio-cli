@@ -84,8 +84,9 @@ func TestResolve_APIBaseDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if r.APIBase != DefaultAPIBase {
-		t.Errorf("APIBase = %q, want default %q", r.APIBase, DefaultAPIBase)
+	const wantDefaultAPIBase = "https://api.member.dev"
+	if r.APIBase != wantDefaultAPIBase {
+		t.Errorf("APIBase = %q, want default %q", r.APIBase, wantDefaultAPIBase)
 	}
 }
 

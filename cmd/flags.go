@@ -58,6 +58,22 @@ func setBoolFlag(cmd *cobra.Command, attrs map[string]any, name string) {
 	}
 }
 
+// flagValue returns the trimmed value of a string flag, or "" if the flag is
+// absent or unset. Unlike setStringFlag it does not care whether the user
+// "Changed" it — an unset string flag defaults to "" — so it is the right tool
+// for resolver flags (--tag, --email) whose empty value simply means "not
+// provided by this path".
+func flagValue(cmd *cobra.Command, name string) string {
+	if cmd.Flags().Lookup(name) == nil {
+		return ""
+	}
+	v, err := cmd.Flags().GetString(name)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(v)
+}
+
 // setMappedString copies a string flag into attrs[key] under an EXPLICIT backend
 // field name, iff the user set it. Use this when the snake_cased flag name does
 // not equal the backend attribute name (e.g. --from-email → mail_from_email).

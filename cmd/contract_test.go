@@ -47,6 +47,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -95,8 +98,33 @@ func runContract(t *testing.T, env []string, args ...string) contractResult {
 // tests that set --output/--jq/--raw/--yes/--team/--hub/--api-key/--api-base do
 // not contaminate subsequent tests. The rootCmd is a singleton; without this
 // reset flag state persists across tests in the same process.
+//
+// It also resets every PER-COMMAND leaf flag back to its registered default and
+// clears its Changed bit by walking the command tree. cobra registers leaf flags
+// (e.g. `tags assign --tag`) once on the singleton command, so a value set by
+// one test would otherwise bleed into the next — exactly the kind of cross-test
+// contamination this helper exists to prevent. The real `mio` binary forks a
+// fresh process per invocation, so this only mirrors production isolation.
 func resetGlobalFlags() {
 	flags = globalFlags{}
+	resetCommandFlags(rootCmd)
+}
+
+// resetCommandFlags restores every flag on cmd (and its subcommands) to its
+// default value and clears the Changed bit, so leaf-flag state from a prior
+// in-process invocation cannot leak into the next one.
+func resetCommandFlags(cmd *cobra.Command) {
+	reset := func(fs *pflag.FlagSet) {
+		fs.VisitAll(func(f *pflag.Flag) {
+			_ = fs.Set(f.Name, f.DefValue)
+			f.Changed = false
+		})
+	}
+	reset(cmd.Flags())
+	reset(cmd.PersistentFlags())
+	for _, sub := range cmd.Commands() {
+		resetCommandFlags(sub)
+	}
 }
 
 // overlayEnv sets key=value pairs on the process environment for the duration
@@ -423,7 +451,7 @@ func TestContract_ExitCodes_NonTTYDestructiveWithoutYes(t *testing.T) {
 // CONTRACT: non-TTY destructive with --yes → exit 0 (ExitOK)
 func TestContract_ExitCodes_NonTTYDestructiveWithYes(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
-		{Method: "DELETE", PathPfx: "/api/teams/", Status: 204, Body: ""},
+		{Method: "DELETE", PathPfx: "/api/v1/teams/", Status: 204, Body: ""},
 	})
 
 	res := runContract(t, baseEnv(srv.URL),
@@ -835,7 +863,7 @@ func TestContract_TeamsSwitch_StdoutMachineClean(t *testing.T) {
 	t.Run("with-body", func(t *testing.T) {
 		body := `{"data":{"id":"t_new","type":"teams","attributes":{"name":"New Team"}}}`
 		srv := newMockServer(t, []mockHandler{
-			{Method: "POST", PathPfx: "/api/teams/", Status: 200, Body: body},
+			{Method: "POST", PathPfx: "/api/v1/teams/", Status: 200, Body: body},
 		})
 
 		env := append(baseEnv(srv.URL), "XDG_CONFIG_HOME="+t.TempDir())
@@ -866,7 +894,7 @@ func TestContract_TeamsSwitch_StdoutMachineClean(t *testing.T) {
 
 	t.Run("no-body", func(t *testing.T) {
 		srv := newMockServer(t, []mockHandler{
-			{Method: "POST", PathPfx: "/api/teams/", Status: 204, Body: ""},
+			{Method: "POST", PathPfx: "/api/v1/teams/", Status: 204, Body: ""},
 		})
 
 		env := append(baseEnv(srv.URL), "XDG_CONFIG_HOME="+t.TempDir())

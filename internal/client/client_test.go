@@ -135,6 +135,38 @@ func TestClient_ListPassesQuery(t *testing.T) {
 	}
 }
 
+func TestClient_CanonicalizesAPIRoutesOnWire(t *testing.T) {
+	cases := []struct {
+		name     string
+		path     string
+		wantPath string
+	}{
+		{"unversioned api route", "/api/teams", "/api/v1/teams"},
+		{"canonical api route", "/api/v1/teams", "/api/v1/teams"},
+		{"future api version", "/api/v2/teams", "/api/v2/teams"},
+		{"non api route", "/v1/hubs/h1/drip-campaigns", "/v1/hubs/h1/drip-campaigns"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				_, _ = w.Write([]byte(`{"data":[],"meta":{}}`))
+			}))
+			defer srv.Close()
+
+			c := newTestClient(srv, "k")
+			if _, err := c.List(context.Background(), tc.path, nil); err != nil {
+				t.Fatalf("List error: %v", err)
+			}
+			if gotPath != tc.wantPath {
+				t.Errorf("wire path = %q, want %q", gotPath, tc.wantPath)
+			}
+		})
+	}
+}
+
 func TestClient_LoginUsesPlainJSON(t *testing.T) {
 	var gotCT, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,8 +181,8 @@ func TestClient_LoginUsesPlainJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Login error: %v", err)
 	}
-	if gotPath != "/api/auth/login" {
-		t.Errorf("path = %q", gotPath)
+	if gotPath != "/api/v1/auth/login" {
+		t.Errorf("path = %q, want /api/v1/auth/login", gotPath)
 	}
 	if gotCT != contentTypeJSON {
 		t.Errorf("Content-Type = %q, want %q (plain JSON for auth)", gotCT, contentTypeJSON)
@@ -292,8 +324,8 @@ func TestMintAPIKey_SendsFlatBodyWithBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MintAPIKey error: %v", err)
 	}
-	if gotPath != "/api/teams/t1/api-keys" {
-		t.Errorf("path = %q, want /api/teams/t1/api-keys", gotPath)
+	if gotPath != "/api/v1/teams/t1/api-keys" {
+		t.Errorf("path = %q, want /api/v1/teams/t1/api-keys", gotPath)
 	}
 	if gotAuth != "Bearer jwt_access_token" {
 		t.Errorf("Authorization = %q, want Bearer jwt_access_token", gotAuth)

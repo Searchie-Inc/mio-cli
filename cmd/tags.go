@@ -229,11 +229,16 @@ var tagsDeleteCmd = &cobra.Command{
 }
 
 var tagsAssignCmd = &cobra.Command{
-	Use:     "assign <contact_id>",
-	Short:   "Assign a tag to a contact.",
-	Long:    "Assign a single tag to a contact by contact id. Requires --tag-id.",
-	Example: `  mio tags assign contact_xyz789 --tag-id tag_abc123`,
-	Args:    cobra.ExactArgs(1),
+	Use:   "assign [contact_id]",
+	Short: "Assign a tag to a contact.",
+	Long: `Assign a single tag to a contact.
+
+Identify the CONTACT by a raw id positional argument OR by --email <addr>
+(resolved to the contact id via the server-side email filter). Identify the TAG
+by --tag-id <id> OR --tag <name-or-id> (a name/slug is resolved to its id).`,
+	Example: `  mio tags assign ctt_xyz789 --tag-id tag_abc123
+  mio tags assign --email alice@example.com --tag VIP`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newContext(cmd)
 		if err != nil {
@@ -247,14 +252,20 @@ var tagsAssignCmd = &cobra.Command{
 			return err
 		}
 
-		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "tag-id")
-
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to assign: set --tag-id")
+		contactID, err := resolveContactArg(c, cmd, teamID, args, 0)
+		if err != nil {
+			return err
+		}
+		tagID, err := resolveTagFlag(c, cmd, teamID)
+		if err != nil {
+			return err
+		}
+		if tagID == "" {
+			return errs.New(errs.ExitUsage, "nothing to assign: set --tag <name-or-id> or --tag-id <id>")
 		}
 
-		res, err := c.client.Create(c.ctx, contactTagsPath(teamID, args[0], ""), attrs)
+		attrs := map[string]any{"tag_id": tagID}
+		res, err := c.client.Create(c.ctx, contactTagsPath(teamID, contactID, ""), attrs)
 		if err != nil {
 			return err
 		}
@@ -297,12 +308,17 @@ var tagsAssignBulkCmd = &cobra.Command{
 }
 
 var tagsRemoveCmd = &cobra.Command{
-	Use:   "remove <contact_id> <tag_id>",
+	Use:   "remove [contact_id] [tag_id]",
 	Short: "Remove a tag from a contact.",
-	Long:  "Remove a tag assignment from a contact. Pass --yes to skip the confirmation prompt in non-interactive environments.",
-	Example: `  mio tags remove contact_xyz789 tag_abc123
-  mio tags remove contact_xyz789 tag_abc123 --yes`,
-	Args: cobra.ExactArgs(2),
+	Long: `Remove a tag assignment from a contact.
+
+Identify the CONTACT by a raw id positional argument OR by --email <addr>.
+Identify the TAG by a raw id positional argument OR by --tag <name-or-id>.
+The two-positional form 'remove <contact_id> <tag_id>' keeps working. Pass --yes
+to skip the confirmation prompt in non-interactive environments.`,
+	Example: `  mio tags remove ctt_xyz789 tag_abc123 --yes
+  mio tags remove --email alice@example.com --tag VIP --yes`,
+	Args: cobra.MaximumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newContext(cmd)
 		if err != nil {
@@ -316,16 +332,82 @@ var tagsRemoveCmd = &cobra.Command{
 			return err
 		}
 
-		if err := confirmDestructive(cmd, fmt.Sprintf("Remove tag %s from contact %s?", args[1], args[0])); err != nil {
+		contactID, err := resolveContactArg(c, cmd, teamID, args, 0)
+		if err != nil {
+			return err
+		}
+		tagID, err := resolveTagArgOrFlag(c, cmd, teamID, args, 1)
+		if err != nil {
+			return err
+		}
+		if tagID == "" {
+			return errs.New(errs.ExitUsage, "nothing to remove: provide a tag id positional or --tag <name-or-id>")
+		}
+
+		if err := confirmDestructive(cmd, fmt.Sprintf("Remove tag %s from contact %s?", tagID, contactID)); err != nil {
 			return err
 		}
 
-		if err := c.client.Delete(c.ctx, contactTagsPath(teamID, args[0], args[1])); err != nil {
+		if err := c.client.Delete(c.ctx, contactTagsPath(teamID, contactID, tagID)); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Removed tag %s from contact %s.\n", args[1], args[0])
+		fmt.Fprintf(cmd.OutOrStdout(), "Removed tag %s from contact %s.\n", tagID, contactID)
 		return nil
 	},
+}
+
+// resolveContactArg determines the team-contact id for a tags command from
+// EITHER the positional argument at index argIdx (a raw id) OR the --email flag
+// (resolved via the server-side email filter). Exactly one source must be
+// provided; supplying both, or neither, is a usage error.
+func resolveContactArg(c *cmdContext, cmd *cobra.Command, teamID string, args []string, argIdx int) (string, error) {
+	hasPos := len(args) > argIdx && args[argIdx] != ""
+	email := flagValue(cmd, "email")
+	switch {
+	case hasPos && email != "":
+		return "", errs.New(errs.ExitUsage, "specify the contact by positional id OR --email, not both")
+	case hasPos:
+		return args[argIdx], nil
+	case email != "":
+		id, err := c.client.ResolveContactByEmail(c.ctx, teamID, email)
+		if err != nil {
+			return "", errs.Wrap(errs.ExitUsage, err)
+		}
+		return id, nil
+	default:
+		return "", errs.New(errs.ExitUsage, "no contact specified: pass a contact id or --email <addr>")
+	}
+}
+
+// resolveTagFlag returns the tag id from --tag (name-or-id, resolved) or
+// --tag-id (raw id). Supplying both is a usage error; supplying neither yields
+// an empty string so the caller can emit a command-specific message.
+func resolveTagFlag(c *cmdContext, cmd *cobra.Command, teamID string) (string, error) {
+	tagName := flagValue(cmd, "tag")
+	tagID := flagValue(cmd, "tag-id")
+	if tagName != "" && tagID != "" {
+		return "", errs.New(errs.ExitUsage, "specify the tag by --tag OR --tag-id, not both")
+	}
+	if tagName != "" {
+		id, err := c.client.ResolveTag(c.ctx, teamID, tagName)
+		if err != nil {
+			return "", errs.Wrap(errs.ExitUsage, err)
+		}
+		return id, nil
+	}
+	return tagID, nil
+}
+
+// resolveTagArgOrFlag returns the tag id from the positional at argIdx (a raw
+// id, the legacy two-positional form) or, failing that, from --tag/--tag-id.
+func resolveTagArgOrFlag(c *cmdContext, cmd *cobra.Command, teamID string, args []string, argIdx int) (string, error) {
+	if len(args) > argIdx && args[argIdx] != "" {
+		if flagValue(cmd, "tag") != "" || flagValue(cmd, "tag-id") != "" {
+			return "", errs.New(errs.ExitUsage, "specify the tag by positional id OR --tag/--tag-id, not both")
+		}
+		return args[argIdx], nil
+	}
+	return resolveTagFlag(c, cmd, teamID)
 }
 
 func init() {
@@ -337,8 +419,17 @@ func init() {
 	}
 	addPaginationFlags(tagsListCmd)
 
-	// assign flags.
-	tagsAssignCmd.Flags().String("tag-id", "", "ID of the tag to assign to the contact.")
+	// assign flags. --tag accepts a tag name/slug OR id (resolved); --tag-id is
+	// the raw-id form kept for back-compat. --email identifies the contact by
+	// address instead of the positional contact id.
+	tagsAssignCmd.Flags().String("tag-id", "", "Raw id of the tag to assign (alternative to --tag).")
+	tagsAssignCmd.Flags().String("tag", "", "Tag name, slug, or id to assign to the contact.")
+	tagsAssignCmd.Flags().String("email", "", "Contact email address (alternative to the contact id positional).")
+
+	// remove flags mirror assign: --tag (name-or-id) and --email identify the
+	// tag and contact without raw-id positionals.
+	tagsRemoveCmd.Flags().String("tag", "", "Tag name, slug, or id to remove (alternative to the tag id positional).")
+	tagsRemoveCmd.Flags().String("email", "", "Contact email address (alternative to the contact id positional).")
 
 	// assign-bulk flags.
 	tagsAssignBulkCmd.Flags().String("tag-ids", "", "Comma-separated list of tag IDs to assign to the contact.")
