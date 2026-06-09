@@ -102,7 +102,7 @@ var automationsCreateCmd = &cobra.Command{
 	Short: "Create an automation.",
 	Long:  "Create a new automation in the active hub.",
 	Example: `  mio automations create --hub hub_123 --name "Welcome Series"
-  mio automations create --hub hub_123 --name "Post-Purchase" --re-entry-mode once`,
+  mio automations create --hub hub_123 --name "Post-Purchase" --re-entry-mode after_exit`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := automationsContext(cmd)
@@ -211,7 +211,7 @@ var automationsUpdateCmd = &cobra.Command{
 	Short: "Update an automation by id.",
 	Long:  "Update one or more attributes of an existing automation.",
 	Example: `  mio automations update auto_abc123 --hub hub_123 --name "New Name"
-  mio automations update auto_abc123 --hub hub_123 --re-entry-mode always`,
+  mio automations update auto_abc123 --hub hub_123 --re-entry-mode interval`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := automationsContext(cmd)
