@@ -432,8 +432,8 @@ var automationsFireEventCmd = &cobra.Command{
 	Use:   "fire-event",
 	Short: "Fire a custom event to trigger automations.",
 	Long:  "Fire a named event for a contact, which may trigger one or more automation entry conditions.",
-	Example: `  mio automations fire-event --hub hub_123 --event-type purchase_completed --team-contact-id tcid_xyz
-  mio automations fire-event --hub hub_123 --event-type webinar_attended --team-contact-id tcid_xyz --idempotency-key idem_abc`,
+	Example: `  mio automations fire-event --hub hub_123 --event-type purchase_completed --team-contact-id tcid_xyz --idempotency-key idem_abc
+  mio automations fire-event --hub hub_123 --event-type webinar_attended --team-contact-id tcid_xyz --idempotency-key idem_def --payload '{"source":"webinar"}'`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := automationsContext(cmd)
@@ -465,6 +465,9 @@ var automationsFireEventCmd = &cobra.Command{
 		}
 		if body["team_contact_id"] == nil {
 			return errs.New(errs.ExitUsage, "--team-contact-id is required")
+		}
+		if body["idempotency_key"] == nil {
+			return errs.New(errs.ExitUsage, "--idempotency-key is required")
 		}
 
 		path := automationsBase(teamID, hubID) + "/events"
@@ -502,7 +505,7 @@ var automationsTestCmd = &cobra.Command{
 		}
 
 		path := automationsPath(teamID, hubID, args[0]) + "/test"
-		res, err := c.client.Action(c.ctx, "POST", path, attrs)
+		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
 		if err != nil {
 			return err
 		}

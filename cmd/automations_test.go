@@ -435,3 +435,118 @@ func TestWebhookEndpointsDelete_WithYes(t *testing.T) {
 		t.Errorf("path %q does not end with /webhook-endpoints/we_1", gotPath)
 	}
 }
+
+// ── automations test (dry-run) ────────────────────────────────────────────────
+
+// TestAutomationsTest_FlatBody is the regression guard for the fix that switched
+// `automations test` from Action (envelope) to ActionWith(StyleFlat). It
+// captures the wire body and asserts it is a FLAT object with no top-level
+// "data" key — exactly {"team_contact_id": "..."}.
+func TestAutomationsTest_FlatBody(t *testing.T) {
+	var gotBody []byte
+	var gotPath string
+
+	const testResponseBody = `{
+		"data": {
+			"id": "auto_1",
+			"type": "automations",
+			"attributes": {"dry_run": true, "steps_executed": 3}
+		}
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(testResponseBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"automations", "test", "auto_1",
+			"--team-contact-id", "tcid_xyz",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Errorf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !strings.HasSuffix(gotPath, "/automations/auto_1/test") {
+		t.Errorf("path %q does not end with /automations/auto_1/test", gotPath)
+	}
+
+	var flat map[string]any
+	if err := json.Unmarshal(gotBody, &flat); err != nil {
+		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
+	}
+
+	// Regression guard: must be flat — no "data" wrapper (no JSON:API envelope).
+	if _, hasData := flat["data"]; hasData {
+		t.Error("automations test body must NOT have a top-level \"data\" key (must be flat, not a JSON:API envelope)")
+	}
+	if flat["team_contact_id"] != "tcid_xyz" {
+		t.Errorf("team_contact_id = %v, want \"tcid_xyz\"", flat["team_contact_id"])
+	}
+}
+
+// ── fire-event: missing idempotency-key ───────────────────────────────────────
+
+// TestAutomationsFireEvent_MissingIdempotencyKey verifies that omitting
+// --idempotency-key exits 2 (ExitUsage) even when --event-type and
+// --team-contact-id are provided.
+func TestAutomationsFireEvent_MissingIdempotencyKey(t *testing.T) {
+	srv := newMockServer(t, nil)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"automations", "fire-event",
+			"--event-type", "purchase_completed",
+			"--team-contact-id", "tcid_xyz",
+			// --idempotency-key intentionally omitted
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
+
+// ── webhook-endpoints create: missing required flags ──────────────────────────
+
+// TestWebhookEndpointsCreate_MissingName verifies that omitting --name (while
+// supplying --target-url) exits 2 (ExitUsage).
+func TestWebhookEndpointsCreate_MissingName(t *testing.T) {
+	srv := newMockServer(t, nil)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"webhook-endpoints", "create",
+			"--target-url", "https://example.com/hook",
+			// --name intentionally omitted
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
+
+// TestWebhookEndpointsCreate_MissingTargetURL verifies that omitting --target-url
+// (while supplying --name) exits 2 (ExitUsage).
+func TestWebhookEndpointsCreate_MissingTargetURL(t *testing.T) {
+	srv := newMockServer(t, nil)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"webhook-endpoints", "create",
+			"--name", "My Hook",
+			// --target-url intentionally omitted
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}

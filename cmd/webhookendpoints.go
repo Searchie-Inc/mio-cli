@@ -96,8 +96,11 @@ var webhookEndpointsCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "target-url")
 		setStringFlag(cmd, attrs, "signing-secret")
 
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name and --target-url")
+		if attrs["name"] == nil {
+			return errs.New(errs.ExitUsage, "--name is required")
+		}
+		if attrs["target_url"] == nil {
+			return errs.New(errs.ExitUsage, "--target-url is required")
 		}
 
 		res, err := c.client.Create(c.ctx, webhookEndpointsPath(teamID, hubID, ""), attrs)
