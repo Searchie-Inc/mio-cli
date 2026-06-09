@@ -22,6 +22,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -460,13 +461,13 @@ var automationsFireEventCmd = &cobra.Command{
 			}
 		}
 
-		if body["event_type"] == nil {
+		if v, _ := body["event_type"].(string); strings.TrimSpace(v) == "" {
 			return errs.New(errs.ExitUsage, "--event-type is required")
 		}
-		if body["team_contact_id"] == nil {
+		if v, _ := body["team_contact_id"].(string); strings.TrimSpace(v) == "" {
 			return errs.New(errs.ExitUsage, "--team-contact-id is required")
 		}
-		if body["idempotency_key"] == nil {
+		if v, _ := body["idempotency_key"].(string); strings.TrimSpace(v) == "" {
 			return errs.New(errs.ExitUsage, "--idempotency-key is required")
 		}
 
@@ -523,7 +524,7 @@ func init() {
 	// Attribute flags for automations create/update.
 	for _, cmd := range []*cobra.Command{automationsCreateCmd, automationsUpdateCmd} {
 		cmd.Flags().String("name", "", "Automation name.")
-		cmd.Flags().String("re-entry-mode", "", "Re-entry mode: once, always, or after_exit.")
+		cmd.Flags().String("re-entry-mode", "", "Re-entry mode: never, after_exit, or interval.")
 		cmd.Flags().String("definition", "", "Automation definition as JSON (inline or @file).")
 		cmd.Flags().String("settings", "", "Automation settings as JSON (inline or @file).")
 	}

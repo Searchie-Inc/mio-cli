@@ -195,7 +195,7 @@ plain JSON.
 - `enrollments` GET    `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/enrollments`  query: filter[status] (e.g. stuck)
 - `enroll`      POST   `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/enrollments`  body: envelope `automation_enrollments` {team_contact_id}
 - `fire-event`  POST   `/api/teams/{team_id}/hubs/{hub_id}/automations/events`  body: **flat** {event_type, team_contact_id, idempotency_key?, payload?}
-- `test`        POST   `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/test`  body: envelope `automations` {team_contact_id} (dry-run)
+- `test`        POST   `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/test`  body: **flat** {team_contact_id} (dry-run, no side effects)
 
 ## webhook-endpoints  (`cmd/webhookendpoints.go`) — hub-scoped
 - `create` POST   `/api/teams/{team_id}/hubs/{hub_id}/webhook-endpoints`  body: envelope `webhook_endpoints` {name, target_url, signing_secret?}

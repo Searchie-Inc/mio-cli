@@ -550,3 +550,62 @@ func TestWebhookEndpointsCreate_MissingTargetURL(t *testing.T) {
 		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
 	}
 }
+
+// ── empty required-flag rejection (whitespace/empty string) ──────────────────
+
+// TestAutomationsFireEvent_EmptyIdempotencyKey verifies that passing
+// --idempotency-key "" (explicitly empty) exits 2 (ExitUsage), not 0.
+// This tests the fix for the "changed but empty" blind spot where nil checks
+// passed because setStringFlag stored "" instead of nil.
+func TestAutomationsFireEvent_EmptyIdempotencyKey(t *testing.T) {
+	srv := newMockServer(t, nil)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"automations", "fire-event",
+			"--event-type", "purchase_completed",
+			"--team-contact-id", "tcid_xyz",
+			"--idempotency-key", "", // explicitly empty
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
+
+// TestWebhookEndpointsCreate_EmptyName verifies that --name "" (explicitly
+// empty) exits 2 (ExitUsage).
+func TestWebhookEndpointsCreate_EmptyName(t *testing.T) {
+	srv := newMockServer(t, nil)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"webhook-endpoints", "create",
+			"--name", "",
+			"--target-url", "https://example.com/hook",
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
+
+// TestWebhookEndpointsCreate_EmptyTargetURL verifies that --target-url ""
+// (explicitly empty) exits 2 (ExitUsage).
+func TestWebhookEndpointsCreate_EmptyTargetURL(t *testing.T) {
+	srv := newMockServer(t, nil)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"webhook-endpoints", "create",
+			"--name", "My Hook",
+			"--target-url", "",
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}

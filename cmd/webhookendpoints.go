@@ -13,6 +13,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -96,10 +97,10 @@ var webhookEndpointsCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "target-url")
 		setStringFlag(cmd, attrs, "signing-secret")
 
-		if attrs["name"] == nil {
+		if v, _ := attrs["name"].(string); strings.TrimSpace(v) == "" {
 			return errs.New(errs.ExitUsage, "--name is required")
 		}
-		if attrs["target_url"] == nil {
+		if v, _ := attrs["target_url"].(string); strings.TrimSpace(v) == "" {
 			return errs.New(errs.ExitUsage, "--target-url is required")
 		}
 
