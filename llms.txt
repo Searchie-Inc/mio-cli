@@ -94,6 +94,23 @@ mio segments search — preview contacts matching a condition TREE, does not sav
 mio segments members — list contacts currently in a segment
 mio segments count — return the member count for a segment
 
+mio automations create — create a draft automation in a hub; --name --re-entry-mode never|after_exit|interval --definition (JSON or @file: {triggers,nodes,edges}) --settings
+mio automations list — list automations in a hub; --filter-status (draft|active|paused) --page-size --page-after
+mio automations retrieve — retrieve an automation by id
+mio automations update — update a draft automation's name/definition/settings
+mio automations publish — validate + snapshot the draft as an immutable version (publish before activate)
+mio automations activate — activate a published automation (draft/paused → active)
+mio automations deactivate — deactivate an automation (active → paused)
+mio automations versions — list published versions of an automation
+mio automations enrollments — list enrollment runs; --filter-status (active|stuck|completed)
+mio automations enroll — manually enroll a contact; --team-contact-id
+mio automations fire-event — fire a custom trigger event; --event-type --team-contact-id --idempotency-key (all required) --payload
+mio automations test — dry-run a contact through the published graph, no side effects; --team-contact-id
+
+mio webhook-endpoints create — register an outbound webhook endpoint (SSRF-guarded); --name --target-url --signing-secret (optional, write-only)
+mio webhook-endpoints list — list webhook endpoints in a hub
+mio webhook-endpoints delete — delete a webhook endpoint by id; --yes in non-interactive shells
+
 mio content create — create a content node in a hub
 mio content list — list root-level content nodes in a hub
 mio content retrieve — retrieve a content node by id

@@ -140,6 +140,9 @@ var typeOverrides = []struct {
 	// Action routes that take an enveloped body with a non-segment type.
 	{"payment-accounts/onboarding-link", "onboarding_links"},
 	{"payments/refund", "refunds"},
+	// Automations sub-resource enrollments carry a different type than the
+	// top-level enrollments segment on other resources.
+	{"automations/enrollments", "automation_enrollments"},
 	// Bare-segment overrides (URL segment != backend type).
 	{"segments", "segment"},
 	{"content", "content-nodes"},
@@ -147,6 +150,7 @@ var typeOverrides = []struct {
 	{"contact-attributes", "contact-attribute-definitions"},
 	{"drip-campaigns", "drip_campaigns"},
 	{"email-templates", "email_templates"},
+	{"webhook-endpoints", "webhook_endpoints"},
 }
 
 // resourceTypeFromPath returns the JSON:API resource `type` for a write to the
@@ -215,6 +219,8 @@ var knownCollections = map[string]bool{
 	"payments": true, "refund": true, "attributes": true,
 	"payment-accounts": true, "onboarding-link": true,
 	"policies": true,
+	// Automations + webhook-endpoints (2026-06-09).
+	"automations": true, "webhook-endpoints": true, "versions": true, "events": true,
 }
 
 // collectionSegments returns the path segments that are static collection

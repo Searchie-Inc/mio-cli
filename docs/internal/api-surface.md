@@ -183,6 +183,25 @@ plain JSON.
 - `contact`      GET `/api/teams/{team_id}/hubs/{hub_id}/activity/contacts/{contact_id}`
 - `top-engaged`  GET `/api/teams/{team_id}/hubs/{hub_id}/activity/top-engaged`
 
+## automations  (`cmd/automations.go`) — hub-scoped
+- `create`      POST   `/api/teams/{team_id}/hubs/{hub_id}/automations`  body: envelope `automations` {name, definition?, re_entry_mode?, settings?}
+- `list`        GET    `/api/teams/{team_id}/hubs/{hub_id}/automations`  query: page[size], page[after], filter[status]
+- `retrieve`    GET    `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}`
+- `update`      PATCH  `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}`  partial: envelope `automations`
+- `publish`     POST   `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/publish`  (no body → 201 version snapshot)
+- `activate`    POST   `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/activate`  (no body)
+- `deactivate`  POST   `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/deactivate`  (no body)
+- `versions`    GET    `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/versions`
+- `enrollments` GET    `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/enrollments`  query: filter[status] (e.g. stuck)
+- `enroll`      POST   `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/enrollments`  body: envelope `automation_enrollments` {team_contact_id}
+- `fire-event`  POST   `/api/teams/{team_id}/hubs/{hub_id}/automations/events`  body: **flat** {event_type, team_contact_id, idempotency_key?, payload?}
+- `test`        POST   `/api/teams/{team_id}/hubs/{hub_id}/automations/{id}/test`  body: **flat** {team_contact_id} (dry-run, no side effects)
+
+## webhook-endpoints  (`cmd/webhookendpoints.go`) — hub-scoped
+- `create` POST   `/api/teams/{team_id}/hubs/{hub_id}/webhook-endpoints`  body: envelope `webhook_endpoints` {name, target_url, signing_secret?}
+- `list`   GET    `/api/teams/{team_id}/hubs/{hub_id}/webhook-endpoints`
+- `delete` DELETE `/api/teams/{team_id}/hubs/{hub_id}/webhook-endpoints/{id}`  → 204
+
 ---
 
 ## Out of scope (v1)
