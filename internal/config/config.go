@@ -10,10 +10,13 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/99designs/keyring"
 	"github.com/BurntSushi/toml"
@@ -33,6 +36,10 @@ const (
 	// DefaultAPIBase is the fallback API base (production). Overridable via the
 	// MIO_API_BASE_URL env var, the --api-base flag, or `mio config set api-base`.
 	DefaultAPIBase = "https://api.member.dev"
+
+	// fileKeyName is the filename (inside the config dir) that holds the
+	// per-install random passphrase for the file-backend keyring fallback.
+	fileKeyName = "file-keyring.key"
 )
 
 // Profile is a named set of context overrides, mirroring Stripe's profiles.
@@ -131,36 +138,123 @@ func (c *Config) Save() error {
 
 // ---- Keychain helpers -------------------------------------------------------
 
+// loadOrCreateFileKey returns the per-install random passphrase used for the
+// file-backend keyring fallback.  On the first call it generates 32 random
+// bytes, hex-encodes them, and writes the result to
+// <config-dir>/file-keyring.key at mode 0600.  Subsequent calls reload that
+// file.  Two different config dirs therefore always produce different keys,
+// which means a copied keyring blob cannot be decrypted with source knowledge
+// alone.
+func loadOrCreateFileKey() (string, error) {
+	cfgPath, err := Path()
+	if err != nil {
+		return "", err
+	}
+	keyPath := filepath.Join(filepath.Dir(cfgPath), fileKeyName)
+
+	data, err := os.ReadFile(keyPath)
+	if err == nil {
+		// Existing key — trim whitespace in case an editor added a newline.
+		return strings.TrimSpace(string(data)), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("read file keyring key: %w", err)
+	}
+
+	// First use: generate a fresh 32-byte random key.
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate file keyring key: %w", err)
+	}
+	key := hex.EncodeToString(raw)
+
+	// Ensure the parent directory exists (config dir, mode 0700).
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
+		return "", fmt.Errorf("create config dir for key file: %w", err)
+	}
+	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
+		return "", fmt.Errorf("write file keyring key: %w", err)
+	}
+	return key, nil
+}
+
+// keyringAllowedBackends is the ordered list of backends tried by openKeyring.
+// It is a package-level variable so tests can force file-only mode to avoid
+// OS keychain interaction.
+var keyringAllowedBackends = []keyring.BackendType{
+	keyring.KeychainBackend,
+	keyring.SecretServiceBackend,
+	keyring.WinCredBackend,
+	keyring.KWalletBackend,
+	keyring.FileBackend,
+}
+
 // openKeyring opens the OS keychain for the mio-cli service, falling back to an
 // encrypted-at-rest file backend under the config dir when no native keychain
 // is available (Linux headless, containers, CI).
+//
+// The file-backend passphrase is a per-install random key (see
+// loadOrCreateFileKey).  A fixed hardcoded passphrase was used in earlier
+// versions and is explicitly not used here: anyone with the source could
+// decrypt a stolen config blob, making encryption theatre rather than security.
 func openKeyring() (keyring.Keyring, error) {
+	fileKey, err := loadOrCreateFileKey()
+	if err != nil {
+		return nil, err
+	}
 	cfgPath, err := Path()
 	if err != nil {
 		return nil, err
 	}
 	fileDir := filepath.Join(filepath.Dir(cfgPath), "keyring")
 	return keyring.Open(keyring.Config{
-		ServiceName: keyringService,
-		// Allow the OS-native backends first; FileBackend is the portable
-		// fallback so headless environments still work without prompting.
-		AllowedBackends: []keyring.BackendType{
-			keyring.KeychainBackend,
-			keyring.SecretServiceBackend,
-			keyring.WinCredBackend,
-			keyring.KWalletBackend,
-			keyring.FileBackend,
-		},
-		FileDir: fileDir,
-		// For the file fallback we use a fixed, non-interactive passphrase
-		// prompt: the file is already protected by 0600 + the user's home dir,
-		// and prompting would break non-TTY agents. The keychain backends do
-		// not use this.
-		FilePasswordFunc: func(string) (string, error) { return "mio-cli", nil },
+		ServiceName:      keyringService,
+		AllowedBackends:  keyringAllowedBackends,
+		FileDir:          fileDir,
+		FilePasswordFunc: func(string) (string, error) { return fileKey, nil },
 	})
 }
 
+// openKeyringWithPassword opens a keyring using the given password and the
+// file backend only.  cfgDirOverride sets FileDir to
+// <cfgDirOverride>/mio/keyring; pass "" to derive from Path().
+// This is used in tests and for legacy-credential seeding.
+func openKeyringWithPassword(password, cfgDirOverride string) (keyring.Keyring, error) {
+	var fileDir string
+	if cfgDirOverride != "" {
+		fileDir = filepath.Join(cfgDirOverride, "mio", "keyring")
+	} else {
+		cfgPath, err := Path()
+		if err != nil {
+			return nil, err
+		}
+		fileDir = filepath.Join(filepath.Dir(cfgPath), "keyring")
+	}
+	return keyring.Open(keyring.Config{
+		ServiceName:      keyringService,
+		AllowedBackends:  []keyring.BackendType{keyring.FileBackend},
+		FileDir:          fileDir,
+		FilePasswordFunc: func(string) (string, error) { return password, nil },
+	})
+}
+
+// legacyKeyringItem returns a keyring.Item suitable for seeding a legacy
+// (hardcoded-passphrase) keyring file in tests.
+func legacyKeyringItem(apiKey string) keyring.Item {
+	return keyring.Item{
+		Key:         keyringKeyName,
+		Data:        []byte(apiKey),
+		Label:       "mio CLI API key",
+		Description: "API key used by the mio CLI",
+	}
+}
+
 // GetAPIKey returns the stored API key, or "" (no error) if none is stored.
+//
+// If the keyring file was encrypted with the old hardcoded passphrase (a
+// legacy install), decryption will fail.  In that case GetAPIKey deletes the
+// stale file so the next `mio login` can write a fresh entry, and returns an
+// error directing the user to re-login.
 func GetAPIKey() (string, error) {
 	ring, err := openKeyring()
 	if err != nil {
@@ -171,9 +265,51 @@ func GetAPIKey() (string, error) {
 		return "", nil
 	}
 	if err != nil {
+		// A decryption failure most likely means the file was encrypted with the
+		// old hardcoded passphrase.  Remove it so the next login can start fresh.
+		if isDecryptionError(err) {
+			_ = deleteKeyringFile()
+			return "", fmt.Errorf(
+				"stored credentials are no longer readable (encrypted with an old passphrase); "+
+					"please run `mio login` to re-login: %w", err)
+		}
 		return "", fmt.Errorf("read key from keychain: %w", err)
 	}
 	return string(item.Data), nil
+}
+
+// isDecryptionError returns true when err looks like a JOSE / crypto decryption
+// failure that the file backend returns when the passphrase is wrong.
+func isDecryptionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// The jose2go library used by the file backend returns descriptive strings
+	// rather than sentinel errors.  We match the common substrings here.
+	return strings.Contains(msg, "decrypt") ||
+		strings.Contains(msg, "cipher") ||
+		strings.Contains(msg, "HMAC") ||
+		strings.Contains(msg, "integrity") ||
+		strings.Contains(msg, "authentication tag") ||
+		strings.Contains(msg, "invalid compact") ||
+		strings.Contains(msg, "unwrap") ||
+		strings.Contains(msg, "pbes")
+}
+
+// deleteKeyringFile removes the encrypted keyring file so it can be
+// re-created on the next `mio login`.
+func deleteKeyringFile() error {
+	cfgPath, err := Path()
+	if err != nil {
+		return err
+	}
+	fileDir := filepath.Join(filepath.Dir(cfgPath), "keyring")
+	target := filepath.Join(fileDir, keyringKeyName)
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // SetAPIKey persists the API key to the keychain.
