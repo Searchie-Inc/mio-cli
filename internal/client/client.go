@@ -114,7 +114,7 @@ type envelopeData struct {
 // segment. The key is a "/"-joined suffix of the path's collection segments
 // (most specific match wins) so context disambiguates the segments that mean
 // different types in different parents (e.g. ".../products" under a coupon is
-// "coupon-products" but under a hub is "hub-product-displays").
+// "coupon_products" but under a hub is "hub_product_displays").
 //
 // Verified against mio-backend app/*/schemas.py JSON:API write resource type
 // Literals (2026-06-01).
@@ -485,7 +485,7 @@ func (c *Client) ActionCollection(ctx context.Context, method, path string, body
 // ActionCollectionRaw is ActionCollection for endpoints whose request body is
 // NOT a simple flat-attributes envelope. The caller supplies the exact JSON the
 // backend expects (e.g. segment search's
-// {"data":{"type":"segment-search","attributes":{"conditions":…,"page":…}}}).
+// {"data":{"type":"segment_search","attributes":{"conditions":…,"page":…}}}).
 // A nil payload sends no body.
 func (c *Client) ActionCollectionRaw(ctx context.Context, method, path string, payload any) (*Collection, error) {
 	return c.actionCollectionPayload(ctx, method, path, payload)

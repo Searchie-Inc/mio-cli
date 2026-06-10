@@ -459,7 +459,7 @@ func TestNewRawEnvelope(t *testing.T) {
 }
 
 // TestClient_ActionCollectionRawSegmentSearch verifies the exact wire body for
-// segment search: an envelope with type "segment-search" whose attributes carry
+// segment search: an envelope with type "segment_search" whose attributes carry
 // a nested conditions tree (NOT a flat attrs map).
 func TestClient_ActionCollectionRawSegmentSearch(t *testing.T) {
 	var raw map[string]any

@@ -265,7 +265,7 @@ and --page-after.`,
 			return errs.Wrap(errs.ExitUsage, fmt.Errorf("--conditions is not valid JSON: %w", perr))
 		}
 
-		// Build the segment-search attributes: {conditions, page?}. page is only
+		// Build the segment_search attributes: {conditions, page?}. page is only
 		// included when the caller set a pagination flag (the backend defaults it).
 		attributes := map[string]any{"conditions": conditions}
 		page := map[string]any{}

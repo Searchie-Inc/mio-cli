@@ -34,7 +34,7 @@ plain JSON.
   replay`, `content/contacts restore`, `email drip-campaigns activate/pause`.
 - **Body-carrying action endpoints:** `checkout payments refund` (envelope
   `refunds`; body REQUIRED — `--reason` mandatory, `--amount` optional and
-  omitted for a full refund), `content reorder` (envelope `content-nodes`), and
+  omitted for a full refund), `content reorder` (envelope `content_nodes`), and
   `checkout accounts onboarding-link` (envelope `onboarding_links`, ALL of
   `--hub-id`/`--return-url`/`--refresh-url` required).
 - **Type derivation:** the envelope `type` is derived from the request path via

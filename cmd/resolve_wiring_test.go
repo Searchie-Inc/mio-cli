@@ -217,7 +217,7 @@ func TestWiring_TagsAssignByEmailAndTagName(t *testing.T) {
 			if got := r.URL.Query().Get("filter[email]"); got != "alice@example.com" {
 				t.Errorf("contact resolve filter[email] = %q", got)
 			}
-			_, _ = w.Write([]byte(`{"data":[{"id":"ctt_alice","type":"team-contacts","attributes":{"email":"alice@example.com"}}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"ctt_alice","type":"team_contacts","attributes":{"email":"alice@example.com"}}]}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tags"):
 			_, _ = w.Write([]byte(`{"data":[{"id":"tag_vip","type":"tags","attributes":{"name":"VIP","slug":"vip"}}]}`))
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/contacts/ctt_alice/tags"):
@@ -290,7 +290,7 @@ func TestWiring_TagsRemoveByName(t *testing.T) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/contacts"):
-			_, _ = w.Write([]byte(`{"data":[{"id":"ctt_alice","type":"team-contacts","attributes":{"email":"alice@example.com"}}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"ctt_alice","type":"team_contacts","attributes":{"email":"alice@example.com"}}]}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tags"):
 			_, _ = w.Write([]byte(`{"data":[{"id":"tag_vip","type":"tags","attributes":{"name":"VIP","slug":"vip"}}]}`))
 		case r.Method == http.MethodDelete:
