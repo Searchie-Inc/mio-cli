@@ -278,11 +278,11 @@ func readAndValidateFileKeyRetry(keyPath string) (string, error) {
 	)
 	var lastErr error
 	for i := range retries {
-		if key, err := readAndValidateFileKey(keyPath); err == nil {
+		key, err := readAndValidateFileKey(keyPath)
+		if err == nil {
 			return key, nil
-		} else {
-			lastErr = err
 		}
+		lastErr = err
 		if i < retries-1 {
 			time.Sleep(wait)
 		}
@@ -297,7 +297,7 @@ func isValidFileKey(key string) bool {
 		return false
 	}
 	for _, c := range key {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}
