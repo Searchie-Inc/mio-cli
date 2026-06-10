@@ -177,8 +177,8 @@ var communitySpacesCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "description")
 		setBoolFlag(cmd, attrs, "is-private")
 
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
+		if _, ok := attrs["name"]; !ok {
+			return errs.New(errs.ExitUsage, "--name is required to create a space")
 		}
 
 		res, err := c.client.Create(c.ctx, spacesPath(teamID, hubID, ""), attrs)

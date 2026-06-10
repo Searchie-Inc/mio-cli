@@ -312,8 +312,8 @@ var mediaFoldersCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "parent-id")
 
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
+		if _, ok := attrs["name"]; !ok {
+			return errs.New(errs.ExitUsage, "--name is required to create a folder")
 		}
 
 		res, err := c.client.Create(c.ctx, foldersPath(teamID, ""), attrs)
@@ -479,8 +479,8 @@ var mediaPlaylistsCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "visibility")
 		setStringFlag(cmd, attrs, "hub-id")
 
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --title")
+		if _, ok := attrs["title"]; !ok {
+			return errs.New(errs.ExitUsage, "--title is required to create a playlist")
 		}
 
 		res, err := c.client.Create(c.ctx, playlistsPath(teamID, ""), attrs)

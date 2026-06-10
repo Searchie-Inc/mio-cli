@@ -156,6 +156,23 @@ func TestCommunitySpacesCreate_BodyShape(t *testing.T) {
 	}
 }
 
+// TestCommunitySpacesCreate_RequiresName verifies that --name is required and
+// providing only optional flags returns ExitUsage without hitting the network.
+func TestCommunitySpacesCreate_RequiresName(t *testing.T) {
+	srv := newMockServer(t, []mockHandler{{Status: 201, Body: spaceBody}})
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_abc123",
+			"community", "spaces", "create",
+			"--slug", "general", // no --name
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want ExitUsage (%d); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
+
 // TestCommunitySpacesDelete_RequiresYes verifies that delete in a
 // non-interactive shell exits with ExitNeedsConfir when --yes is not passed.
 func TestCommunitySpacesDelete_RequiresYes(t *testing.T) {
@@ -480,6 +497,34 @@ func TestMediaFilesDelete_RequiresYes(t *testing.T) {
 }
 
 // ── media folders ─────────────────────────────────────────────────────────────
+
+// TestMediaFoldersCreate_RequiresName verifies that --name is required for folder create.
+func TestMediaFoldersCreate_RequiresName(t *testing.T) {
+	srv := newMockServer(t, []mockHandler{{Status: 201, Body: mediaFolderBody}})
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "media", "folders", "create",
+			"--parent-id", "folder_root", // no --name
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want ExitUsage (%d); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
+
+// TestMediaPlaylistsCreate_RequiresTitle verifies that --title is required for playlist create.
+func TestMediaPlaylistsCreate_RequiresTitle(t *testing.T) {
+	srv := newMockServer(t, []mockHandler{{Status: 201, Body: mediaPlaylistBody}})
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "media", "playlists", "create",
+			"--visibility", "public", // no --title
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want ExitUsage (%d); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
 
 // TestMediaFoldersList_Path verifies the correct list path.
 func TestMediaFoldersList_Path(t *testing.T) {
