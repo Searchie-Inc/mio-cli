@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -122,7 +123,14 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		Profile: flags.profile,
 	})
 	if err != nil {
-		return errs.Wrap(errs.ExitGeneric, err)
+		if errors.Is(err, config.ErrLegacyCredentials) {
+			// The stale blob has already been deleted; resolved is populated with
+			// APIBase/TeamID but no key.  Inform the user once and fall through to
+			// the interactive login prompt as if no key was stored.
+			fmt.Fprintln(cmd.ErrOrStderr(), "Note: your stored credentials used an old format and have been cleared. Please log in again.")
+		} else {
+			return errs.Wrap(errs.ExitGeneric, err)
+		}
 	}
 
 	// Path 1: env / flag key — validate and store.
