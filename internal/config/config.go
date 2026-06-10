@@ -153,10 +153,8 @@ var ErrLegacyCredentials = errors.New("stored credentials use legacy encryption;
 // which means a copied keyring blob cannot be decrypted with source knowledge
 // alone.
 //
-// Key generation is atomic: the file is created with O_CREATE|O_EXCL so that
-// concurrent first runs are safe.  The loser reads the winner's key rather
-// than writing a different one (which would leave the keyring blob encrypted
-// with a key that is no longer on disk).
+// Key generation uses write-to-temp + O_CREATE|O_EXCL link to final path, so
+// concurrent first-run processes are safe: the loser reads the winner's key.
 func loadOrCreateFileKey() (string, error) {
 	cfgPath, err := Path()
 	if err != nil {
@@ -164,30 +162,27 @@ func loadOrCreateFileKey() (string, error) {
 	}
 	keyPath := filepath.Join(filepath.Dir(cfgPath), fileKeyName)
 
-	// Try to read an existing key first.  Validate: must be a regular file
-	// (not a symlink), must have mode 0600, and must contain exactly 64 hex
-	// characters.  If any check fails, regenerate.
+	// Try to read an existing key first.  Any validation failure means we must
+	// regenerate (the old key is removed inside readAndValidateFileKey).
 	if key, err := readAndValidateFileKey(keyPath); err == nil {
 		return key, nil
 	}
 	// Fall through to create/regenerate (the key either doesn't exist, is
-	// corrupt, has wrong permissions, or is a symlink).
+	// corrupt, has bad permissions, or was a symlink/non-regular file).
 
 	// Ensure the parent directory exists (config dir, mode 0700).
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
 		return "", fmt.Errorf("create config dir for key file: %w", err)
 	}
 
-	// First use (or invalid key removed): generate a fresh 32-byte random key.
+	// Generate a fresh 32-byte random key.
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("generate file keyring key: %w", err)
 	}
 	key := hex.EncodeToString(raw)
 
-	// Atomic create: write to a temp file then rename into place so concurrent
-	// first runners converge on the same key.  O_CREATE|O_EXCL on a temp name
-	// avoids a window where the loser reads a partially-written file.
+	// Write to a temp file first so the reader never sees a partial write.
 	tmp, err := os.CreateTemp(filepath.Dir(keyPath), ".file-keyring-*.tmp")
 	if err != nil {
 		return "", fmt.Errorf("create tmp file keyring key: %w", err)
@@ -195,7 +190,7 @@ func loadOrCreateFileKey() (string, error) {
 	tmpName := tmp.Name()
 	defer func() {
 		_ = tmp.Close()
-		_ = os.Remove(tmpName) // no-op if rename succeeded
+		_ = os.Remove(tmpName) // no-op if link succeeded
 	}()
 	if err := tmp.Chmod(0o600); err != nil {
 		return "", fmt.Errorf("chmod tmp file keyring key: %w", err)
@@ -207,35 +202,59 @@ func loadOrCreateFileKey() (string, error) {
 		return "", fmt.Errorf("close tmp file keyring key: %w", err)
 	}
 
-	// Rename is atomic on POSIX and overwrites any existing file atomically.
-	// If two processes race, one wins and both read the same on-disk key.
-	if err := os.Rename(tmpName, keyPath); err != nil {
-		return "", fmt.Errorf("publish file keyring key: %w", err)
+	// Hard-link tmp → final path with O_EXCL semantics via os.Link (POSIX
+	// atomic, create-if-absent).  If the link fails because the target already
+	// exists (concurrent winner), discard our key and read the winner's.
+	linkErr := os.Link(tmpName, keyPath)
+	switch {
+	case linkErr == nil:
+		// We are the winner: our key is now at keyPath.  Re-read it so we
+		// go through the same validation every other call does.
+		return readAndValidateFileKeyRetry(keyPath)
+	case errors.Is(linkErr, os.ErrExist):
+		// Another process published first; read their key.
+		return readAndValidateFileKeyRetry(keyPath)
+	default:
+		return "", fmt.Errorf("publish file keyring key: %w", linkErr)
 	}
-
-	// Re-read what landed on disk (handles the race where another process won
-	// the rename and wrote its own key).
-	return readAndValidateFileKeyRetry(keyPath)
 }
 
-// readAndValidateFileKey reads keyPath, verifies it is a regular file (not a
-// symlink) with mode 0600, and contains valid 64-char hex.  Returns an error
-// on any failure; callers treat any error as "must regenerate".
+// readAndValidateFileKey reads keyPath and verifies:
+//   - it exists and is a regular file (not a symlink, FIFO, device, or dir)
+//   - its mode is exactly 0600 (permission drift means potential exposure;
+//     we invalidate rather than silently repair to avoid using a key that
+//     may have been read by another user)
+//   - it contains exactly 64 lowercase hex characters
+//
+// On any validation failure the offending path is removed (best-effort) and
+// an error is returned so loadOrCreateFileKey regenerates.
 func readAndValidateFileKey(keyPath string) (string, error) {
-	// Lstat to detect symlinks before following them.
+	// Lstat so we see the symlink itself, not its target.
 	info, err := os.Lstat(keyPath)
 	if err != nil {
 		return "", err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		// Symlink — reject so attackers can't redirect to a known path.
+	// Reject anything that is not a plain regular file.
+	if !info.Mode().IsRegular() {
 		_ = os.Remove(keyPath)
-		return "", fmt.Errorf("file keyring key is a symlink; regenerating")
+		return "", fmt.Errorf("file keyring key is not a regular file (mode %v); regenerating", info.Mode())
 	}
-	// Enforce 0600: repair silently rather than abort so a chmod drift doesn't
-	// lock users out.  Log nothing — there's no structured logger here.
+	// Permission drift means the key may have been readable by others.
+	// Treat it as compromised: remove it and the encrypted credential blob so
+	// the user must re-login with a fresh key.
 	if perm := info.Mode().Perm(); perm != 0o600 {
-		_ = os.Chmod(keyPath, 0o600)
+		_ = os.Remove(keyPath)
+		// Ignore blob-deletion errors here; loadOrCreateFileKey will regenerate
+		// the key, and the next GetAPIKey / Resolve call will surface any
+		// remaining stale-blob issue via the normal decryption-error path.
+		if derr := deleteKeyringFile(); derr != nil {
+			return "", fmt.Errorf(
+				"file keyring key had permissions %04o (expected 0600); key invalidated (blob cleanup failed: %v) — please run `mio login` to re-login",
+				perm, derr)
+		}
+		return "", fmt.Errorf(
+			"file keyring key had permissions %04o (expected 0600); key and credentials invalidated for security — please run `mio login` to re-login",
+			perm)
 	}
 	data, err := os.ReadFile(keyPath)
 	if err != nil {
@@ -244,14 +263,14 @@ func readAndValidateFileKey(keyPath string) (string, error) {
 	key := strings.TrimSpace(string(data))
 	if !isValidFileKey(key) {
 		_ = os.Remove(keyPath)
-		return "", fmt.Errorf("file keyring key is invalid; regenerating")
+		return "", fmt.Errorf("file keyring key content is invalid; regenerating")
 	}
 	return key, nil
 }
 
 // readAndValidateFileKeyRetry retries readAndValidateFileKey with brief waits
 // for the case where the file was just created by a concurrent runner and may
-// still be flushing.
+// still be visible after the hard-link.
 func readAndValidateFileKeyRetry(keyPath string) (string, error) {
 	const (
 		retries = 5
@@ -378,7 +397,12 @@ func GetAPIKey() (string, error) {
 		// old hardcoded passphrase.  Remove it so the next login can start fresh,
 		// then return the typed sentinel so callers can handle it appropriately.
 		if isDecryptionError(err) {
-			_ = deleteKeyringFile()
+			if derr := deleteKeyringFile(); derr != nil {
+				// Deletion failed: the stale blob remains.  Return a combined
+				// error so the operator can see why, still typed as legacy so
+				// callers map to ExitAuth.
+				return "", fmt.Errorf("%w (cleanup failed: %v)", ErrLegacyCredentials, derr)
+			}
 			return "", ErrLegacyCredentials
 		}
 		return "", fmt.Errorf("read key from keychain: %w", err)

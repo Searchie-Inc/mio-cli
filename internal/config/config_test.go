@@ -230,12 +230,15 @@ func TestFileKey_Permissions(t *testing.T) {
 	}
 }
 
-// TestFileKey_PermissionDriftRepaired verifies that a key file with wrong
-// permissions (e.g., 0644) is silently repaired to 0600 on next read.
-func TestFileKey_PermissionDriftRepaired(t *testing.T) {
+// TestFileKey_PermissionDriftInvalidates verifies that a key file whose
+// permissions have drifted beyond 0600 is treated as potentially compromised:
+// the key file is removed and loadOrCreateFileKey regenerates with a NEW key
+// on the next call (rather than silently repairing and reusing the old key).
+func TestFileKey_PermissionDriftInvalidates(t *testing.T) {
 	dir := withXDG(t)
 	// Generate the key initially.
-	if _, err := loadOrCreateFileKey(); err != nil {
+	origKey, err := loadOrCreateFileKey()
+	if err != nil {
 		t.Fatalf("initial loadOrCreateFileKey: %v", err)
 	}
 	// Widen permissions to simulate drift.
@@ -243,16 +246,22 @@ func TestFileKey_PermissionDriftRepaired(t *testing.T) {
 	if err := os.Chmod(keyPath, 0o644); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	// Re-reading must not error and must repair permissions.
-	if _, err := loadOrCreateFileKey(); err != nil {
+	// The validation must reject the drifted key and regenerate.
+	newKey, err := loadOrCreateFileKey()
+	if err != nil {
 		t.Fatalf("loadOrCreateFileKey after drift: %v", err)
 	}
+	// A fresh key must have been generated (different from the old one).
+	if newKey == origKey {
+		t.Error("expected a new key after permission drift, but got the same key — drift was silently repaired instead of invalidated")
+	}
+	// New key file must be at 0600.
 	info, err := os.Stat(keyPath)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("perms after repair = %04o, want 0600", perm)
+		t.Errorf("new key file perms = %04o, want 0600", perm)
 	}
 }
 
