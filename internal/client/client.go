@@ -123,20 +123,21 @@ var typeOverrides = []struct {
 	typ    string
 }{
 	// Contextual collisions — keep these BEFORE the bare-segment entries.
-	{"coupons/products", "coupon-products"},
-	{"hubs/products", "hub-product-displays"},
-	{"hubs/prices", "hub-price-displays"},
-	{"products/deliverables", "product-deliverables"},
-	{"contact-attributes/options", "contact-attribute-options"},
+	// All type values are snake_case per MIO-636 (backend cutover 2026-06-04).
+	{"coupons/products", "coupon_products"},
+	{"hubs/products", "hub_product_displays"},
+	{"hubs/prices", "hub_price_displays"},
+	{"products/deliverables", "product_deliverables"},
+	{"contact-attributes/options", "contact_attribute_options"},
 	// hub-config lives at /hubs/{hub}/contact-attributes — same trailing
 	// segment as team-level definitions, disambiguated by the hubs parent.
-	{"hubs/contact-attributes", "contact-attribute-hub-configs"},
-	{"content/reorder", "content-nodes"},
-	{"segments/search", "segment-search"},
+	{"hubs/contact-attributes", "contact_attribute_hub_configs"},
+	{"content/reorder", "content_nodes"},
+	{"segments/search", "segment_search"},
 	{"contacts/tags", "tag_assignments"},
 	{"drip-campaigns/steps", "drip_steps"},
 	{"pages/sections", "sections"},
-	{"teams/members", "team-members"},
+	{"teams/members", "team_members"},
 	// Action routes that take an enveloped body with a non-segment type.
 	{"payment-accounts/onboarding-link", "onboarding_links"},
 	{"payments/refund", "refunds"},
@@ -145,9 +146,9 @@ var typeOverrides = []struct {
 	{"automations/enrollments", "automation_enrollments"},
 	// Bare-segment overrides (URL segment != backend type).
 	{"segments", "segment"},
-	{"content", "content-nodes"},
-	{"contacts", "team-contacts"},
-	{"contact-attributes", "contact-attribute-definitions"},
+	{"content", "content_nodes"},
+	{"contacts", "team_contacts"},
+	{"contact-attributes", "contact_attribute_definitions"},
 	{"drip-campaigns", "drip_campaigns"},
 	{"email-templates", "email_templates"},
 	{"webhook-endpoints", "webhook_endpoints"},

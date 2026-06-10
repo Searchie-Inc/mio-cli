@@ -543,8 +543,8 @@ func TestContract_JSON_RetrieveIsFlatObject(t *testing.T) {
 	if obj["id"] != "ctt_1" {
 		t.Errorf("CONTRACT: retrieve.id = %v, want ctt_1", obj["id"])
 	}
-	if obj["type"] != "team-contacts" {
-		t.Errorf("CONTRACT: retrieve.type = %v, want team-contacts", obj["type"])
+	if obj["type"] != "team_contacts" {
+		t.Errorf("CONTRACT: retrieve.type = %v, want team_contacts", obj["type"])
 	}
 	if _, has := obj["data"]; has {
 		t.Error("CONTRACT: retrieve JSON must NOT have a top-level 'data' key")

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
@@ -232,21 +233,22 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/hubs/h1/pages", "pages"},
 		{"/api/teams/t1/hubs/h1/pages/pg1/sections", "sections"},
 		// Overrides: backend type != URL segment.
+		// All type values are snake_case per MIO-636 (backend cutover 2026-06-04).
 		{"/api/teams/t1/segments", "segment"},
 		{"/api/teams/t1/segments/s1", "segment"},
-		{"/api/teams/t1/segments/search", "segment-search"},
-		{"/api/teams/t1/contacts", "team-contacts"},
-		{"/api/teams/t1/contacts/c1", "team-contacts"},
-		{"/api/teams/t1/hubs/h1/content", "content-nodes"},
-		{"/api/teams/t1/hubs/h1/content/n1", "content-nodes"},
-		{"/api/teams/t1/products/p1/deliverables", "product-deliverables"},
+		{"/api/teams/t1/segments/search", "segment_search"},
+		{"/api/teams/t1/contacts", "team_contacts"},
+		{"/api/teams/t1/contacts/c1", "team_contacts"},
+		{"/api/teams/t1/hubs/h1/content", "content_nodes"},
+		{"/api/teams/t1/hubs/h1/content/n1", "content_nodes"},
+		{"/api/teams/t1/products/p1/deliverables", "product_deliverables"},
 		// Contextual collisions on the same trailing segment.
-		{"/api/teams/t1/coupons/co1/products", "coupon-products"},
-		{"/api/teams/t1/hubs/h1/products", "hub-product-displays"},
-		{"/api/teams/t1/hubs/h1/prices", "hub-price-displays"},
+		{"/api/teams/t1/coupons/co1/products", "coupon_products"},
+		{"/api/teams/t1/hubs/h1/products", "hub_product_displays"},
+		{"/api/teams/t1/hubs/h1/prices", "hub_price_displays"},
 		// contact-attributes family.
-		{"/api/teams/t1/contact-attributes", "contact-attribute-definitions"},
-		{"/api/teams/t1/contact-attributes/d1/options", "contact-attribute-options"},
+		{"/api/teams/t1/contact-attributes", "contact_attribute_definitions"},
+		{"/api/teams/t1/contact-attributes/d1/options", "contact_attribute_options"},
 		// email family.
 		{"/v1/hubs/h1/drip-campaigns", "drip_campaigns"},
 		{"/v1/hubs/h1/drip-campaigns/dc1/steps", "drip_steps"},
@@ -257,15 +259,15 @@ func TestResourceTypeFromPath(t *testing.T) {
 		// page sections under a page.
 		{"/api/teams/t1/hubs/h1/pages/pg1/sections/sec1", "sections"},
 		// hub-config: contact-attributes under a hub != team-level definitions.
-		{"/api/teams/t1/hubs/h1/contact-attributes", "contact-attribute-hub-configs"},
-		{"/api/teams/t1/hubs/h1/contact-attributes/d1", "contact-attribute-hub-configs"},
-		// content reorder action keeps the content-nodes type.
-		{"/api/teams/t1/hubs/h1/content/reorder", "content-nodes"},
+		{"/api/teams/t1/hubs/h1/contact-attributes", "contact_attribute_hub_configs"},
+		{"/api/teams/t1/hubs/h1/contact-attributes/d1", "contact_attribute_hub_configs"},
+		// content reorder action keeps the content_nodes type.
+		{"/api/teams/t1/hubs/h1/content/reorder", "content_nodes"},
 		// checkout action routes with non-segment envelope types.
 		{"/api/teams/t1/hubs/h1/payments/pay1/refund", "refunds"},
 		{"/api/teams/t1/payment-accounts/onboarding-link", "onboarding_links"},
 		// team members write resource.
-		{"/api/teams/t1/members", "team-members"},
+		{"/api/teams/t1/members", "team_members"},
 	}
 	for _, tc := range cases {
 		if got := resourceTypeFromPath(tc.path); got != tc.want {
@@ -425,7 +427,7 @@ func TestBuildWriteBody(t *testing.T) {
 // TestNewRawEnvelope verifies the structured-attributes envelope used by segment
 // search marshals to {"data":{"type":…,"attributes":<arbitrary>}}.
 func TestNewRawEnvelope(t *testing.T) {
-	env := NewRawEnvelope("segment-search", map[string]any{
+	env := NewRawEnvelope("segment_search", map[string]any{
 		"conditions": map[string]any{"version": 1},
 		"page":       map[string]any{"size": 50},
 	})
@@ -445,8 +447,8 @@ func TestNewRawEnvelope(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Data.Type != "segment-search" {
-		t.Errorf("type = %q, want segment-search", got.Data.Type)
+	if got.Data.Type != "segment_search" {
+		t.Errorf("type = %q, want segment_search", got.Data.Type)
 	}
 	if got.Data.Attributes.Conditions["version"] != float64(1) {
 		t.Errorf("conditions.version = %v, want 1", got.Data.Attributes.Conditions["version"])
@@ -469,7 +471,7 @@ func TestClient_ActionCollectionRawSegmentSearch(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv, "k")
-	payload := NewRawEnvelope("segment-search", map[string]any{
+	payload := NewRawEnvelope("segment_search", map[string]any{
 		"conditions": map[string]any{
 			"version": 1,
 			"groups":  []any{map[string]any{"logic": "AND", "conditions": []any{}}},
@@ -482,8 +484,8 @@ func TestClient_ActionCollectionRawSegmentSearch(t *testing.T) {
 	if !ok {
 		t.Fatalf("body missing data object: %#v", raw)
 	}
-	if data["type"] != "segment-search" {
-		t.Errorf("data.type = %v, want segment-search", data["type"])
+	if data["type"] != "segment_search" {
+		t.Errorf("data.type = %v, want segment_search", data["type"])
 	}
 	attrs, ok := data["attributes"].(map[string]any)
 	if !ok {
@@ -597,5 +599,34 @@ func TestClient_ActionCollection(t *testing.T) {
 	}
 	if col.Data[0].ID != "tc1" || col.Data[1].ID != "tc2" {
 		t.Errorf("unexpected resources: %#v", col.Data)
+	}
+}
+
+// isSnakeCaseType returns true if s is a valid snake_case identifier (lower-case
+// letters, digits, and underscores only). Kebab-case values contain a hyphen and
+// therefore fail this check. This is the same rule enforced by the backend's
+// test_jsonapi_type_naming.py contract guard (MIO-636).
+func isSnakeCaseType(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsLower(r) && !unicode.IsDigit(r) && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// TestTypeOverrides_AllSnakeCase is a compile-time-equivalent guard that fails
+// whenever a kebab-case value (or any non-snake_case string) is introduced into
+// typeOverrides. It enforces the MIO-636 invariant: every JSON:API resource
+// type value sent to the backend must be snake_case. This mirrors the backend's
+// tests/contract/test_jsonapi_type_naming.py guard on the CLI side.
+func TestTypeOverrides_AllSnakeCase(t *testing.T) {
+	for _, o := range typeOverrides {
+		if !isSnakeCaseType(o.typ) {
+			t.Errorf("typeOverrides[%q].typ = %q is not snake_case (MIO-636: backend requires snake_case type values)", o.suffix, o.typ)
+		}
 	}
 }

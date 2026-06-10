@@ -40,10 +40,11 @@ plain JSON.
 - **Type derivation:** the envelope `type` is derived from the request path via
   `resourceTypeFromPath` + a `typeOverrides` table for the cases where the backend
   `type` literal differs from the URL segment (e.g. `segments`→`segment`,
-  `contacts`→`team-contacts`, `members`→`team-members`, `hubs/contact-attributes`
-  →`contact-attribute-hub-configs`, `steps`→`drip_steps`, `payments/refund`
+  `contacts`→`team_contacts`, `members`→`team_members`, `hubs/contact-attributes`
+  →`contact_attribute_hub_configs`, `steps`→`drip_steps`, `payments/refund`
   →`refunds`, `payment-accounts/onboarding-link`→`onboarding_links`).
-- **segments search:** body is an envelope `{"data":{"type":"segment-search",
+  All override values are `snake_case` per MIO-636 (backend cutover 2026-06-04).
+- **segments search:** body is an envelope `{"data":{"type":"segment_search",
   "attributes":{"conditions":<tree>,"page":{"size","after"}}}}`. `--conditions`
   takes the full condition tree as JSON (`{"version":1,"groups":[…]}`), `--page-size`
   and `--page-after` drive pagination. There is no `--match` flag.

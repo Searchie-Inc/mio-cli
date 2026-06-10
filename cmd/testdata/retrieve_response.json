@@ -1,7 +1,7 @@
 {
   "data": {
     "id": "ctt_1",
-    "type": "team-contacts",
+    "type": "team_contacts",
     "attributes": {
       "email": "alice@example.com",
       "first_name": "Alice",
