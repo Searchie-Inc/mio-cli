@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/99designs/keyring"
 	"github.com/BurntSushi/toml"
@@ -163,59 +164,111 @@ func loadOrCreateFileKey() (string, error) {
 	}
 	keyPath := filepath.Join(filepath.Dir(cfgPath), fileKeyName)
 
-	// Try to read an existing key first.  Validate that it looks like 64 hex
-	// characters (32 bytes); if the file is corrupt, regenerate it.
-	if data, err := os.ReadFile(keyPath); err == nil {
-		key := strings.TrimSpace(string(data))
-		if isValidFileKey(key) {
-			return key, nil
-		}
-		// File is corrupt or truncated — fall through to regenerate.
-		// Ignore the remove error; we'll fail on the subsequent write.
-		_ = os.Remove(keyPath)
+	// Try to read an existing key first.  Validate: must be a regular file
+	// (not a symlink), must have mode 0600, and must contain exactly 64 hex
+	// characters.  If any check fails, regenerate.
+	if key, err := readAndValidateFileKey(keyPath); err == nil {
+		return key, nil
 	}
-
-	// First use (or corrupt key removed): generate a fresh 32-byte random key.
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("generate file keyring key: %w", err)
-	}
-	key := hex.EncodeToString(raw)
+	// Fall through to create/regenerate (the key either doesn't exist, is
+	// corrupt, has wrong permissions, or is a symlink).
 
 	// Ensure the parent directory exists (config dir, mode 0700).
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
 		return "", fmt.Errorf("create config dir for key file: %w", err)
 	}
 
-	// Atomic create: O_CREATE|O_EXCL so concurrent first runs don't both write
-	// different keys.  The loser (EEXIST) falls through to read the winner's key.
-	f, err := os.OpenFile(keyPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	switch {
-	case err == nil:
-		// We won the race — write our key.
-		if _, werr := fmt.Fprint(f, key); werr != nil {
-			_ = f.Close()
-			_ = os.Remove(keyPath)
-			return "", fmt.Errorf("write file keyring key: %w", werr)
-		}
-		if cerr := f.Close(); cerr != nil {
-			return "", fmt.Errorf("close file keyring key: %w", cerr)
-		}
-		return key, nil
-	case errors.Is(err, os.ErrExist):
-		// Another process created the file first; read and return their key.
-		data, rerr := os.ReadFile(keyPath)
-		if rerr != nil {
-			return "", fmt.Errorf("read file keyring key (race): %w", rerr)
-		}
-		winner := strings.TrimSpace(string(data))
-		if !isValidFileKey(winner) {
-			return "", fmt.Errorf("file keyring key written by concurrent process is invalid")
-		}
-		return winner, nil
-	default:
-		return "", fmt.Errorf("create file keyring key: %w", err)
+	// First use (or invalid key removed): generate a fresh 32-byte random key.
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate file keyring key: %w", err)
 	}
+	key := hex.EncodeToString(raw)
+
+	// Atomic create: write to a temp file then rename into place so concurrent
+	// first runners converge on the same key.  O_CREATE|O_EXCL on a temp name
+	// avoids a window where the loser reads a partially-written file.
+	tmp, err := os.CreateTemp(filepath.Dir(keyPath), ".file-keyring-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create tmp file keyring key: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName) // no-op if rename succeeded
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return "", fmt.Errorf("chmod tmp file keyring key: %w", err)
+	}
+	if _, err := fmt.Fprint(tmp, key); err != nil {
+		return "", fmt.Errorf("write tmp file keyring key: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close tmp file keyring key: %w", err)
+	}
+
+	// Rename is atomic on POSIX and overwrites any existing file atomically.
+	// If two processes race, one wins and both read the same on-disk key.
+	if err := os.Rename(tmpName, keyPath); err != nil {
+		return "", fmt.Errorf("publish file keyring key: %w", err)
+	}
+
+	// Re-read what landed on disk (handles the race where another process won
+	// the rename and wrote its own key).
+	return readAndValidateFileKeyRetry(keyPath)
+}
+
+// readAndValidateFileKey reads keyPath, verifies it is a regular file (not a
+// symlink) with mode 0600, and contains valid 64-char hex.  Returns an error
+// on any failure; callers treat any error as "must regenerate".
+func readAndValidateFileKey(keyPath string) (string, error) {
+	// Lstat to detect symlinks before following them.
+	info, err := os.Lstat(keyPath)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		// Symlink — reject so attackers can't redirect to a known path.
+		_ = os.Remove(keyPath)
+		return "", fmt.Errorf("file keyring key is a symlink; regenerating")
+	}
+	// Enforce 0600: repair silently rather than abort so a chmod drift doesn't
+	// lock users out.  Log nothing — there's no structured logger here.
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		_ = os.Chmod(keyPath, 0o600)
+	}
+	data, err := os.ReadFile(keyPath)
+	if err != nil {
+		return "", err
+	}
+	key := strings.TrimSpace(string(data))
+	if !isValidFileKey(key) {
+		_ = os.Remove(keyPath)
+		return "", fmt.Errorf("file keyring key is invalid; regenerating")
+	}
+	return key, nil
+}
+
+// readAndValidateFileKeyRetry retries readAndValidateFileKey with brief waits
+// for the case where the file was just created by a concurrent runner and may
+// still be flushing.
+func readAndValidateFileKeyRetry(keyPath string) (string, error) {
+	const (
+		retries = 5
+		wait    = 10 * time.Millisecond
+	)
+	var lastErr error
+	for i := range retries {
+		if key, err := readAndValidateFileKey(keyPath); err == nil {
+			return key, nil
+		} else {
+			lastErr = err
+		}
+		if i < retries-1 {
+			time.Sleep(wait)
+		}
+	}
+	return "", fmt.Errorf("file keyring key not readable after retries: %w", lastErr)
 }
 
 // isValidFileKey returns true if key is a 64-character lowercase hex string

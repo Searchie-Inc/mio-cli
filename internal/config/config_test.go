@@ -230,6 +230,70 @@ func TestFileKey_Permissions(t *testing.T) {
 	}
 }
 
+// TestFileKey_PermissionDriftRepaired verifies that a key file with wrong
+// permissions (e.g., 0644) is silently repaired to 0600 on next read.
+func TestFileKey_PermissionDriftRepaired(t *testing.T) {
+	dir := withXDG(t)
+	// Generate the key initially.
+	if _, err := loadOrCreateFileKey(); err != nil {
+		t.Fatalf("initial loadOrCreateFileKey: %v", err)
+	}
+	// Widen permissions to simulate drift.
+	keyPath := filepath.Join(dir, "mio", fileKeyName)
+	if err := os.Chmod(keyPath, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	// Re-reading must not error and must repair permissions.
+	if _, err := loadOrCreateFileKey(); err != nil {
+		t.Fatalf("loadOrCreateFileKey after drift: %v", err)
+	}
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("perms after repair = %04o, want 0600", perm)
+	}
+}
+
+// TestFileKey_SymlinkRejected verifies that a symlink at the key path is
+// detected and regenerated as a regular file.
+func TestFileKey_SymlinkRejected(t *testing.T) {
+	dir := withXDG(t)
+	keyPath := filepath.Join(dir, "mio", fileKeyName)
+
+	// Create the mio config dir.
+	if err := os.MkdirAll(filepath.Join(dir, "mio"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Put a symlink at the key path.
+	target := filepath.Join(dir, "other-key.txt")
+	if err := os.WriteFile(target, []byte("deadbeef"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, keyPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	// loadOrCreateFileKey must detect the symlink, remove it, and generate a
+	// real regular-file key.
+	key, err := loadOrCreateFileKey()
+	if err != nil {
+		t.Fatalf("loadOrCreateFileKey with symlink: %v", err)
+	}
+	if !isValidFileKey(key) {
+		t.Errorf("regenerated key %q is invalid", key)
+	}
+	// The path should now be a regular file, not a symlink.
+	info, err := os.Lstat(keyPath)
+	if err != nil {
+		t.Fatalf("lstat after symlink rejection: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Error("key path is still a symlink after rejection")
+	}
+}
+
 // TestKeyring_SetGetRoundTrip verifies that SetAPIKey+GetAPIKey round-trip via
 // the file backend (no OS keychain in the test environment).
 func TestKeyring_SetGetRoundTrip(t *testing.T) {
