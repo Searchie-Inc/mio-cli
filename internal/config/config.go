@@ -319,25 +319,24 @@ var keyringAllowedBackends = []keyring.BackendType{
 // encrypted-at-rest file backend under the config dir when no native keychain
 // is available (Linux headless, containers, CI).
 //
-// The file-backend passphrase is a per-install random key (see
-// loadOrCreateFileKey).  A fixed hardcoded passphrase was used in earlier
-// versions and is explicitly not used here: anyone with the source could
-// decrypt a stolen config blob, making encryption theatre rather than security.
+// The file-backend passphrase is loaded lazily inside FilePasswordFunc so that
+// OS keychain users (macOS Keychain, Windows Credential Manager, Linux Secret
+// Service) never pay the cost of file-key creation or validation.
+// loadOrCreateFileKey is only called if the keyring library actually selects
+// the file backend.
 func openKeyring() (keyring.Keyring, error) {
-	fileKey, err := loadOrCreateFileKey()
-	if err != nil {
-		return nil, err
-	}
 	cfgPath, err := Path()
 	if err != nil {
 		return nil, err
 	}
 	fileDir := filepath.Join(filepath.Dir(cfgPath), "keyring")
 	return keyring.Open(keyring.Config{
-		ServiceName:      keyringService,
-		AllowedBackends:  keyringAllowedBackends,
-		FileDir:          fileDir,
-		FilePasswordFunc: func(string) (string, error) { return fileKey, nil },
+		ServiceName:     keyringService,
+		AllowedBackends: keyringAllowedBackends,
+		FileDir:         fileDir,
+		// FilePasswordFunc is invoked lazily, only when the file backend is
+		// actually selected by the keyring library.
+		FilePasswordFunc: func(string) (string, error) { return loadOrCreateFileKey() },
 	})
 }
 
