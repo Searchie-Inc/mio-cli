@@ -11,6 +11,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -194,6 +195,11 @@ func newContext(cmd *cobra.Command) (*cmdContext, error) {
 		Profile: flags.profile,
 	})
 	if err != nil {
+		// Legacy encrypted credentials → exit 3 (same as missing/invalid auth)
+		// so agents and CI handle it like any other auth failure.
+		if errors.Is(err, config.ErrLegacyCredentials) {
+			return nil, errs.Wrap(errs.ExitAuth, err)
+		}
 		return nil, errs.Wrap(errs.ExitGeneric, err)
 	}
 

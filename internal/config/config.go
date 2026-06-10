@@ -138,6 +138,12 @@ func (c *Config) Save() error {
 
 // ---- Keychain helpers -------------------------------------------------------
 
+// ErrLegacyCredentials is returned by GetAPIKey when the stored credential blob
+// was encrypted with the old hardcoded passphrase.  Callers (including the
+// login flow) should treat it as "no stored key" and proceed to the login
+// prompt rather than aborting.  Root command wiring maps this to ExitAuth.
+var ErrLegacyCredentials = errors.New("stored credentials use legacy encryption; please run `mio login` to re-login")
+
 // loadOrCreateFileKey returns the per-install random passphrase used for the
 // file-backend keyring fallback.  On the first call it generates 32 random
 // bytes, hex-encodes them, and writes the result to
@@ -145,6 +151,11 @@ func (c *Config) Save() error {
 // file.  Two different config dirs therefore always produce different keys,
 // which means a copied keyring blob cannot be decrypted with source knowledge
 // alone.
+//
+// Key generation is atomic: the file is created with O_CREATE|O_EXCL so that
+// concurrent first runs are safe.  The loser reads the winner's key rather
+// than writing a different one (which would leave the keyring blob encrypted
+// with a key that is no longer on disk).
 func loadOrCreateFileKey() (string, error) {
 	cfgPath, err := Path()
 	if err != nil {
@@ -152,16 +163,19 @@ func loadOrCreateFileKey() (string, error) {
 	}
 	keyPath := filepath.Join(filepath.Dir(cfgPath), fileKeyName)
 
-	data, err := os.ReadFile(keyPath)
-	if err == nil {
-		// Existing key — trim whitespace in case an editor added a newline.
-		return strings.TrimSpace(string(data)), nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("read file keyring key: %w", err)
+	// Try to read an existing key first.  Validate that it looks like 64 hex
+	// characters (32 bytes); if the file is corrupt, regenerate it.
+	if data, err := os.ReadFile(keyPath); err == nil {
+		key := strings.TrimSpace(string(data))
+		if isValidFileKey(key) {
+			return key, nil
+		}
+		// File is corrupt or truncated — fall through to regenerate.
+		// Ignore the remove error; we'll fail on the subsequent write.
+		_ = os.Remove(keyPath)
 	}
 
-	// First use: generate a fresh 32-byte random key.
+	// First use (or corrupt key removed): generate a fresh 32-byte random key.
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("generate file keyring key: %w", err)
@@ -172,10 +186,50 @@ func loadOrCreateFileKey() (string, error) {
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
 		return "", fmt.Errorf("create config dir for key file: %w", err)
 	}
-	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
-		return "", fmt.Errorf("write file keyring key: %w", err)
+
+	// Atomic create: O_CREATE|O_EXCL so concurrent first runs don't both write
+	// different keys.  The loser (EEXIST) falls through to read the winner's key.
+	f, err := os.OpenFile(keyPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	switch {
+	case err == nil:
+		// We won the race — write our key.
+		if _, werr := fmt.Fprint(f, key); werr != nil {
+			_ = f.Close()
+			_ = os.Remove(keyPath)
+			return "", fmt.Errorf("write file keyring key: %w", werr)
+		}
+		if cerr := f.Close(); cerr != nil {
+			return "", fmt.Errorf("close file keyring key: %w", cerr)
+		}
+		return key, nil
+	case errors.Is(err, os.ErrExist):
+		// Another process created the file first; read and return their key.
+		data, rerr := os.ReadFile(keyPath)
+		if rerr != nil {
+			return "", fmt.Errorf("read file keyring key (race): %w", rerr)
+		}
+		winner := strings.TrimSpace(string(data))
+		if !isValidFileKey(winner) {
+			return "", fmt.Errorf("file keyring key written by concurrent process is invalid")
+		}
+		return winner, nil
+	default:
+		return "", fmt.Errorf("create file keyring key: %w", err)
 	}
-	return key, nil
+}
+
+// isValidFileKey returns true if key is a 64-character lowercase hex string
+// (the expected encoding of 32 random bytes).
+func isValidFileKey(key string) bool {
+	if len(key) != 64 {
+		return false
+	}
+	for _, c := range key {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // keyringAllowedBackends is the ordered list of backends tried by openKeyring.
@@ -253,8 +307,10 @@ func legacyKeyringItem(apiKey string) keyring.Item {
 //
 // If the keyring file was encrypted with the old hardcoded passphrase (a
 // legacy install), decryption will fail.  In that case GetAPIKey deletes the
-// stale file so the next `mio login` can write a fresh entry, and returns an
-// error directing the user to re-login.
+// stale file so the next `mio login` can write a fresh entry, and returns
+// ErrLegacyCredentials.  Callers in the login flow detect this sentinel and
+// continue to the interactive prompt rather than aborting; other callers
+// (root command wiring) map it to ExitAuth.
 func GetAPIKey() (string, error) {
 	ring, err := openKeyring()
 	if err != nil {
@@ -266,12 +322,11 @@ func GetAPIKey() (string, error) {
 	}
 	if err != nil {
 		// A decryption failure most likely means the file was encrypted with the
-		// old hardcoded passphrase.  Remove it so the next login can start fresh.
+		// old hardcoded passphrase.  Remove it so the next login can start fresh,
+		// then return the typed sentinel so callers can handle it appropriately.
 		if isDecryptionError(err) {
 			_ = deleteKeyringFile()
-			return "", fmt.Errorf(
-				"stored credentials are no longer readable (encrypted with an old passphrase); "+
-					"please run `mio login` to re-login: %w", err)
+			return "", ErrLegacyCredentials
 		}
 		return "", fmt.Errorf("read key from keychain: %w", err)
 	}
@@ -373,10 +428,20 @@ func (c *Config) Resolve(o Overrides) (Resolved, error) {
 	}
 	if apiKey == "" {
 		stored, err := GetAPIKey()
-		if err != nil {
+		switch {
+		case err == nil:
+			apiKey = stored
+		case errors.Is(err, ErrLegacyCredentials):
+			// The stale blob has been deleted; treat as no key stored and surface
+			// the sentinel so callers (root wiring, login) can react appropriately.
+			return Resolved{
+				APIBase: firstNonEmpty(o.APIBase, os.Getenv(EnvAPIBase), prof.APIBase, c.APIBase, DefaultAPIBase),
+				TeamID:  firstNonEmpty(o.TeamID, prof.CurrentTeam, c.CurrentTeam),
+				HubID:   firstNonEmpty(o.HubID, prof.CurrentHub, c.CurrentHub),
+			}, ErrLegacyCredentials
+		default:
 			return Resolved{}, err
 		}
-		apiKey = stored
 	}
 
 	// API base: flag > env > profile/config > default.
