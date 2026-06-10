@@ -283,7 +283,7 @@ func TestResolveContactByEmail_UsesServerFilter(t *testing.T) {
 		gotFilter = r.URL.Query().Get("filter[email]")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":[
-		  {"id":"019ec001-0000-7000-8000-00000000000d","type":"team-contacts","attributes":{"email":"alice@example.com"}}
+		  {"id":"019ec001-0000-7000-8000-00000000000d","type":"team_contacts","attributes":{"email":"alice@example.com"}}
 		]}`))
 	})
 	c := New(srv.URL, "k", WithHTTPClient(srv.Client()))

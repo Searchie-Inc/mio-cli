@@ -2,7 +2,7 @@
   "data": [
     {
       "id": "ctt_1",
-      "type": "team-contacts",
+      "type": "team_contacts",
       "attributes": {
         "email": "alice@example.com",
         "first_name": "Alice",
@@ -11,7 +11,7 @@
     },
     {
       "id": "ctt_2",
-      "type": "team-contacts",
+      "type": "team_contacts",
       "attributes": {
         "email": "bob@example.com",
         "first_name": "Bob",
