@@ -268,6 +268,18 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/payment-accounts/onboarding-link", "onboarding_links"},
 		// team members write resource.
 		{"/api/teams/t1/members", "team_members"},
+		// Community admin spaces + discussions (MIO-811).
+		{"/api/admin/teams/t1/hubs/h1/spaces", "spaces"},
+		{"/api/admin/teams/t1/hubs/h1/spaces/sp1", "spaces"},
+		{"/api/admin/teams/t1/hubs/h1/discussions", "discussions"},
+		{"/api/admin/teams/t1/hubs/h1/discussions/d1", "discussions"},
+		// Media files, folders, playlists (MIO-811).
+		{"/api/teams/t1/files", "files"},
+		{"/api/teams/t1/files/f1", "files"},
+		{"/api/teams/t1/folders", "folders"},
+		{"/api/teams/t1/folders/fo1", "folders"},
+		{"/api/teams/t1/playlists", "playlists"},
+		{"/api/teams/t1/playlists/pl1", "playlists"},
 	}
 	for _, tc := range cases {
 		if got := resourceTypeFromPath(tc.path); got != tc.want {

@@ -222,6 +222,10 @@ var knownCollections = map[string]bool{
 	"policies": true,
 	// Automations + webhook-endpoints (2026-06-09).
 	"automations": true, "webhook-endpoints": true, "versions": true, "events": true,
+	// Community admin (2026-06-09): spaces, discussions wired in community.go.
+	"spaces": true, "discussions": true,
+	// Media (2026-06-09): files, folders, playlists wired in media.go.
+	"files": true, "folders": true, "playlists": true,
 }
 
 // collectionSegments returns the path segments that are static collection
