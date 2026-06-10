@@ -349,9 +349,9 @@ var mediaFoldersRetrieveCmd = &cobra.Command{
 // ---- folders update ---------------------------------------------------------
 
 var mediaFoldersUpdateCmd = &cobra.Command{
-	Use:   "update <id>",
-	Short: "Update (rename) a media folder by id.",
-	Long:  "Rename a folder. To move a folder to a new parent use the API's POST /{id}/move endpoint directly.",
+	Use:     "update <id>",
+	Short:   "Update (rename) a media folder by id.",
+	Long:    "Rename a folder. To move a folder to a new parent use the API's POST /{id}/move endpoint directly.",
 	Example: `  mio media folders update folder_abc123 --name "Renamed Folder"`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
