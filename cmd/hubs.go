@@ -95,11 +95,11 @@ var hubsCreateCmd = &cobra.Command{
 		}
 
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "name")
+		setMappedString(cmd, attrs, "name", "title")
 		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "logo-url")
-		setBoolFlag(cmd, attrs, "published")
+		setMappedNestedString(cmd, attrs, "logo-url", "branding", "logo_url")
+		setMappedBoolInverted(cmd, attrs, "published", "is_private")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
@@ -175,12 +175,20 @@ var hubsUpdateCmd = &cobra.Command{
 			return err
 		}
 
+		// --logo-url is not supported on update: the backend assigns branding
+		// wholesale (setattr, not merge), so patching any branding field would
+		// silently clobber all sibling keys (primary_color, background_color, etc.).
+		// Fail fast so the caller knows the logo was NOT updated. (MIO-901)
+		if cmd.Flags().Changed("logo-url") {
+			return errs.New(errs.ExitUsage,
+				"--logo-url is not supported on `hubs update` yet: updating it would overwrite other branding fields. Set the logo when creating the hub. (tracked: MIO-901)")
+		}
+
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "name")
+		setMappedString(cmd, attrs, "name", "title")
 		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "logo-url")
-		setBoolFlag(cmd, attrs, "published")
+		setMappedBoolInverted(cmd, attrs, "published", "is_private")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")

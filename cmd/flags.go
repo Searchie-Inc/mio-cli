@@ -97,6 +97,34 @@ func setMappedInt(cmd *cobra.Command, attrs map[string]any, name, key string) {
 	}
 }
 
+// setMappedBoolInverted copies a bool flag into attrs[key] under an EXPLICIT
+// backend field name with the value NEGATED, iff the user set it. Use this
+// when the user-facing flag has the opposite polarity to the backend attribute
+// (e.g. --published=true should send is_private=false).
+func setMappedBoolInverted(cmd *cobra.Command, attrs map[string]any, name, key string) {
+	if !cmd.Flags().Changed(name) {
+		return
+	}
+	if v, err := cmd.Flags().GetBool(name); err == nil {
+		attrs[key] = !v
+	}
+}
+
+// setMappedNestedString copies a string flag into attrs[parentKey][childKey]
+// iff the user set it. Use this when the backend expects the value nested
+// inside a sub-object rather than at the top level of attributes — for example
+// --logo-url X should send attributes.branding.logo_url = X, not
+// attributes.logo_url. The parent map is always created fresh so there is no
+// risk of merging with a pre-existing value.
+func setMappedNestedString(cmd *cobra.Command, attrs map[string]any, name, parentKey, childKey string) {
+	if !cmd.Flags().Changed(name) {
+		return
+	}
+	if v, err := cmd.Flags().GetString(name); err == nil {
+		attrs[parentKey] = map[string]any{childKey: v}
+	}
+}
+
 // parseJSONFlag parses a flag value as JSON, returning the decoded value (an
 // object, array, or scalar). A value beginning with "@" is treated as a path to
 // a file whose contents are the JSON (e.g. --conditions @conditions.json). Used
