@@ -138,11 +138,15 @@ func TestCommunitySpacesCreate_BodyShape(t *testing.T) {
 
 	var doc struct {
 		Data struct {
+			Type       string         `json:"type"`
 			Attributes map[string]any `json:"attributes"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(gotBody, &doc); err != nil {
 		t.Fatalf("body not valid JSON: %v; raw=%s", err, gotBody)
+	}
+	if doc.Data.Type != "spaces" {
+		t.Errorf("data.type = %q, want \"spaces\"", doc.Data.Type)
 	}
 	if doc.Data.Attributes["name"] != "General" {
 		t.Errorf("attributes.name = %v, want General", doc.Data.Attributes["name"])
@@ -222,11 +226,15 @@ func TestCommunityDiscussionsUpdate_BodyShape(t *testing.T) {
 
 	var doc struct {
 		Data struct {
+			Type       string         `json:"type"`
 			Attributes map[string]any `json:"attributes"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(gotBody, &doc); err != nil {
 		t.Fatalf("body not valid JSON: %v; raw=%s", err, gotBody)
+	}
+	if doc.Data.Type != "discussions" {
+		t.Errorf("data.type = %q, want \"discussions\"", doc.Data.Type)
 	}
 	if doc.Data.Attributes["title"] != "Updated Title" {
 		t.Errorf("attributes.title = %v, want 'Updated Title'", doc.Data.Attributes["title"])
@@ -437,11 +445,15 @@ func TestMediaFilesUpdate_BodyShape(t *testing.T) {
 
 	var doc struct {
 		Data struct {
+			Type       string         `json:"type"`
 			Attributes map[string]any `json:"attributes"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(gotBody, &doc); err != nil {
 		t.Fatalf("body not valid JSON: %v; raw=%s", err, gotBody)
+	}
+	if doc.Data.Type != "files" {
+		t.Errorf("data.type = %q, want \"files\"", doc.Data.Type)
 	}
 	if doc.Data.Attributes["title"] != "My Video" {
 		t.Errorf("attributes.title = %v, want 'My Video'", doc.Data.Attributes["title"])
@@ -516,11 +528,15 @@ func TestMediaFoldersCreate_BodyShape(t *testing.T) {
 
 	var doc struct {
 		Data struct {
+			Type       string         `json:"type"`
 			Attributes map[string]any `json:"attributes"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(gotBody, &doc); err != nil {
 		t.Fatalf("body not valid JSON: %v; raw=%s", err, gotBody)
+	}
+	if doc.Data.Type != "folders" {
+		t.Errorf("data.type = %q, want \"folders\"", doc.Data.Type)
 	}
 	if doc.Data.Attributes["name"] != "Videos" {
 		t.Errorf("attributes.name = %v, want 'Videos'", doc.Data.Attributes["name"])
@@ -579,11 +595,15 @@ func TestMediaPlaylistsCreate_BodyShape(t *testing.T) {
 
 	var doc struct {
 		Data struct {
+			Type       string         `json:"type"`
 			Attributes map[string]any `json:"attributes"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(gotBody, &doc); err != nil {
 		t.Fatalf("body not valid JSON: %v; raw=%s", err, gotBody)
+	}
+	if doc.Data.Type != "playlists" {
+		t.Errorf("data.type = %q, want \"playlists\"", doc.Data.Type)
 	}
 	if doc.Data.Attributes["title"] != "Course Videos" {
 		t.Errorf("attributes.title = %v, want 'Course Videos'", doc.Data.Attributes["title"])
@@ -617,11 +637,15 @@ func TestMediaPlaylistsUpdate_PodcastFlag(t *testing.T) {
 
 	var doc struct {
 		Data struct {
+			Type       string         `json:"type"`
 			Attributes map[string]any `json:"attributes"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(gotBody, &doc); err != nil {
 		t.Fatalf("body not valid JSON: %v; raw=%s", err, gotBody)
+	}
+	if doc.Data.Type != "playlists" {
+		t.Errorf("data.type = %q, want \"playlists\"", doc.Data.Type)
 	}
 	if v, ok := doc.Data.Attributes["podcast_feed_enabled"]; !ok || v != true {
 		t.Errorf("attributes.podcast_feed_enabled = %v (ok=%v), want true", v, ok)

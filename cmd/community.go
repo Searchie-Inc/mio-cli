@@ -6,8 +6,8 @@ package cmd
 //
 // spaces (admin, hub-scoped):
 //
-//	list     GET    /api/admin/teams/{team_id}/hubs/{hub_id}/spaces/
-//	create   POST   /api/admin/teams/{team_id}/hubs/{hub_id}/spaces/
+//	list     GET    /api/admin/teams/{team_id}/hubs/{hub_id}/spaces
+//	create   POST   /api/admin/teams/{team_id}/hubs/{hub_id}/spaces
 //	retrieve GET    /api/admin/teams/{team_id}/hubs/{hub_id}/spaces/{space_id}
 //	update   PATCH  /api/admin/teams/{team_id}/hubs/{hub_id}/spaces/{space_id}
 //	delete   DELETE /api/admin/teams/{team_id}/hubs/{hub_id}/spaces/{space_id}

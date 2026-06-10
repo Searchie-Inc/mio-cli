@@ -465,7 +465,7 @@ var mediaPlaylistsCreateCmd = &cobra.Command{
 	Short: "Create a media playlist.",
 	Long:  "Create a new media playlist for the active team.",
 	Example: `  mio media playlists create --title "My Playlist"
-  mio media playlists create --title "Course Videos" --description "All course material" --visibility public --hub hub_abc123`,
+  mio media playlists create --title "Course Videos" --description "All course material" --visibility public --hub-id hub_abc123`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, err := mediaContext(cmd)
