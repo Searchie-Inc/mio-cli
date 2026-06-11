@@ -789,6 +789,232 @@ func TestLogin_HeadlessFlags_FullMintFlow(t *testing.T) {
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MIO-846 — coupons: enum validation, currency normalization, omit-unset, path
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const minimalCouponBody = `{"data":{"id":"cpn_1","type":"coupons","attributes":{"code":"SAVE20","discount_type":"percent","discount_value":20}}}`
+
+// TestWritePath_CouponsCreate_ExactBody pins the EXACT wire body for
+// `mio coupons create`: data.type = "coupons", discount_type = "percent".
+//
+// CONTRACT (MIO-846): coupons create wire body uses data.type="coupons".
+func TestWritePath_CouponsCreate_ExactBody(t *testing.T) {
+	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalCouponBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "coupons", "create",
+			"--code", "SAVE20",
+			"--discount-type", "percent",
+			"--discount-value", "20",
+		)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "coupons",
+			"attributes": {
+				"code": "SAVE20",
+				"discount_type": "percent",
+				"discount_value": 20
+			}
+		}
+	}`)
+}
+
+// TestWritePath_CouponsCreate_RequiredFlags pins that `mio coupons create`
+// validates --code, --discount-type, and --discount-value client-side.
+//
+// CONTRACT (MIO-846): missing any required flag → exit 2 (ExitUsage), no request.
+func TestWritePath_CouponsCreate_RequiredFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"missing code", []string{"--discount-type", "percent", "--discount-value", "20"}},
+		{"missing discount-type", []string{"--code", "SAVE20", "--discount-value", "20"}},
+		{"missing discount-value", []string{"--code", "SAVE20", "--discount-type", "percent"}},
+		{"missing all", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, fired := newNoRequestServer(t, minimalCouponBody)
+
+			args := append([]string{"coupons", "create"}, tc.args...)
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+			}
+			if *fired {
+				t.Error("POST must NOT be fired when required flags are missing")
+			}
+		})
+	}
+}
+
+// TestWritePath_CouponsCreate_DiscountTypeEnumValidation pins that passing an
+// invalid discount type (e.g. "percentage" — wrong; backend only accepts
+// "percent" or "amount") exits 2 (ExitUsage) and fires NO request.
+//
+// This test WOULD HAVE FAILED against pre-fix code that accepted "percentage"
+// without validation. It is the canonical canary for Finding 1.
+//
+// CONTRACT (MIO-846): --discount-type percentage → exit 2 (invalid enum value).
+func TestWritePath_CouponsCreate_DiscountTypeEnumValidation(t *testing.T) {
+	badTypes := []string{"percentage", "fixed", "flat", "PERCENT", "AMOUNT", ""}
+	for _, bad := range badTypes {
+		t.Run("bad type: "+bad, func(t *testing.T) {
+			srv, fired := newNoRequestServer(t, minimalCouponBody)
+
+			args := []string{"coupons", "create",
+				"--code", "X",
+				"--discount-type", bad,
+				"--discount-value", "10",
+			}
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+
+			if res.Code != errs.ExitUsage {
+				t.Errorf("discount-type=%q: exit code = %d, want %d (ExitUsage); stderr=%q",
+					bad, res.Code, errs.ExitUsage, res.Stderr)
+			}
+			if *fired {
+				t.Errorf("discount-type=%q: POST must NOT be fired for invalid enum", bad)
+			}
+		})
+	}
+}
+
+// TestWritePath_CouponsCreate_CurrencyNormalization pins that an uppercase
+// currency code (e.g. "USD") is normalized to lowercase ("usd") in the wire
+// body. This test WOULD HAVE FAILED against pre-fix code that sent "USD" verbatim.
+//
+// CONTRACT (MIO-846): --currency USD in wire body → currency = "usd" (lowercase).
+func TestWritePath_CouponsCreate_CurrencyNormalization(t *testing.T) {
+	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalCouponBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "coupons", "create",
+			"--code", "TEN",
+			"--discount-type", "amount",
+			"--discount-value", "10",
+			"--currency", "USD", // uppercase input — must be normalized to "usd"
+		)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	// Parse and confirm currency is lowercase in the wire body.
+	var doc struct {
+		Data struct {
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(*gotBody, &doc); err != nil {
+		t.Fatalf("request body not valid JSON: %v; body=%q", err, *gotBody)
+	}
+	got, _ := doc.Data.Attributes["currency"].(string)
+	if got != "usd" {
+		t.Errorf("MIO-846: currency in wire body = %q, want \"usd\" (uppercase input must be normalized)", got)
+	}
+}
+
+// TestWritePath_CouponsCreate_InvalidCurrencyRejected pins that an unsupported
+// currency code exits 2 (ExitUsage) and fires no request.
+//
+// CONTRACT (MIO-846): --currency XYZ → exit 2 (not in {usd,cad,gbp,eur,aud}).
+func TestWritePath_CouponsCreate_InvalidCurrencyRejected(t *testing.T) {
+	srv, fired := newNoRequestServer(t, minimalCouponBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "coupons", "create",
+			"--code", "X",
+			"--discount-type", "amount",
+			"--discount-value", "10",
+			"--currency", "XYZ",
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage for bad currency); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("POST must NOT be fired for unsupported currency")
+	}
+}
+
+// TestWritePath_CouponsUpdate_OmitUnsetSemantics pins that `mio coupons update`
+// only sends flags that were explicitly set (PATCH semantics): an omitted flag
+// must NOT appear in the wire body.
+//
+// CONTRACT (MIO-846): coupons update omits unset fields from wire body.
+func TestWritePath_CouponsUpdate_OmitUnsetSemantics(t *testing.T) {
+	srv, gotBody := captureWriteRequest(t, http.StatusOK, minimalCouponBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "coupons", "update", "cpn_abc123",
+			"--is-active=false",
+		)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	// Only is_active must appear — max_redemptions, first_time_only, expires_at must be absent.
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "coupons",
+			"attributes": {
+				"is_active": false
+			}
+		}
+	}`)
+}
+
+// TestWritePath_CouponsUpdate_NothingToUpdate pins that `mio coupons update`
+// with no mutable flags exits 2 (ExitUsage) and fires no request.
+//
+// CONTRACT (MIO-846): coupons update with no flags → exit 2, no request.
+func TestWritePath_CouponsUpdate_NothingToUpdate(t *testing.T) {
+	srv, fired := newNoRequestServer(t, minimalCouponBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "coupons", "update", "cpn_abc123")...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("PATCH must NOT be fired when no fields are supplied")
+	}
+}
+
+// TestWritePath_CouponsListPath pins that `mio coupons list` hits the correct
+// team-scoped path: /api/v1/teams/{team_id}/coupons.
+//
+// CONTRACT (MIO-846): coupons list → GET /api/v1/teams/{team_id}/coupons
+func TestWritePath_CouponsListPath(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[],"meta":{}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "coupons", "list")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	wantPath := "/api/v1/teams/t_team1/coupons"
+	if gotPath != wantPath {
+		t.Errorf("coupons list path = %q, want %q", gotPath, wantPath)
+	}
+}
+
 // TestLogin_HeadlessEnvVars pins that MIO_EMAIL + MIO_PASSWORD env vars activate
 // the headless path (not the interactive TTY menu).
 //

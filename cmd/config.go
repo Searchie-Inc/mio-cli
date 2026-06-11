@@ -27,8 +27,8 @@ var configCmd = &cobra.Command{
 	Long: `Manage the persistent CLI configuration stored at
 $XDG_CONFIG_HOME/mio/config.toml (default ~/.config/mio/config.toml).
 
-Writable keys: team, hub, api-base. The API key itself is a secret and is
-managed by 'mio login' / 'mio logout', not by this command.`,
+Writable keys: current_team, current_hub, api_base. The API key itself is a
+secret and is managed by 'mio login' / 'mio logout', not by this command.`,
 }
 
 var configSetCmd = &cobra.Command{
