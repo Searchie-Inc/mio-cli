@@ -7,16 +7,24 @@ package cmd
 // missing/incorrect required attribute flags. These tests pin the CORRECT
 // wire behaviour so the drift class is caught immediately if re-introduced.
 //
+// Wire-body tests assert the EXACT serialized request body (full JSON
+// equality of the whole envelope: data.type + the complete attributes map),
+// so a stale or extra attribute fails loudly instead of slipping past
+// key-by-key checks.
+//
 // MIO-937 (contacts): data.type must be "team_contacts" (not "contacts")
-// MIO-938 (segments): segment_type must NOT be sent; --conditions required on create
-// MIO-941 (products): attributes.type (product kind) must be sent; no stale status/published
-// MIO-942 (content):  data.type must be "content_nodes"; --node-type maps to node_type
+// MIO-938 (segments): segment_type must NOT be sent; --name + --conditions required on create
+// MIO-941 (products): attributes.type (product kind) must be sent; --name + --type required
+// MIO-942 (content):  data.type must be "content_nodes"; --node-type maps to node_type;
+//                     --title + --node-type required; --published removed (schema has
+//                     published_at, exposed as --published-at)
 
 import (
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
@@ -26,8 +34,7 @@ import (
 
 // captureWriteRequest starts a test server that captures the first request's
 // body and returns a pointer to it. The server replies with a canned resource
-// document at the given HTTP status code; the resource type in the response is
-// whatever the caller needs to return so the CLI's decoder is happy.
+// document at the given HTTP status code.
 func captureWriteRequest(t *testing.T, status int, responseBody string) (*httptest.Server, *[]byte) {
 	t.Helper()
 	var gotBody []byte
@@ -41,24 +48,36 @@ func captureWriteRequest(t *testing.T, status int, responseBody string) (*httpte
 	return srv, &gotBody
 }
 
-// decodeEnvelope parses a captured request body and returns data.type and
-// data.attributes. It fails the test if the body is not a valid JSON:API
-// resource document.
-func decodeEnvelope(t *testing.T, body []byte) (typ string, attrs map[string]any) {
+// assertExactBody asserts that the captured request body is EXACTLY equal to
+// wantJSON (deep JSON equality of the entire envelope — data.type plus the
+// complete attributes map). Any extra, missing, or stale attribute fails.
+func assertExactBody(t *testing.T, gotBody []byte, wantJSON string) {
 	t.Helper()
-	var doc struct {
-		Data struct {
-			Type       string         `json:"type"`
-			Attributes map[string]any `json:"attributes"`
-		} `json:"data"`
+	var got, want any
+	if err := json.Unmarshal(gotBody, &got); err != nil {
+		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
 	}
-	if err := json.Unmarshal(body, &doc); err != nil {
-		t.Fatalf("request body is not valid JSON: %v; body=%q", err, body)
+	if err := json.Unmarshal([]byte(wantJSON), &want); err != nil {
+		t.Fatalf("wantJSON is not valid JSON (test bug): %v; want=%q", err, wantJSON)
 	}
-	if doc.Data.Type == "" {
-		t.Errorf("data.type is empty; body=%q", body)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("wire body mismatch:\n got: %s\nwant: %s", gotBody, wantJSON)
 	}
-	return doc.Data.Type, doc.Data.Attributes
+}
+
+// newNoRequestServer starts a server that records whether ANY request arrived.
+// Used by requiredness tests: client-side validation must fire BEFORE the API.
+func newNoRequestServer(t *testing.T, responseBody string) (*httptest.Server, *bool) {
+	t.Helper()
+	fired := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fired = true
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &fired
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -67,36 +86,39 @@ func decodeEnvelope(t *testing.T, body []byte) (typ string, attrs map[string]any
 
 const minimalContactBody = `{"data":{"id":"ctt_1","type":"team_contacts","attributes":{"email":"x@test.member.dev"}}}`
 
-// TestWritePath_ContactsCreate_TypeIsTeamContacts pins that `mio contacts create`
-// sends data.type = "team_contacts" (not the bare URL segment "contacts").
+// TestWritePath_ContactsCreate_ExactBody pins the EXACT wire body for
+// `mio contacts create`: data.type = "team_contacts" and only the attributes
+// the user set.
 //
-// CONTRACT (MIO-937): contacts create → data.type = "team_contacts"
-func TestWritePath_ContactsCreate_TypeIsTeamContacts(t *testing.T) {
+// CONTRACT (MIO-937): contacts create → {"data":{"type":"team_contacts","attributes":{…}}}
+func TestWritePath_ContactsCreate_ExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalContactBody)
 
 	res := runContract(t, baseEnv(srv.URL),
-		withTeam("t_team1", "contacts", "create", "--email", "x@test.member.dev")...)
+		withTeam("t_team1", "contacts", "create",
+			"--email", "x@test.member.dev",
+			"--first-name", "Claudiu",
+		)...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
 
-	typ, attrs := decodeEnvelope(t, *gotBody)
-
-	// CONTRACT: data.type must be "team_contacts".
-	if typ != "team_contacts" {
-		t.Errorf("MIO-937: data.type = %q, want \"team_contacts\"", typ)
-	}
-	// attributes.email must arrive correctly.
-	if attrs["email"] != "x@test.member.dev" {
-		t.Errorf("data.attributes.email = %v, want \"x@test.member.dev\"", attrs["email"])
-	}
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "team_contacts",
+			"attributes": {
+				"email": "x@test.member.dev",
+				"first_name": "Claudiu"
+			}
+		}
+	}`)
 }
 
-// TestWritePath_ContactsUpdate_TypeIsTeamContacts pins the same invariant for
+// TestWritePath_ContactsUpdate_ExactBody pins the EXACT wire body for
 // `mio contacts update` (PATCH path).
 //
-// CONTRACT (MIO-937): contacts update → data.type = "team_contacts"
-func TestWritePath_ContactsUpdate_TypeIsTeamContacts(t *testing.T) {
+// CONTRACT (MIO-937): contacts update → {"data":{"type":"team_contacts","attributes":{…}}}
+func TestWritePath_ContactsUpdate_ExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusOK, minimalContactBody)
 
 	res := runContract(t, baseEnv(srv.URL),
@@ -105,14 +127,14 @@ func TestWritePath_ContactsUpdate_TypeIsTeamContacts(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
 
-	typ, attrs := decodeEnvelope(t, *gotBody)
-
-	if typ != "team_contacts" {
-		t.Errorf("MIO-937: data.type = %q, want \"team_contacts\"", typ)
-	}
-	if attrs["first_name"] != "Alice" {
-		t.Errorf("data.attributes.first_name = %v, want Alice", attrs["first_name"])
-	}
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "team_contacts",
+			"attributes": {
+				"first_name": "Alice"
+			}
+		}
+	}`)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -121,98 +143,84 @@ func TestWritePath_ContactsUpdate_TypeIsTeamContacts(t *testing.T) {
 
 const minimalSegmentBody = `{"data":{"id":"seg_1","type":"segment","attributes":{"name":"Test"}}}`
 
-// TestWritePath_SegmentsCreate_NoSegmentType pins that `mio segments create`
-// does NOT send a segment_type attribute. The backend SegmentCreateAttributes
-// schema uses extra="forbid" and has no segment_type field; sending it caused
-// a 422 "extra inputs not permitted" (MIO-938 QA repro).
+const segmentConditionsJSON = `{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@test.member.dev"}]}]}`
+
+// TestWritePath_SegmentsCreate_ExactBody pins the EXACT wire body for
+// `mio segments create`: type "segment", the parsed conditions tree inside
+// attributes, and — critically — NO segment_type key (the backend schema is
+// extra="forbid"; segment_type caused 422 "extra inputs not permitted").
 //
-// CONTRACT (MIO-938): segments create → no segment_type in attributes
-func TestWritePath_SegmentsCreate_NoSegmentType(t *testing.T) {
+// CONTRACT (MIO-938): segments create →
+//
+//	{"data":{"type":"segment","attributes":{"name":…,"conditions":{…}}}}
+func TestWritePath_SegmentsCreate_ExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalSegmentBody)
-	conds := `{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@test.member.dev"}]}]}`
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "segments", "create",
 			"--name", "Test Segment",
-			"--conditions", conds,
+			"--conditions", segmentConditionsJSON,
 		)...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
 
-	typ, attrs := decodeEnvelope(t, *gotBody)
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "segment",
+			"attributes": {
+				"name": "Test Segment",
+				"conditions": {
+					"version": 1,
+					"groups": [
+						{
+							"logic": "AND",
+							"conditions": [
+								{"type": "email", "operator": "contains", "value": "@test.member.dev"}
+							]
+						}
+					]
+				}
+			}
+		}
+	}`)
+}
 
-	if typ != "segment" {
-		t.Errorf("MIO-938: data.type = %q, want \"segment\"", typ)
-	}
-	// segment_type must NOT be present.
-	if _, has := attrs["segment_type"]; has {
-		t.Errorf("MIO-938: attributes.segment_type must NOT be sent (extra inputs not permitted); attrs=%v", attrs)
-	}
-	// name must arrive correctly.
-	if attrs["name"] != "Test Segment" {
-		t.Errorf("data.attributes.name = %v, want \"Test Segment\"", attrs["name"])
+// TestWritePath_SegmentsCreate_RequiredFlags pins that `mio segments create`
+// validates BOTH --name and --conditions client-side: any missing combination
+// exits 2 (ExitUsage) and fires NO request.
+//
+// CONTRACT (MIO-938): segments create requires --name AND --conditions.
+func TestWritePath_SegmentsCreate_RequiredFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"missing conditions", []string{"--name", "Test Segment"}},
+		{"missing name", []string{"--conditions", segmentConditionsJSON}},
+		{"missing both", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, fired := newNoRequestServer(t, minimalSegmentBody)
+
+			args := append([]string{"segments", "create"}, tc.args...)
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+			}
+			if *fired {
+				t.Error("POST must NOT be fired when required flags are missing")
+			}
+		})
 	}
 }
 
-// TestWritePath_SegmentsCreate_ConditionsRequired pins that `mio segments create`
-// without --conditions exits with ExitUsage (exit 2) and fires NO HTTP request.
+// TestWritePath_SegmentsUpdate_ExactBody pins the EXACT wire body for
+// `mio segments update` — and proves no segment_type key is emitted.
 //
-// CONTRACT (MIO-938): segments create without --conditions → exit 2 (no API call)
-func TestWritePath_SegmentsCreate_ConditionsRequired(t *testing.T) {
-	requestFired := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requestFired = true
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(minimalSegmentBody))
-	}))
-	t.Cleanup(srv.Close)
-
-	res := runContract(t, baseEnv(srv.URL),
-		withTeam("t_team1", "segments", "create", "--name", "Test Segment")...)
-
-	if res.Code != errs.ExitUsage {
-		t.Errorf("MIO-938: exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
-	}
-	if requestFired {
-		t.Error("MIO-938: POST must NOT be fired when --conditions is absent")
-	}
-}
-
-// TestWritePath_SegmentsCreate_ConditionsSentInAttributes pins that --conditions
-// JSON is delivered inside data.attributes.conditions (not at the top level).
-//
-// CONTRACT (MIO-938): segments create --conditions '<tree>' → attributes.conditions is set
-func TestWritePath_SegmentsCreate_ConditionsSentInAttributes(t *testing.T) {
-	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalSegmentBody)
-	conds := `{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@test.member.dev"}]}]}`
-
-	res := runContract(t, baseEnv(srv.URL),
-		withTeam("t_team1", "segments", "create",
-			"--name", "Email Segment",
-			"--conditions", conds,
-		)...)
-	if res.Code != errs.ExitOK {
-		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
-	}
-
-	_, attrs := decodeEnvelope(t, *gotBody)
-
-	if _, has := attrs["conditions"]; !has {
-		t.Errorf("MIO-938: data.attributes.conditions is absent; attrs=%v", attrs)
-	}
-	// conditions must be a parsed object, not the raw string.
-	if _, ok := attrs["conditions"].(map[string]any); !ok {
-		t.Errorf("MIO-938: data.attributes.conditions is not a JSON object; got %T, attrs=%v",
-			attrs["conditions"], attrs)
-	}
-}
-
-// TestWritePath_SegmentsUpdate_NoSegmentType pins the same no-segment_type
-// invariant on `mio segments update`.
-//
-// CONTRACT (MIO-938): segments update → no segment_type in attributes
-func TestWritePath_SegmentsUpdate_NoSegmentType(t *testing.T) {
+// CONTRACT (MIO-938): segments update → {"data":{"type":"segment","attributes":{…}}}
+func TestWritePath_SegmentsUpdate_ExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusOK, minimalSegmentBody)
 
 	res := runContract(t, baseEnv(srv.URL),
@@ -223,10 +231,71 @@ func TestWritePath_SegmentsUpdate_NoSegmentType(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
 
-	_, attrs := decodeEnvelope(t, *gotBody)
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "segment",
+			"attributes": {
+				"name": "Renamed Segment"
+			}
+		}
+	}`)
+}
 
-	if _, has := attrs["segment_type"]; has {
-		t.Errorf("MIO-938: attributes.segment_type must NOT be sent on update; attrs=%v", attrs)
+// TestWritePath_SegmentsUpdate_ConditionsExactBody pins that --conditions on
+// update delivers the parsed tree inside attributes.conditions.
+//
+// CONTRACT (MIO-938): segments update --conditions → attributes.conditions = parsed tree
+func TestWritePath_SegmentsUpdate_ConditionsExactBody(t *testing.T) {
+	srv, gotBody := captureWriteRequest(t, http.StatusOK, minimalSegmentBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "segments", "update", "seg_abc123",
+			"--conditions", segmentConditionsJSON,
+		)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "segment",
+			"attributes": {
+				"conditions": {
+					"version": 1,
+					"groups": [
+						{
+							"logic": "AND",
+							"conditions": [
+								{"type": "email", "operator": "contains", "value": "@test.member.dev"}
+							]
+						}
+					]
+				}
+			}
+		}
+	}`)
+}
+
+// TestWritePath_SegmentsCreate_SegmentTypeFlagRemoved pins that the stale
+// --segment-type flag no longer exists: passing it is an unknown flag → exit 2.
+//
+// CONTRACT (MIO-938): segments create --segment-type X → exit 2 (unknown flag)
+func TestWritePath_SegmentsCreate_SegmentTypeFlagRemoved(t *testing.T) {
+	srv, fired := newNoRequestServer(t, minimalSegmentBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "segments", "create",
+			"--name", "X",
+			"--conditions", segmentConditionsJSON,
+			"--segment-type", "static", // removed flag — must be unknown
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage for removed --segment-type); stderr=%q",
+			res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("POST must NOT be fired when an unknown flag is passed")
 	}
 }
 
@@ -236,12 +305,14 @@ func TestWritePath_SegmentsUpdate_NoSegmentType(t *testing.T) {
 
 const minimalProductBody = `{"data":{"id":"prod_1","type":"products","attributes":{"name":"Course"}}}`
 
-// TestWritePath_ProductsCreate_TypeSentAsAttribute pins that `mio products create`
-// sends attributes.type (the product kind: course, membership, …). Before MIO-941
-// there was no --type flag so the required field was never included, causing a 422.
+// TestWritePath_ProductsCreate_ExactBody pins the EXACT wire body for
+// `mio products create`: attributes.type (the product kind) is present and no
+// stale status/published keys exist.
 //
-// CONTRACT (MIO-941): products create --type course → data.attributes.type = "course"
-func TestWritePath_ProductsCreate_TypeSentAsAttribute(t *testing.T) {
+// CONTRACT (MIO-941): products create →
+//
+//	{"data":{"type":"products","attributes":{"name":…,"type":…}}}
+func TestWritePath_ProductsCreate_ExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalProductBody)
 
 	res := runContract(t, baseEnv(srv.URL),
@@ -253,29 +324,53 @@ func TestWritePath_ProductsCreate_TypeSentAsAttribute(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
 
-	_, attrs := decodeEnvelope(t, *gotBody)
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "products",
+			"attributes": {
+				"name": "Intro to Go",
+				"type": "course"
+			}
+		}
+	}`)
+}
 
-	if attrs["type"] != "course" {
-		t.Errorf("MIO-941: data.attributes.type = %v, want \"course\"", attrs["type"])
-	}
-	if attrs["name"] != "Intro to Go" {
-		t.Errorf("data.attributes.name = %v, want \"Intro to Go\"", attrs["name"])
+// TestWritePath_ProductsCreate_RequiredFlags pins that `mio products create`
+// validates BOTH --name and --type client-side: any missing combination exits
+// 2 (ExitUsage) and fires NO request.
+//
+// CONTRACT (MIO-941): products create requires --name AND --type.
+func TestWritePath_ProductsCreate_RequiredFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"missing type", []string{"--name", "Intro to Go"}},
+		{"missing name", []string{"--type", "course"}},
+		{"missing both", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, fired := newNoRequestServer(t, minimalProductBody)
+
+			args := append([]string{"products", "create"}, tc.args...)
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+			}
+			if *fired {
+				t.Error("POST must NOT be fired when required flags are missing")
+			}
+		})
 	}
 }
 
-// TestWritePath_ProductsCreate_NoStaleStatus pins that the stale --status and
-// --published flags (which no longer exist) do NOT appear as attributes in the
-// wire body, and that using them causes a usage error (exit 2).
+// TestWritePath_ProductsCreate_NoStaleStatusFlag pins that the stale --status
+// flag no longer exists on products create (unknown flag → exit 2; no API call).
 //
-// CONTRACT (MIO-941): products create --status X → exit 2 (unknown flag); no API call
+// CONTRACT (MIO-941): products create --status X → exit 2 (unknown flag)
 func TestWritePath_ProductsCreate_NoStaleStatusFlag(t *testing.T) {
-	requestFired := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requestFired = true
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(minimalProductBody))
-	}))
-	t.Cleanup(srv.Close)
+	srv, fired := newNoRequestServer(t, minimalProductBody)
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "products", "create",
@@ -284,21 +379,22 @@ func TestWritePath_ProductsCreate_NoStaleStatusFlag(t *testing.T) {
 			"--status", "active", // stale flag — must not exist
 		)...)
 
-	// An unknown flag exits with ExitUsage (2) and must not fire the API.
 	if res.Code != errs.ExitUsage {
 		t.Errorf("MIO-941: exit code = %d, want %d (ExitUsage for removed --status flag); stderr=%q",
 			res.Code, errs.ExitUsage, res.Stderr)
 	}
-	if requestFired {
+	if *fired {
 		t.Error("MIO-941: POST must NOT be fired when an unknown flag is passed")
 	}
 }
 
-// TestWritePath_ProductsUpdate_TypeSentAsAttribute pins the same type mapping
-// for `mio products update`.
+// TestWritePath_ProductsUpdate_ExactBody pins the EXACT wire body for
+// `mio products update` (partial update: only the set flag is serialized).
 //
-// CONTRACT (MIO-941): products update --type membership → attributes.type = "membership"
-func TestWritePath_ProductsUpdate_TypeSentAsAttribute(t *testing.T) {
+// CONTRACT (MIO-941): products update --type membership →
+//
+//	{"data":{"type":"products","attributes":{"type":"membership"}}}
+func TestWritePath_ProductsUpdate_ExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusOK, minimalProductBody)
 
 	res := runContract(t, baseEnv(srv.URL),
@@ -309,24 +405,29 @@ func TestWritePath_ProductsUpdate_TypeSentAsAttribute(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
 
-	_, attrs := decodeEnvelope(t, *gotBody)
-
-	if attrs["type"] != "membership" {
-		t.Errorf("MIO-941: data.attributes.type = %v, want \"membership\"", attrs["type"])
-	}
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "products",
+			"attributes": {
+				"type": "membership"
+			}
+		}
+	}`)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MIO-942 — content create
+// MIO-942 — content create / update
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const minimalContentBody = `{"data":{"id":"cnt_1","type":"content_nodes","attributes":{"title":"Module 1"}}}`
 
-// TestWritePath_ContentCreate_TypeIsContentNodes pins that `mio content create`
-// sends data.type = "content_nodes" (not "content").
+// TestWritePath_ContentCreate_ExactBody pins the EXACT wire body for
+// `mio content create`: data.type = "content_nodes" and --node-type → node_type.
 //
-// CONTRACT (MIO-942): content create → data.type = "content_nodes"
-func TestWritePath_ContentCreate_TypeIsContentNodes(t *testing.T) {
+// CONTRACT (MIO-942): content create →
+//
+//	{"data":{"type":"content_nodes","attributes":{"title":…,"node_type":…}}}
+func TestWritePath_ContentCreate_ExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalContentBody)
 
 	res := runContract(t, baseEnv(srv.URL),
@@ -340,47 +441,22 @@ func TestWritePath_ContentCreate_TypeIsContentNodes(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
 
-	typ, _ := decodeEnvelope(t, *gotBody)
-
-	if typ != "content_nodes" {
-		t.Errorf("MIO-942: data.type = %q, want \"content_nodes\"", typ)
-	}
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "content_nodes",
+			"attributes": {
+				"title": "Module 1",
+				"node_type": "container"
+			}
+		}
+	}`)
 }
 
-// TestWritePath_ContentCreate_NodeTypeMapsToNodeTypeAttribute pins that
-// --node-type sends attributes.node_type (snake_case, not node-type).
+// TestWritePath_ContentCreate_LessonWithContentTypeExactBody pins the full
+// body for a lesson node carrying the optional content_type sub-type.
 //
-// CONTRACT (MIO-942): content create --node-type container → attributes.node_type = "container"
-func TestWritePath_ContentCreate_NodeTypeMapsToNodeTypeAttribute(t *testing.T) {
-	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalContentBody)
-
-	res := runContract(t, baseEnv(srv.URL),
-		withTeam("t_team1",
-			"--hub", "hub_abc",
-			"content", "create",
-			"--title", "Module 1",
-			"--node-type", "container",
-		)...)
-	if res.Code != errs.ExitOK {
-		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
-	}
-
-	_, attrs := decodeEnvelope(t, *gotBody)
-
-	if attrs["node_type"] != "container" {
-		t.Errorf("MIO-942: data.attributes.node_type = %v, want \"container\"", attrs["node_type"])
-	}
-	// node-type (kebab) must NOT appear as a top-level attribute key.
-	if _, has := attrs["node-type"]; has {
-		t.Errorf("MIO-942: attributes must not carry the kebab key \"node-type\"; attrs=%v", attrs)
-	}
-}
-
-// TestWritePath_ContentCreate_ContentTypeOptional pins that --content-type is
-// optional and maps to attributes.content_type when provided.
-//
-// CONTRACT (MIO-942): content create --content-type video → attributes.content_type = "video"
-func TestWritePath_ContentCreate_ContentTypeOptional(t *testing.T) {
+// CONTRACT (MIO-942): --content-type video → attributes.content_type = "video"
+func TestWritePath_ContentCreate_LessonWithContentTypeExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalContentBody)
 
 	res := runContract(t, baseEnv(srv.URL),
@@ -395,26 +471,173 @@ func TestWritePath_ContentCreate_ContentTypeOptional(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
 
-	_, attrs := decodeEnvelope(t, *gotBody)
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "content_nodes",
+			"attributes": {
+				"title": "Welcome Video",
+				"node_type": "lesson",
+				"content_type": "video"
+			}
+		}
+	}`)
+}
 
-	if attrs["content_type"] != "video" {
-		t.Errorf("MIO-942: data.attributes.content_type = %v, want \"video\"", attrs["content_type"])
+// TestWritePath_ContentCreate_PublishedAtExactBody pins that --published-at
+// maps to attributes.published_at (the schema's nullable publish timestamp;
+// the backend gates member visibility on published_at <= now).
+//
+// CONTRACT (MIO-942 / Codex R1): --published-at X → attributes.published_at = X
+func TestWritePath_ContentCreate_PublishedAtExactBody(t *testing.T) {
+	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalContentBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_abc",
+			"content", "create",
+			"--title", "Module 1",
+			"--node-type", "container",
+			"--published-at", "2026-06-11T00:00:00Z",
+		)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "content_nodes",
+			"attributes": {
+				"title": "Module 1",
+				"node_type": "container",
+				"published_at": "2026-06-11T00:00:00Z"
+			}
+		}
+	}`)
+}
+
+// TestWritePath_ContentCreate_RequiredFlags pins that `mio content create`
+// validates BOTH --title and --node-type client-side: any missing combination
+// exits 2 (ExitUsage) and fires NO request.
+//
+// CONTRACT (MIO-942): content create requires --title AND --node-type.
+func TestWritePath_ContentCreate_RequiredFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"missing node-type", []string{"--title", "Module 1"}},
+		{"missing title", []string{"--node-type", "container"}},
+		{"missing both", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, fired := newNoRequestServer(t, minimalContentBody)
+
+			args := append([]string{"--hub", "hub_abc", "content", "create"}, tc.args...)
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+			}
+			if *fired {
+				t.Error("POST must NOT be fired when required flags are missing")
+			}
+		})
+	}
+}
+
+// TestWritePath_ContentUpdate_ExactBody pins the EXACT wire body for
+// `mio content update` (partial update — the missing regression from R1).
+//
+// CONTRACT (MIO-942): content update --title X →
+//
+//	{"data":{"type":"content_nodes","attributes":{"title":"X"}}}
+func TestWritePath_ContentUpdate_ExactBody(t *testing.T) {
+	srv, gotBody := captureWriteRequest(t, http.StatusOK, minimalContentBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_abc",
+			"content", "update", "cnt_abc123",
+			"--title", "New Title",
+		)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "content_nodes",
+			"attributes": {
+				"title": "New Title"
+			}
+		}
+	}`)
+}
+
+// TestWritePath_ContentUpdate_PublishedAtExactBody pins --published-at on the
+// update path (published_at is mutable post-create per the backend schema).
+//
+// CONTRACT (Codex R1): content update --published-at X → attributes.published_at = X
+func TestWritePath_ContentUpdate_PublishedAtExactBody(t *testing.T) {
+	srv, gotBody := captureWriteRequest(t, http.StatusOK, minimalContentBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_abc",
+			"content", "update", "cnt_abc123",
+			"--published-at", "2026-06-11T00:00:00Z",
+		)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	assertExactBody(t, *gotBody, `{
+		"data": {
+			"type": "content_nodes",
+			"attributes": {
+				"published_at": "2026-06-11T00:00:00Z"
+			}
+		}
+	}`)
+}
+
+// TestWritePath_Content_PublishedFlagRemoved pins that the stale --published
+// bool flag no longer exists on content create OR update. The backend schema
+// (extra="forbid") has published_at, not published — the bool flag was a
+// guaranteed-422 dead flag (Codex R1 finding 1).
+//
+// CONTRACT (Codex R1): content create/update --published → exit 2 (unknown flag)
+func TestWritePath_Content_PublishedFlagRemoved(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"create", []string{"content", "create", "--title", "X", "--node-type", "lesson", "--published"}},
+		{"update", []string{"content", "update", "cnt_abc123", "--title", "X", "--published"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, fired := newNoRequestServer(t, minimalContentBody)
+
+			args := append([]string{"--hub", "hub_abc"}, tc.args...)
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage for removed --published flag); stderr=%q",
+					res.Code, errs.ExitUsage, res.Stderr)
+			}
+			if *fired {
+				t.Error("request must NOT be fired when an unknown flag is passed")
+			}
+		})
 	}
 }
 
 // TestWritePath_ContentCreate_NoStaleStatusFlag pins that the stale --status
-// flag no longer exists on content create (the backend ContentNodeCreateAttributes
-// schema uses extra="forbid" and has no status field).
+// flag no longer exists on content create (unknown flag → exit 2; no API call).
 //
 // CONTRACT (MIO-942): content create --status X → exit 2 (unknown flag)
 func TestWritePath_ContentCreate_NoStaleStatusFlag(t *testing.T) {
-	requestFired := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requestFired = true
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(minimalContentBody))
-	}))
-	t.Cleanup(srv.Close)
+	srv, fired := newNoRequestServer(t, minimalContentBody)
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
@@ -429,7 +652,7 @@ func TestWritePath_ContentCreate_NoStaleStatusFlag(t *testing.T) {
 		t.Errorf("MIO-942: exit code = %d, want %d (ExitUsage for removed --status flag); stderr=%q",
 			res.Code, errs.ExitUsage, res.Stderr)
 	}
-	if requestFired {
+	if *fired {
 		t.Error("MIO-942: POST must NOT be fired when an unknown flag is passed")
 	}
 }

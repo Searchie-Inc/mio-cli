@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -101,6 +102,20 @@ var contentCreateCmd = &cobra.Command{
 			return err
 		}
 
+		// Both --title and --node-type are required by the backend
+		// ContentNodeCreateAttributes schema; validate client-side so a
+		// partial-required body never reaches the API.
+		var missing []string
+		if !cmd.Flags().Changed("title") {
+			missing = append(missing, "--title")
+		}
+		if !cmd.Flags().Changed("node-type") {
+			missing = append(missing, "--node-type")
+		}
+		if len(missing) > 0 {
+			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
+		}
+
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "title")
 		setMappedString(cmd, attrs, "node-type", "node_type")
@@ -108,11 +123,7 @@ var contentCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "parent-id")
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "privacy")
-		setBoolFlag(cmd, attrs, "published")
-
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --title and --node-type")
-		}
+		setMappedString(cmd, attrs, "published-at", "published_at")
 
 		res, err := c.client.Create(c.ctx, contentBasePath(teamID, hubID, ""), attrs)
 		if err != nil {
@@ -219,7 +230,7 @@ Note: node_type and parent_id are immutable after create and cannot be changed v
 		setStringFlag(cmd, attrs, "content-type")
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "privacy")
-		setBoolFlag(cmd, attrs, "published")
+		setMappedString(cmd, attrs, "published-at", "published_at")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -326,8 +337,11 @@ var contentReorderCmd = &cobra.Command{
 
 func init() {
 	// Flags for create.
-	// NOTE: --status was removed (MIO-942) — ContentNodeCreateAttributes uses
-	// extra="forbid" and does not have a status field. Use --privacy instead.
+	// NOTE: --status and --published were removed (MIO-942 + Codex R1) — the
+	// ContentNodeCreateAttributes schema uses extra="forbid" and has neither a
+	// status nor a published field. Publication is controlled by published_at
+	// (a nullable timestamp the backend gates visibility on: published =
+	// published_at <= now), exposed here as --published-at.
 	// --node-type maps to attributes.node_type (required on create; immutable after).
 	// --content-type maps to attributes.content_type (optional sub-type for lessons).
 	contentCreateCmd.Flags().String("title", "", "Content item title.")
@@ -336,14 +350,14 @@ func init() {
 	contentCreateCmd.Flags().String("parent-id", "", "Id of the parent content item (nests this item under a folder).")
 	contentCreateCmd.Flags().String("description", "", "Content item description.")
 	contentCreateCmd.Flags().String("privacy", "", `Privacy setting for the content item (e.g. "members", "public").`)
-	contentCreateCmd.Flags().Bool("published", false, "Whether the content item is published.")
+	contentCreateCmd.Flags().String("published-at", "", "Publish timestamp in RFC 3339 format (e.g. 2026-06-11T00:00:00Z). The item is visible to members once this time has passed.")
 
 	// Flags for update (node_type and parent_id are immutable after create).
 	contentUpdateCmd.Flags().String("title", "", "Content item title.")
 	contentUpdateCmd.Flags().String("content-type", "", `Optional content sub-type for lesson nodes (e.g. video, audio, pdf, text).`)
 	contentUpdateCmd.Flags().String("description", "", "Content item description.")
 	contentUpdateCmd.Flags().String("privacy", "", `Privacy setting for the content item (e.g. "members", "public").`)
-	contentUpdateCmd.Flags().Bool("published", false, "Whether the content item is published.")
+	contentUpdateCmd.Flags().String("published-at", "", "Publish timestamp in RFC 3339 format (e.g. 2026-06-11T00:00:00Z). The item is visible to members once this time has passed.")
 
 	// Pagination for list and children.
 	addPaginationFlags(contentListCmd)

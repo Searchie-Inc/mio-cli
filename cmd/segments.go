@@ -12,6 +12,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -67,7 +68,7 @@ var segmentsCreateCmd = &cobra.Command{
 	Short: "Create a segment.",
 	Long: `Create a new contact segment for the active team.
 
---conditions is required. It accepts the full condition tree as JSON:
+--name and --conditions are required. --conditions accepts the full condition tree as JSON:
   {"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}
 Prefix the value with @ to read the JSON from a file (e.g. --conditions @conds.json).`,
 	Example: `  # Create a segment with an email condition
@@ -89,9 +90,20 @@ Prefix the value with @ to read the JSON from a file (e.g. --conditions @conds.j
 			return err
 		}
 
-		if !cmd.Flags().Changed("conditions") {
-			return errs.New(errs.ExitUsage, "nothing to create: --conditions is required (a JSON condition tree)")
+		// Both --name and --conditions are required by the backend
+		// SegmentCreateAttributes schema; validate client-side so a
+		// partial-required body never reaches the API.
+		var missing []string
+		if !cmd.Flags().Changed("name") {
+			missing = append(missing, "--name")
 		}
+		if !cmd.Flags().Changed("conditions") {
+			missing = append(missing, "--conditions")
+		}
+		if len(missing) > 0 {
+			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
+		}
+
 		rawConditions, _ := cmd.Flags().GetString("conditions")
 		conditions, perr := parseJSONFlag(rawConditions)
 		if perr != nil {

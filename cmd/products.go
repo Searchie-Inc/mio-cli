@@ -27,6 +27,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -97,15 +98,25 @@ var productsCreateCmd = &cobra.Command{
 			return err
 		}
 
+		// Both --name and --type are required by the backend
+		// ProductCreateAttributes schema; validate client-side so a
+		// partial-required body never reaches the API.
+		var missing []string
+		if !cmd.Flags().Changed("name") {
+			missing = append(missing, "--name")
+		}
+		if !cmd.Flags().Changed("type") {
+			missing = append(missing, "--type")
+		}
+		if len(missing) > 0 {
+			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
+		}
+
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "type")
 		setStringFlag(cmd, attrs, "description")
 		setBoolFlag(cmd, attrs, "is-active")
-
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name and --type")
-		}
 
 		res, err := c.client.Create(c.ctx, productsPath(teamID, ""), attrs)
 		if err != nil {
