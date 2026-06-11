@@ -14,6 +14,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -156,10 +157,10 @@ var contactAttributesCreateCmd = &cobra.Command{
 	Short: "Create a contact attribute definition.",
 	Long:  "Create a new contact attribute definition for the active team.",
 	Example: `  # Create a text attribute
-  mio contact-attributes create --name="Company" --field-type=text
+  mio contact-attributes create --name="Company" --slug="company" --field-type=text
 
-  # Create a single-select attribute
-  mio contact-attributes create --name="Tier" --field-type=select`,
+  # Create a multiple-select attribute
+  mio contact-attributes create --name="Tier" --slug="tier" --field-type=multiple`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, err := caContext(cmd)
@@ -167,16 +168,28 @@ var contactAttributesCreateCmd = &cobra.Command{
 			return err
 		}
 
+		var missing []string
+		if !cmd.Flags().Changed("name") {
+			missing = append(missing, "--name")
+		}
+		if !cmd.Flags().Changed("slug") {
+			missing = append(missing, "--slug")
+		}
+		if !cmd.Flags().Changed("field-type") {
+			missing = append(missing, "--field-type")
+		}
+		if len(missing) > 0 {
+			return errs.New(errs.ExitUsage, "missing required flags: %s", strings.Join(missing, ", "))
+		}
+
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
-		setStringFlag(cmd, attrs, "field-type")
-		setStringFlag(cmd, attrs, "label")
+		setStringFlag(cmd, attrs, "slug")
+		// --field-type maps to backend field "type" (domain attribute type, not resource type)
+		setMappedString(cmd, attrs, "field-type", "type")
 		setStringFlag(cmd, attrs, "description")
-		setBoolFlag(cmd, attrs, "required")
-
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name and --field-type")
-		}
+		setBoolFlag(cmd, attrs, "is-contact-editable")
+		setIntFlag(cmd, attrs, "position")
 
 		res, err := c.client.Create(c.ctx, contactAttributesDefsPath(teamID, ""), attrs)
 		if err != nil {
@@ -232,9 +245,10 @@ var contactAttributesRetrieveCmd = &cobra.Command{
 var contactAttributesUpdateCmd = &cobra.Command{
 	Use:     "update <id>",
 	Short:   "Update a contact attribute definition by id.",
-	Long:    "Update one or more fields on a contact attribute definition. Only the flags you set are changed.",
-	Example: `  mio contact-attributes update attr_abc123 --label="Company Name" --required=true`,
-	Args:    cobra.ExactArgs(1),
+	Long:    "Update one or more fields on a contact attribute definition. Only the flags you set are changed. Note: field type is immutable and cannot be updated.",
+	Example: `  mio contact-attributes update attr_abc123 --name="Company Name"
+  mio contact-attributes update attr_abc123 --slug="company-name" --description="Employer name"`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := caContext(cmd)
 		if err != nil {
@@ -243,10 +257,10 @@ var contactAttributesUpdateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
-		setStringFlag(cmd, attrs, "field-type")
-		setStringFlag(cmd, attrs, "label")
+		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "description")
-		setBoolFlag(cmd, attrs, "required")
+		setBoolFlag(cmd, attrs, "is-contact-editable")
+		setIntFlag(cmd, attrs, "position")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -285,14 +299,21 @@ var contactAttributesDeleteCmd = &cobra.Command{
 }
 
 func init() {
-	// defs create/update flags
-	for _, cmd := range []*cobra.Command{contactAttributesCreateCmd, contactAttributesUpdateCmd} {
-		cmd.Flags().String("name", "", "Internal name / key for the attribute.")
-		cmd.Flags().String("field-type", "", "Attribute field type (e.g. text, number, date, select, multi_select, boolean).")
-		cmd.Flags().String("label", "", "Human-readable label shown to contacts.")
-		cmd.Flags().String("description", "", "Optional description or hint for this attribute.")
-		cmd.Flags().Bool("required", false, "Whether this attribute is required.")
-	}
+	// create-only flags (field type is required on create; immutable on update)
+	contactAttributesCreateCmd.Flags().String("name", "", "Attribute name. Required.")
+	contactAttributesCreateCmd.Flags().String("slug", "", "Attribute slug (unique identifier within the team). Required.")
+	contactAttributesCreateCmd.Flags().String("field-type", "", "Attribute field type: text, number, boolean, date, or multiple. Required.")
+	contactAttributesCreateCmd.Flags().String("description", "", "Optional description or hint for this attribute.")
+	contactAttributesCreateCmd.Flags().Bool("is-contact-editable", true, "Whether contacts can edit this attribute themselves.")
+	contactAttributesCreateCmd.Flags().Int("position", 0, "Display order position (lower numbers appear first).")
+
+	// update flags (field type is immutable — not exposed here)
+	contactAttributesUpdateCmd.Flags().String("name", "", "Attribute name.")
+	contactAttributesUpdateCmd.Flags().String("slug", "", "Attribute slug.")
+	contactAttributesUpdateCmd.Flags().String("description", "", "Optional description or hint for this attribute.")
+	contactAttributesUpdateCmd.Flags().Bool("is-contact-editable", true, "Whether contacts can edit this attribute themselves.")
+	contactAttributesUpdateCmd.Flags().Int("position", 0, "Display order position (lower numbers appear first).")
+
 	addPaginationFlags(contactAttributesListCmd)
 }
 

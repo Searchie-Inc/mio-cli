@@ -65,6 +65,7 @@ const webhookEndpointBody = `{
 
 // TestAutomationsCreate_BodyShape verifies that create sends a JSON:API
 // envelope with type "automations" and the correct snake_case attribute keys.
+// --definition is now required (MIO-968c).
 func TestAutomationsCreate_BodyShape(t *testing.T) {
 	var gotBody []byte
 	var gotPath string
@@ -78,12 +79,15 @@ func TestAutomationsCreate_BodyShape(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
+	const defJSON = `{"nodes":[{"type":"exit","id":"n1","config":{}}],"edges":[],"triggers":[]}`
+
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"automations", "create",
 			"--name", "Welcome Series",
 			"--re-entry-mode", "once",
+			"--definition", defJSON,
 		)...)
 
 	if res.Code != errs.ExitOK {
@@ -113,16 +117,22 @@ func TestAutomationsCreate_BodyShape(t *testing.T) {
 	if attrs["re_entry_mode"] != "once" {
 		t.Errorf("attributes.re_entry_mode = %v, want \"once\"", attrs["re_entry_mode"])
 	}
+	if attrs["definition"] == nil {
+		t.Errorf("attributes.definition must be present (required field)")
+	}
 }
 
 // TestAutomationsCreate_MissingName verifies that omitting --name exits 2.
 func TestAutomationsCreate_MissingName(t *testing.T) {
 	srv := newMockServer(t, nil)
+	const defJSON = `{"nodes":[{"type":"exit","id":"n1","config":{}}],"edges":[],"triggers":[]}`
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"automations", "create",
+			// --name intentionally omitted; --definition provided to isolate the test
+			"--definition", defJSON,
 		)...)
 
 	if res.Code != errs.ExitUsage {

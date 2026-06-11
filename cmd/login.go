@@ -76,7 +76,15 @@ func resolveTeamID(cmd *cobra.Command, cli *client.Client, accessToken, flagTeam
 	}
 }
 
+// EnvEmail and EnvPassword are the environment variables for headless login.
+const (
+	envEmail    = "MIO_EMAIL"
+	envPassword = "MIO_PASSWORD"
+)
+
 func init() {
+	loginCmd.Flags().String("email", "", "Email address for headless (non-interactive) login. Overrides MIO_EMAIL.")
+	loginCmd.Flags().String("password", "", "Password for headless (non-interactive) login. Overrides MIO_PASSWORD. Never echoed or stored.")
 	rootCmd.AddCommand(loginCmd, logoutCmd)
 }
 
@@ -85,15 +93,18 @@ var loginCmd = &cobra.Command{
 	Short: "Authenticate the CLI and store an API key.",
 	Long: `Authenticate the mio CLI.
 
-Resolution:
-  1. If MIO_API_KEY is set, it is validated and stored.
-  2. Otherwise, on a TTY, you are offered two paths:
+Resolution order:
+  1. If MIO_API_KEY is set (or --api-key flag), it is validated and stored.
+  2. If --email and --password are set (or MIO_EMAIL/MIO_PASSWORD env vars),
+     login runs non-interactively: no TTY prompts, password is never echoed
+     or saved.
+  3. Otherwise, on a TTY, you are offered two paths:
        (a) paste an existing mio_sk_... API key, or
        (b) email + password → the CLI mints a key named "mio-cli@<host>"
            on your team and stores it (your password is never saved).
 
 The key is stored in the OS keychain (file fallback when none is available).
-Off a TTY with no resolvable key, login exits with code 3 and a JSON error.`,
+Off a TTY with no resolvable key or credentials, login exits with code 3.`,
 	Args: cobra.NoArgs,
 	RunE: runLogin,
 }
@@ -138,10 +149,25 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		return validateAndStore(cmd, resolved.APIBase, envKey)
 	}
 
+	// Path 2: headless email+password (--email/--password flags or MIO_EMAIL/MIO_PASSWORD env).
+	// Resolve email: flag > env.
+	headlessEmail := flagValue(cmd, "email")
+	if headlessEmail == "" {
+		headlessEmail = os.Getenv(envEmail)
+	}
+	// Resolve password: flag > env. Password is NEVER echoed or stored.
+	headlessPassword, _ := cmd.Flags().GetString("password")
+	if headlessPassword == "" {
+		headlessPassword = os.Getenv(envPassword)
+	}
+	if headlessEmail != "" && headlessPassword != "" {
+		return loginPasswordHeadless(cmd, resolved.APIBase, resolved.TeamID, headlessEmail, headlessPassword, cfg)
+	}
+
 	// Interactive paths require a TTY. Off a TTY we cannot prompt → exit 3.
 	if !isTTY(os.Stdin) {
 		return errs.New(errs.ExitAuth,
-			"no API key available and not a TTY: set MIO_API_KEY or run `mio login` interactively")
+			"no API key available and not a TTY: set MIO_API_KEY, or provide --email and --password (or MIO_EMAIL/MIO_PASSWORD), or run `mio login` interactively")
 	}
 
 	fmt.Fprintln(cmd.ErrOrStderr(), "How would you like to authenticate?")
@@ -159,6 +185,47 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	default:
 		return errs.New(errs.ExitUsage, "invalid choice; expected 1 or 2")
 	}
+}
+
+// loginPasswordHeadless performs the email+password → mint flow without any TTY
+// prompts. Used when both --email/MIO_EMAIL and --password/MIO_PASSWORD are set.
+// The password is never echoed or stored.
+func loginPasswordHeadless(cmd *cobra.Command, apiBase, teamID, email, password string, cfg *config.Config) error {
+	cli := client.New(apiBase, "", client.WithDebug(flags.debug))
+	loginRes, err := cli.Login(cmd.Context(), email, password)
+	if err != nil {
+		return err
+	}
+
+	resolvedTeam, teamName, err := resolveTeamID(cmd, cli, loginRes.AccessToken, teamID)
+	if err != nil {
+		return err
+	}
+
+	keyName := fmt.Sprintf("mio-cli@%s", hostname())
+	minted, err := cli.MintAPIKey(cmd.Context(), loginRes.AccessToken, resolvedTeam, keyName)
+	if err != nil {
+		return err
+	}
+	secret, _ := minted.Attributes["secret"].(string)
+	if secret == "" {
+		return errs.New(errs.ExitGeneric, "key minted but no secret returned by the server")
+	}
+
+	if err := config.SetAPIKey(secret); err != nil {
+		return errs.Wrap(errs.ExitGeneric, err)
+	}
+	cfg.CurrentTeam = resolvedTeam
+	if err := cfg.Save(); err != nil {
+		return errs.Wrap(errs.ExitGeneric, err)
+	}
+
+	displayTeam := resolvedTeam
+	if teamName != "" {
+		displayTeam = fmt.Sprintf("%s (%s)", teamName, resolvedTeam)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Logged in as %s. Using team %s. Saved API key.\n", email, displayTeam)
+	return nil
 }
 
 // loginPasteKey reads a pasted key, validates it, and stores it.

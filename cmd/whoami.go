@@ -15,6 +15,13 @@ package cmd
 //
 // Off a TTY it renders JSON by default (respecting --output), so agents can
 // parse it; on a TTY it renders a friendly key/value table.
+//
+// MIO-847 — API key precedence for team_id:
+// When the API key was resolved from the MIO_API_KEY env var (or --api-key
+// flag), the key itself encodes identity. The team_id reported by whoami must
+// reflect the team derived from the key (via the /api/auth/me response), NOT
+// the current_team stored in the config file. Config-stored team is a default
+// used when no explicit key is supplied; an explicit key overrides it.
 
 import (
 	"os"
@@ -54,7 +61,6 @@ This is the canonical "did my setup work?" command. Off a TTY it prints JSON
 			"api_base":   c.resolved.APIBase,
 			"profile":    flags.profile,
 			"key_source": keySource(),
-			"team_id":    c.resolved.TeamID,
 			"hub_id":     c.resolved.HubID,
 		}
 
@@ -75,17 +81,33 @@ This is the canonical "did my setup work?" command. Off a TTY it prints JSON
 			info["user_id"] = v
 		}
 
+		// MIO-847 — team_id precedence:
+		// When an explicit API key is in use (via --api-key flag or MIO_API_KEY
+		// env), the key carries its own team identity. Use the team_id from the
+		// /api/auth/me response as the authoritative team for this invocation,
+		// ignoring whatever current_team is stored in the config file.
+		// When using a keychain key (no explicit override), fall back to the
+		// resolved config team id as before.
+		teamID := c.resolved.TeamID
+		if ks := keySource(); ks == "flag (--api-key)" || ks == "env ("+config.EnvAPIKey+")" {
+			// Prefer the team_id the server reports for this key over config.
+			if v, ok := me["team_id"].(string); ok && v != "" {
+				teamID = v
+			}
+		}
+		info["team_id"] = teamID
+
 		// Resolve display names best-effort — a name lookup failing must NOT
 		// fail whoami; the ids are the authoritative answer.
-		if c.resolved.TeamID != "" {
-			if res, rerr := c.client.Retrieve(c.ctx, teamsPath(c.resolved.TeamID)); rerr == nil && res != nil {
+		if teamID != "" {
+			if res, rerr := c.client.Retrieve(c.ctx, teamsPath(teamID)); rerr == nil && res != nil {
 				if name, ok := res.Attributes["name"].(string); ok {
 					info["team_name"] = name
 				}
 			}
 		}
-		if c.resolved.TeamID != "" && c.resolved.HubID != "" {
-			if res, rerr := c.client.Retrieve(c.ctx, hubsPath(c.resolved.TeamID, c.resolved.HubID)); rerr == nil && res != nil {
+		if teamID != "" && c.resolved.HubID != "" {
+			if res, rerr := c.client.Retrieve(c.ctx, hubsPath(teamID, c.resolved.HubID)); rerr == nil && res != nil {
 				if name, ok := res.Attributes["name"].(string); ok {
 					info["hub_name"] = name
 				}

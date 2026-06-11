@@ -12,6 +12,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -65,11 +66,11 @@ var tagsCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a tag.",
 	Long:  "Create a new tag for the active team.",
-	Example: `  # Create a tag named "VIP"
-  mio tags create --name VIP
+	Example: `  # Create a tag named "VIP" with slug "vip"
+  mio tags create --name VIP --slug vip
 
   # Create a tag with a color
-  mio tags create --name VIP --color "#FF0000"`,
+  mio tags create --name VIP --slug vip --color "#FF0000"`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
@@ -84,14 +85,22 @@ var tagsCreateCmd = &cobra.Command{
 			return err
 		}
 
+		var missing []string
+		if !cmd.Flags().Changed("name") {
+			missing = append(missing, "--name")
+		}
+		if !cmd.Flags().Changed("slug") {
+			missing = append(missing, "--slug")
+		}
+		if len(missing) > 0 {
+			return errs.New(errs.ExitUsage, "missing required flags: %s", strings.Join(missing, ", "))
+		}
+
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
+		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "color")
 		setStringFlag(cmd, attrs, "description")
-
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
-		}
 
 		res, err := c.client.Create(c.ctx, tagsPath(teamID, ""), attrs)
 		if err != nil {
@@ -181,6 +190,7 @@ var tagsUpdateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
+		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "color")
 		setStringFlag(cmd, attrs, "description")
 
@@ -414,6 +424,7 @@ func init() {
 	// Attribute flags for create/update.
 	for _, cmd := range []*cobra.Command{tagsCreateCmd, tagsUpdateCmd} {
 		cmd.Flags().String("name", "", "Tag name.")
+		cmd.Flags().String("slug", "", "Tag slug (lowercase alphanumeric, hyphens, underscores). Required on create.")
 		cmd.Flags().String("color", "", "Tag color as a hex code, e.g. #FF0000.")
 		cmd.Flags().String("description", "", "Tag description.")
 	}
