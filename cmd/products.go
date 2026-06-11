@@ -77,7 +77,13 @@ func productsPath(teamID, id string) string {
 var productsCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a product.",
-	Args:  cobra.NoArgs,
+	Long: `Create a new product for the active team.
+
+--name and --type are required. Allowed values for --type:
+  course, membership, bundle, digital_download, booking`,
+	Example: `  mio products create --name "Intro to Go" --type course
+  mio products create --name "Pro Membership" --type membership --description "Full access plan"`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
 		if err != nil {
@@ -93,12 +99,12 @@ var productsCreateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
+		setStringFlag(cmd, attrs, "type")
 		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "status")
-		setBoolFlag(cmd, attrs, "published")
+		setBoolFlag(cmd, attrs, "is-active")
 
 		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
+			return errs.New(errs.ExitUsage, "nothing to create: set at least --name and --type")
 		}
 
 		res, err := c.client.Create(c.ctx, productsPath(teamID, ""), attrs)
@@ -165,7 +171,12 @@ var productsRetrieveCmd = &cobra.Command{
 var productsUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update a product by id.",
-	Args:  cobra.ExactArgs(1),
+	Long: `Partially update a product. Only the flags you supply are changed (PATCH semantics).
+
+Allowed values for --type (when provided): course, membership, bundle, digital_download, booking`,
+	Example: `  mio products update prod_abc123 --name "Advanced Go"
+  mio products update prod_abc123 --type membership --is-active`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newContext(cmd)
 		if err != nil {
@@ -181,9 +192,9 @@ var productsUpdateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
+		setStringFlag(cmd, attrs, "type")
 		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "status")
-		setBoolFlag(cmd, attrs, "published")
+		setBoolFlag(cmd, attrs, "is-active")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -228,11 +239,17 @@ var productsDeleteCmd = &cobra.Command{
 
 func init() {
 	// Attribute flags for create/update.
+	// NOTE: --status and --published were removed (MIO-941) — the backend
+	// ProductCreateAttributes/ProductUpdateAttributes schemas do not include those
+	// fields; sending them caused a 422 "extra inputs not permitted".
+	// --type maps to attributes.type (required on create; allowed values:
+	// course, membership, bundle, digital_download, booking).
+	// --is-active maps to attributes.is_active.
 	for _, cmd := range []*cobra.Command{productsCreateCmd, productsUpdateCmd} {
 		cmd.Flags().String("name", "", "Product name.")
+		cmd.Flags().String("type", "", "Product type: course, membership, bundle, digital_download, or booking. Required on create.")
 		cmd.Flags().String("description", "", "Product description.")
-		cmd.Flags().String("status", "", "Product status.")
-		cmd.Flags().Bool("published", false, "Whether the product is published.")
+		cmd.Flags().Bool("is-active", false, "Whether the product is active.")
 	}
 	addPaginationFlags(productsListCmd)
 }

@@ -85,9 +85,15 @@ func contentContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 var contentCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a content item in a hub.",
-	Long:  "Create a new content item under the active hub. At least --title must be provided.",
-	Example: `  mio content create --hub hub_abc --title "Module 1" --content-type folder
-  mio content create --hub hub_abc --title "Welcome Video" --content-type video --parent-id cnt_xyz`,
+	Long: `Create a new content item under the active hub.
+
+--title and --node-type are required. Allowed values for --node-type:
+  container  — a folder or module that holds other items
+  lesson     — a leaf content item (video, audio, pdf, text, etc.)
+
+--content-type is an optional sub-type for leaf items (e.g. video, audio, pdf, text).`,
+	Example: `  mio content create --hub hub_abc --title "Module 1" --node-type container
+  mio content create --hub hub_abc --title "Welcome Video" --node-type lesson --content-type video --parent-id cnt_xyz`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := contentContext(cmd)
@@ -97,14 +103,15 @@ var contentCreateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "title")
+		setMappedString(cmd, attrs, "node-type", "node_type")
 		setStringFlag(cmd, attrs, "content-type")
 		setStringFlag(cmd, attrs, "parent-id")
 		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "status")
+		setStringFlag(cmd, attrs, "privacy")
 		setBoolFlag(cmd, attrs, "published")
 
 		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --title")
+			return errs.New(errs.ExitUsage, "nothing to create: set at least --title and --node-type")
 		}
 
 		res, err := c.client.Create(c.ctx, contentBasePath(teamID, hubID, ""), attrs)
@@ -195,9 +202,11 @@ var contentChildrenCmd = &cobra.Command{
 var contentUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update a content item by id.",
-	Long:  "Partially update a content item. Only the flags you supply are changed.",
+	Long: `Partially update a content item. Only the flags you supply are changed (PATCH semantics).
+
+Note: node_type and parent_id are immutable after create and cannot be changed via update.`,
 	Example: `  mio content update cnt_abc123 --hub hub_abc --title "New Title"
-  mio content update cnt_abc123 --hub hub_abc --published`,
+  mio content update cnt_abc123 --hub hub_abc --content-type audio --privacy members`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := contentContext(cmd)
@@ -208,9 +217,8 @@ var contentUpdateCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "title")
 		setStringFlag(cmd, attrs, "content-type")
-		setStringFlag(cmd, attrs, "parent-id")
 		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "status")
+		setStringFlag(cmd, attrs, "privacy")
 		setBoolFlag(cmd, attrs, "published")
 
 		if len(attrs) == 0 {
@@ -317,15 +325,25 @@ var contentReorderCmd = &cobra.Command{
 // ---- flag registration ------------------------------------------------------
 
 func init() {
-	// Flags for create and update (writable attributes).
-	for _, cmd := range []*cobra.Command{contentCreateCmd, contentUpdateCmd} {
-		cmd.Flags().String("title", "", "Content item title.")
-		cmd.Flags().String("content-type", "", "Content type (e.g. folder, video, audio, pdf, text).")
-		cmd.Flags().String("parent-id", "", "Id of the parent content item (nests this item under a folder).")
-		cmd.Flags().String("description", "", "Content item description.")
-		cmd.Flags().String("status", "", "Content item status (e.g. draft, published).")
-		cmd.Flags().Bool("published", false, "Whether the content item is published.")
-	}
+	// Flags for create.
+	// NOTE: --status was removed (MIO-942) — ContentNodeCreateAttributes uses
+	// extra="forbid" and does not have a status field. Use --privacy instead.
+	// --node-type maps to attributes.node_type (required on create; immutable after).
+	// --content-type maps to attributes.content_type (optional sub-type for lessons).
+	contentCreateCmd.Flags().String("title", "", "Content item title.")
+	contentCreateCmd.Flags().String("node-type", "", `Node type: "container" (folder/module) or "lesson" (leaf item). Required on create.`)
+	contentCreateCmd.Flags().String("content-type", "", `Optional content sub-type for lesson nodes (e.g. video, audio, pdf, text).`)
+	contentCreateCmd.Flags().String("parent-id", "", "Id of the parent content item (nests this item under a folder).")
+	contentCreateCmd.Flags().String("description", "", "Content item description.")
+	contentCreateCmd.Flags().String("privacy", "", `Privacy setting for the content item (e.g. "members", "public").`)
+	contentCreateCmd.Flags().Bool("published", false, "Whether the content item is published.")
+
+	// Flags for update (node_type and parent_id are immutable after create).
+	contentUpdateCmd.Flags().String("title", "", "Content item title.")
+	contentUpdateCmd.Flags().String("content-type", "", `Optional content sub-type for lesson nodes (e.g. video, audio, pdf, text).`)
+	contentUpdateCmd.Flags().String("description", "", "Content item description.")
+	contentUpdateCmd.Flags().String("privacy", "", `Privacy setting for the content item (e.g. "members", "public").`)
+	contentUpdateCmd.Flags().Bool("published", false, "Whether the content item is published.")
 
 	// Pagination for list and children.
 	addPaginationFlags(contentListCmd)
