@@ -10,6 +10,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -54,12 +55,12 @@ func rolesPath(id string) string {
 var rolesCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a role.",
-	Long:  "Create a new role with the given name and optional description.",
+	Long:  "Create a new role with the given name and slug.",
 	Example: `  # Create a basic role
-  mio roles create --name "Content Editor"
+  mio roles create --name "Content Editor" --slug content-editor
 
-  # Create a role with a description
-  mio roles create --name "Moderator" --description "Can moderate community content"`,
+  # Create a team-scoped role
+  mio roles create --name "Moderator" --slug moderator`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
@@ -70,13 +71,20 @@ var rolesCreateCmd = &cobra.Command{
 			return err
 		}
 
+		var missing []string
+		if !cmd.Flags().Changed("name") {
+			missing = append(missing, "--name")
+		}
+		if !cmd.Flags().Changed("slug") {
+			missing = append(missing, "--slug")
+		}
+		if len(missing) > 0 {
+			return errs.New(errs.ExitUsage, "missing required flags: %s", strings.Join(missing, ", "))
+		}
+
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
-		setStringFlag(cmd, attrs, "description")
-
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
-		}
+		setStringFlag(cmd, attrs, "slug")
 
 		// Flat body: the backend RoleCreate schema is a plain pydantic model,
 		// not a JSON:API envelope.
@@ -142,9 +150,8 @@ var rolesUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update a role by id.",
 	Long:  "Partially update a role. Only flags you provide are changed (PATCH semantics).",
-	Example: `  mio roles update role_abc123 --name "Senior Editor"
-  mio roles update role_abc123 --description "Updated description"`,
-	Args: cobra.ExactArgs(1),
+	Example: `  mio roles update role_abc123 --name "Senior Editor"`,
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newContext(cmd)
 		if err != nil {
@@ -156,7 +163,6 @@ var rolesUpdateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
-		setStringFlag(cmd, attrs, "description")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -201,11 +207,13 @@ var rolesDeleteCmd = &cobra.Command{
 }
 
 func init() {
-	// Attribute flags for create/update.
-	for _, cmd := range []*cobra.Command{rolesCreateCmd, rolesUpdateCmd} {
-		cmd.Flags().String("name", "", "Role name.")
-		cmd.Flags().String("description", "", "Role description.")
-	}
+	// create: name + slug are both required; slug is immutable after creation.
+	rolesCreateCmd.Flags().String("name", "", "Role name. Required.")
+	rolesCreateCmd.Flags().String("slug", "", "Role slug (unique identifier). Required.")
+
+	// update: only name is mutable per the backend RoleUpdate schema.
+	rolesUpdateCmd.Flags().String("name", "", "Role name.")
+
 	addPaginationFlags(rolesListCmd)
 }
 

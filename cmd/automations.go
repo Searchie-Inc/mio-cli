@@ -101,13 +101,27 @@ var automationsCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create an automation.",
 	Long:  "Create a new automation in the active hub.",
-	Example: `  mio automations create --hub hub_123 --name "Welcome Series"
-  mio automations create --hub hub_123 --name "Post-Purchase" --re-entry-mode after_exit`,
+	Example: `  mio automations create --hub hub_123 --name "Welcome Series" \
+    --definition '{"nodes":[{"type":"exit","id":"n1","config":{}}],"edges":[],"triggers":[]}'
+
+  mio automations create --hub hub_123 --name "Post-Purchase" --re-entry-mode after_exit \
+    --definition @my-automation.json`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := automationsContext(cmd)
 		if err != nil {
 			return err
+		}
+
+		var missing []string
+		if !cmd.Flags().Changed("name") {
+			missing = append(missing, "--name")
+		}
+		if !cmd.Flags().Changed("definition") {
+			missing = append(missing, "--definition")
+		}
+		if len(missing) > 0 {
+			return errs.New(errs.ExitUsage, "missing required flags: %s", strings.Join(missing, ", "))
 		}
 
 		attrs := map[string]any{}
@@ -136,10 +150,6 @@ var automationsCreateCmd = &cobra.Command{
 				}
 				attrs["settings"] = v
 			}
-		}
-
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
 		}
 
 		res, err := c.client.Create(c.ctx, automationsPath(teamID, hubID, ""), attrs)

@@ -11,8 +11,10 @@ import (
 )
 
 // configKeys are the writable config keys exposed via `mio config set/get`.
-// They map to fields on config.Config. Keep this list and the switch in sync.
-var configKeys = []string{"team", "hub", "api-base"}
+// They match the TOML field names in config.Config exactly so that scripting
+// with `mio config get <key>` produces the same key names as the file on disk.
+// Keep this list and the configValues / configSetCmd switch in sync.
+var configKeys = []string{"current_team", "current_hub", "api_base"}
 
 func init() {
 	configCmd.AddCommand(configSetCmd, configGetCmd, configListCmd)
@@ -25,13 +27,13 @@ var configCmd = &cobra.Command{
 	Long: `Manage the persistent CLI configuration stored at
 $XDG_CONFIG_HOME/mio/config.toml (default ~/.config/mio/config.toml).
 
-Writable keys: team, hub, api-base. The API key itself is a secret and is
-managed by 'mio login' / 'mio logout', not by this command.`,
+Writable keys: current_team, current_hub, api_base. The API key itself is a
+secret and is managed by 'mio login' / 'mio logout', not by this command.`,
 }
 
 var configSetCmd = &cobra.Command{
 	Use:   "set <key> <value>",
-	Short: "Set a config value (team|hub|api-base).",
+	Short: "Set a config value (current_team|current_hub|api_base).",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		key, value := args[0], args[1]
@@ -40,11 +42,11 @@ var configSetCmd = &cobra.Command{
 			return errs.Wrap(errs.ExitGeneric, err)
 		}
 		switch key {
-		case "team":
+		case "current_team":
 			cfg.CurrentTeam = value
-		case "hub":
+		case "current_hub":
 			cfg.CurrentHub = value
-		case "api-base":
+		case "api_base":
 			cfg.APIBase = value
 		default:
 			return errs.New(errs.ExitUsage, "unknown config key %q (valid: %v)", key, configKeys)
@@ -103,9 +105,9 @@ var configListCmd = &cobra.Command{
 
 func configValues(cfg *config.Config) map[string]string {
 	return map[string]string{
-		"team":     cfg.CurrentTeam,
-		"hub":      cfg.CurrentHub,
-		"api-base": cfg.APIBase,
+		"current_team": cfg.CurrentTeam,
+		"current_hub":  cfg.CurrentHub,
+		"api_base":     cfg.APIBase,
 	}
 }
 
