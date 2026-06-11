@@ -243,9 +243,9 @@ var contactAttributesRetrieveCmd = &cobra.Command{
 }
 
 var contactAttributesUpdateCmd = &cobra.Command{
-	Use:     "update <id>",
-	Short:   "Update a contact attribute definition by id.",
-	Long:    "Update one or more fields on a contact attribute definition. Only the flags you set are changed. Note: field type is immutable and cannot be updated.",
+	Use:   "update <id>",
+	Short: "Update a contact attribute definition by id.",
+	Long:  "Update one or more fields on a contact attribute definition. Only the flags you set are changed. Note: field type is immutable and cannot be updated.",
 	Example: `  mio contact-attributes update attr_abc123 --name="Company Name"
   mio contact-attributes update attr_abc123 --slug="company-name" --description="Employer name"`,
 	Args: cobra.ExactArgs(1),

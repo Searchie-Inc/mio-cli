@@ -147,9 +147,9 @@ var rolesRetrieveCmd = &cobra.Command{
 }
 
 var rolesUpdateCmd = &cobra.Command{
-	Use:   "update <id>",
-	Short: "Update a role by id.",
-	Long:  "Partially update a role. Only flags you provide are changed (PATCH semantics).",
+	Use:     "update <id>",
+	Short:   "Update a role by id.",
+	Long:    "Partially update a role. Only flags you provide are changed (PATCH semantics).",
 	Example: `  mio roles update role_abc123 --name "Senior Editor"`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
