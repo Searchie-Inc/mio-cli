@@ -12,6 +12,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -65,12 +66,16 @@ func segmentsMembersPath(teamID, id, suffix string) string {
 var segmentsCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a segment.",
-	Long:  "Create a new contact segment for the active team.",
-	Example: `  # Create a static segment
-  mio segments create --name "VIP Contacts" --segment-type static
+	Long: `Create a new contact segment for the active team.
 
-  # Create a dynamic segment with a description
-  mio segments create --name "High Engagement" --segment-type dynamic --description "Contacts with high engagement scores"`,
+--name and --conditions are required. --conditions accepts the full condition tree as JSON:
+  {"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}
+Prefix the value with @ to read the JSON from a file (e.g. --conditions @conds.json).`,
+	Example: `  # Create a segment with an email condition
+  mio segments create --name "VIP Contacts" --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
+
+  # Create a segment loading conditions from a file
+  mio segments create --name "High Engagement" --description "Engaged contacts" --conditions @conditions.json`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
@@ -85,14 +90,30 @@ var segmentsCreateCmd = &cobra.Command{
 			return err
 		}
 
-		attrs := map[string]any{}
+		// Both --name and --conditions are required by the backend
+		// SegmentCreateAttributes schema; validate client-side so a
+		// partial-required body never reaches the API.
+		var missing []string
+		if !cmd.Flags().Changed("name") {
+			missing = append(missing, "--name")
+		}
+		if !cmd.Flags().Changed("conditions") {
+			missing = append(missing, "--conditions")
+		}
+		if len(missing) > 0 {
+			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
+		}
+
+		rawConditions, _ := cmd.Flags().GetString("conditions")
+		conditions, perr := parseJSONFlag(rawConditions)
+		if perr != nil {
+			return errs.Wrap(errs.ExitUsage, fmt.Errorf("--conditions is not valid JSON: %w", perr))
+		}
+
+		attrs := map[string]any{"conditions": conditions}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "segment-type")
-
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
-		}
+		setBoolFlag(cmd, attrs, "is-active")
 
 		res, err := c.client.Create(c.ctx, segmentsPath(teamID, ""), attrs)
 		if err != nil {
@@ -163,9 +184,12 @@ var segmentsRetrieveCmd = &cobra.Command{
 var segmentsUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update a segment by id.",
-	Long:  "Update one or more fields on a contact segment. Only the flags you pass are changed (partial update).",
+	Long: `Update one or more fields on a contact segment. Only the flags you pass are changed (partial update).
+
+--conditions accepts the full condition tree as JSON (same shape as create). Prefix with @ to read from a file.`,
 	Example: `  mio segments update seg_abc123 --name "Renamed Segment"
-  mio segments update seg_abc123 --description "Updated description"`,
+  mio segments update seg_abc123 --description "Updated description"
+  mio segments update seg_abc123 --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newContext(cmd)
@@ -183,7 +207,16 @@ var segmentsUpdateCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "segment-type")
+		setBoolFlag(cmd, attrs, "is-active")
+
+		if cmd.Flags().Changed("conditions") {
+			rawConditions, _ := cmd.Flags().GetString("conditions")
+			conditions, perr := parseJSONFlag(rawConditions)
+			if perr != nil {
+				return errs.Wrap(errs.ExitUsage, fmt.Errorf("--conditions is not valid JSON: %w", perr))
+			}
+			attrs["conditions"] = conditions
+		}
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -345,10 +378,15 @@ var segmentsCountCmd = &cobra.Command{
 
 func init() {
 	// Attribute flags for create and update.
+	// NOTE: --segment-type was removed (MIO-938) — the backend SegmentCreateAttributes
+	// schema uses extra="forbid" and does not accept a segment_type field; sending it
+	// caused a 422 "extra inputs not permitted". Segment type is now determined
+	// automatically by the backend based on whether conditions are provided.
 	for _, cmd := range []*cobra.Command{segmentsCreateCmd, segmentsUpdateCmd} {
 		cmd.Flags().String("name", "", "Segment name.")
 		cmd.Flags().String("description", "", "Segment description.")
-		cmd.Flags().String("segment-type", "", "Segment type: static or dynamic.")
+		cmd.Flags().Bool("is-active", false, "Whether the segment is active (default true on create).")
+		cmd.Flags().String("conditions", "", `Condition tree as JSON: {"version":1,"groups":[{"logic":"AND","conditions":[...]}]}. Prefix with @ to read from a file (e.g. @conditions.json).`)
 	}
 
 	// Pagination flags for list and members.
