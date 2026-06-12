@@ -434,9 +434,10 @@ func (c *Client) ActionWithHeaders(ctx context.Context, style BodyStyle, method,
 	return decodeResourceWrapped(raw)
 }
 
-// doWithHeaders is do() with an additional map of extra request headers. It is
-// used only by ActionWithHeaders; all other callers go through the plain do()
-// path so the standard behaviour is not affected.
+// doWithHeaders is the single HTTP request choke point. It is called by do()
+// (which passes a nil extra map) and by ActionWithHeaders (which passes extra
+// headers for conditional requests such as If-Match). All client methods
+// ultimately funnel through here.
 //
 // 429 handling: when the server returns HTTP 429 Too Many Requests this method
 // reads the Retry-After response header (whole seconds) and sleeps for that
@@ -529,6 +530,12 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, query u
 // returns a duration capped at rateLimitMaxWait. If the header is absent or
 // unparseable it falls back to 1 second so the CLI still backs off rather than
 // hammering the server.
+//
+// The float → Duration conversion can overflow for very large values (e.g.
+// 1e10 seconds) before the cap is applied, producing a negative or wrapped
+// duration. To prevent this we cap the float seconds value at the equivalent
+// of rateLimitMaxWait BEFORE the conversion so the arithmetic stays within
+// the safe range of int64.
 func retryAfterDuration(header string) time.Duration {
 	if header == "" {
 		return time.Second
@@ -537,11 +544,14 @@ func retryAfterDuration(header string) time.Duration {
 	if err != nil || secs < 0 {
 		return time.Second
 	}
-	d := time.Duration(math.Ceil(secs)) * time.Second
-	if d > rateLimitMaxWait {
+	// Cap seconds in float space first so the subsequent int64 arithmetic
+	// cannot overflow. rateLimitMaxWait / time.Second is safe to convert to
+	// float64 (it is 60, well within float64 precision).
+	maxSecs := float64(rateLimitMaxWait / time.Second)
+	if secs > maxSecs {
 		return rateLimitMaxWait
 	}
-	return d
+	return time.Duration(math.Ceil(secs)) * time.Second
 }
 
 // ActionCollection performs a custom action route that returns a JSON:API

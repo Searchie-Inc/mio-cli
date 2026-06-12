@@ -87,6 +87,11 @@ func TestClient_ErrorMapping(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				// For 429 set Retry-After: 0 so the retry loop does not sleep
+				// between attempts and the test stays fast.
+				if tc.status == http.StatusTooManyRequests {
+					w.Header().Set("Retry-After", "0")
+				}
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body))
 			}))
@@ -712,7 +717,9 @@ func TestClient_RateLimitRetry_ExhaustsRetries(t *testing.T) {
 }
 
 // TestRetryAfterDuration verifies header parsing, the 60 s cap, and the
-// fallback-to-1s behaviour on missing/malformed values.
+// fallback-to-1s behaviour on missing/malformed values. It also tests
+// very large values (e.g. 1e10) that would overflow int64 if converted
+// directly to time.Duration before the cap is applied.
 func TestRetryAfterDuration(t *testing.T) {
 	cases := []struct {
 		header string
@@ -723,10 +730,12 @@ func TestRetryAfterDuration(t *testing.T) {
 		{"60", 60 * time.Second}, // exactly at cap
 		{"61", 60 * time.Second}, // capped to rateLimitMaxWait
 		{"120", 60 * time.Second},
-		{"", time.Second},        // absent → fallback
-		{"abc", time.Second},     // malformed → fallback
-		{"-1", time.Second},      // negative → fallback
-		{"1.7", 2 * time.Second}, // fractional → ceiling
+		{"1e10", 60 * time.Second}, // huge value — must not overflow, must cap
+		{"1e18", 60 * time.Second}, // beyond int64 max seconds — must cap
+		{"", time.Second},          // absent → fallback
+		{"abc", time.Second},       // malformed → fallback
+		{"-1", time.Second},        // negative → fallback
+		{"1.7", 2 * time.Second},   // fractional → ceiling
 	}
 	for _, tc := range cases {
 		got := retryAfterDuration(tc.header)
