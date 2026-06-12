@@ -43,6 +43,11 @@ var segmentsCmd = &cobra.Command{
 	Use:   "segments",
 	Short: "Manage contact segments.",
 	Long:  "Create, list, retrieve, update, and delete contact segments for the active team. Also search segment members and preview conditions.",
+	Example: `  mio segments list
+  mio segments create --name "VIP Contacts" --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
+  mio segments retrieve seg_abc123
+  mio segments members seg_abc123
+  mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'`,
 }
 
 // segmentsPath returns /api/teams/{team_id}/segments[/{id}].
