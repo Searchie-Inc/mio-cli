@@ -541,7 +541,11 @@ func retryAfterDuration(header string) time.Duration {
 		return time.Second
 	}
 	secs, err := strconv.ParseFloat(strings.TrimSpace(header), 64)
-	if err != nil || secs < 0 {
+	// ParseFloat accepts "NaN" and "±Inf" without error, and NaN compares
+	// false against every range check below — converting it to an int is
+	// implementation-specific (can yield an invalid/negative duration). Treat
+	// non-finite values exactly like unparseable input: fall back to 1 s.
+	if err != nil || math.IsNaN(secs) || math.IsInf(secs, 0) || secs < 0 {
 		return time.Second
 	}
 	// Cap seconds in float space first so the subsequent int64 arithmetic

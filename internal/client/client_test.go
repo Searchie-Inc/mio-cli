@@ -736,6 +736,9 @@ func TestRetryAfterDuration(t *testing.T) {
 		{"abc", time.Second},       // malformed → fallback
 		{"-1", time.Second},        // negative → fallback
 		{"1.7", 2 * time.Second},   // fractional → ceiling
+		{"NaN", time.Second},       // ParseFloat accepts NaN; range checks are all false → must fall back
+		{"+Inf", time.Second},      // non-finite → fallback
+		{"-Inf", time.Second},      // non-finite → fallback
 	}
 	for _, tc := range cases {
 		got := retryAfterDuration(tc.header)
