@@ -152,6 +152,12 @@ var typeOverrides = []struct {
 	{"drip-campaigns", "drip_campaigns"},
 	{"email-templates", "email_templates"},
 	{"webhook-endpoints", "webhook_endpoints"},
+	// access-rules sub-resources: URL segment uses hyphens but JSON:API type
+	// is snake_case. Without these overrides resourceTypeFromPath returns the
+	// hyphenated segment verbatim ("access-rules", "access-overrides"), which
+	// the backend's Literal-typed write schemas reject with 400 (MIO-992).
+	{"access-rules", "access_rules"},
+	{"access-overrides", "access_overrides"},
 }
 
 // resourceTypeFromPath returns the JSON:API resource `type` for a write to the
