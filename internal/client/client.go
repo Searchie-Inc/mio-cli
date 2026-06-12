@@ -14,12 +14,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
+)
+
+// Retry-After / 429 backoff constants.
+const (
+	// rateLimitMaxRetries is the maximum number of automatic retries on a 429.
+	// Two retries means three total attempts (initial + 2 retries).
+	rateLimitMaxRetries = 2
+	// rateLimitMaxWait caps the Retry-After value so a misbehaving server cannot
+	// stall the CLI indefinitely. 60 s is the maximum rate-limit window in the
+	// backend (auth login / checkout), so honouring values beyond it is pointless.
+	rateLimitMaxWait = 60 * time.Second
 )
 
 // Content types. JSON:API for resource routes; plain JSON for /api/auth/*.
@@ -424,59 +437,111 @@ func (c *Client) ActionWithHeaders(ctx context.Context, style BodyStyle, method,
 // doWithHeaders is do() with an additional map of extra request headers. It is
 // used only by ActionWithHeaders; all other callers go through the plain do()
 // path so the standard behaviour is not affected.
+//
+// 429 handling: when the server returns HTTP 429 Too Many Requests this method
+// reads the Retry-After response header (whole seconds) and sleeps for that
+// duration (capped at rateLimitMaxWait) before retrying. It retries at most
+// rateLimitMaxRetries times; if the server keeps returning 429 after all
+// retries are exhausted it returns the 429 error with a message that includes
+// the suggested wait time so the user knows how long to back off manually.
 func (c *Client) doWithHeaders(ctx context.Context, method, path string, query url.Values, payload any, accept string, extra map[string]string) ([]byte, error) {
 	u := c.baseURL + canonicalRequestPath(path)
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
 
-	var reqBody io.Reader
+	// Marshal the payload once; on retry we reset the reader position from the
+	// same buffer so we do not re-marshal on every attempt.
+	var payloadBuf []byte
 	if payload != nil {
-		buf, err := json.Marshal(payload)
+		var err error
+		payloadBuf, err = json.Marshal(payload)
 		if err != nil {
 			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("encode request body: %w", err))
 		}
-		reqBody = bytes.NewReader(buf)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
-	if err != nil {
-		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("build request: %w", err))
-	}
-	req.Header.Set("Accept", accept)
-	if reqBody != nil {
-		req.Header.Set("Content-Type", accept)
-	}
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	for k, v := range extra {
-		req.Header.Set(k, v)
-	}
+	for attempt := 0; ; attempt++ {
+		var reqBody io.Reader
+		if payloadBuf != nil {
+			reqBody = bytes.NewReader(payloadBuf)
+		}
 
-	if c.debug {
-		fmt.Fprintf(stderr(), "[debug] %s %s\n", method, u)
-	}
+		req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
+		if err != nil {
+			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("build request: %w", err))
+		}
+		req.Header.Set("Accept", accept)
+		if reqBody != nil {
+			req.Header.Set("Content-Type", accept)
+		}
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
+		for k, v := range extra {
+			req.Header.Set(k, v)
+		}
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("%s %s: %w", method, u, err))
-	}
-	defer resp.Body.Close()
+		if c.debug {
+			fmt.Fprintf(stderr(), "[debug] %s %s (attempt %d)\n", method, u, attempt+1)
+		}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("read response: %w", err))
-	}
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("%s %s: %w", method, u, err))
+		}
+		respBody, rerr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if rerr != nil {
+			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("read response: %w", rerr))
+		}
 
-	if c.debug {
-		fmt.Fprintf(stderr(), "[debug] -> %d (%d bytes)\n", resp.StatusCode, len(respBody))
-	}
+		if c.debug {
+			fmt.Fprintf(stderr(), "[debug] -> %d (%d bytes)\n", resp.StatusCode, len(respBody))
+		}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Happy path.
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return respBody, nil
+		}
+
+		// 429: honour Retry-After if we have retries left.
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < rateLimitMaxRetries {
+			wait := retryAfterDuration(resp.Header.Get("Retry-After"))
+			if c.debug {
+				fmt.Fprintf(stderr(), "[debug] rate limited; retrying in %s (attempt %d/%d)\n",
+					wait.Round(time.Second), attempt+1, rateLimitMaxRetries)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, errs.Wrap(errs.ExitGeneric, ctx.Err())
+			case <-time.After(wait):
+			}
+			continue
+		}
+
+		// All other non-2xx responses, or 429 after retries exhausted.
 		return nil, c.errorForResponse(resp.StatusCode, respBody)
 	}
-	return respBody, nil
+}
+
+// retryAfterDuration parses a Retry-After header value (integer seconds) and
+// returns a duration capped at rateLimitMaxWait. If the header is absent or
+// unparseable it falls back to 1 second so the CLI still backs off rather than
+// hammering the server.
+func retryAfterDuration(header string) time.Duration {
+	if header == "" {
+		return time.Second
+	}
+	secs, err := strconv.ParseFloat(strings.TrimSpace(header), 64)
+	if err != nil || secs < 0 {
+		return time.Second
+	}
+	d := time.Duration(math.Ceil(secs)) * time.Second
+	if d > rateLimitMaxWait {
+		return rateLimitMaxWait
+	}
+	return d
 }
 
 // ActionCollection performs a custom action route that returns a JSON:API

@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 	"unicode"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
@@ -639,6 +641,97 @@ func TestTypeOverrides_AllSnakeCase(t *testing.T) {
 	for _, o := range typeOverrides {
 		if !isSnakeCaseType(o.typ) {
 			t.Errorf("typeOverrides[%q].typ = %q is not snake_case (MIO-636: backend requires snake_case type values)", o.suffix, o.typ)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 429 / Retry-After tests (MIO-1000, from QA record MIO-982)
+// ---------------------------------------------------------------------------
+
+// TestClient_RateLimitRetry_SucceedsOnSecondAttempt verifies that a 429
+// followed by a 200 results in success, and that the client honours the
+// Retry-After header value (instead of retrying immediately).
+func TestClient_RateLimitRetry_SucceedsOnSecondAttempt(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "0") // 0 s → immediate in tests
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"errors":[{"detail":"rate limited"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"1","type":"products","attributes":{}}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	res, err := c.Retrieve(context.Background(), "/x")
+	if err != nil {
+		t.Fatalf("expected success after retry, got error: %v", err)
+	}
+	if res == nil || res.ID != "1" {
+		t.Errorf("unexpected result: %#v", res)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("server called %d times, want 2", got)
+	}
+}
+
+// TestClient_RateLimitRetry_ExhaustsRetries verifies that when the server
+// returns 429 on every attempt, the client stops after rateLimitMaxRetries
+// extra attempts and surfaces the 429 error with ExitRateLimited.
+func TestClient_RateLimitRetry_ExhaustsRetries(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"errors":[{"detail":"rate limited"}]}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	_, err := c.Retrieve(context.Background(), "/x")
+	if err == nil {
+		t.Fatal("expected error after exhausting retries, got nil")
+	}
+	if got := errs.CodeOf(err); got != errs.ExitRateLimited {
+		t.Errorf("exit code = %d, want ExitRateLimited (%d)", got, errs.ExitRateLimited)
+	}
+	if !strings.Contains(err.Error(), "rate limited") {
+		t.Errorf("error message %q does not mention rate limit", err.Error())
+	}
+	// Should have made 1 initial + rateLimitMaxRetries extra calls.
+	wantCalls := int32(1 + rateLimitMaxRetries)
+	if got := calls.Load(); got != wantCalls {
+		t.Errorf("server called %d times, want %d (1 initial + %d retries)", got, wantCalls, rateLimitMaxRetries)
+	}
+}
+
+// TestRetryAfterDuration verifies header parsing, the 60 s cap, and the
+// fallback-to-1s behaviour on missing/malformed values.
+func TestRetryAfterDuration(t *testing.T) {
+	cases := []struct {
+		header string
+		want   time.Duration
+	}{
+		{"5", 5 * time.Second},
+		{"0", 0},                 // zero is a valid "retry immediately"
+		{"60", 60 * time.Second}, // exactly at cap
+		{"61", 60 * time.Second}, // capped to rateLimitMaxWait
+		{"120", 60 * time.Second},
+		{"", time.Second},        // absent → fallback
+		{"abc", time.Second},     // malformed → fallback
+		{"-1", time.Second},      // negative → fallback
+		{"1.7", 2 * time.Second}, // fractional → ceiling
+	}
+	for _, tc := range cases {
+		got := retryAfterDuration(tc.header)
+		if got != tc.want {
+			t.Errorf("retryAfterDuration(%q) = %v, want %v", tc.header, got, tc.want)
 		}
 	}
 }
