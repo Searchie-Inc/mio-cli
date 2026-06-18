@@ -157,6 +157,14 @@ var typeOverrides = []struct {
 	// Automations sub-resource enrollments carry a different type than the
 	// top-level enrollments segment on other resources.
 	{"automations/enrollments", "automation_enrollments"},
+	// Drip-campaign enrollments: backend DripEnrollCreateRequest pins type to
+	// "drip_enrollments" (Literal const); the bare "enrollments" segment would
+	// not match that Literal and returns 422.
+	{"drip-campaigns/enrollments", "drip_enrollments"},
+	// Hub email-settings: backend HubEmailSenderUpdateEnvelope pins type to
+	// "hub_email_senders"; the segment "email-settings" would not match that
+	// Literal without this override (MIO-1229).
+	{"hubs/email-settings", "hub_email_senders"},
 	// Bare-segment overrides (URL segment != backend type).
 	{"segments", "segment"},
 	{"content", "content_nodes"},
@@ -239,12 +247,16 @@ var knownCollections = map[string]bool{
 	"payments": true, "refund": true, "attributes": true,
 	"payment-accounts": true, "onboarding-link": true,
 	"policies": true,
+	// Hub per-sender email identity (MIO-1229).
+	"email-settings": true,
 	// Automations + webhook-endpoints (2026-06-09).
 	"automations": true, "webhook-endpoints": true, "versions": true, "events": true,
 	// Community admin (2026-06-09): spaces, discussions wired in community.go.
 	"spaces": true, "discussions": true,
 	// Media (2026-06-09): files, folders, playlists wired in media.go.
 	"files": true, "folders": true, "playlists": true,
+	// Contact-scoped drip enrollment reader (email enrollments list-by-contact).
+	"drip-enrollments": true,
 }
 
 // collectionSegments returns the path segments that are static collection

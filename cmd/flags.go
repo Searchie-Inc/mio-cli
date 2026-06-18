@@ -36,6 +36,26 @@ func setStringFlag(cmd *cobra.Command, attrs map[string]any, name string) {
 	}
 }
 
+// setNullableMappedString copies a string flag into attrs[attrName] iff the user
+// set it, sending JSON null when the value is empty so an explicit `--flag ""`
+// CLEARS the field rather than storing an empty string. The backend distinguishes
+// null (clear) from "" (store empty) under exclude_unset semantics; an unset flag
+// is left untouched.
+func setNullableMappedString(cmd *cobra.Command, attrs map[string]any, name, attrName string) {
+	if !cmd.Flags().Changed(name) {
+		return
+	}
+	v, err := cmd.Flags().GetString(name)
+	if err != nil {
+		return
+	}
+	if v == "" {
+		attrs[attrName] = nil
+	} else {
+		attrs[attrName] = v
+	}
+}
+
 // setIntFlag copies an int flag into attrs[<snake_case name>] iff it was set by
 // the user.
 func setIntFlag(cmd *cobra.Command, attrs map[string]any, name string) {
