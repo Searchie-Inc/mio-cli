@@ -496,7 +496,7 @@ var emailTemplatesCreateCmd = &cobra.Command{
 	Use:     "create",
 	Short:   "Create an email template.",
 	Long:    "Create a new email template for the active hub.",
-	Example: `  mio email templates create --name="Welcome Email" --subject="Welcome!" --body="<p>Hello</p>"`,
+	Example: `  mio email templates create --name="Welcome" --subject="Welcome!" --body="<mjml><mj-body><mj-section><mj-column><mj-text>Hello!</mj-text></mj-column></mj-section></mj-body></mjml>" --plain-text="Hello!"`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, hubID, err := emailContext(cmd)
@@ -507,7 +507,12 @@ var emailTemplatesCreateCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "subject")
-		setStringFlag(cmd, attrs, "body")
+		// Content fields: the backend email_templates schema is mjml_source +
+		// plain_text (NOT a "body" attribute). --body therefore maps to
+		// mjml_source so it actually sets the rendered content; a bare "body"
+		// attribute is silently dropped by the backend (MIO-1238).
+		setMappedString(cmd, attrs, "body", "mjml_source")
+		setMappedString(cmd, attrs, "plain-text", "plain_text")
 		setStringFlag(cmd, attrs, "from-name")
 		setStringFlag(cmd, attrs, "from-email")
 		setStringFlag(cmd, attrs, "reply-to")
@@ -581,7 +586,12 @@ var emailTemplatesUpdateCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "subject")
-		setStringFlag(cmd, attrs, "body")
+		// Content fields: the backend email_templates schema is mjml_source +
+		// plain_text (NOT a "body" attribute). --body therefore maps to
+		// mjml_source so it actually sets the rendered content; a bare "body"
+		// attribute is silently dropped by the backend (MIO-1238).
+		setMappedString(cmd, attrs, "body", "mjml_source")
+		setMappedString(cmd, attrs, "plain-text", "plain_text")
 		setStringFlag(cmd, attrs, "from-name")
 		setStringFlag(cmd, attrs, "from-email")
 		setStringFlag(cmd, attrs, "reply-to")
@@ -653,7 +663,8 @@ func init() {
 	for _, cmd := range []*cobra.Command{emailTemplatesCreateCmd, emailTemplatesUpdateCmd} {
 		cmd.Flags().String("name", "", "Template name.")
 		cmd.Flags().String("subject", "", "Email subject line.")
-		cmd.Flags().String("body", "", "Email body HTML.")
+		cmd.Flags().String("body", "", "Email body as MJML source (sets the template's mjml_source).")
+		cmd.Flags().String("plain-text", "", "Plain-text fallback body (sets plain_text).")
 		cmd.Flags().String("from-name", "", "Sender display name.")
 		cmd.Flags().String("from-email", "", "Sender email address.")
 		cmd.Flags().String("reply-to", "", "Reply-to email address.")
