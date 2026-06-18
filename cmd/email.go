@@ -8,7 +8,7 @@ package cmd
 //	email steps           create/list/update/delete            (under a drip campaign)
 //	email templates       create/list/retrieve/update/delete/preview
 //	email config          set/get/delete/test
-//	email enrollments     list/exit                            (under a drip campaign)
+//	email enrollments     create/list/exit/list-by-contact     (under a drip campaign / by contact)
 //	email stats           get
 //
 // Self-registered: init() attaches emailCmd to rootCmd. No other file is touched.
@@ -63,8 +63,10 @@ func init() {
 
 	// enrollments sub-commands
 	emailEnrollmentsCmd.AddCommand(
+		emailEnrollmentsCreateCmd,
 		emailEnrollmentsListCmd,
 		emailEnrollmentsExitCmd,
+		emailEnrollmentsListByContactCmd,
 	)
 
 	// stats sub-commands
@@ -817,6 +819,33 @@ func enrollmentsPath(hubID, campaignID, enrollmentID string) string {
 	return base
 }
 
+var emailEnrollmentsCreateCmd = &cobra.Command{
+	Use:     "create <campaign_id>",
+	Short:   "Manually enroll a contact in a drip campaign.",
+	Long:    "Manually enroll a contact in the specified drip campaign. The contact must be a member of the hub.",
+	Example: `  mio email enrollments create dc_abc123 --contact-id ctt_xyz789`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, hubID, err := emailContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		attrs := map[string]any{}
+		setStringFlag(cmd, attrs, "contact-id")
+
+		if len(attrs) == 0 {
+			return errs.New(errs.ExitUsage, "nothing to create: set --contact-id")
+		}
+
+		res, err := c.client.Create(c.ctx, enrollmentsPath(hubID, args[0], ""), attrs)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
 var emailEnrollmentsListCmd = &cobra.Command{
 	Use:     "list <campaign_id>",
 	Short:   "List enrollments for a drip campaign.",
@@ -864,8 +893,42 @@ var emailEnrollmentsExitCmd = &cobra.Command{
 	},
 }
 
+// contactDripEnrollmentsPath returns /v1/contacts/{contact_id}/drip-enrollments.
+// This is a contact-scoped read endpoint — not hub-scoped.
+func contactDripEnrollmentsPath(contactID string) string {
+	return fmt.Sprintf("/v1/contacts/%s/drip-enrollments", contactID)
+}
+
+var emailEnrollmentsListByContactCmd = &cobra.Command{
+	Use:     "list-by-contact <contact_id>",
+	Short:   "List all drip enrollments for a contact.",
+	Long:    "List every drip campaign enrollment for a given contact across all campaigns.",
+	Example: `  mio email enrollments list-by-contact ctt_xyz789`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := newContext(cmd)
+		if err != nil {
+			return err
+		}
+		if err := c.requireAuth(); err != nil {
+			return err
+		}
+
+		query := url.Values{}
+		addPageFlags(cmd, query)
+
+		col, err := c.client.List(c.ctx, contactDripEnrollmentsPath(args[0]), query)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, col)
+	},
+}
+
 func init() {
+	emailEnrollmentsCreateCmd.Flags().String("contact-id", "", "ID of the contact to enroll in the drip campaign.")
 	addPaginationFlags(emailEnrollmentsListCmd)
+	addPaginationFlags(emailEnrollmentsListByContactCmd)
 }
 
 // ---- stats ------------------------------------------------------------------

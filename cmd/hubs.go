@@ -4,12 +4,14 @@ package cmd
 //
 // Routes (see docs/internal/api-surface.md "hubs"):
 //
-//	create          POST   /api/teams/{team_id}/hubs
-//	list            GET    /api/teams/{team_id}/hubs
-//	retrieve        GET    /api/teams/{team_id}/hubs/{id}
-//	update          PATCH  /api/teams/{team_id}/hubs/{id}
-//	delete          DELETE /api/teams/{team_id}/hubs/{id}
-//	policies update PATCH  /api/teams/{team_id}/hubs/{hub_id}/policies
+//	create                   POST   /api/teams/{team_id}/hubs
+//	list                     GET    /api/teams/{team_id}/hubs
+//	retrieve                 GET    /api/teams/{team_id}/hubs/{id}
+//	update                   PATCH  /api/teams/{team_id}/hubs/{id}
+//	delete                   DELETE /api/teams/{team_id}/hubs/{id}
+//	policies update          PATCH  /api/teams/{team_id}/hubs/{hub_id}/policies
+//	email-settings get       GET    /api/teams/{team_id}/hubs/{hub_id}/email-settings
+//	email-settings update    PATCH  /api/teams/{team_id}/hubs/{hub_id}/email-settings
 //
 // All routes are team-scoped. Hub id comes from a positional argument (not the
 // --hub context flag) so operators can manage any hub, not just the active one.
@@ -37,6 +39,13 @@ func init() {
 	// hubs policies <action>  (nested sub-resource)
 	hubsPoliciesCmd.AddCommand(hubsPoliciesUpdateCmd)
 	hubsCmd.AddCommand(hubsPoliciesCmd)
+
+	// hubs email-settings <action>  (per-hub sender identity, MIO-1229)
+	hubsEmailSettingsCmd.AddCommand(
+		hubsEmailSettingsGetCmd,
+		hubsEmailSettingsUpdateCmd,
+	)
+	hubsCmd.AddCommand(hubsEmailSettingsCmd)
 
 	rootCmd.AddCommand(hubsCmd)
 }
@@ -358,4 +367,80 @@ func init() {
 	hubsPoliciesUpdateCmd.Flags().Bool("reset-content", false, "Revert the policy to the backend default (sends content: null). Mutually exclusive with --content.")
 
 	hubsPoliciesUpdateCmd.Flags().Bool("require-acceptance", false, "Require hub members to accept the policy before accessing content (TOS only).")
+}
+
+// ---- hubs email-settings sub-resource (MIO-1229) ----------------------------
+
+var hubsEmailSettingsCmd = &cobra.Command{
+	Use:   "email-settings",
+	Short: "Manage per-hub email sender identity.",
+	Long:  "Get or update the per-hub email sender identity (from_name, reply_to) for a hub (MIO-1229).",
+}
+
+// hubsEmailSettingsPath returns /api/teams/{team_id}/hubs/{hub_id}/email-settings.
+func hubsEmailSettingsPath(teamID, hubID string) string {
+	return fmt.Sprintf("/api/teams/%s/hubs/%s/email-settings", teamID, hubID)
+}
+
+var hubsEmailSettingsGetCmd = &cobra.Command{
+	Use:   "get <hub_id>",
+	Short: "Get the per-hub email sender identity.",
+	Long: `Retrieve the email sender identity (from_name, reply_to) for a hub.
+
+Per-hub sender settings override the team-level defaults for all emails
+sent from that hub (MIO-1229).`,
+	Example: `  mio hubs email-settings get hub_abc123`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		res, err := c.client.Retrieve(c.ctx, hubsEmailSettingsPath(teamID, args[0]))
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
+var hubsEmailSettingsUpdateCmd = &cobra.Command{
+	Use:   "update <hub_id>",
+	Short: "Update the per-hub email sender identity.",
+	Long: `Update the email sender identity (from_name, reply_to) for a hub.
+
+Only the flags you provide are changed (partial update). Pass an empty
+string to explicitly clear a field (e.g. --reply-to="" clears the reply-to
+address). Merges into the hub's settings.email; other settings keys are
+preserved (MIO-1229).`,
+	Example: `  mio hubs email-settings update hub_abc123 --from-name "My Community"
+  mio hubs email-settings update hub_abc123 --from-name "Support" --reply-to support@example.com
+  mio hubs email-settings update hub_abc123 --reply-to ""`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		attrs := map[string]any{}
+		setNullableMappedString(cmd, attrs, "from-name", "from_name")
+		setNullableMappedString(cmd, attrs, "reply-to", "reply_to")
+
+		if len(attrs) == 0 {
+			return errs.New(errs.ExitUsage, "nothing to update: set at least --from-name or --reply-to")
+		}
+
+		res, err := c.client.Update(c.ctx, hubsEmailSettingsPath(teamID, args[0]), attrs)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
+func init() {
+	hubsEmailSettingsUpdateCmd.Flags().String("from-name", "", "Sender display name override for this hub (from_name).")
+	hubsEmailSettingsUpdateCmd.Flags().String("reply-to", "", "Reply-to email address override for this hub. Pass an empty string to clear.")
 }
