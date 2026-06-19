@@ -46,6 +46,31 @@ func TestClient_SetsAuthAndContentHeaders(t *testing.T) {
 	}
 }
 
+// TestClient_NoBodyPostSetsContentType ensures that a no-body POST (action
+// endpoint like /publish, /activate, /deactivate) still carries
+// Content-Type: application/vnd.api+json as required by the backend's
+// require_jsonapi_content_type middleware (MIO-1115).
+func TestClient_NoBodyPostSetsContentType(t *testing.T) {
+	var gotCT, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotMethod = r.Method
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"1","type":"automations","attributes":{}}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	// Action with nil body simulates /automations/{id}/publish (no request body).
+	_, _ = c.ActionWithHeaders(context.Background(), StyleEnvelope, "POST", "/api/v1/teams/t1/automations/a1/publish", nil, nil)
+	if gotMethod != "POST" {
+		t.Fatalf("method = %q, want POST", gotMethod)
+	}
+	if gotCT != contentTypeJSONAPI {
+		t.Errorf("Content-Type on no-body POST = %q, want %q (MIO-1115)", gotCT, contentTypeJSONAPI)
+	}
+}
+
 func TestClient_WrapsAttributesInEnvelope(t *testing.T) {
 	var bodySeen string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
