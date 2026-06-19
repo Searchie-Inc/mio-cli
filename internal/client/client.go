@@ -485,7 +485,11 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, query u
 			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("build request: %w", err))
 		}
 		req.Header.Set("Accept", accept)
-		if reqBody != nil {
+		// Set Content-Type on any write method even when the body is empty.
+		// No-body action POSTs (e.g. automations /publish, /activate) require
+		// Content-Type: application/vnd.api+json via require_jsonapi_content_type
+		// middleware; without it the backend returns 415/500 (MIO-1115).
+		if reqBody != nil || method == http.MethodPost || method == http.MethodPatch {
 			req.Header.Set("Content-Type", accept)
 		}
 		if c.apiKey != "" {
