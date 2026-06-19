@@ -365,26 +365,51 @@ func sectionsPath(teamID, hubID, pid, sid string) string {
 }
 
 var pagesSectionsCreateCmd = &cobra.Command{
-	Use:     "create <page_id>",
-	Short:   "Create a section on a page.",
-	Long:    "Add a new section to the specified page.",
-	Example: `  mio pages sections create page_abc123 --hub hub_123 --type hero --position 0`,
-	Args:    cobra.ExactArgs(1),
+	Use:   "create <page_id>",
+	Short: "Create a section on a page.",
+	Long: `Add a new section to the specified page.
+
+--type is required. Allowed values for --type:
+  carousel, grid, content-grid, video, text, cta, search, row, feature
+
+--settings accepts a JSON object (or @file path) that controls the section's
+display configuration (layout, colours, limits, etc.). The exact keys are
+section-type-specific.`,
+	Example: `  mio pages sections create page_abc123 --hub hub_123 --type text --position 0
+  mio pages sections create page_abc123 --hub hub_123 --type grid --title "Featured Content" --settings '{"limit":6}'
+  mio pages sections create page_abc123 --hub hub_123 --type grid --settings @section-settings.json`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := pagesContext(cmd)
 		if err != nil {
 			return err
 		}
 
+		if !cmd.Flags().Changed("type") {
+			return errs.New(errs.ExitUsage, "missing required flag: --type")
+		}
+
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "type")
-		setStringFlag(cmd, attrs, "name")
+		setStringFlag(cmd, attrs, "title")
 		setIntFlag(cmd, attrs, "position")
-		setStringFlag(cmd, attrs, "content")
 		setBoolFlag(cmd, attrs, "visible")
 
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --type")
+		if cmd.Flags().Changed("settings") {
+			raw, _ := cmd.Flags().GetString("settings")
+			parsed, perr := parseJSONFlag(raw)
+			if perr != nil {
+				return errs.Wrap(errs.ExitUsage, fmt.Errorf("--settings is not valid JSON: %w", perr))
+			}
+			attrs["settings"] = parsed
+		}
+		if cmd.Flags().Changed("meta") {
+			raw, _ := cmd.Flags().GetString("meta")
+			parsed, perr := parseJSONFlag(raw)
+			if perr != nil {
+				return errs.Wrap(errs.ExitUsage, fmt.Errorf("--meta is not valid JSON: %w", perr))
+			}
+			attrs["meta"] = parsed
 		}
 
 		res, err := c.client.Create(c.ctx, sectionsPath(teamID, hubID, args[0], ""), attrs)
@@ -419,11 +444,15 @@ var pagesSectionsListCmd = &cobra.Command{
 }
 
 var pagesSectionsUpdateCmd = &cobra.Command{
-	Use:     "update <page_id> <section_id>",
-	Short:   "Update a section by id.",
-	Long:    "Update one or more attributes of an existing page section.",
-	Example: `  mio pages sections update page_abc123 sec_xyz --hub hub_123 --name "Hero Banner"`,
-	Args:    cobra.ExactArgs(2),
+	Use:   "update <page_id> <section_id>",
+	Short: "Update a section by id.",
+	Long: `Update one or more attributes of an existing page section (PATCH semantics).
+
+Note: --type is immutable after creation and cannot be changed via update.
+Mutable fields: --title, --position, --visible, --settings, --meta.`,
+	Example: `  mio pages sections update page_abc123 sec_xyz --hub hub_123 --title "Hero Banner"
+  mio pages sections update page_abc123 sec_xyz --hub hub_123 --settings '{"limit":12}'`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := pagesContext(cmd)
 		if err != nil {
@@ -431,11 +460,26 @@ var pagesSectionsUpdateCmd = &cobra.Command{
 		}
 
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "type")
-		setStringFlag(cmd, attrs, "name")
+		setStringFlag(cmd, attrs, "title")
 		setIntFlag(cmd, attrs, "position")
-		setStringFlag(cmd, attrs, "content")
 		setBoolFlag(cmd, attrs, "visible")
+
+		if cmd.Flags().Changed("settings") {
+			raw, _ := cmd.Flags().GetString("settings")
+			parsed, perr := parseJSONFlag(raw)
+			if perr != nil {
+				return errs.Wrap(errs.ExitUsage, fmt.Errorf("--settings is not valid JSON: %w", perr))
+			}
+			attrs["settings"] = parsed
+		}
+		if cmd.Flags().Changed("meta") {
+			raw, _ := cmd.Flags().GetString("meta")
+			parsed, perr := parseJSONFlag(raw)
+			if perr != nil {
+				return errs.Wrap(errs.ExitUsage, fmt.Errorf("--meta is not valid JSON: %w", perr))
+			}
+			attrs["meta"] = parsed
+		}
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -501,14 +545,18 @@ var pagesSectionsReorderCmd = &cobra.Command{
 }
 
 func init() {
-	// Attribute flags for sections create/update.
-	for _, cmd := range []*cobra.Command{pagesSectionsCreateCmd, pagesSectionsUpdateCmd} {
-		cmd.Flags().String("type", "", "Section type (e.g. hero, text, media, cta).")
-		cmd.Flags().String("name", "", "Human-readable section name.")
-		cmd.Flags().Int("position", 0, "Zero-based display position of the section within the page.")
-		cmd.Flags().String("content", "", "Section content payload (JSON or plain text, depending on type).")
-		cmd.Flags().Bool("visible", true, "Whether the section is visible to hub members.")
+	// Create-only flag: --type is required on create but immutable on update.
+	pagesSectionsCreateCmd.Flags().String("type", "", "Section type: carousel, grid, content-grid, video, text, cta, search, row, or feature. Required.")
+
+	// Shared mutable flags for create and update.
+	for _, c := range []*cobra.Command{pagesSectionsCreateCmd, pagesSectionsUpdateCmd} {
+		c.Flags().String("title", "", "Human-readable section title.")
+		c.Flags().Int("position", 0, "Zero-based display position of the section within the page.")
+		c.Flags().Bool("visible", true, "Whether the section is visible to hub members.")
+		c.Flags().String("settings", "", "Section display settings as a JSON object or @file path (e.g. '{\"limit\":6}').")
+		c.Flags().String("meta", "", "Arbitrary section metadata as a JSON object or @file path.")
 	}
+
 	addPaginationFlags(pagesSectionsListCmd)
 	pagesSectionsReorderCmd.Flags().String("order", "", "Comma-separated list of section ids in the desired display order.")
 }
