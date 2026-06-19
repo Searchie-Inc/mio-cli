@@ -44,10 +44,10 @@ var segmentsCmd = &cobra.Command{
 	Short: "Manage contact segments.",
 	Long:  "Create, list, retrieve, update, and delete contact segments for the active team. Also search segment members and preview conditions.",
 	Example: `  mio segments list
-  mio segments create --name "VIP Contacts" --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
+  mio segments create --name "VIP Contacts" --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":{"text":"@example.com"}}]}]}'
   mio segments retrieve seg_abc123
   mio segments members seg_abc123
-  mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'`,
+  mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":{"text":"@example.com"}}]}]}'`,
 }
 
 // segmentsPath returns /api/teams/{team_id}/segments[/{id}].
@@ -73,11 +73,13 @@ var segmentsCreateCmd = &cobra.Command{
 	Short: "Create a segment.",
 	Long: `Create a new contact segment for the active team.
 
---name and --conditions are required. --conditions accepts the full condition tree as JSON:
-  {"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}
+--name and --conditions are required. --conditions accepts the full condition tree as JSON.
+Each condition's "value" field is a typed object, not a plain string. For example, an email
+condition uses {"text":"@example.com"} as the value:
+  {"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":{"text":"@example.com"}}]}]}
 Prefix the value with @ to read the JSON from a file (e.g. --conditions @conds.json).`,
 	Example: `  # Create a segment with an email condition
-  mio segments create --name "VIP Contacts" --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
+  mio segments create --name "VIP Contacts" --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":{"text":"@example.com"}}]}]}'
 
   # Create a segment loading conditions from a file
   mio segments create --name "High Engagement" --description "Engaged contacts" --conditions @conditions.json`,
@@ -194,7 +196,7 @@ var segmentsUpdateCmd = &cobra.Command{
 --conditions accepts the full condition tree as JSON (same shape as create). Prefix with @ to read from a file.`,
 	Example: `  mio segments update seg_abc123 --name "Renamed Segment"
   mio segments update seg_abc123 --description "Updated description"
-  mio segments update seg_abc123 --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'`,
+  mio segments update seg_abc123 --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":{"text":"@example.com"}}]}]}'`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newContext(cmd)
@@ -275,10 +277,11 @@ dynamic segment.
 
 --conditions takes the full condition TREE as JSON, matching the backend write
 shape: {"version":1,"groups":[{"logic":"AND","conditions":[ ... ]}]}. Each leaf
-is a discriminated object identified by "type" (e.g. {"type":"email","operator":
-"contains","value":"@example.com"}). Pagination is controlled with --page-size
-and --page-after.`,
-	Example: `  mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
+is a discriminated object identified by "type". Each condition's "value" is a
+typed object — NOT a plain scalar. For example, an email condition uses:
+  {"type":"email","operator":"contains","value":{"text":"@example.com"}}
+Pagination is controlled with --page-size and --page-after.`,
+	Example: `  mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":{"text":"@example.com"}}]}]}'
   mio segments search --conditions @conditions.json --page-size 50`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
