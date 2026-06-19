@@ -285,21 +285,48 @@ func pricesPath(teamID, productID, priceID string) string {
 var productsPricesCreateCmd = &cobra.Command{
 	Use:   "create <product_id>",
 	Short: "Create a price on a product.",
-	Args:  cobra.ExactArgs(1),
+	Long: `Create a price attached to the given product.
+
+--amount, --currency, and --type are required. For recurring prices, --interval
+and --interval-count are also required.
+
+Allowed values for --currency: usd, cad, gbp, eur, aud
+Allowed values for --type:     one_time, recurring
+Allowed values for --interval: month, year, week, day (required when --type=recurring)`,
+	Example: `  mio products prices create prod_abc123 --amount 4999 --currency usd --type one_time
+  mio products prices create prod_abc123 --amount 999 --currency usd --type recurring --interval month --interval-count 1`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := pricesContext(cmd)
 		if err != nil {
 			return err
 		}
-		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "currency")
-		setIntFlag(cmd, attrs, "amount")
-		setStringFlag(cmd, attrs, "interval")
-		setStringFlag(cmd, attrs, "nickname")
 
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --amount and --currency")
+		// --amount, --currency, and --type are required by PriceCreateAttributes.
+		var missing []string
+		if !cmd.Flags().Changed("amount") {
+			missing = append(missing, "--amount")
 		}
+		if !cmd.Flags().Changed("currency") {
+			missing = append(missing, "--currency")
+		}
+		if !cmd.Flags().Changed("type") {
+			missing = append(missing, "--type")
+		}
+		if len(missing) > 0 {
+			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
+		}
+
+		attrs := map[string]any{}
+		setIntFlag(cmd, attrs, "amount")
+		setStringFlag(cmd, attrs, "currency")
+		setStringFlag(cmd, attrs, "type")
+		setStringFlag(cmd, attrs, "interval")
+		setIntFlag(cmd, attrs, "interval-count")
+		setStringFlag(cmd, attrs, "name")
+		setStringFlag(cmd, attrs, "description")
+		setBoolFlag(cmd, attrs, "is-active")
+
 		res, err := c.client.Create(c.ctx, pricesPath(teamID, args[0], ""), attrs)
 		if err != nil {
 			return err
@@ -347,20 +374,27 @@ var productsPricesRetrieveCmd = &cobra.Command{
 var productsPricesUpdateCmd = &cobra.Command{
 	Use:   "update <product_id> <price_id>",
 	Short: "Update a price by id.",
-	Args:  cobra.ExactArgs(2),
+	Long: `Partially update a price. Only the flags you supply are changed (PATCH semantics).
+
+Billing fields (amount, currency, type, interval, interval_count) are IMMUTABLE
+after creation. To change them, create a new price and deactivate the old one.
+
+Mutable fields: --name, --description, --is-active.`,
+	Example: `  mio products prices update prod_abc123 price_xyz --name "Monthly Plan"
+  mio products prices update prod_abc123 price_xyz --is-active=false`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := pricesContext(cmd)
 		if err != nil {
 			return err
 		}
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "currency")
-		setIntFlag(cmd, attrs, "amount")
-		setStringFlag(cmd, attrs, "interval")
-		setStringFlag(cmd, attrs, "nickname")
+		setStringFlag(cmd, attrs, "name")
+		setStringFlag(cmd, attrs, "description")
+		setBoolFlag(cmd, attrs, "is-active")
 
 		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
+			return errs.New(errs.ExitUsage, "nothing to update: set at least one mutable field flag (--name, --description, --is-active)")
 		}
 		res, err := c.client.Update(c.ctx, pricesPath(teamID, args[0], args[1]), attrs)
 		if err != nil {
@@ -408,11 +442,21 @@ func pricesContext(cmd *cobra.Command) (*cmdContext, string, error) {
 }
 
 func init() {
-	for _, cmd := range []*cobra.Command{productsPricesCreateCmd, productsPricesUpdateCmd} {
-		cmd.Flags().String("currency", "", "ISO currency code, e.g. usd.")
-		cmd.Flags().Int("amount", 0, "Price amount in the currency's minor unit (e.g. cents).")
-		cmd.Flags().String("interval", "", "Billing interval (e.g. month, year) for recurring prices.")
-		cmd.Flags().String("nickname", "", "Human-readable price nickname.")
-	}
+	// Create flags: amount, currency, type are required; interval/interval-count
+	// are required when type=recurring; name/description/is-active are optional.
+	productsPricesCreateCmd.Flags().Int("amount", 0, "Price amount in the currency's minor unit (e.g. cents). Required.")
+	productsPricesCreateCmd.Flags().String("currency", "", "ISO currency code: usd, cad, gbp, eur, or aud. Required.")
+	productsPricesCreateCmd.Flags().String("type", "", "Price type: one_time or recurring. Required.")
+	productsPricesCreateCmd.Flags().String("interval", "", "Billing interval: month, year, week, or day. Required when --type=recurring.")
+	productsPricesCreateCmd.Flags().Int("interval-count", 0, "Number of intervals between billings (≥1). Required when --type=recurring.")
+	productsPricesCreateCmd.Flags().String("name", "", "Human-readable price label (max 100 chars).")
+	productsPricesCreateCmd.Flags().String("description", "", "Price description (max 500 chars).")
+	productsPricesCreateCmd.Flags().Bool("is-active", true, "Whether the price is active.")
+
+	// Update flags: only mutable fields (billing fields are immutable after creation).
+	productsPricesUpdateCmd.Flags().String("name", "", "Human-readable price label (max 100 chars).")
+	productsPricesUpdateCmd.Flags().String("description", "", "Price description (max 500 chars).")
+	productsPricesUpdateCmd.Flags().Bool("is-active", false, "Whether the price is active.")
+
 	addPaginationFlags(productsPricesListCmd)
 }
