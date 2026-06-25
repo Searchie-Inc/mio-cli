@@ -179,6 +179,11 @@ var typeOverrides = []struct {
 	// the backend's Literal-typed write schemas reject with 400 (MIO-992).
 	{"access-rules", "access_rules"},
 	{"access-overrides", "access_overrides"},
+	// OAuth client management (Hub-as-IdP SSO, 2026-06-24).
+	// redirect-uris is a sub-resource of oauth-clients; two-segment override
+	// takes priority and resolves to the correct backend type literal.
+	{"oauth-clients/redirect-uris", "oauth_client_redirect_uris"},
+	{"oauth-clients", "oauth_clients"},
 }
 
 // resourceTypeFromPath returns the JSON:API resource `type` for a write to the
@@ -257,6 +262,8 @@ var knownCollections = map[string]bool{
 	"files": true, "folders": true, "playlists": true,
 	// Contact-scoped drip enrollment reader (email enrollments list-by-contact).
 	"drip-enrollments": true,
+	// OAuth client management (Hub-as-IdP SSO, 2026-06-24).
+	"oauth-clients": true, "redirect-uris": true,
 }
 
 // collectionSegments returns the path segments that are static collection
