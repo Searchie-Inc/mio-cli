@@ -117,6 +117,18 @@ func setMappedInt(cmd *cobra.Command, attrs map[string]any, name, key string) {
 	}
 }
 
+// setMappedBool copies a bool flag into attrs[key] under an EXPLICIT backend
+// field name, iff the user set it. Use this when the flag name differs from
+// the backend attribute name (e.g. --public → is_public).
+func setMappedBool(cmd *cobra.Command, attrs map[string]any, name, key string) {
+	if !cmd.Flags().Changed(name) {
+		return
+	}
+	if v, err := cmd.Flags().GetBool(name); err == nil {
+		attrs[key] = v
+	}
+}
+
 // setMappedBoolInverted copies a bool flag into attrs[key] under an EXPLICIT
 // backend field name with the value NEGATED, iff the user set it. Use this
 // when the user-facing flag has the opposite polarity to the backend attribute
