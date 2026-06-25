@@ -151,12 +151,22 @@ names to mio contact fields, e.g.
 			return err
 		}
 
-		// --kind and --display-name are required client-side.
+		// --kind, --display-name, --client-id, and --client-secret are required
+		// client-side. The backend requires client_id and client_secret on create
+		// for EVERY provider kind (google, facebook, generic_oidc, generic_oauth2)
+		// — there is no kind that legitimately omits them — so we enforce both
+		// up-front rather than letting an incomplete request reach the server.
 		if v, _ := attrs["kind"].(string); strings.TrimSpace(v) == "" {
 			return errs.New(errs.ExitUsage, "--kind is required (google|facebook|generic_oidc|generic_oauth2)")
 		}
 		if v, _ := attrs["display_name"].(string); strings.TrimSpace(v) == "" {
 			return errs.New(errs.ExitUsage, "--display-name is required")
+		}
+		if v, _ := attrs["client_id"].(string); strings.TrimSpace(v) == "" {
+			return errs.New(errs.ExitUsage, "--client-id is required")
+		}
+		if v, _ := attrs["client_secret"].(string); strings.TrimSpace(v) == "" {
+			return errs.New(errs.ExitUsage, "--client-secret is required")
 		}
 
 		res, err := c.client.Create(c.ctx, externalLoginProvidersPath(teamID, ""), attrs)
@@ -343,8 +353,8 @@ func init() {
 	externalLoginProvidersCreateCmd.Flags().String("kind", "", "Provider kind: google|facebook|generic_oidc|generic_oauth2. (required)")
 	externalLoginProvidersCreateCmd.Flags().String("slug", "", "URL-safe slug for the provider (auto-derived from display-name if omitted).")
 	externalLoginProvidersCreateCmd.Flags().String("display-name", "", "Human-readable label shown on the login button. (required)")
-	externalLoginProvidersCreateCmd.Flags().String("client-id", "", "OAuth2 client ID registered with the identity provider.")
-	externalLoginProvidersCreateCmd.Flags().String("client-secret", "", "OAuth2 client secret registered with the identity provider (write-only).")
+	externalLoginProvidersCreateCmd.Flags().String("client-id", "", "OAuth2 client ID registered with the identity provider. (required)")
+	externalLoginProvidersCreateCmd.Flags().String("client-secret", "", "OAuth2 client secret registered with the identity provider (write-only). (required)")
 
 	// Generic provider flags — create
 	externalLoginProvidersCreateCmd.Flags().String("issuer", "", "Issuer URL (generic_oidc / generic_oauth2 only).")
@@ -392,6 +402,12 @@ func setJSONObjectFlag(cmd *cobra.Command, attrs map[string]any, name string) er
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return errs.New(errs.ExitUsage, "--%s must be a valid JSON object: %s", name, err)
+	}
+	// json.Unmarshal accepts the literal `null` for a map and leaves parsed nil.
+	// A JSON object is required here, so reject null explicitly rather than sending
+	// an empty/nil attribute to the server.
+	if parsed == nil {
+		return errs.New(errs.ExitUsage, "--%s must be a JSON object, not null", name)
 	}
 	attrs[attrKey(name)] = parsed
 	return nil

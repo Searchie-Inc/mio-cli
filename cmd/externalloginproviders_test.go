@@ -6,7 +6,8 @@ package cmd
 // Tests pin:
 //   - Correct JSON:API data.type value ("external_login_providers")
 //   - Exact wire bodies for create (first-party + generic provider flavours)
-//   - Required-flag validation (--kind and --display-name on create)
+//   - Required-flag validation (--kind, --display-name, --client-id,
+//     --client-secret on create)
 //   - Partial-update (PATCH) semantics: only changed flags are sent
 //   - Destructive-guard behaviour on delete
 //   - --claim-map JSON-object parsing
@@ -127,6 +128,8 @@ func TestExternalLoginProviders_Create_WithClaimMap(t *testing.T) {
 		withTeam("t_team1", "external-login-providers", "create",
 			"--kind", "generic_oidc",
 			"--display-name", "Company SSO",
+			"--client-id", "oidc-client-id",
+			"--client-secret", "oidc-secret",
 			"--claim-map", `{"given_name":"first_name","family_name":"last_name","email":"email"}`,
 		)...)
 	if res.Code != errs.ExitOK {
@@ -139,6 +142,8 @@ func TestExternalLoginProviders_Create_WithClaimMap(t *testing.T) {
 			"attributes": {
 				"kind": "generic_oidc",
 				"display_name": "Company SSO",
+				"client_id": "oidc-client-id",
+				"client_secret": "oidc-secret",
 				"claim_map": {
 					"given_name": "first_name",
 					"family_name": "last_name",
@@ -159,6 +164,8 @@ func TestExternalLoginProviders_Create_WithSlug(t *testing.T) {
 			"--kind", "google",
 			"--slug", "my-google",
 			"--display-name", "My Google Login",
+			"--client-id", "google-client-id",
+			"--client-secret", "google-client-secret",
 		)...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
@@ -170,7 +177,9 @@ func TestExternalLoginProviders_Create_WithSlug(t *testing.T) {
 			"attributes": {
 				"kind": "google",
 				"slug": "my-google",
-				"display_name": "My Google Login"
+				"display_name": "My Google Login",
+				"client_id": "google-client-id",
+				"client_secret": "google-client-secret"
 			}
 		}
 	}`)
@@ -201,6 +210,36 @@ func TestExternalLoginProviders_Create_RequiredFlags(t *testing.T) {
 	}
 }
 
+// TestExternalLoginProviders_Create_RequiresClientCredentials pins that
+// --client-id and --client-secret are required client-side for every provider
+// kind, and that a blank value is rejected the same as an omitted flag. The
+// backend requires both on create (no kind legitimately omits them), so create
+// must NOT fire an incomplete request.
+func TestExternalLoginProviders_Create_RequiresClientCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"missing client-id", []string{"--kind", "google", "--display-name", "Google", "--client-secret", "s"}},
+		{"missing client-secret", []string{"--kind", "google", "--display-name", "Google", "--client-id", "c"}},
+		{"missing both credentials", []string{"--kind", "google", "--display-name", "Google"}},
+		{"blank client-id", []string{"--kind", "google", "--display-name", "Google", "--client-id", "  ", "--client-secret", "s"}},
+		{"blank client-secret", []string{"--kind", "google", "--display-name", "Google", "--client-id", "c", "--client-secret", ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, fired := newNoRequestServer(t, minimalExternalLoginProviderBody)
+			args := append([]string{"external-login-providers", "create"}, tc.args...)
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+			}
+			if *fired {
+				t.Error("POST must NOT be fired when client credentials are missing")
+			}
+		})
+	}
+}
+
 // TestExternalLoginProviders_Create_InvalidClaimMapJSON pins that a non-JSON
 // --claim-map value exits with ExitUsage and fires no request.
 func TestExternalLoginProviders_Create_InvalidClaimMapJSON(t *testing.T) {
@@ -210,6 +249,8 @@ func TestExternalLoginProviders_Create_InvalidClaimMapJSON(t *testing.T) {
 		withTeam("t_team1", "external-login-providers", "create",
 			"--kind", "generic_oidc",
 			"--display-name", "Bad Provider",
+			"--client-id", "c",
+			"--client-secret", "s",
 			"--claim-map", "not-json",
 		)...)
 	if res.Code != errs.ExitUsage {
@@ -217,6 +258,46 @@ func TestExternalLoginProviders_Create_InvalidClaimMapJSON(t *testing.T) {
 	}
 	if *fired {
 		t.Error("POST must NOT be fired when --claim-map is invalid JSON")
+	}
+}
+
+// TestExternalLoginProviders_Create_NullClaimMapRejected pins that --claim-map
+// null (valid JSON, but a null rather than an object) is rejected with
+// ExitUsage and fires no request — a JSON OBJECT is required, not null.
+func TestExternalLoginProviders_Create_NullClaimMapRejected(t *testing.T) {
+	srv, fired := newNoRequestServer(t, minimalExternalLoginProviderBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "external-login-providers", "create",
+			"--kind", "generic_oidc",
+			"--display-name", "Null Claim Map",
+			"--client-id", "c",
+			"--client-secret", "s",
+			"--claim-map", "null",
+		)...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("POST must NOT be fired when --claim-map is null")
+	}
+}
+
+// TestExternalLoginProviders_Update_NullClaimMapRejected pins that update also
+// rejects --claim-map null (the same setJSONObjectFlag guard) with ExitUsage and
+// fires no request.
+func TestExternalLoginProviders_Update_NullClaimMapRejected(t *testing.T) {
+	srv, fired := newNoRequestServer(t, minimalExternalLoginProviderBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "external-login-providers", "update", "elp_abc123",
+			"--claim-map", "null",
+		)...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("PATCH must NOT be fired when --claim-map is null")
 	}
 }
 
