@@ -187,6 +187,9 @@ var typeOverrides = []struct {
 	// External login provider admin commands (MIO-1513, 2026-06-25).
 	// URL segment uses hyphens; JSON:API type is snake_case.
 	{"external-login-providers", "external_login_providers"},
+	// Verified-domain admin commands (External Login v2 verified-domain SSO,
+	// MIO-1513, 2026-06-25). URL segment uses hyphens; JSON:API type is snake_case.
+	{"verified-domains", "verified_domains"},
 }
 
 // resourceTypeFromPath returns the JSON:API resource `type` for a write to the
@@ -269,6 +272,8 @@ var knownCollections = map[string]bool{
 	"oauth-clients": true, "redirect-uris": true,
 	// External login provider admin commands (MIO-1513, 2026-06-25).
 	"external-login-providers": true,
+	// Verified-domain admin commands (External Login v2, MIO-1513, 2026-06-25).
+	"verified-domains": true,
 }
 
 // collectionSegments returns the path segments that are static collection
