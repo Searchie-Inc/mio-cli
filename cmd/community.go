@@ -389,11 +389,8 @@ not title/body (those are authored by the member and are not admin-editable).`,
   mio community discussions update disc_abc123 --hub hub_abc123 --is-broadcast=false`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, teamID, hubID, err := communityContext(cmd)
-		if err != nil {
-			return err
-		}
-
+		// Validate flags BEFORE resolving auth/team/hub so a no-op update fails
+		// with a usage error and fires no HTTP request (repo contract).
 		attrs := map[string]any{}
 		setBoolFlag(cmd, attrs, "is-pinned")
 		setBoolFlag(cmd, attrs, "is-locked")
@@ -401,6 +398,11 @@ not title/body (those are authored by the member and are not admin-editable).`,
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one of --is-pinned/--is-locked/--is-broadcast")
+		}
+
+		c, teamID, hubID, err := communityContext(cmd)
+		if err != nil {
+			return err
 		}
 
 		res, err := c.client.Update(c.ctx, discussionsAdminPath(teamID, hubID, args[0]), attrs)

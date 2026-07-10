@@ -3,6 +3,8 @@ package cmd
 import (
 	"net/http"
 	"testing"
+
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
 // MIO-2283: `community discussions update` drops --title/--body (the admin PATCH
@@ -79,6 +81,28 @@ func TestCommunityDiscussionsUpdate_NoFlags_UsageNoRequest(t *testing.T) {
 	}
 	if *gotMethod != "" {
 		t.Errorf("a request fired (%s) but none was expected", *gotMethod)
+	}
+}
+
+// TestCommunityDiscussionsUpdate_NoFlagsRejectBeforeTeamResolve verifies the
+// no-field-flags usage error fires BEFORE auth/team/hub resolution (repo
+// contract) — even with a team NAME that would otherwise need a resolving GET —
+// so no HTTP request is made and the exit is usage (2), not auth (3).
+func TestCommunityDiscussionsUpdate_NoFlagsRejectBeforeTeamResolve(t *testing.T) {
+	srv, gotMethod, _, _ := captureHubRequest(t, http.StatusOK)
+
+	res := runContract(t, baseEnv(srv.URL),
+		"community", "discussions", "update", "disc_abc",
+		"--team", "acme-name", // NOT id-shaped → would trigger a ResolveTeam GET
+		"--hub", "hub_123",
+		// no --is-pinned/--is-locked/--is-broadcast
+	)
+
+	if res.Code != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage before team resolve); stderr=%s", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *gotMethod != "" {
+		t.Errorf("a request fired (%s) — the no-flags usage error must precede team resolution", *gotMethod)
 	}
 }
 
