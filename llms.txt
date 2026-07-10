@@ -49,7 +49,7 @@ mio roles permissions list — list all available permissions
 mio hubs create — create a new hub within the active team; author the presentation layer via --branding-json/--navigation-json/--settings-json/--meta-json (opaque JSONB objects; inline JSON or @file); --logo-url merges into branding rather than replacing it
 mio hubs list — list hubs in the active team
 mio hubs retrieve — retrieve a hub by id
-mio hubs update — update hub attributes
+mio hubs update — update hub attributes; --navigation-json authors the header/footer menu (typed items, inline JSON or @file; whole-blob replace, untyped items rejected client-side)
 mio hubs delete — delete a hub
 mio hubs policies update — create or replace a hub legal policy (tos or privacy_policy); hub id is a POSITIONAL arg; --content supports @file; --require-acceptance for tos only
 

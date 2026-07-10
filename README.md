@@ -185,6 +185,9 @@ mio hubs create --name "My Hub" --slug my-hub \
   --navigation-json @nav.json \
   --settings-json '{"policies":{"enabled":true}}' \
   --meta-json '{"discussions":{"enabled":true}}'
+# Author the header/footer menu on an existing hub. Each item needs a "type"
+# (url|page|playlist|discussions) — untyped items are rejected. Whole-blob replace.
+mio hubs update <hub-id> --navigation-json '{"header":[{"type":"url","label":"Home","href":"/my-hub/","position":0}]}'
 
 # Products & prices  (the product id is a positional argument, not a flag)
 mio products list

@@ -121,6 +121,14 @@ var hubsCreateCmd = &cobra.Command{
 			}
 		}
 
+		// Untyped header/footer items are dropped by the hub renderer, so reject
+		// them up front rather than shipping a menu that renders empty. (MIO-2255)
+		if nav, ok := attrs["navigation"].(map[string]any); ok {
+			if err := validateNavigationBlob(nav); err != nil {
+				return err
+			}
+		}
+
 		// --logo-url merges into the branding object rather than replacing it, so it
 		// composes with --branding-json (the backend assigns branding wholesale, so
 		// the CLI must send one already-merged object).
@@ -211,30 +219,45 @@ var hubsUpdateCmd = &cobra.Command{
   mio hubs update hub_abc123 --published=true`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, teamID, err := hubsContext(cmd)
-		if err != nil {
-			return err
-		}
-
 		// --logo-url is not supported on update: the backend assigns branding
 		// wholesale (setattr, not merge), so patching any branding field would
 		// silently clobber all sibling keys (primary_color, background_color, etc.).
-		// Fail fast so the caller knows the logo was NOT updated. (MIO-901)
+		// Fail fast, before any network call, so the caller knows the logo was NOT
+		// updated. (MIO-901)
 		if cmd.Flags().Changed("logo-url") {
 			return errs.New(errs.ExitUsage,
 				"--logo-url is not supported on `hubs update` yet: updating it would overwrite other branding fields. Set the logo when creating the hub. (tracked: MIO-901)")
 		}
 
+		// Build and validate attributes BEFORE resolving auth/team so a malformed
+		// menu exits with a usage error and fires no HTTP request.
 		attrs := map[string]any{}
 		setMappedString(cmd, attrs, "name", "title")
 		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "description")
 		setMappedBoolInverted(cmd, attrs, "published", "is_private")
 
+		// --navigation-json authors the header/footer menu. navigation is a
+		// whole-blob field, so this REPLACES the hub's navigation; a nav-only PATCH
+		// leaves branding/settings/meta untouched. Items are validated for the
+		// typed shape the mio-hub parser requires. (MIO-2255)
+		if err := setMappedJSONObjectFlag(cmd, attrs, "navigation-json", "navigation"); err != nil {
+			return err
+		}
+		if nav, ok := attrs["navigation"].(map[string]any); ok {
+			if err := validateNavigationBlob(nav); err != nil {
+				return err
+			}
+		}
+
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
 		res, err := c.client.Update(c.ctx, hubsPath(teamID, args[0]), attrs)
 		if err != nil {
 			return err
@@ -282,9 +305,10 @@ func init() {
 		cmd.Flags().Bool("published", false, "Whether the hub is publicly published.")
 	}
 
-	// Presentation-blob flags are create-only for now: `hubs update` needs
-	// read-modify-write handling (branding/navigation/meta are whole-blob
-	// overwrites server-side) which lands in MIO-2255 / MIO-2256.
+	// Presentation-blob flags. branding/settings/meta are create-only for now:
+	// `hubs update` needs read-modify-write handling (they are whole-blob
+	// overwrites server-side) which lands in MIO-2256. navigation-json is also
+	// registered on update below (MIO-2255).
 	for _, f := range []struct{ name, desc string }{
 		{"branding-json", "Hub branding as a JSON object — colors, fonts, logo. Inline JSON or @file."},
 		{"navigation-json", "Hub navigation as a JSON object — header/footer menu items. Inline JSON or @file."},
@@ -293,6 +317,12 @@ func init() {
 	} {
 		hubsCreateCmd.Flags().String(f.name, "", f.desc)
 	}
+
+	// --navigation-json is authorable on `hubs update` too (menu authoring,
+	// MIO-2255): navigation is a complete-object replace, so unlike --logo-url it
+	// does not clobber sibling keys.
+	hubsUpdateCmd.Flags().String("navigation-json",
+		"", "Hub navigation as a JSON object — header/footer menu items (each needs a \"type\"). Inline JSON or @file. Replaces the hub's navigation.")
 
 	addPaginationFlags(hubsListCmd)
 }
