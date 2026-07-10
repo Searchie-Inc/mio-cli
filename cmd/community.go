@@ -310,6 +310,11 @@ func discussionsAdminPath(teamID, hubID, id string) string {
 	return base
 }
 
+// Note: there is deliberately no `discussions create` — admins must not post on
+// a member's behalf via the CLI/API (MIO-2262 → Won't Do; the endpoint was
+// dropped in mio-backend #487). Authoring a discussion as a specific member
+// stays a seeder-only, in-process capability.
+
 // ---- discussions list -------------------------------------------------------
 
 var communityDiscussionsListCmd = &cobra.Command{
@@ -440,6 +445,7 @@ func init() {
 	addPaginationFlags(communityDiscussionsListCmd)
 	communityDiscussionsListCmd.Flags().String("filter-status", "", "Filter by status (e.g. published, draft).")
 	communityDiscussionsListCmd.Flags().String("filter-space", "", "Filter by space id.")
+
 }
 
 // ======================================================================

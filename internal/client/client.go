@@ -156,6 +156,10 @@ var typeOverrides = []struct {
 	// Page draft node-tree authoring: PUT .../pages/{id}/tree (MIO-2258).
 	{"pages/tree", "page_draft_trees"},
 	{"teams/members", "team_members"},
+	// Hub membership authoring (MIO-2261 add, MIO-2263 set-role): the members
+	// collection under a hub is the hub_memberships resource, not team_members.
+	{"hubs/members", "hub_memberships"},
+	{"members/role", "hub_memberships"},
 	// Action routes that take an enveloped body with a non-segment type.
 	{"payment-accounts/onboarding-link", "onboarding_links"},
 	{"payments/refund", "refunds"},
@@ -269,6 +273,8 @@ var knownCollections = map[string]bool{
 	"automations": true, "webhook-endpoints": true, "versions": true, "events": true,
 	// Community admin (2026-06-09): spaces, discussions wired in community.go.
 	"spaces": true, "discussions": true,
+	// Hub membership role sub-resource (MIO-2263).
+	"role": true,
 	// Media (2026-06-09): files, folders, playlists wired in media.go.
 	"files": true, "folders": true, "playlists": true,
 	// Contact-scoped drip enrollment reader (email enrollments list-by-contact).
