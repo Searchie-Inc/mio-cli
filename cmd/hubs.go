@@ -106,6 +106,10 @@ var hubsCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "description")
 		setMappedBoolInverted(cmd, attrs, "published", "is_private")
+		// discussions_default_title/description are typed columns (MIO-2274) — a
+		// plain partial update; an empty string clears to null.
+		setNullableMappedString(cmd, attrs, "discussions-default-title", "discussions_default_title")
+		setNullableMappedString(cmd, attrs, "discussions-default-description", "discussions_default_description")
 
 		// Presentation-blob flags: opaque JSONB objects passed through verbatim so
 		// an operator or agent can author a hub's branding, navigation, settings and
@@ -226,6 +230,8 @@ var hubsUpdateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "description")
 		setMappedBoolInverted(cmd, attrs, "published", "is_private")
+		setNullableMappedString(cmd, attrs, "discussions-default-title", "discussions_default_title")
+		setNullableMappedString(cmd, attrs, "discussions-default-description", "discussions_default_description")
 
 		// --navigation-json authors the header/footer menu — a whole-blob REPLACE
 		// (MIO-2255), validated for the typed shape the mio-hub parser requires.
@@ -345,6 +351,8 @@ func init() {
 		cmd.Flags().String("description", "", "Short description of the hub.")
 		cmd.Flags().String("logo-url", "", "URL of the hub's logo image.")
 		cmd.Flags().Bool("published", false, "Whether the hub is publicly published.")
+		cmd.Flags().String("discussions-default-title", "", "Default title for the hub's discussions surface (MIO-2274). Pass \"\" to clear.")
+		cmd.Flags().String("discussions-default-description", "", "Default description for the hub's discussions surface. Pass \"\" to clear.")
 	}
 
 	// Presentation-blob flags, all authorable on create.
