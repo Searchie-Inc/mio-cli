@@ -19,9 +19,9 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// firedServer returns a server that flips *fired and replies 2xx with the given
+// moderationFiredServer returns a server that flips *fired and replies 2xx with the given
 // body. Used to prove client-side validation fires before any HTTP request.
-func firedServer(t *testing.T, fired *bool, status int, body string) *httptest.Server {
+func moderationFiredServer(t *testing.T, fired *bool, status int, body string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		*fired = true
@@ -94,7 +94,7 @@ func TestReportReasonsCreate_Body(t *testing.T) {
 
 func TestReportReasonsCreate_RequiresLabel(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusCreated, minimalHubBody)
+	srv := moderationFiredServer(t, &fired, http.StatusCreated, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "report-reasons", "create", "--position", "1")...)
@@ -108,7 +108,7 @@ func TestReportReasonsCreate_RequiresLabel(t *testing.T) {
 
 func TestReportReasonsCreate_RejectsNegativePosition(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusCreated, minimalHubBody)
+	srv := moderationFiredServer(t, &fired, http.StatusCreated, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "report-reasons", "create", "--label", "X", "--position", "-1")...)
@@ -152,7 +152,7 @@ func TestReportReasonsUpdate_BodyCarriesTypeAndID(t *testing.T) {
 
 func TestReportReasonsUpdate_RequiresAField(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusOK, minimalHubBody)
+	srv := moderationFiredServer(t, &fired, http.StatusOK, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "report-reasons", "update", "rr_9")...)
@@ -182,7 +182,7 @@ func TestReportReasonsDelete_PathAndConfirm(t *testing.T) {
 
 func TestReportReasonsDelete_NonTTYWithoutYesBlocks(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusOK, minimalHubBody)
+	srv := moderationFiredServer(t, &fired, http.StatusOK, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "report-reasons", "delete", "rr_9")...)
@@ -230,7 +230,7 @@ func TestCommentsList_PathAndFilters(t *testing.T) {
 
 func TestCommentsList_RejectsBadTargetType(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusOK, `{"data":[]}`)
+	srv := moderationFiredServer(t, &fired, http.StatusOK, `{"data":[]}`)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "comments", "list", "--target-type", "message", "--target-id", "x")...)
@@ -260,7 +260,7 @@ func TestCommentsDelete_PathAndConfirm(t *testing.T) {
 
 func TestCommentsDelete_NonTTYWithoutYesBlocks(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusOK, minimalHubBody)
+	srv := moderationFiredServer(t, &fired, http.StatusOK, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "comments", "delete", "cmt_5")...)
@@ -304,7 +304,7 @@ func TestModerationQueue_PathAndQuery(t *testing.T) {
 
 func TestModerationQueue_RejectsBadSort(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusOK, `{"data":[]}`)
+	srv := moderationFiredServer(t, &fired, http.StatusOK, `{"data":[]}`)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "moderation", "queue", "--sort", "created_at")...)
@@ -318,7 +318,7 @@ func TestModerationQueue_RejectsBadSort(t *testing.T) {
 
 func TestModerationQueue_RejectsBadReportableType(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusOK, `{"data":[]}`)
+	srv := moderationFiredServer(t, &fired, http.StatusOK, `{"data":[]}`)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "moderation", "queue", "--reportable-type", "reply")...)
@@ -375,7 +375,7 @@ func TestModerationAuditLog_PathAndFilters(t *testing.T) {
 
 func TestModerationBanned_RejectsBadSort(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusOK, `{"data":[]}`)
+	srv := moderationFiredServer(t, &fired, http.StatusOK, `{"data":[]}`)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "moderation", "banned", "--sort", "-report_count")...)
@@ -401,7 +401,7 @@ func TestModerationRemoved_PathAndRejectsBadContentType(t *testing.T) {
 	}
 	// bad content-type → no request
 	fired := false
-	srv2 := firedServer(t, &fired, http.StatusOK, `{"data":[]}`)
+	srv2 := moderationFiredServer(t, &fired, http.StatusOK, `{"data":[]}`)
 	res2 := runContract(t, baseEnv(srv2.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "moderation", "removed", "--content-type", "message")...)
@@ -431,7 +431,7 @@ func TestModerationContentView_PathAndEnum(t *testing.T) {
 	}
 
 	fired := false
-	srv2 := firedServer(t, &fired, http.StatusOK, minimalHubBody)
+	srv2 := moderationFiredServer(t, &fired, http.StatusOK, minimalHubBody)
 	res2 := runContract(t, baseEnv(srv2.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "moderation", "content", "view", "reply", "x")...)
@@ -461,7 +461,7 @@ func TestModerationContentRemove_PathAndConfirm(t *testing.T) {
 
 func TestModerationContentRemove_NonTTYWithoutYesBlocks(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusCreated, minimalHubBody)
+	srv := moderationFiredServer(t, &fired, http.StatusCreated, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "moderation", "content", "remove", "discussion", "disc_1")...)
@@ -539,7 +539,7 @@ func TestModerationReportsResolve_Body(t *testing.T) {
 
 func TestModerationReportsResolve_RequiresResolution(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusOK, minimalHubBody)
+	srv := moderationFiredServer(t, &fired, http.StatusOK, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "moderation", "reports", "resolve", "rep_1", "--notes", "n")...)
@@ -553,7 +553,7 @@ func TestModerationReportsResolve_RequiresResolution(t *testing.T) {
 
 func TestModerationReportsResolve_RejectsBadResolution(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusOK, minimalHubBody)
+	srv := moderationFiredServer(t, &fired, http.StatusOK, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "moderation", "reports", "resolve", "rep_1", "--resolution", "ignored")...)
@@ -599,7 +599,7 @@ func TestMembersSoftBan_Body(t *testing.T) {
 
 func TestMembersSoftBan_RejectsBadReason(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, http.StatusCreated, minimalHubBody)
+	srv := moderationFiredServer(t, &fired, http.StatusCreated, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "members", "soft-ban", "contact_9", "--reason", "being_rude")...)
