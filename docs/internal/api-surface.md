@@ -145,9 +145,10 @@ plain JSON.
 
 ## pages  (`cmd/pages.go`)
 - pages:    `create/list/retrieve/update/delete` `/api/teams/{team_id}/hubs/{hub_id}/pages[/{id}]`; `home` GET `…/pages/home`
+  - create/update flags match PageCreate/PageUpdateAttributes: `--title` `--slug` `--type` `--privacy`(public|members|private) `--position` `--is-home`(→`is_homepage`) `--settings`/`--meta`(@file). No `--published`/`--description`/`--layout` (MIO-2257)
 - sections: `create` POST `…/pages/{pid}/sections`; `list` GET `…/pages/{pid}/sections`;
   `update` PATCH `…/pages/{pid}/sections/{sid}`; `delete` DELETE `…/pages/{pid}/sections/{sid}`;
-  `reorder` PATCH `…/pages/{pid}/sections`
+  `reorder` PATCH `…/pages/{pid}/sections` — body is a bare `{data:[{id,position}]}` list (SectionReorderEnvelope), built from `--order` (MIO-2257)
 
 ## products  (`cmd/products.go`) — REFERENCE RESOURCE
 - products:     `create/list/retrieve/update/delete` `/api/teams/{team_id}/products[/{id}]`

@@ -120,7 +120,7 @@ mio content delete — soft-delete a content node
 mio content restore — restore a soft-deleted content node
 mio content reorder — reorder content nodes within a parent
 
-mio pages create — create a page in a hub
+mio pages create — create a page in a hub; flags: --title --slug --type --privacy (public|members|private) --position --is-home (sends is_homepage) --settings/--meta (@file). NO --published/--description/--layout (not in schema)
 mio pages list — list pages in a hub
 mio pages retrieve — retrieve a page by id; add --tree to get the raw published node tree (page-trees resource, resolve=false) for admin editor use
 mio pages update — update a page

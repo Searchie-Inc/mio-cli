@@ -14,6 +14,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 
@@ -77,7 +78,7 @@ var pagesCreateCmd = &cobra.Command{
 	Short: "Create a page.",
 	Long:  "Create a new page in the active hub.",
 	Example: `  mio pages create --hub hub_123 --title "Welcome" --slug welcome
-  mio pages create --hub hub_123 --title "About" --published`,
+  mio pages create --hub hub_123 --title "About" --slug about --privacy public`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := pagesContext(cmd)
@@ -86,12 +87,9 @@ var pagesCreateCmd = &cobra.Command{
 		}
 
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "title")
-		setStringFlag(cmd, attrs, "slug")
-		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "layout")
-		setBoolFlag(cmd, attrs, "published")
-		setBoolFlag(cmd, attrs, "is-home")
+		if err := setPageWriteAttrs(cmd, attrs); err != nil {
+			return err
+		}
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --title")
@@ -173,7 +171,7 @@ var pagesUpdateCmd = &cobra.Command{
 	Short: "Update a page by id.",
 	Long:  "Update one or more attributes of an existing page.",
 	Example: `  mio pages update page_abc123 --hub hub_123 --title "New Title"
-  mio pages update page_abc123 --hub hub_123 --published=false`,
+  mio pages update page_abc123 --hub hub_123 --is-home`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := pagesContext(cmd)
@@ -182,12 +180,9 @@ var pagesUpdateCmd = &cobra.Command{
 		}
 
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "title")
-		setStringFlag(cmd, attrs, "slug")
-		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "layout")
-		setBoolFlag(cmd, attrs, "published")
-		setBoolFlag(cmd, attrs, "is-home")
+		if err := setPageWriteAttrs(cmd, attrs); err != nil {
+			return err
+		}
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -303,10 +298,12 @@ func init() {
 	for _, cmd := range []*cobra.Command{pagesCreateCmd, pagesUpdateCmd} {
 		cmd.Flags().String("title", "", "Page title.")
 		cmd.Flags().String("slug", "", "URL slug for the page.")
-		cmd.Flags().String("description", "", "Page description or meta description.")
-		cmd.Flags().String("layout", "", "Page layout template name.")
-		cmd.Flags().Bool("published", false, "Whether the page is published and publicly accessible.")
-		cmd.Flags().Bool("is-home", false, "Whether this page is the hub home page.")
+		cmd.Flags().String("type", "", "Page type (default: generic).")
+		cmd.Flags().String("privacy", "", "Page privacy: public, members, or private (default: members).")
+		cmd.Flags().Int("position", 0, "Zero-based display position of the page.")
+		cmd.Flags().Bool("is-home", false, "Whether this page is the hub home page (sends is_homepage).")
+		cmd.Flags().String("settings", "", "Page settings as a JSON object or @file path.")
+		cmd.Flags().String("meta", "", "Page metadata as a JSON object or @file path.")
 	}
 	addPaginationFlags(pagesListCmd)
 
@@ -529,18 +526,28 @@ var pagesSectionsReorderCmd = &cobra.Command{
 			return err
 		}
 
-		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "order")
-
-		if len(attrs) == 0 {
+		order, err := cmd.Flags().GetString("order")
+		if err != nil {
+			return errs.New(errs.ExitUsage, "--order: %s", err)
+		}
+		ids := splitCSV(order)
+		if len(ids) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to reorder: set --order with a comma-separated list of section ids")
 		}
+		data := make([]map[string]any, len(ids))
+		for i, id := range ids {
+			data[i] = map[string]any{"id": id, "position": i}
+		}
 
-		res, err := c.client.Update(c.ctx, sectionsBase(teamID, hubID, args[0]), attrs)
+		// The backend reorder endpoint (PATCH .../sections) takes a bare
+		// SectionReorderEnvelope { data: [{id, position}] }, NOT the standard
+		// {data:{type,attributes}} envelope — send it raw. (MIO-2257)
+		col, err := c.client.ActionCollectionRaw(c.ctx, http.MethodPatch,
+			sectionsBase(teamID, hubID, args[0]), map[string]any{"data": data})
 		if err != nil {
 			return err
 		}
-		return c.render(cmd, res)
+		return c.render(cmd, col)
 	},
 }
 
