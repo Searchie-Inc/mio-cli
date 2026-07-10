@@ -83,9 +83,17 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 	firstName, _ := cmd.Flags().GetString("first-name")
 	lastName, _ := cmd.Flags().GetString("last-name")
 
+	// The mint step must target the NEWLY registered account's team, which the
+	// register token carries as a claim. So we honour only an explicit --team here
+	// (flags.team) and never resolved.TeamID: the latter inherits a stale
+	// current_team from config (left by a prior login), and resolveTeamID treats
+	// any non-empty value as overriding the token claim — which would mint the key
+	// on a team the new account does not belong to (403), breaking auto-login.
+	mintTeam := flags.team
+
 	// Headless when both email and password are already available.
 	if email != "" && password != "" {
-		return registerAndLogin(cmd, resolved.APIBase, resolved.TeamID, email, password, firstName, lastName, cfg)
+		return registerAndLogin(cmd, resolved.APIBase, mintTeam, email, password, firstName, lastName, cfg)
 	}
 
 	// Interactive registration requires an interactive terminal to prompt for the
@@ -104,7 +112,7 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	return registerAndLogin(cmd, resolved.APIBase, resolved.TeamID, email, password, firstName, lastName, cfg)
+	return registerAndLogin(cmd, resolved.APIBase, mintTeam, email, password, firstName, lastName, cfg)
 }
 
 // promptRegistration collects the registration fields interactively on a TTY:

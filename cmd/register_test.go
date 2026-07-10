@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -365,5 +367,59 @@ func TestRegister_PromptReadsEmailWhenMissing(t *testing.T) {
 	}
 	if firstName != "" || lastName != "" {
 		t.Errorf("names = %q/%q, want empty (blank lines)", firstName, lastName)
+	}
+}
+
+// TestRegister_IgnoresConfiguredTeam pins that register mints under the NEWLY
+// registered account's own team (from its token claim), NOT a stale current_team
+// left in config by a prior login. Without --team, register must not inherit the
+// configured team — the new account does not belong to it, so minting there would
+// 403 and break "register + auto-login always".
+func TestRegister_IgnoresConfiguredTeam(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+
+	// Seed a stale current_team as if a prior `mio login` configured this machine.
+	mioDir := filepath.Join(cfgDir, "mio")
+	if err := os.MkdirAll(mioDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mioDir, "config.toml"), []byte("current_team = \"t_stale\"\n"), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	token := makeLoginJWT(t, "t_fresh") // the new account's OWN team
+	var mintPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/auth/register" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			resp, _ := json.Marshal(map[string]any{"access_token": token, "token_type": "Bearer"})
+			_, _ = w.Write(resp)
+		case strings.HasSuffix(r.URL.Path, "/api-keys") && r.Method == http.MethodPost:
+			mintPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"k","type":"api_keys","attributes":{"secret":"mio_sk_fresh"}}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	// No --team passed: the configured current_team ("t_stale") must NOT be used.
+	env := []string{"MIO_API_BASE_URL=" + srv.URL, "MIO_API_KEY="}
+	res := runContract(t, env,
+		"register",
+		"--email", "fresh@test.member.dev",
+		"--password", "s3cr3tpass",
+	)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if mintPath != "/api/v1/teams/t_fresh/api-keys" {
+		t.Errorf("mint path = %q, want /api/v1/teams/t_fresh/api-keys — register must use the new account's token team, not the stale configured current_team", mintPath)
 	}
 }
