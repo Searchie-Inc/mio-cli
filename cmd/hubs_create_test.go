@@ -345,44 +345,6 @@ func TestHubsCreate_UnsetLogoURLOmitsBranding(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_LogoURLErrorsFast verifies that `mio hubs update --logo-url`
-// fails immediately with a usage error (exit 2) and sends NO HTTP request.
-//
-// The backend assigns branding wholesale (not merged), so a partial branding
-// patch would silently clobber sibling keys. Rather than silently ignoring the
-// flag (which would mislead the caller), the command now fails fast. (MIO-901)
-//
-// CONTRACT (MIO-844 / MIO-901): hubs update --logo-url X → ExitUsage (2),
-// no PATCH fired, error message mentions logo-url/update.
-func TestHubsUpdate_LogoURLErrorsFast(t *testing.T) {
-	patchFired := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		patchFired = true
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(minimalHubBody))
-	}))
-	t.Cleanup(srv.Close)
-
-	res := runContract(t, baseEnv(srv.URL),
-		withTeam("t_team1",
-			"hubs", "update", "hub_abc123",
-			"--name", "X",
-			"--logo-url", "https://x/l.png",
-		)...)
-
-	// Must exit with a usage error — not success.
-	if res.Code != errs.ExitUsage {
-		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
-	}
-
-	// No HTTP request must have been fired.
-	if patchFired {
-		t.Error("PATCH must NOT be sent when --logo-url is passed to hubs update")
-	}
-
-	// The error message content (mentioning logo-url/update) is only available on
-	// the real binary's stderr (main.go renders it through the JSON:API envelope);
-	// the in-process driver silences errors at the cobra level. Message content is
-	// therefore NOT asserted here — the two assertions above are sufficient to
-	// prove fail-fast behaviour.
-}
+// Note: `hubs update --logo-url` now MERGES into branding via read-modify-write
+// (MIO-2256) rather than erroring — see TestHubsUpdate_LogoURLMergesRMW in
+// hubs_update_blobs_test.go. The old fail-fast test (MIO-901) was removed.

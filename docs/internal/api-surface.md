@@ -97,6 +97,7 @@ plain JSON.
 - `retrieve` GET `/api/teams/{team_id}/hubs/{id}`
 - `update`   PATCH `/api/teams/{team_id}/hubs/{id}`
   - `--navigation-json` authors the header/footer menu (typed items; inline JSON or `@file`); whole-blob replace, validated client-side (untyped items rejected) (MIO-2255)
+  - `--branding-json` / `--settings-json` / `--meta-json` deep-merge (read-modify-write: retrieve → merge → PATCH, so sibling keys survive); `--logo-url` merges into branding (MIO-2256, unblocks MIO-901)
 - `delete`   DELETE `/api/teams/{team_id}/hubs/{id}`
 
 ## contacts  (`cmd/contacts.go`) — backend module contacts_admin
