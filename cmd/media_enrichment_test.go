@@ -48,9 +48,9 @@ func captureMediaRequest(t *testing.T, status int, respBody string) (
 	return srv, &gotMethod, &gotPath, &gotQuery, &gotBody
 }
 
-// firedServer returns a server that flips *fired true on ANY request, used to
+// mediaFiredServer returns a server that flips *fired true on ANY request, used to
 // prove a client-side usage error fired NO HTTP request.
-func firedServer(t *testing.T, fired *bool, body string) *httptest.Server {
+func mediaFiredServer(t *testing.T, fired *bool, body string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		*fired = true
@@ -132,7 +132,7 @@ func TestMediaFilesCardsSet_ClearWithEmptyArray(t *testing.T) {
 
 func TestMediaFilesCardsSet_RequiresCards(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, emptyCollectionBody)
+	srv := mediaFiredServer(t, &fired, emptyCollectionBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "media", "files", "cards", "set", "file_1")...)
 	if res.Code != errs.ExitUsage {
@@ -145,7 +145,7 @@ func TestMediaFilesCardsSet_RequiresCards(t *testing.T) {
 
 func TestMediaFilesCardsSet_RejectsNonArray(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, emptyCollectionBody)
+	srv := mediaFiredServer(t, &fired, emptyCollectionBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "media", "files", "cards", "set", "file_1", "--cards", `{"label":"x"}`)...)
 	if res.Code != errs.ExitUsage {
@@ -158,7 +158,7 @@ func TestMediaFilesCardsSet_RejectsNonArray(t *testing.T) {
 
 func TestMediaFilesCardsSet_RejectsInvalidJSON(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, emptyCollectionBody)
+	srv := mediaFiredServer(t, &fired, emptyCollectionBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "media", "files", "cards", "set", "file_1", "--cards", `not-json`)...)
 	if res.Code != errs.ExitUsage {
@@ -220,7 +220,7 @@ func TestMediaFilesChaptersSet_Body(t *testing.T) {
 
 func TestMediaFilesChaptersSet_RequiresChapters(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, emptyCollectionBody)
+	srv := mediaFiredServer(t, &fired, emptyCollectionBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "media", "files", "chapters", "set", "file_1")...)
 	if res.Code != errs.ExitUsage {
@@ -279,7 +279,7 @@ func TestMediaFoldersMove_ToRootBody(t *testing.T) {
 
 func TestMediaFoldersMove_RequiresTarget(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, minimalHubBody)
+	srv := mediaFiredServer(t, &fired, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "media", "folders", "move", "folder_1")...)
 	if res.Code != errs.ExitUsage {
@@ -292,7 +292,7 @@ func TestMediaFoldersMove_RequiresTarget(t *testing.T) {
 
 func TestMediaFoldersMove_RejectsBothTargets(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, minimalHubBody)
+	srv := mediaFiredServer(t, &fired, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "media", "folders", "move", "folder_1",
 			"--parent-id", "folder_2", "--to-root")...)
@@ -339,7 +339,7 @@ func TestMediaSearch_Query(t *testing.T) {
 
 func TestMediaSearch_RequiresQuery(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, emptyCollectionBody)
+	srv := mediaFiredServer(t, &fired, emptyCollectionBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "media", "search")...)
 	if res.Code != errs.ExitUsage {
@@ -354,7 +354,7 @@ func TestMediaSearch_RejectsOutOfRangeLimit(t *testing.T) {
 	for _, limit := range []string{"0", "-1", "101"} {
 		t.Run("limit="+limit, func(t *testing.T) {
 			fired := false
-			srv := firedServer(t, &fired, emptyCollectionBody)
+			srv := mediaFiredServer(t, &fired, emptyCollectionBody)
 			res := runContract(t, baseEnv(srv.URL),
 				withTeam("t_team1", "media", "search", "--query", "x", "--limit", limit)...)
 			if res.Code != errs.ExitUsage {
@@ -406,7 +406,7 @@ func TestMediaHubMediaPublish_Body(t *testing.T) {
 
 func TestMediaHubMediaPublish_RequiresFileID(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, minimalHubBody)
+	srv := mediaFiredServer(t, &fired, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "media", "hub-media", "publish")...)
 	if res.Code != errs.ExitUsage {
@@ -419,7 +419,7 @@ func TestMediaHubMediaPublish_RequiresFileID(t *testing.T) {
 
 func TestMediaHubMediaPublish_RejectsInvalidVisibility(t *testing.T) {
 	fired := false
-	srv := firedServer(t, &fired, minimalHubBody)
+	srv := mediaFiredServer(t, &fired, minimalHubBody)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "media", "hub-media", "publish",
 			"--file-id", "file_abc", "--visibility", "everyone")...)
