@@ -153,6 +153,8 @@ var typeOverrides = []struct {
 	{"contacts/tags", "tag_assignments"},
 	{"drip-campaigns/steps", "drip_steps"},
 	{"pages/sections", "sections"},
+	// Page draft node-tree authoring: PUT .../pages/{id}/tree (MIO-2258).
+	{"pages/tree", "page_draft_trees"},
 	{"teams/members", "team_members"},
 	// Action routes that take an enveloped body with a non-segment type.
 	{"payment-accounts/onboarding-link", "onboarding_links"},
@@ -254,7 +256,7 @@ var knownCollections = map[string]bool{
 	"members": true, "contacts": true, "content": true, "children": true,
 	"tags": true, "contact-attributes": true, "options": true,
 	"reorder": true,
-	"pages":   true, "sections": true, "api-keys": true, "roles": true,
+	"pages":   true, "sections": true, "tree": true, "api-keys": true, "roles": true,
 	"users": true, "access-rules": true, "access-overrides": true,
 	"drip-campaigns": true, "steps": true, "email-templates": true,
 	"enrollments": true, "orders": true, "subscriptions": true,
