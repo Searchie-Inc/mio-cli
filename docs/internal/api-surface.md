@@ -156,10 +156,14 @@ plain JSON.
 - products:     `create/list/retrieve/update/delete` `/api/teams/{team_id}/products[/{id}]`
 - prices:       `create/list/retrieve/update/delete` `/api/teams/{team_id}/products/{id}/prices[/{pid}]`
 - deliverables: `create/list/delete` `/api/teams/{team_id}/products/{id}/deliverables[/{did}]`
-- hub-attach:   `attach/list/update/detach` `/api/teams/{team_id}/hubs/{hid}/products[/{id}]`
-- hub-prices:   `list/update` `/api/teams/{team_id}/hubs/{hid}/prices`
+  (CLI `mio products deliverables`; type `product_deliverables`; `--type` enum: hub_access, content_enrollment, tag, file_download, community_access) (MIO-2268)
+- hub-products: `attach/list/update/detach` `/api/teams/{team_id}/hubs/{hid}/products[/{did}]`
+  (CLI `mio checkout hub-products`; type `hub_product_displays`; attach takes a PRODUCT id, update/detach take a display id) (MIO-2268)
+- hub-prices:   `list/update` `/api/teams/{team_id}/hubs/{hid}/prices[/{did}]`
+  (CLI `mio checkout hub-prices`; type `hub_price_displays`; no create/delete — auto-managed on product attach/detach) (MIO-2268)
 - coupons:      `create/list/retrieve/update/delete` `/api/teams/{team_id}/coupons[/{id}]`
 - coupon-products: `attach/list/detach` `/api/teams/{team_id}/coupons/{id}/products[/{pid}]`
+  (CLI `mio coupons products`; type `coupon_products`; empty scope = coupon applies to every product) (MIO-2268)
 
 ## checkout  (`cmd/checkout.go`) — admin reads + actions, team-scoped
 - orders:        `list/retrieve` `/api/teams/{team_id}/hubs/{hub_id}/orders[/{id}]`

@@ -96,6 +96,14 @@ func flagValue(cmd *cobra.Command, name string) string {
 	return strings.TrimSpace(v)
 }
 
+// stringArg returns the trimmed value of a positional argument. Cobra's
+// ExactArgs(n) guarantees the slot exists but not that it is non-empty, so
+// commands that turn a positional into a path segment or a required body field
+// use this to reject an all-whitespace argument up front.
+func stringArg(arg string) string {
+	return strings.TrimSpace(arg)
+}
+
 // setMappedString copies a string flag into attrs[key] under an EXPLICIT backend
 // field name, iff the user set it. Use this when the snake_cased flag name does
 // not equal the backend attribute name (e.g. --from-email → mail_from_email).
