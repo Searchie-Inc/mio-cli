@@ -143,6 +143,19 @@ var typeOverrides = []struct {
 	// Publishing a playlist to a hub writes a hub_media row (MIO-2259); the
 	// bare "playlists" segment would derive the team-scoped "playlists" type.
 	{"hubs/playlists", "hub_media"},
+	// Publishing a standalone file to a hub also writes a hub_media row
+	// (MIO-2266); the bare "media" segment would derive "media".
+	{"hubs/media", "hub_media"},
+	// Media enrichment (MIO-2266): in-video CTA cards + authorable chapters are
+	// full-list PUT replaces whose backend Literal types are the snake_case
+	// plurals, not the "cards"/"chapters" URL segments.
+	{"files/cards", "file_cards"},
+	{"files/chapters", "file_chapters"},
+	// Folder subtree move (MIO-2266): POST .../folders/{id}/move binds the
+	// FolderMove schema whose type Literal is "folders" (NOT "move"). "move" is
+	// a known collection token so it is not mistaken for the {id}; this override
+	// then resolves the folders/move tail back to the "folders" type.
+	{"folders/move", "folders"},
 	{"products/deliverables", "product_deliverables"},
 	{"contact-attributes/options", "contact_attribute_options"},
 	// hub-config lives at /hubs/{hub}/contact-attributes — same trailing
@@ -212,6 +225,11 @@ var typeOverrides = []struct {
 	// .../hubs/{hub}/email-suppressions binds HubCreateSuppressionData whose
 	// type is "email_suppressions"; the hyphenated segment would not match.
 	{"email-suppressions", "email_suppressions"},
+	// Community moderation report-reasons (MIO-2265): the create POST derives
+	// its JSON:API type from the .../report-reasons collection tail. The URL
+	// segment uses hyphens; the backend ReportReasonCreateData type Literal is
+	// snake_case "report_reasons", so without this override the write 422s.
+	{"report-reasons", "report_reasons"},
 }
 
 // resourceTypeFromPath returns the JSON:API resource `type` for a write to the
@@ -286,10 +304,17 @@ var knownCollections = map[string]bool{
 	"automations": true, "webhook-endpoints": true, "versions": true, "events": true,
 	// Community admin (2026-06-09): spaces, discussions wired in community.go.
 	"spaces": true, "discussions": true,
+	// Community moderation console (MIO-2265): report-reasons CRUD write path
+	// (create derives type "report_reasons" via the typeOverride above) and the
+	// admin comments list/delete collection segment.
+	"report-reasons": true, "comments": true,
 	// Hub membership role sub-resource (MIO-2263).
 	"role": true,
 	// Media (2026-06-09): files, folders, playlists wired in media.go.
 	"files": true, "folders": true, "playlists": true,
+	// Media enrichment (MIO-2266): in-video cards, authorable chapters, folder
+	// subtree move, and standalone-file hub publishing (hubs/{hub}/media).
+	"cards": true, "chapters": true, "move": true, "media": true,
 	// Contact-scoped drip enrollment reader (email enrollments list-by-contact).
 	"drip-enrollments": true,
 	// OAuth client management (Hub-as-IdP SSO, 2026-06-24).

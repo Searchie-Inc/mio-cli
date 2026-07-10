@@ -95,10 +95,11 @@ plain JSON.
 ## hubs  (`cmd/hubs.go`)
 - `create`   POST `/api/teams/{team_id}/hubs`
   - presentation-blob flags (create-only): `--branding-json` `--navigation-json` `--settings-json` `--meta-json` (opaque JSONB objects; inline JSON or `@file`); `--logo-url` merges into `branding` (MIO-2254)
+  - `--navigation-json` header/footer `type:"url"` items with a hub-relative `href` (leading `/`) must stay within the hub — start with `/{--slug}` — else ExitUsage; absolute `http(s)://` hrefs pass as-is (MIO-2270)
 - `list`     GET `/api/teams/{team_id}/hubs`
 - `retrieve` GET `/api/teams/{team_id}/hubs/{id}`
 - `update`   PATCH `/api/teams/{team_id}/hubs/{id}`
-  - `--navigation-json` authors the header/footer menu (typed items; inline JSON or `@file`); whole-blob replace, validated client-side (untyped items rejected) (MIO-2255)
+  - `--navigation-json` authors the header/footer menu (typed items; inline JSON or `@file`); whole-blob replace, validated client-side (untyped items rejected) (MIO-2255). Hub-relative `type:"url"` hrefs (leading `/`) must start with `/{hub.slug}` — the update retrieves the hub for its slug — else ExitUsage; absolute `http(s)://` hrefs pass as-is (MIO-2270)
   - `--branding-json` / `--settings-json` / `--meta-json` deep-merge (read-modify-write: retrieve → merge → PATCH, so sibling keys survive); `--logo-url` merges into branding (MIO-2256, unblocks MIO-901)
 - `delete`   DELETE `/api/teams/{team_id}/hubs/{id}`
 - `policies update` PATCH `/api/teams/{team_id}/hubs/{hub_id}/policies`  envelope `policies` {policy_type, content?, require_acceptance?}; hub id POSITIONAL
@@ -163,10 +164,14 @@ plain JSON.
 - products:     `create/list/retrieve/update/delete` `/api/teams/{team_id}/products[/{id}]`
 - prices:       `create/list/retrieve/update/delete` `/api/teams/{team_id}/products/{id}/prices[/{pid}]`
 - deliverables: `create/list/delete` `/api/teams/{team_id}/products/{id}/deliverables[/{did}]`
-- hub-attach:   `attach/list/update/detach` `/api/teams/{team_id}/hubs/{hid}/products[/{id}]`
-- hub-prices:   `list/update` `/api/teams/{team_id}/hubs/{hid}/prices`
+  (CLI `mio products deliverables`; type `product_deliverables`; `--type` enum: hub_access, content_enrollment, tag, file_download, community_access) (MIO-2268)
+- hub-products: `attach/list/update/detach` `/api/teams/{team_id}/hubs/{hid}/products[/{did}]`
+  (CLI `mio checkout hub-products`; type `hub_product_displays`; attach takes a PRODUCT id, update/detach take a display id) (MIO-2268)
+- hub-prices:   `list/update` `/api/teams/{team_id}/hubs/{hid}/prices[/{did}]`
+  (CLI `mio checkout hub-prices`; type `hub_price_displays`; no create/delete — auto-managed on product attach/detach) (MIO-2268)
 - coupons:      `create/list/retrieve/update/delete` `/api/teams/{team_id}/coupons[/{id}]`
 - coupon-products: `attach/list/detach` `/api/teams/{team_id}/coupons/{id}/products[/{pid}]`
+  (CLI `mio coupons products`; type `coupon_products`; empty scope = coupon applies to every product) (MIO-2268)
 
 ## checkout  (`cmd/checkout.go`) — admin reads + actions, team-scoped
 - orders:        `list/retrieve` `/api/teams/{team_id}/hubs/{hub_id}/orders[/{id}]`

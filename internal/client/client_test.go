@@ -305,6 +305,10 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/admin/teams/t1/hubs/h1/spaces/sp1", "spaces"},
 		{"/api/admin/teams/t1/hubs/h1/discussions", "discussions"},
 		{"/api/admin/teams/t1/hubs/h1/discussions/d1", "discussions"},
+		// Community moderation report-reasons (MIO-2265): hyphenated segment →
+		// snake_case type "report_reasons" on both create and update paths.
+		{"/api/admin/teams/t1/hubs/h1/report-reasons", "report_reasons"},
+		{"/api/admin/teams/t1/hubs/h1/report-reasons/rr1", "report_reasons"},
 		// Media files, folders, playlists (MIO-811).
 		{"/api/teams/t1/files", "files"},
 		{"/api/teams/t1/files/f1", "files"},
