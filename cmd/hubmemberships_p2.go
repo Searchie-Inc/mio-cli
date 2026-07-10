@@ -1,0 +1,99 @@
+package cmd
+
+// hubmemberships_p2.go — admin membership authoring (MIO-2261 `add`, MIO-2263
+// `set-role`). The create-membership endpoint (POST .../members) ships in
+// mio-backend PR #487; set-role (PATCH .../members/{contact_id}/role) already
+// exists.
+
+import (
+	"github.com/spf13/cobra"
+
+	"github.com/Searchie-Inc/mio-cli/internal/client"
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
+)
+
+// hubMemberRoles is the elevated-role enum the backend accepts (None = a plain
+// active member — omit --role).
+var hubMemberRoles = map[string]bool{"admin": true, "moderator": true}
+
+// hubMembersPath returns /api/admin/teams/{team}/hubs/{hub}/members[/{contact_id}].
+func hubMembersPath(teamID, hubID, contactID string) string {
+	base := "/api/admin/teams/" + teamID + "/hubs/" + hubID + "/members"
+	if contactID != "" {
+		return base + "/" + contactID
+	}
+	return base
+}
+
+var hubMembershipsAddCmd = &cobra.Command{
+	Use:   "add <contact_id>",
+	Short: "Add a contact as an active hub member.",
+	Long: `Add (or re-activate) a contact as an ACTIVE member of the hub, optionally
+granting an admin or moderator role. Emits MemberAdded, so the contact's
+community profile is created as a side effect.`,
+	Example: `  mio hub-memberships add contact_xyz --hub hub_abc123
+  mio hub-memberships add contact_xyz --hub hub_abc123 --role moderator`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		attrs := map[string]any{"contact_id": args[0]}
+		if cmd.Flags().Changed("role") {
+			role, err := cmd.Flags().GetString("role")
+			if err != nil {
+				return errs.New(errs.ExitUsage, "--role: %s", err)
+			}
+			if !hubMemberRoles[role] {
+				return errs.New(errs.ExitUsage, "invalid --role %q: must be admin or moderator (omit for a plain member)", role)
+			}
+			attrs["role"] = role
+		}
+
+		c, teamID, hubID, err := hubMembershipsContext(cmd)
+		if err != nil {
+			return err
+		}
+		res, err := c.client.Create(c.ctx, hubMembersPath(teamID, hubID, ""), attrs)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
+var hubMembershipsSetRoleCmd = &cobra.Command{
+	Use:     "set-role <contact_id>",
+	Short:   "Set a hub member's role.",
+	Long:    "Set an active member's role to admin or moderator. The member must already be active (add them with 'hub-memberships add' first).",
+	Example: `  mio hub-memberships set-role contact_xyz --hub hub_abc123 --role moderator`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if !cmd.Flags().Changed("role") {
+			return errs.New(errs.ExitUsage, "--role is required: admin or moderator")
+		}
+		role, err := cmd.Flags().GetString("role")
+		if err != nil {
+			return errs.New(errs.ExitUsage, "--role: %s", err)
+		}
+		if !hubMemberRoles[role] {
+			return errs.New(errs.ExitUsage, "invalid --role %q: must be admin or moderator", role)
+		}
+
+		c, teamID, hubID, err := hubMembershipsContext(cmd)
+		if err != nil {
+			return err
+		}
+		// PATCH .../members/{contact_id}/role with {data:{type:hub_memberships,attributes:{role}}}.
+		res, err := c.client.ActionWith(c.ctx, client.StyleEnvelope, "PATCH",
+			hubMembersPath(teamID, hubID, args[0])+"/role", map[string]any{"role": role})
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
+func init() {
+	hubMembershipsCmd.AddCommand(hubMembershipsAddCmd, hubMembershipsSetRoleCmd)
+
+	hubMembershipsAddCmd.Flags().String("role", "", "Optional elevated role: admin or moderator (omit for a plain member).")
+	hubMembershipsSetRoleCmd.Flags().String("role", "", "New role: admin or moderator. Required.")
+}
