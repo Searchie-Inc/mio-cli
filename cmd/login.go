@@ -197,32 +197,9 @@ func loginPasswordHeadless(cmd *cobra.Command, apiBase, teamID, email, password 
 		return err
 	}
 
-	resolvedTeam, teamName, err := resolveTeamID(cmd, cli, loginRes.AccessToken, teamID)
+	displayTeam, err := mintAndStore(cmd, cli, loginRes.AccessToken, teamID, cfg)
 	if err != nil {
 		return err
-	}
-
-	keyName := fmt.Sprintf("mio-cli@%s", hostname())
-	minted, err := cli.MintAPIKey(cmd.Context(), loginRes.AccessToken, resolvedTeam, keyName)
-	if err != nil {
-		return err
-	}
-	secret, _ := minted.Attributes["secret"].(string)
-	if secret == "" {
-		return errs.New(errs.ExitGeneric, "key minted but no secret returned by the server")
-	}
-
-	if err := config.SetAPIKey(secret); err != nil {
-		return errs.Wrap(errs.ExitGeneric, err)
-	}
-	cfg.CurrentTeam = resolvedTeam
-	if err := cfg.Save(); err != nil {
-		return errs.Wrap(errs.ExitGeneric, err)
-	}
-
-	displayTeam := resolvedTeam
-	if teamName != "" {
-		displayTeam = fmt.Sprintf("%s (%s)", teamName, resolvedTeam)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Logged in as %s. Using team %s. Saved API key.\n", email, displayTeam)
 	return nil
@@ -258,35 +235,49 @@ func loginPassword(cmd *cobra.Command, reader *bufio.Reader, apiBase, teamID str
 		return err
 	}
 
-	resolvedTeam, teamName, err := resolveTeamID(cmd, cli, loginRes.AccessToken, teamID)
+	displayTeam, err := mintAndStore(cmd, cli, loginRes.AccessToken, teamID, cfg)
 	if err != nil {
 		return err
-	}
-
-	keyName := fmt.Sprintf("mio-cli@%s", hostname())
-	minted, err := cli.MintAPIKey(cmd.Context(), loginRes.AccessToken, resolvedTeam, keyName)
-	if err != nil {
-		return err
-	}
-	secret, _ := minted.Attributes["secret"].(string)
-	if secret == "" {
-		return errs.New(errs.ExitGeneric, "key minted but no secret returned by the server")
-	}
-
-	if err := config.SetAPIKey(secret); err != nil {
-		return errs.Wrap(errs.ExitGeneric, err)
-	}
-	cfg.CurrentTeam = resolvedTeam
-	if err := cfg.Save(); err != nil {
-		return errs.Wrap(errs.ExitGeneric, err)
-	}
-
-	displayTeam := resolvedTeam
-	if teamName != "" {
-		displayTeam = fmt.Sprintf("%s (%s)", teamName, resolvedTeam)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Logged in as %s. Using team %s. Saved API key.\n", email, displayTeam)
 	return nil
+}
+
+// mintAndStore resolves the team for the given JWT access token, mints a
+// "mio-cli@<host>" API key, stores it in the OS keychain, persists the resolved
+// team to config, and returns a human display string for the team ("Name (id)"
+// or the bare id when the name is unknown). It is the shared tail of every
+// password→key flow — `login` (interactive + headless) and `register` — which
+// differ only in their final confirmation wording.
+func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamID string, cfg *config.Config) (displayTeam string, err error) {
+	resolvedTeam, teamName, err := resolveTeamID(cmd, cli, accessToken, flagTeamID)
+	if err != nil {
+		return "", err
+	}
+
+	keyName := fmt.Sprintf("mio-cli@%s", hostname())
+	minted, err := cli.MintAPIKey(cmd.Context(), accessToken, resolvedTeam, keyName)
+	if err != nil {
+		return "", err
+	}
+	secret, _ := minted.Attributes["secret"].(string)
+	if secret == "" {
+		return "", errs.New(errs.ExitGeneric, "key minted but no secret returned by the server")
+	}
+
+	if err := config.SetAPIKey(secret); err != nil {
+		return "", errs.Wrap(errs.ExitGeneric, err)
+	}
+	cfg.CurrentTeam = resolvedTeam
+	if err := cfg.Save(); err != nil {
+		return "", errs.Wrap(errs.ExitGeneric, err)
+	}
+
+	displayTeam = resolvedTeam
+	if teamName != "" {
+		displayTeam = fmt.Sprintf("%s (%s)", teamName, resolvedTeam)
+	}
+	return displayTeam, nil
 }
 
 // validateAndStore validates a key against /api/auth/me and, on success, stores

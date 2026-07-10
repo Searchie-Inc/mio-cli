@@ -12,6 +12,7 @@
 mio version — print version information
 mio update — update mio via the official release installer; --version pins a release; --prefix chooses install dir
 mio login — interactive login (stores key; auto-resolves team for single-team accounts); use MIO_API_KEY instead in agents
+mio register — create a new account (email+password, optional --first-name/--last-name; or MIO_EMAIL/MIO_PASSWORD) then auto-login (mints+stores a key, REPLACING any stored key); unauthenticated; in agents prefer a pre-provisioned MIO_API_KEY
 mio whoami — print resolved user, active team, hub, api-base, profile, and key source; use as "did my setup work?" check
 mio logout — clear stored credentials
 

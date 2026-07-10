@@ -116,6 +116,7 @@ Every implemented resource and its verbs.
 | Resource | Verbs |
 |----------|-------|
 | `login` | _(interactive only — use `MIO_API_KEY` instead)_ |
+| `register` | Create an account + auto-login: `--email`/`--password` (or `MIO_EMAIL`/`MIO_PASSWORD`), optional `--first-name`/`--last-name`. Unauthenticated; stores a freshly minted key, REPLACING any current one. Agents that already have a `MIO_API_KEY` do not need this. |
 | `logout` | _(interactive only)_ |
 | `whoami` | _(no subcommand — prints resolved user, team, hub, api-base, profile, key source)_ |
 | `version` | _(no subcommand)_ |

@@ -92,6 +92,45 @@ func (c *Client) Login(ctx context.Context, email, password string) (*LoginResul
 	return &res, nil
 }
 
+// RegisterResult is the decoded response of POST /api/auth/register. The backend
+// answers 201 with the SAME token payload as login (verified against
+// mio-backend: both routes return TokenResponse), so it aliases LoginResult —
+// the register command can feed the resulting access token straight into the
+// mint flow without a second login round-trip.
+type RegisterResult = LoginResult
+
+// Register creates a new account via the plain-JSON auth route and returns the
+// resulting tokens. first_name/last_name are sent ONLY when non-empty (the
+// backend fields are optional). Like Login, this uses application/json rather
+// than the JSON:API content type, and requires no bearer credentials.
+//
+// Failures are returned unchanged so the backend's precise detail survives: a
+// 409 ("Email '…' is already registered.") or a 422 ("String should have at
+// least 8 characters") both map to ExitUsage via errorForResponse and already
+// carry a user-facing message — masking them with a generic string would only
+// hide why registration was rejected.
+func (c *Client) Register(ctx context.Context, email, password, firstName, lastName string) (*RegisterResult, error) {
+	payload := map[string]string{"email": email, "password": password}
+	if firstName != "" {
+		payload["first_name"] = firstName
+	}
+	if lastName != "" {
+		payload["last_name"] = lastName
+	}
+	body, err := c.do(ctx, http.MethodPost, "/api/auth/register", nil, payload, contentTypeJSON)
+	if err != nil {
+		return nil, err
+	}
+	var res RegisterResult
+	if uerr := json.Unmarshal(body, &res); uerr != nil {
+		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("decode register response: %w", uerr))
+	}
+	if res.AccessToken == "" {
+		return nil, errs.New(errs.ExitGeneric, "registration succeeded but no access token was returned")
+	}
+	return &res, nil
+}
+
 // MintAPIKey creates a new API key for the given team using a bearer access
 // token obtained from Login. It returns the minted Resource; the full secret is
 // in attributes["secret"] and is only ever returned once by the backend.

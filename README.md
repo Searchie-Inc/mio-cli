@@ -121,6 +121,22 @@ Run `mio login` and choose one of two paths:
 
 The key is stored in your **OS keychain** (with an encrypted-file fallback on headless/CI environments where no keychain is available). `mio logout` deletes it.
 
+### `mio register` (create an account)
+
+Don't have an account yet? `mio register` creates one and logs you in in a single step — it mints and stores a key just like `mio login`, so you end up authenticated as the new account (this **replaces** any key already stored).
+
+```sh
+# Interactive: prompts for email, password (typed twice), optional name
+mio register
+
+# Headless (CI / scripting)
+mio register --email you@example.com --password 's3cr3tpass' --first-name Ada --last-name Lovelace
+# …or via env vars
+MIO_EMAIL=you@example.com MIO_PASSWORD='s3cr3tpass' mio register
+```
+
+Your password is never echoed or saved. `--first-name`/`--last-name` are optional; email-format and password rules (min 8 characters) are enforced by the API.
+
 ### API key (CI / scripts / agents)
 
 Skip `mio login` entirely — just set the environment variable:
@@ -278,6 +294,7 @@ Scripts and agents can branch on these stable codes.
 | Resource | Available actions |
 |----------|-------------------|
 | `login` / `logout` | Interactive auth |
+| `register` | Create a new account (email + password, optional first/last name) and auto-login — interactive, or headless via `--email`/`--password` (or `MIO_EMAIL`/`MIO_PASSWORD`). Replaces any stored key. |
 | `whoami` | Print resolved identity — user, team, hub, api-base, profile, key source |
 | `config` | `set`, `get`, `list` |
 | `api-keys` | `create`, `list`, `retrieve`, `delete` |

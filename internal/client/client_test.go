@@ -783,3 +783,120 @@ func TestRetryAfterDuration(t *testing.T) {
 		}
 	}
 }
+
+// TestClient_RegisterUsesPlainJSON verifies that Register posts a FLAT plain-JSON
+// body to /api/v1/auth/register (the /api/auth/* family speaks application/json,
+// not JSON:API), carries no Authorization header (registration is
+// unauthenticated), and decodes the 201 TokenResponse's access token.
+func TestClient_RegisterUsesPlainJSON(t *testing.T) {
+	var gotCT, gotPath, gotAuth string
+	var raw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"access_token":"jwt_reg","refresh_token":"rt","token_type":"Bearer","expires_in":900}`))
+	}))
+	defer srv.Close()
+
+	// An empty key mirrors how the register command constructs its client: the
+	// endpoint is unauthenticated.
+	c := newTestClient(srv, "")
+	res, err := c.Register(context.Background(), "a@example.com", "s3cr3tpass", "Ada", "Lovelace")
+	if err != nil {
+		t.Fatalf("Register error: %v", err)
+	}
+	if gotPath != "/api/v1/auth/register" {
+		t.Errorf("path = %q, want /api/v1/auth/register", gotPath)
+	}
+	if gotCT != contentTypeJSON {
+		t.Errorf("Content-Type = %q, want %q (plain JSON for auth)", gotCT, contentTypeJSON)
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization = %q, want empty (register is unauthenticated)", gotAuth)
+	}
+	// Flat body: fields at the top level, NO JSON:API `data` envelope.
+	if _, hasData := raw["data"]; hasData {
+		t.Errorf("register body unexpectedly carried a `data` envelope: %#v", raw)
+	}
+	if raw["email"] != "a@example.com" {
+		t.Errorf("body.email = %v, want a@example.com", raw["email"])
+	}
+	if raw["password"] != "s3cr3tpass" {
+		t.Errorf("body.password = %v, want s3cr3tpass", raw["password"])
+	}
+	if raw["first_name"] != "Ada" {
+		t.Errorf("body.first_name = %v, want Ada", raw["first_name"])
+	}
+	if raw["last_name"] != "Lovelace" {
+		t.Errorf("body.last_name = %v, want Lovelace", raw["last_name"])
+	}
+	if res.AccessToken != "jwt_reg" {
+		t.Errorf("access token = %q, want jwt_reg", res.AccessToken)
+	}
+}
+
+// TestClient_RegisterOmitsEmptyNames verifies that first_name/last_name are sent
+// ONLY when non-empty — the backend fields are optional, and sending empty
+// strings would differ from omission.
+func TestClient_RegisterOmitsEmptyNames(t *testing.T) {
+	var raw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"access_token":"jwt_reg","token_type":"Bearer"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	if _, err := c.Register(context.Background(), "a@example.com", "s3cr3tpass", "", ""); err != nil {
+		t.Fatalf("Register error: %v", err)
+	}
+	if _, has := raw["first_name"]; has {
+		t.Errorf("first_name must be omitted when empty; body: %#v", raw)
+	}
+	if _, has := raw["last_name"]; has {
+		t.Errorf("last_name must be omitted when empty; body: %#v", raw)
+	}
+}
+
+// TestClient_RegisterSurfacesConflict verifies that a 409 (email already
+// registered) is surfaced as a usage-class error carrying the backend's precise
+// detail message rather than being masked by a generic string.
+func TestClient_RegisterSurfacesConflict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentTypeJSONAPI)
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"errors":[{"status":"409","title":"ConflictError","detail":"Email 'a@example.com' is already registered."}]}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	_, err := c.Register(context.Background(), "a@example.com", "s3cr3tpass", "", "")
+	if err == nil {
+		t.Fatal("Register on a 409 must return an error")
+	}
+	if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Errorf("409 exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
+	}
+	if !strings.Contains(err.Error(), "already registered") {
+		t.Errorf("error must surface the backend detail; got %q", err.Error())
+	}
+}
+
+// TestClient_RegisterErrorsWithoutAccessToken verifies that a 2xx with no access
+// token is treated as a failure (the mint flow cannot proceed without one).
+func TestClient_RegisterErrorsWithoutAccessToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token_type":"Bearer"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "")
+	if _, err := c.Register(context.Background(), "a@example.com", "s3cr3tpass", "", ""); err == nil {
+		t.Fatal("Register must error when the response carries no access token")
+	}
+}

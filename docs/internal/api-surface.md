@@ -52,9 +52,15 @@ plain JSON.
 
 ---
 
-## auth (handled by login.go, not a resource command)
+## auth (handled by login.go / register.go, not resource commands)
 - `POST /api/auth/login` {email,password} → tokens (plain JSON)
-- `POST /api/auth/register` {email,password,first_name?,last_name?}
+- `POST /api/auth/register` {email,password,first_name?,last_name?} → 201 tokens
+  (same TokenResponse as login; unauthenticated). Surfaced as `mio register`
+  (`cmd/register.go`): creates the account then auto-logs-in by feeding the
+  returned access token into the shared `mintAndStore` tail (resolveTeamID →
+  MintAPIKey → keychain), so it REPLACES any stored key. Names sent only when
+  non-empty. Backend auto-provisions a personal team, so the JWT team_id claim
+  resolves the mint target with no `GET /api/teams` round-trip.
 - `POST /api/auth/refresh` (Bearer refresh)
 - `POST /api/auth/logout`
 - `GET /api/auth/me` → current user
