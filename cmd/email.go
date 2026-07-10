@@ -1048,9 +1048,15 @@ is lifted. The scope is always the hub and the reason is always admin_block.`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		// Validate the required flag BEFORE resolving auth so a usage error
-		// fires no HTTP request.
+		// fires no HTTP request. An explicit empty/whitespace --email is a usage
+		// error too (the backend rejects it as EmailStr) — catch it here rather
+		// than round-tripping to a 422.
 		if !cmd.Flags().Changed("email") {
 			return errs.New(errs.ExitUsage, "missing required flag: --email")
+		}
+		email := flagValue(cmd, "email")
+		if email == "" {
+			return errs.New(errs.ExitUsage, "--email must not be empty")
 		}
 
 		c, hubID, err := emailContext(cmd)
@@ -1058,11 +1064,9 @@ is lifted. The scope is always the hub and the reason is always admin_block.`,
 			return err
 		}
 
-		attrs := map[string]any{}
-		setMappedString(cmd, attrs, "email", "email_address")
-
 		// Enveloped POST: the backend HubCreateSuppressionData type is
 		// "email_suppressions" (derived from the email-suppressions tail).
+		attrs := map[string]any{"email_address": email}
 		res, err := c.client.Create(c.ctx, suppressionsPath(hubID, ""), attrs)
 		if err != nil {
 			return err
@@ -1080,12 +1084,14 @@ to a bad recipient, so this requires --yes in non-interactive shells.`,
 	Example: `  mio email suppressions lift esp_abc123 --yes`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, hubID, err := emailContext(cmd)
-		if err != nil {
+		// Gate the destructive op BEFORE resolving auth/hub so the --yes guard
+		// fires ahead of any hub name/slug resolution or auto-default HTTP call.
+		if err := confirmDestructive(cmd, fmt.Sprintf("Lift suppression %s (re-enable email delivery)?", args[0])); err != nil {
 			return err
 		}
 
-		if err := confirmDestructive(cmd, fmt.Sprintf("Lift suppression %s (re-enable email delivery)?", args[0])); err != nil {
+		c, hubID, err := emailContext(cmd)
+		if err != nil {
 			return err
 		}
 

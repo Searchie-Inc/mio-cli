@@ -82,6 +82,24 @@ func TestEmailSuppressionsCreate_MissingEmail(t *testing.T) {
 	}
 }
 
+// TestEmailSuppressionsCreate_EmptyEmail pins that an explicit empty --email
+// exits ExitUsage without firing any request (the backend rejects it as
+// EmailStr; we catch it before context resolution).
+func TestEmailSuppressionsCreate_EmptyEmail(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"email", "suppressions", "create", "--email", "   ")...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("no HTTP request must be fired for an empty --email")
+	}
+}
+
 // TestEmailSuppressionsLift_WithYes pins the lift DELETE: method and path
 // (including the suppression id).
 func TestEmailSuppressionsLift_WithYes(t *testing.T) {
@@ -116,5 +134,24 @@ func TestEmailSuppressionsLift_NoYes(t *testing.T) {
 	}
 	if *fired {
 		t.Error("no HTTP request must be fired when --yes is missing")
+	}
+}
+
+// TestEmailSuppressionsLift_NoYes_GuardBeforeResolve pins that the --yes guard
+// fires BEFORE any hub name/slug resolution. With a hub SLUG (not a raw id),
+// context resolution would issue a hub-list HTTP call; the destructive guard
+// must short-circuit first, so no request is fired.
+func TestEmailSuppressionsLift_NoYes_GuardBeforeResolve(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "my-slug-hub",
+			"email", "suppressions", "lift", "esp_1")...)
+
+	if res.Code != errs.ExitNeedsConfir {
+		t.Errorf("exit code = %d, want %d (ExitNeedsConfir); stderr=%q", res.Code, errs.ExitNeedsConfir, res.Stderr)
+	}
+	if *fired {
+		t.Error("destructive --yes guard must fire before hub resolution; no HTTP request expected")
 	}
 }

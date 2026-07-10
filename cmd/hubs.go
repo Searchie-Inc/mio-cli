@@ -514,7 +514,7 @@ func init() {
 	hubsPoliciesUpdateCmd.Flags().Bool("require-acceptance", false, "Require hub members to accept the policy before accessing content (TOS only).")
 }
 
-// ---- hubs policies gate + get (MIO-2020 / MIO-364) --------------------------
+// ---- hubs policies gate (MIO-2020) ------------------------------------------
 
 // hubsPoliciesGatePath returns /api/teams/{team_id}/hubs/{hub_id}/policies/gate.
 func hubsPoliciesGatePath(teamID, hubID string) string {

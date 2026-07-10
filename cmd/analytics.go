@@ -15,9 +15,35 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
+
+// validEngagementSections is the set of section drill-down values the backend
+// /analytics/engagement route accepts; any other value is a 422. Validated
+// client-side so a typo exits ExitUsage before any HTTP request.
+var validEngagementSections = map[string]bool{
+	"top_members_by_posts":    true,
+	"top_members_by_comments": true,
+	"top_posts":               true,
+	"top_content":             true,
+	"top_spaces":              true,
+	"recent_members":          true,
+}
+
+// engagementSectionList is the sorted, comma-joined valid section names for
+// error messages.
+var engagementSectionList = strings.Join([]string{
+	"recent_members",
+	"top_content",
+	"top_members_by_comments",
+	"top_members_by_posts",
+	"top_posts",
+	"top_spaces",
+}, ", ")
 
 func init() {
 	analyticsCmd.AddCommand(
@@ -156,18 +182,16 @@ Naive date-times are treated as UTC by the backend.`,
 	Example: `  # Default window
   mio analytics engagement --hub hub_123
 
-  # Custom range, single section, top 25 rows
-  mio analytics engagement --hub hub_123 --from 2026-05-01T00:00:00Z --to 2026-06-01T00:00:00Z --section courses --limit 25
+  # Custom range, single-section drill-down, top 25 rows
+  mio analytics engagement --hub hub_123 --from 2026-05-01T00:00:00Z --to 2026-06-01T00:00:00Z --section top_content --limit 25
 
   # Output as JSON for downstream processing
   mio analytics engagement --hub hub_123 --output json`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		c, teamID, hubID, err := analyticsContext(cmd)
-		if err != nil {
-			return err
-		}
-
+		// Validate the section enum + limit range BEFORE resolving auth/team/hub
+		// so a usage error fires no HTTP request (the backend enforces the same
+		// constraints with a 422 round-trip).
 		query := url.Values{}
 		if cmd.Flags().Changed("from") {
 			v, _ := cmd.Flags().GetString("from")
@@ -179,12 +203,26 @@ Naive date-times are treated as UTC by the backend.`,
 		}
 		if cmd.Flags().Changed("section") {
 			v, _ := cmd.Flags().GetString("section")
+			if !validEngagementSections[v] {
+				return errs.New(errs.ExitUsage,
+					"--section %q is not valid: must be one of %s", v, engagementSectionList)
+			}
 			query.Set("section", v)
 		}
 		if cmd.Flags().Changed("limit") {
-			if v, gerr := cmd.Flags().GetInt("limit"); gerr == nil && v > 0 {
-				query.Set("page[size]", itoa(v))
+			v, gerr := cmd.Flags().GetInt("limit")
+			if gerr != nil {
+				return errs.New(errs.ExitUsage, "--limit: %s", gerr.Error())
 			}
+			if v < 1 || v > 100 {
+				return errs.New(errs.ExitUsage, "--limit must be between 1 and 100 (got %d)", v)
+			}
+			query.Set("page[size]", itoa(v))
+		}
+
+		c, teamID, hubID, err := analyticsContext(cmd)
+		if err != nil {
+			return err
 		}
 
 		path := analyticsBasePath(teamID, hubID) + "/engagement"
@@ -226,6 +264,6 @@ func init() {
 	}
 
 	// Engagement-only filters.
-	analyticsEngagementCmd.Flags().String("section", "", "Filter the content/space leaderboards to a single section.")
+	analyticsEngagementCmd.Flags().String("section", "", "Drill down into a single section: one of "+engagementSectionList+".")
 	analyticsEngagementCmd.Flags().Int("limit", 0, "Cap the size of the returned top-N lists (page[size], 1–100).")
 }
