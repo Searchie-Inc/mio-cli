@@ -89,9 +89,12 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Interactive registration requires an interactive terminal to prompt for the
-	// missing fields. We key off the stderr stream (where the prompts are written),
-	// mirroring confirmDestructive — off a terminal we cannot meaningfully prompt,
-	// so this is a usage error (exit 2) that fires no HTTP request.
+	// missing fields. We key off the stderr stream — where the prompts are written
+	// — so that off a terminal we cannot meaningfully prompt and instead return a
+	// usage error (exit 2) that fires no HTTP request. Gating on a command stream
+	// (rather than os.Stdin) also keeps the branch deterministic under `go test`,
+	// which connects os.Stdin to /dev/null (a char device isTTY treats as a TTY);
+	// confirmDestructive gates on cmd.OutOrStdout() for the same reason.
 	if !isTTY(cmd.ErrOrStderr()) {
 		return errs.New(errs.ExitUsage,
 			"register needs --email and --password (or MIO_EMAIL/MIO_PASSWORD) when not run interactively")

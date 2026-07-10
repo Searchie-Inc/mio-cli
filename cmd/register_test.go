@@ -55,7 +55,11 @@ func registerMintServer(t *testing.T, teamID string, regBody *map[string]any, mi
 // body to /api/v1/auth/register, then auto-logs-in by minting + storing a key,
 // and confirms both registration and login in its stdout.
 func TestRegister_HeadlessFullFlow(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // isolate config/keychain writes
+	// Sandbox the config dir so the minted key + current_team land in a temp dir,
+	// not the developer's real config. As with TestLogin_HeadlessFlags_FullMintFlow,
+	// config.SetAPIKey falls back to the encrypted file keyring here (no native
+	// keychain on CI); the test asserts a non-error outcome regardless of backend.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	var regBody map[string]any
 	mintReached := false
@@ -293,5 +297,73 @@ func TestRegister_PromptSuccess(t *testing.T) {
 	}
 	if lastName != "Lovelace" {
 		t.Errorf("lastName = %q, want Lovelace", lastName)
+	}
+}
+
+// TestRegister_TeamFlagOverridesClaim pins that an explicit --team wins over the
+// team_id embedded in the register token claim when choosing the mint target —
+// the documented "honors the global --team for the mint step" behavior. The
+// token claims team t_claim; --team t_explicit must be where the key is minted.
+func TestRegister_TeamFlagOverridesClaim(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	token := makeLoginJWT(t, "t_claim")
+	var mintPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/auth/register" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			resp, _ := json.Marshal(map[string]any{"access_token": token, "token_type": "Bearer"})
+			_, _ = w.Write(resp)
+		case strings.HasSuffix(r.URL.Path, "/api-keys") && r.Method == http.MethodPost:
+			mintPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"k","type":"api_keys","attributes":{"secret":"mio_sk_teamflag"}}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	env := []string{"MIO_API_BASE_URL=" + srv.URL, "MIO_API_KEY="}
+	res := runContract(t, env,
+		withTeam("t_explicit",
+			"register",
+			"--email", "teamflag@test.member.dev",
+			"--password", "s3cr3tpass",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if mintPath != "/api/v1/teams/t_explicit/api-keys" {
+		t.Errorf("mint path = %q, want /api/v1/teams/t_explicit/api-keys (--team must override the token claim)", mintPath)
+	}
+}
+
+// TestRegister_PromptReadsEmailWhenMissing exercises the interactive email
+// prompt: with no email supplied up front, promptRegistration must consume the
+// FIRST reader line as the email, then password, confirmation, and (empty)
+// optional names — proving the shared-reader line ordering.
+func TestRegister_PromptReadsEmailWhenMissing(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetIn(strings.NewReader("prompted@test.member.dev\nsecretpass\nsecretpass\n\n\n"))
+	var errBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+
+	email, password, firstName, lastName, err := promptRegistration(cmd, "", "", "")
+	if err != nil {
+		t.Fatalf("promptRegistration error: %v", err)
+	}
+	if email != "prompted@test.member.dev" {
+		t.Errorf("email = %q, want prompted@test.member.dev (read from the first line)", email)
+	}
+	if password != "secretpass" {
+		t.Errorf("password = %q, want secretpass", password)
+	}
+	if firstName != "" || lastName != "" {
+		t.Errorf("names = %q/%q, want empty (blank lines)", firstName, lastName)
 	}
 }
