@@ -10,6 +10,10 @@ package cmd
 //	retrieve GET    /api/teams/{team_id}/files/{id}
 //	update   PATCH  /api/teams/{team_id}/files/{id}
 //	delete   DELETE /api/teams/{team_id}/files/{id}
+//	cards get GET   /api/teams/{team_id}/files/{id}/cards
+//	cards set PUT   /api/teams/{team_id}/files/{id}/cards     (type file_cards)
+//	chapters get GET /api/teams/{team_id}/files/{id}/chapters
+//	chapters set PUT /api/teams/{team_id}/files/{id}/chapters (type file_chapters)
 //
 // folders (team-scoped admin):
 //
@@ -18,6 +22,17 @@ package cmd
 //	retrieve GET    /api/teams/{team_id}/folders/{id}
 //	update   PATCH  /api/teams/{team_id}/folders/{id}
 //	delete   DELETE /api/teams/{team_id}/folders/{id}
+//	move     POST   /api/teams/{team_id}/folders/{id}/move    (type folders)
+//
+// search (team-scoped admin):
+//
+//	search   GET    /api/teams/{team_id}/search/media?q=…
+//
+// hub-media (hub-scoped admin — standalone files):
+//
+//	publish   POST   /api/teams/{team_id}/hubs/{hub_id}/media  (type hub_media)
+//	list      GET    /api/teams/{team_id}/hubs/{hub_id}/media
+//	unpublish DELETE /api/teams/{team_id}/hubs/{hub_id}/media/{file_id}
 //
 // playlists (team-scoped admin):
 //
@@ -36,7 +51,9 @@ package cmd
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -46,13 +63,20 @@ import (
 
 func init() {
 	// media files <action>
+	mediaFilesCardsCmd.AddCommand(mediaFilesCardsGetCmd, mediaFilesCardsSetCmd)
+	mediaFilesChaptersCmd.AddCommand(mediaFilesChaptersGetCmd, mediaFilesChaptersSetCmd)
 	mediaFilesCmd.AddCommand(
 		mediaFilesListCmd,
 		mediaFilesRetrieveCmd,
 		mediaFilesUpdateCmd,
 		mediaFilesDeleteCmd,
+		mediaFilesCardsCmd,
+		mediaFilesChaptersCmd,
 	)
 	mediaCmd.AddCommand(mediaFilesCmd)
+
+	mediaFilesCardsSetCmd.Flags().String("cards", "", "JSON array of cards (or @file.json). Each: {label,start,url?,description?,id?}. Required.")
+	mediaFilesChaptersSetCmd.Flags().String("chapters", "", "JSON array of chapters (or @file.json). Each: {title,start,id?}. Required.")
 
 	// media folders <action>
 	mediaFoldersCmd.AddCommand(
@@ -61,8 +85,32 @@ func init() {
 		mediaFoldersRetrieveCmd,
 		mediaFoldersUpdateCmd,
 		mediaFoldersDeleteCmd,
+		mediaFoldersMoveCmd,
 	)
 	mediaCmd.AddCommand(mediaFoldersCmd)
+
+	mediaFoldersMoveCmd.Flags().String("parent-id", "", "Target parent folder id to move under.")
+	mediaFoldersMoveCmd.Flags().Bool("to-root", false, "Move the folder to the library root (no parent).")
+
+	// media search
+	mediaCmd.AddCommand(mediaSearchCmd)
+	mediaSearchCmd.Flags().String("query", "", "Search query string. Required.")
+	mediaSearchCmd.Flags().String("hub-id", "", "Optional hub id to scope the search.")
+	mediaSearchCmd.Flags().Int("limit", 0, "Max results (page[size], 1-100).")
+
+	// media hub-media <action>  (standalone files — MIO-2266)
+	mediaHubMediaCmd.AddCommand(
+		mediaHubMediaPublishCmd,
+		mediaHubMediaListCmd,
+		mediaHubMediaUnpublishCmd,
+	)
+	mediaCmd.AddCommand(mediaHubMediaCmd)
+
+	mediaHubMediaPublishCmd.Flags().String("file-id", "", "File id to publish to the hub. Required.")
+	mediaHubMediaPublishCmd.Flags().String("visibility", "", "Per-hub visibility: members (default), private, or public.")
+	mediaHubMediaPublishCmd.Flags().String("published-at", "", "RFC3339 publish timestamp (default: now).")
+	mediaHubMediaPublishCmd.Flags().Int("position", 0, "Manual ordering within the hub (>= 0).")
+	addPaginationFlags(mediaHubMediaListCmd)
 
 	// media playlists <action>
 	mediaPlaylistsCmd.AddCommand(
@@ -145,6 +193,44 @@ func hubPlaylistsPath(teamID, hubID, playlistID string) string {
 	return base
 }
 
+// applyHubMediaOptions parses the optional hub_media publish flags
+// (--visibility, --published-at, --position) into attrs, validating each BEFORE
+// any HTTP request so a bad flag fires no request. Shared by the hub-playlists
+// and hub-media (standalone file) publish commands.
+func applyHubMediaOptions(cmd *cobra.Command, attrs map[string]any) error {
+	if cmd.Flags().Changed("visibility") {
+		v, err := cmd.Flags().GetString("visibility")
+		if err != nil {
+			return errs.New(errs.ExitUsage, "--visibility: %s", err)
+		}
+		if !hubMediaVisibility[v] {
+			return errs.New(errs.ExitUsage, "invalid --visibility %q: must be members, private, or public", v)
+		}
+		attrs["visibility"] = v
+	}
+	if cmd.Flags().Changed("published-at") {
+		pa, err := cmd.Flags().GetString("published-at")
+		if err != nil {
+			return errs.New(errs.ExitUsage, "--published-at: %s", err)
+		}
+		if _, perr := time.Parse(time.RFC3339, pa); perr != nil {
+			return errs.New(errs.ExitUsage, "invalid --published-at %q: must be RFC3339 (e.g. 2026-01-02T15:04:05Z)", pa)
+		}
+		attrs["published_at"] = pa
+	}
+	if cmd.Flags().Changed("position") {
+		pos, err := cmd.Flags().GetInt("position")
+		if err != nil {
+			return errs.New(errs.ExitUsage, "--position: %s", err)
+		}
+		if pos < 0 {
+			return errs.New(errs.ExitUsage, "invalid --position %d: must be >= 0", pos)
+		}
+		attrs["position"] = pos
+	}
+	return nil
+}
+
 var mediaHubPlaylistsCmd = &cobra.Command{
 	Use:   "hub-playlists",
 	Short: "Publish playlists to a hub.",
@@ -171,35 +257,8 @@ var mediaHubPlaylistsPublishCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "missing required flag: --playlist-id")
 		}
 		attrs := map[string]any{"playlist_id": pid}
-		if cmd.Flags().Changed("visibility") {
-			v, err := cmd.Flags().GetString("visibility")
-			if err != nil {
-				return errs.New(errs.ExitUsage, "--visibility: %s", err)
-			}
-			if !hubMediaVisibility[v] {
-				return errs.New(errs.ExitUsage, "invalid --visibility %q: must be members, private, or public", v)
-			}
-			attrs["visibility"] = v
-		}
-		if cmd.Flags().Changed("published-at") {
-			pa, err := cmd.Flags().GetString("published-at")
-			if err != nil {
-				return errs.New(errs.ExitUsage, "--published-at: %s", err)
-			}
-			if _, perr := time.Parse(time.RFC3339, pa); perr != nil {
-				return errs.New(errs.ExitUsage, "invalid --published-at %q: must be RFC3339 (e.g. 2026-01-02T15:04:05Z)", pa)
-			}
-			attrs["published_at"] = pa
-		}
-		if cmd.Flags().Changed("position") {
-			pos, err := cmd.Flags().GetInt("position")
-			if err != nil {
-				return errs.New(errs.ExitUsage, "--position: %s", err)
-			}
-			if pos < 0 {
-				return errs.New(errs.ExitUsage, "invalid --position %d: must be >= 0", pos)
-			}
-			attrs["position"] = pos
+		if err := applyHubMediaOptions(cmd, attrs); err != nil {
+			return err
 		}
 
 		c, teamID, hubID, err := mediaHubContext(cmd)
@@ -750,4 +809,393 @@ func init() {
 	mediaPlaylistsUpdateCmd.Flags().Bool("podcast-feed-enabled", false, "Whether to enable the podcast RSS feed for this playlist.")
 
 	addPaginationFlags(mediaPlaylistsListCmd)
+}
+
+// ======================================================================
+// media files cards / chapters (MIO-2266)
+//
+// In-video CTA cards and authorable chapters are full-list PUT replaces that
+// return a JSON:API collection. `set` derives the JSON:API type "file_cards" /
+// "file_chapters" from the .../files/{id}/cards|chapters tail via typeOverrides.
+//
+//	cards    get GET  /api/teams/{team}/files/{id}/cards
+//	         set PUT  /api/teams/{team}/files/{id}/cards      (type file_cards)
+//	chapters get GET  /api/teams/{team}/files/{id}/chapters
+//	         set PUT  /api/teams/{team}/files/{id}/chapters   (type file_chapters)
+// ======================================================================
+
+// fileCardsPath returns /api/teams/{team}/files/{id}/cards.
+func fileCardsPath(teamID, fileID string) string {
+	return fmt.Sprintf("/api/teams/%s/files/%s/cards", teamID, fileID)
+}
+
+// fileChaptersPath returns /api/teams/{team}/files/{id}/chapters.
+func fileChaptersPath(teamID, fileID string) string {
+	return fmt.Sprintf("/api/teams/%s/files/%s/chapters", teamID, fileID)
+}
+
+// parseJSONArrayFlag parses a REQUIRED string flag whose value is a JSON array
+// (or @file.json). It validates client-side — an unset/empty flag, malformed
+// JSON, or a non-array value is a usage error that fires no HTTP request. The
+// per-item shape is validated server-side (the backend forbids unknown keys).
+func parseJSONArrayFlag(cmd *cobra.Command, name string) ([]any, error) {
+	if !cmd.Flags().Changed(name) {
+		return nil, errs.New(errs.ExitUsage, "missing required flag: --%s", name)
+	}
+	raw, err := cmd.Flags().GetString(name)
+	if err != nil {
+		return nil, errs.New(errs.ExitUsage, "--%s: %s", name, err)
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil, errs.New(errs.ExitUsage, "--%s must not be empty (use '[]' to clear)", name)
+	}
+	v, perr := parseJSONFlag(raw)
+	if perr != nil {
+		return nil, errs.New(errs.ExitUsage, "--%s must be valid JSON array or @file: %s", name, perr)
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return nil, errs.New(errs.ExitUsage, "--%s must be a JSON array", name)
+	}
+	return arr, nil
+}
+
+var mediaFilesCardsCmd = &cobra.Command{
+	Use:   "cards",
+	Short: "Manage a file's in-video CTA cards.",
+	Long:  "Get or replace the in-video CTA cards shown on a media file during playback.",
+}
+
+var mediaFilesCardsGetCmd = &cobra.Command{
+	Use:     "get <file_id>",
+	Short:   "List a file's in-video CTA cards.",
+	Long:    "List the active in-video CTA cards for a team-owned file, ordered by start time.",
+	Example: `  mio media files cards get file_abc123`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, teamID, err := mediaContext(cmd)
+		if err != nil {
+			return err
+		}
+		col, err := c.client.List(c.ctx, fileCardsPath(teamID, args[0]), nil)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, col)
+	},
+}
+
+var mediaFilesCardsSetCmd = &cobra.Command{
+	Use:   "set <file_id>",
+	Short: "Replace a file's in-video CTA cards (full-list PUT).",
+	Long: `Atomically replace the full list of in-video CTA cards for a file.
+
+--cards takes a JSON array (or @file.json). Each card is an object:
+  {"label":"Buy now","start":15000,"url":"https://…","description":"…"}
+label and start (milliseconds from the video start) are required; url and
+description are optional. Include an existing card's "id" to preserve it; omit
+it to create a new card. Pass --cards '[]' to remove all cards.`,
+	Example: `  mio media files cards set file_abc123 --cards '[{"label":"Buy","start":15000,"url":"https://x.co"}]'
+  mio media files cards set file_abc123 --cards @cards.json
+  mio media files cards set file_abc123 --cards '[]'`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Validate the payload before resolving auth/team so a bad flag fires no request.
+		cards, err := parseJSONArrayFlag(cmd, "cards")
+		if err != nil {
+			return err
+		}
+		c, teamID, err := mediaContext(cmd)
+		if err != nil {
+			return err
+		}
+		col, err := c.client.ActionCollection(c.ctx, http.MethodPut,
+			fileCardsPath(teamID, args[0]), map[string]any{"cards": cards})
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, col)
+	},
+}
+
+var mediaFilesChaptersCmd = &cobra.Command{
+	Use:   "chapters",
+	Short: "Manage a file's authored chapters.",
+	Long:  "Get the effective chapters (authored, else auto) or replace the authored chapter list for a media file.",
+}
+
+var mediaFilesChaptersGetCmd = &cobra.Command{
+	Use:     "get <file_id>",
+	Short:   "List a file's effective chapters.",
+	Long:    "List the effective chapters (authored when present, else auto-generated) for a team-owned file.",
+	Example: `  mio media files chapters get file_abc123`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, teamID, err := mediaContext(cmd)
+		if err != nil {
+			return err
+		}
+		col, err := c.client.List(c.ctx, fileChaptersPath(teamID, args[0]), nil)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, col)
+	},
+}
+
+var mediaFilesChaptersSetCmd = &cobra.Command{
+	Use:   "set <file_id>",
+	Short: "Replace a file's authored chapters (full-list PUT).",
+	Long: `Atomically replace the authored chapter list for a file.
+
+--chapters takes a JSON array (or @file.json). Each chapter is an object:
+  {"title":"Intro","start":0}
+title and start (milliseconds from the video start) are required; start values
+must be unique. Include an existing chapter's "id" to preserve it. Pass
+--chapters '[]' to clear the authored list (auto chapters then apply).`,
+	Example: `  mio media files chapters set file_abc123 --chapters '[{"title":"Intro","start":0},{"title":"Demo","start":60000}]'
+  mio media files chapters set file_abc123 --chapters @chapters.json
+  mio media files chapters set file_abc123 --chapters '[]'`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Validate the payload before resolving auth/team so a bad flag fires no request.
+		chapters, err := parseJSONArrayFlag(cmd, "chapters")
+		if err != nil {
+			return err
+		}
+		c, teamID, err := mediaContext(cmd)
+		if err != nil {
+			return err
+		}
+		col, err := c.client.ActionCollection(c.ctx, http.MethodPut,
+			fileChaptersPath(teamID, args[0]), map[string]any{"chapters": chapters})
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, col)
+	},
+}
+
+// ======================================================================
+// media folders move (MIO-2266)
+//
+//	move POST /api/teams/{team}/folders/{id}/move   (type folders)
+//
+// The body is {new_parent_id: <id>|null}; the write derives the JSON:API type
+// "folders" (NOT "move") via the folders/move typeOverride.
+// ======================================================================
+
+// foldersMovePath returns /api/teams/{team}/folders/{id}/move.
+func foldersMovePath(teamID, folderID string) string {
+	return fmt.Sprintf("/api/teams/%s/folders/%s/move", teamID, folderID)
+}
+
+var mediaFoldersMoveCmd = &cobra.Command{
+	Use:   "move <folder_id>",
+	Short: "Move a folder (and its subtree) to a new parent.",
+	Long: `Move a folder and its entire subtree under a new parent folder, or to the
+library root with --to-root.
+
+Exactly one of --parent-id or --to-root is required. The move fails (422) if it
+would create a cycle, and is not supported for subtrees larger than 1000 folders.`,
+	Example: `  mio media folders move folder_abc123 --parent-id folder_xyz789
+  mio media folders move folder_abc123 --to-root`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Validate the target selection before resolving auth so a bad flag fires no request.
+		toRoot, _ := cmd.Flags().GetBool("to-root")
+		parentID := flagValue(cmd, "parent-id")
+		switch {
+		case toRoot && parentID != "":
+			return errs.New(errs.ExitUsage, "pass either --parent-id or --to-root, not both")
+		case !toRoot && parentID == "":
+			return errs.New(errs.ExitUsage, "missing move target: pass --parent-id <id> or --to-root")
+		}
+		// new_parent_id is required by the backend but nullable: null moves to root.
+		var newParent any
+		if !toRoot {
+			newParent = parentID
+		}
+		attrs := map[string]any{"new_parent_id": newParent}
+
+		c, teamID, err := mediaContext(cmd)
+		if err != nil {
+			return err
+		}
+		res, err := c.client.Action(c.ctx, http.MethodPost, foldersMovePath(teamID, args[0]), attrs)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
+// ======================================================================
+// media search (MIO-2266)
+//
+//	search GET /api/teams/{team}/search/media?q=…&hub_id=…&page[size]=…
+//
+// Hybrid (RRF) search over a team's media transcripts. Team-admin scope; uses
+// top-N pagination (page[size] only — no cursor).
+// ======================================================================
+
+// searchMediaPath returns /api/teams/{team}/search/media.
+func searchMediaPath(teamID string) string {
+	return fmt.Sprintf("/api/teams/%s/search/media", teamID)
+}
+
+var mediaSearchCmd = &cobra.Command{
+	Use:   "search",
+	Short: "Search a team's media transcripts.",
+	Long: `Hybrid (lexical + semantic RRF) search over the team's media transcripts.
+
+Returns ranked snippets with timestamps and share URLs. Team-admin scope. Pass
+--hub-id to restrict results to a single hub's published media.`,
+	Example: `  mio media search --query "onboarding checklist"
+  mio media search --query pricing --hub-id hub_123 --limit 50`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Validate flags before resolving auth so a bad flag fires no request.
+		q := flagValue(cmd, "query")
+		if q == "" {
+			return errs.New(errs.ExitUsage, "missing required flag: --query")
+		}
+		pageSize := 0
+		if cmd.Flags().Changed("limit") {
+			limit, lerr := cmd.Flags().GetInt("limit")
+			if lerr != nil {
+				return errs.New(errs.ExitUsage, "--limit: %s", lerr)
+			}
+			// Backend caps page[size] at 1..100 (top-N pagination); reject
+			// out-of-range client-side so it fires no request.
+			if limit < 1 || limit > 100 {
+				return errs.New(errs.ExitUsage, "invalid --limit %d: must be between 1 and 100", limit)
+			}
+			pageSize = limit
+		}
+
+		c, teamID, err := mediaContext(cmd)
+		if err != nil {
+			return err
+		}
+		query := url.Values{}
+		query.Set("q", q)
+		if hubID := flagValue(cmd, "hub-id"); hubID != "" {
+			query.Set("hub_id", hubID)
+		}
+		if pageSize > 0 {
+			query.Set("page[size]", itoa(pageSize))
+		}
+		col, err := c.client.List(c.ctx, searchMediaPath(teamID), query)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, col)
+	},
+}
+
+// ======================================================================
+// media hub-media — publish standalone files to a hub (MIO-2266)
+//
+//	publish   POST   /api/teams/{team}/hubs/{hub}/media
+//	list      GET    /api/teams/{team}/hubs/{hub}/media
+//	unpublish DELETE /api/teams/{team}/hubs/{hub}/media/{file_id}
+//
+// Publishing a file writes a hub_media row (same join the /content grid and
+// homepage content-grid read). The write derives JSON:API type "hub_media"
+// (not "media") via the hubs/media typeOverride.
+// ======================================================================
+
+// hubMediaPath returns /api/teams/{team}/hubs/{hub}/media[/{file_id}].
+func hubMediaPath(teamID, hubID, fileID string) string {
+	base := fmt.Sprintf("/api/teams/%s/hubs/%s/media", teamID, hubID)
+	if fileID != "" {
+		return base + "/" + fileID
+	}
+	return base
+}
+
+var mediaHubMediaCmd = &cobra.Command{
+	Use:   "hub-media",
+	Short: "Publish standalone files to a hub.",
+	Long: `Publish, list, and unpublish standalone media files on the active hub.
+
+Publishing a file writes a hub_media row — the record that surfaces the file on
+the hub's /content browse grid and the homepage content-grid. (Use
+'media hub-playlists' to publish a playlist instead.)`,
+	Example: `  mio media hub-media publish --hub hub_123 --file-id file_abc
+  mio media hub-media list --hub hub_123`,
+}
+
+var mediaHubMediaPublishCmd = &cobra.Command{
+	Use:   "publish",
+	Short: "Publish a file to the active hub.",
+	Long:  "Publish a standalone media file to the active hub, creating (or updating) its hub_media row.",
+	Example: `  mio media hub-media publish --hub hub_123 --file-id file_abc
+  mio media hub-media publish --hub hub_123 --file-id file_abc --visibility public --position 0`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Validate before resolving auth/team/hub so a bad flag fires no request.
+		fid := flagValue(cmd, "file-id")
+		if fid == "" {
+			return errs.New(errs.ExitUsage, "missing required flag: --file-id")
+		}
+		attrs := map[string]any{"file_id": fid}
+		if err := applyHubMediaOptions(cmd, attrs); err != nil {
+			return err
+		}
+
+		c, teamID, hubID, err := mediaHubContext(cmd)
+		if err != nil {
+			return err
+		}
+		res, err := c.client.Create(c.ctx, hubMediaPath(teamID, hubID, ""), attrs)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
+var mediaHubMediaListCmd = &cobra.Command{
+	Use:     "list",
+	Short:   "List files published to the active hub.",
+	Long:    "List the standalone media files published to the active hub (hub_media rows), in all states (draft/scheduled/live).",
+	Example: `  mio media hub-media list --hub hub_123`,
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		c, teamID, hubID, err := mediaHubContext(cmd)
+		if err != nil {
+			return err
+		}
+		query := url.Values{}
+		addPageFlags(cmd, query)
+		col, err := c.client.List(c.ctx, hubMediaPath(teamID, hubID, ""), query)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, col)
+	},
+}
+
+var mediaHubMediaUnpublishCmd = &cobra.Command{
+	Use:     "unpublish <file_id>",
+	Short:   "Unpublish a file from the active hub.",
+	Long:    "Remove a file's hub_media row from the active hub. The file itself is not deleted. Pass --yes to skip the confirmation prompt.",
+	Example: `  mio media hub-media unpublish file_abc --hub hub_123 --yes`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, teamID, hubID, err := mediaHubContext(cmd)
+		if err != nil {
+			return err
+		}
+		if err := confirmDestructive(cmd, fmt.Sprintf("Unpublish file %s from the hub?", args[0])); err != nil {
+			return err
+		}
+		if err := c.client.Delete(c.ctx, hubMediaPath(teamID, hubID, args[0])); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Unpublished file %s from the hub.\n", args[0])
+		return nil
+	},
 }
