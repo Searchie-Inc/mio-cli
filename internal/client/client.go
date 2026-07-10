@@ -143,6 +143,19 @@ var typeOverrides = []struct {
 	// Publishing a playlist to a hub writes a hub_media row (MIO-2259); the
 	// bare "playlists" segment would derive the team-scoped "playlists" type.
 	{"hubs/playlists", "hub_media"},
+	// Publishing a standalone file to a hub also writes a hub_media row
+	// (MIO-2266); the bare "media" segment would derive "media".
+	{"hubs/media", "hub_media"},
+	// Media enrichment (MIO-2266): in-video CTA cards + authorable chapters are
+	// full-list PUT replaces whose backend Literal types are the snake_case
+	// plurals, not the "cards"/"chapters" URL segments.
+	{"files/cards", "file_cards"},
+	{"files/chapters", "file_chapters"},
+	// Folder subtree move (MIO-2266): POST .../folders/{id}/move binds the
+	// FolderMove schema whose type Literal is "folders" (NOT "move"). "move" is
+	// a known collection token so it is not mistaken for the {id}; this override
+	// then resolves the folders/move tail back to the "folders" type.
+	{"folders/move", "folders"},
 	{"products/deliverables", "product_deliverables"},
 	{"contact-attributes/options", "contact_attribute_options"},
 	// hub-config lives at /hubs/{hub}/contact-attributes — same trailing
@@ -277,6 +290,9 @@ var knownCollections = map[string]bool{
 	"role": true,
 	// Media (2026-06-09): files, folders, playlists wired in media.go.
 	"files": true, "folders": true, "playlists": true,
+	// Media enrichment (MIO-2266): in-video cards, authorable chapters, folder
+	// subtree move, and standalone-file hub publishing (hubs/{hub}/media).
+	"cards": true, "chapters": true, "move": true, "media": true,
 	// Contact-scoped drip enrollment reader (email enrollments list-by-contact).
 	"drip-enrollments": true,
 	// OAuth client management (Hub-as-IdP SSO, 2026-06-24).
