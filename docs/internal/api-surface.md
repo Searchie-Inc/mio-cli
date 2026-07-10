@@ -92,6 +92,7 @@ plain JSON.
 
 ## hubs  (`cmd/hubs.go`)
 - `create`   POST `/api/teams/{team_id}/hubs`
+  - presentation-blob flags (create-only): `--branding-json` `--navigation-json` `--settings-json` `--meta-json` (opaque JSONB objects; inline JSON or `@file`); `--logo-url` merges into `branding` (MIO-2254)
 - `list`     GET `/api/teams/{team_id}/hubs`
 - `retrieve` GET `/api/teams/{team_id}/hubs/{id}`
 - `update`   PATCH `/api/teams/{team_id}/hubs/{id}`

@@ -98,20 +98,52 @@ var hubsCreateCmd = &cobra.Command{
   mio hubs create --name "Support Hub" --slug support --description "Help articles"`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		c, teamID, err := hubsContext(cmd)
-		if err != nil {
-			return err
-		}
-
+		// Build and validate attributes BEFORE resolving auth/team: a malformed
+		// flag must exit with a usage error and fire NO HTTP request, even when
+		// --team is a name/slug that would otherwise trigger a resolution GET.
 		attrs := map[string]any{}
 		setMappedString(cmd, attrs, "name", "title")
 		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "description")
-		setMappedNestedString(cmd, attrs, "logo-url", "branding", "logo_url")
 		setMappedBoolInverted(cmd, attrs, "published", "is_private")
+
+		// Presentation-blob flags: opaque JSONB objects passed through verbatim so
+		// an operator or agent can author a hub's branding, navigation, settings and
+		// feature-guard meta in the same POST. (MIO-2254)
+		for _, jf := range []struct{ flag, key string }{
+			{"branding-json", "branding"},
+			{"navigation-json", "navigation"},
+			{"settings-json", "settings"},
+			{"meta-json", "meta"},
+		} {
+			if err := setMappedJSONObjectFlag(cmd, attrs, jf.flag, jf.key); err != nil {
+				return err
+			}
+		}
+
+		// --logo-url merges into the branding object rather than replacing it, so it
+		// composes with --branding-json (the backend assigns branding wholesale, so
+		// the CLI must send one already-merged object).
+		if cmd.Flags().Changed("logo-url") {
+			logo, err := cmd.Flags().GetString("logo-url")
+			if err != nil {
+				return errs.New(errs.ExitUsage, "--logo-url: %s", err)
+			}
+			branding, _ := attrs["branding"].(map[string]any)
+			if branding == nil {
+				branding = map[string]any{}
+			}
+			branding["logo_url"] = logo
+			attrs["branding"] = branding
+		}
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
+		}
+
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
 		}
 
 		res, err := c.client.Create(c.ctx, hubsPath(teamID, ""), attrs)
@@ -248,6 +280,18 @@ func init() {
 		cmd.Flags().String("description", "", "Short description of the hub.")
 		cmd.Flags().String("logo-url", "", "URL of the hub's logo image.")
 		cmd.Flags().Bool("published", false, "Whether the hub is publicly published.")
+	}
+
+	// Presentation-blob flags are create-only for now: `hubs update` needs
+	// read-modify-write handling (branding/navigation/meta are whole-blob
+	// overwrites server-side) which lands in MIO-2255 / MIO-2256.
+	for _, f := range []struct{ name, desc string }{
+		{"branding-json", "Hub branding as a JSON object — colors, fonts, logo. Inline JSON or @file."},
+		{"navigation-json", "Hub navigation as a JSON object — header/footer menu items. Inline JSON or @file."},
+		{"settings-json", "Hub settings as a JSON object — header/footer chrome, appearance, policies. Inline JSON or @file."},
+		{"meta-json", "Hub meta as a JSON object — feature guards. Inline JSON or @file."},
+	} {
+		hubsCreateCmd.Flags().String(f.name, "", f.desc)
 	}
 
 	addPaginationFlags(hubsListCmd)

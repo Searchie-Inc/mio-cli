@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
 // attrKey converts a user-facing kebab-case flag name into the snake_case
@@ -142,21 +144,6 @@ func setMappedBoolInverted(cmd *cobra.Command, attrs map[string]any, name, key s
 	}
 }
 
-// setMappedNestedString copies a string flag into attrs[parentKey][childKey]
-// iff the user set it. Use this when the backend expects the value nested
-// inside a sub-object rather than at the top level of attributes — for example
-// --logo-url X should send attributes.branding.logo_url = X, not
-// attributes.logo_url. The parent map is always created fresh so there is no
-// risk of merging with a pre-existing value.
-func setMappedNestedString(cmd *cobra.Command, attrs map[string]any, name, parentKey, childKey string) {
-	if !cmd.Flags().Changed(name) {
-		return
-	}
-	if v, err := cmd.Flags().GetString(name); err == nil {
-		attrs[parentKey] = map[string]any{childKey: v}
-	}
-}
-
 // parseJSONFlag parses a flag value as JSON, returning the decoded value (an
 // object, array, or scalar). A value beginning with "@" is treated as a path to
 // a file whose contents are the JSON (e.g. --conditions @conditions.json). Used
@@ -176,6 +163,38 @@ func parseJSONFlag(raw string) (any, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+// setMappedJSONObjectFlag parses a string flag as a JSON object and stores it
+// at attrs[key] under an EXPLICIT backend attribute name, iff the user set the
+// flag. A value beginning with "@" is read from a file (see parseJSONFlag).
+// The decoded value MUST be a JSON object: these flags map to backend JSONB
+// sub-objects (branding, navigation, settings, meta), so an array, scalar or
+// null is a usage error rather than a silent pass-through the backend would
+// 422 on. Mirrors setMappedString for the JSON-object case. Returns ExitUsage
+// on malformed JSON or a non-object value; leaves attrs untouched when unset.
+//
+// JSON numbers decode via float64, which is lossless for the small UI-scale
+// values these hub-config blobs carry (colors, font sizes, positions, flags).
+// Integers needing >2^53 precision are out of scope for hub presentation blobs.
+func setMappedJSONObjectFlag(cmd *cobra.Command, attrs map[string]any, name, key string) error {
+	if !cmd.Flags().Changed(name) {
+		return nil
+	}
+	raw, err := cmd.Flags().GetString(name)
+	if err != nil {
+		return errs.New(errs.ExitUsage, "--%s: %s", name, err)
+	}
+	v, err := parseJSONFlag(raw)
+	if err != nil {
+		return errs.New(errs.ExitUsage, "--%s must be valid JSON: %s", name, err)
+	}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return errs.New(errs.ExitUsage, "--%s must be a JSON object", name)
+	}
+	attrs[key] = obj
+	return nil
 }
 
 // addPaginationFlags registers the JSON:API pagination flags on a list command.
