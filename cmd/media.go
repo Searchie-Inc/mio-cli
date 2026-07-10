@@ -37,6 +37,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -73,6 +74,20 @@ func init() {
 	)
 	mediaCmd.AddCommand(mediaPlaylistsCmd)
 
+	// media hub-playlists <action>  (MIO-2259)
+	mediaHubPlaylistsCmd.AddCommand(
+		mediaHubPlaylistsPublishCmd,
+		mediaHubPlaylistsListCmd,
+		mediaHubPlaylistsUnpublishCmd,
+	)
+	mediaCmd.AddCommand(mediaHubPlaylistsCmd)
+
+	mediaHubPlaylistsPublishCmd.Flags().String("playlist-id", "", "Playlist id to publish to the hub. Required.")
+	mediaHubPlaylistsPublishCmd.Flags().String("visibility", "", "Per-hub visibility: members (default), private, or public.")
+	mediaHubPlaylistsPublishCmd.Flags().String("published-at", "", "RFC3339 publish timestamp (default: now).")
+	mediaHubPlaylistsPublishCmd.Flags().Int("position", 0, "Manual ordering within the hub (>= 0).")
+	addPaginationFlags(mediaHubPlaylistsListCmd)
+
 	rootCmd.AddCommand(mediaCmd)
 }
 
@@ -92,6 +107,154 @@ or API directly for new file uploads.`,
 	Example: `  mio media files list
   mio media folders list
   mio media playlists list`,
+}
+
+// ---- media hub-playlists sub-resource (MIO-2259) ----------------------------
+//
+// Publish a media playlist onto a hub (writes a hub_media row — the record the
+// /content browse grid and homepage content-grid join on). Hub-scoped.
+//
+//	publish   POST   /api/teams/{team_id}/hubs/{hub_id}/playlists
+//	list      GET    /api/teams/{team_id}/hubs/{hub_id}/playlists
+//	unpublish DELETE /api/teams/{team_id}/hubs/{hub_id}/playlists/{playlist_id}
+//
+// The write derives JSON:API type "hub_media" (not "playlists") via the
+// hubs/playlists typeOverride in internal/client.
+
+var hubMediaVisibility = map[string]bool{"members": true, "private": true, "public": true}
+
+// mediaHubContext resolves team + hub for hub-scoped media commands.
+func mediaHubContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
+	c, teamID, err := mediaContext(cmd)
+	if err != nil {
+		return nil, "", "", err
+	}
+	hubID, err := c.requireHub()
+	if err != nil {
+		return nil, "", "", err
+	}
+	return c, teamID, hubID, nil
+}
+
+// hubPlaylistsPath returns /api/teams/{team}/hubs/{hub}/playlists[/{playlist_id}].
+func hubPlaylistsPath(teamID, hubID, playlistID string) string {
+	base := fmt.Sprintf("/api/teams/%s/hubs/%s/playlists", teamID, hubID)
+	if playlistID != "" {
+		return base + "/" + playlistID
+	}
+	return base
+}
+
+var mediaHubPlaylistsCmd = &cobra.Command{
+	Use:   "hub-playlists",
+	Short: "Publish playlists to a hub.",
+	Long: `Publish, list, and unpublish media playlists on the active hub.
+
+Publishing a playlist writes a hub_media row — the record that surfaces the
+playlist on the hub's /content browse grid and the homepage content-grid.`,
+	Example: `  mio media hub-playlists publish --hub hub_123 --playlist-id pl_abc
+  mio media hub-playlists list --hub hub_123`,
+}
+
+var mediaHubPlaylistsPublishCmd = &cobra.Command{
+	Use:   "publish",
+	Short: "Publish a playlist to the active hub.",
+	Long:  "Publish a media playlist to the active hub, creating (or updating) its hub_media row.",
+	Example: `  mio media hub-playlists publish --hub hub_123 --playlist-id pl_abc
+  mio media hub-playlists publish --hub hub_123 --playlist-id pl_abc --visibility public --position 0`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Validate before resolving auth/team/hub so a bad flag fires no request.
+		// flagValue trims, so --playlist-id "" / --playlist-id=" " are rejected too.
+		pid := flagValue(cmd, "playlist-id")
+		if pid == "" {
+			return errs.New(errs.ExitUsage, "missing required flag: --playlist-id")
+		}
+		attrs := map[string]any{"playlist_id": pid}
+		if cmd.Flags().Changed("visibility") {
+			v, err := cmd.Flags().GetString("visibility")
+			if err != nil {
+				return errs.New(errs.ExitUsage, "--visibility: %s", err)
+			}
+			if !hubMediaVisibility[v] {
+				return errs.New(errs.ExitUsage, "invalid --visibility %q: must be members, private, or public", v)
+			}
+			attrs["visibility"] = v
+		}
+		if cmd.Flags().Changed("published-at") {
+			pa, err := cmd.Flags().GetString("published-at")
+			if err != nil {
+				return errs.New(errs.ExitUsage, "--published-at: %s", err)
+			}
+			if _, perr := time.Parse(time.RFC3339, pa); perr != nil {
+				return errs.New(errs.ExitUsage, "invalid --published-at %q: must be RFC3339 (e.g. 2026-01-02T15:04:05Z)", pa)
+			}
+			attrs["published_at"] = pa
+		}
+		if cmd.Flags().Changed("position") {
+			pos, err := cmd.Flags().GetInt("position")
+			if err != nil {
+				return errs.New(errs.ExitUsage, "--position: %s", err)
+			}
+			if pos < 0 {
+				return errs.New(errs.ExitUsage, "invalid --position %d: must be >= 0", pos)
+			}
+			attrs["position"] = pos
+		}
+
+		c, teamID, hubID, err := mediaHubContext(cmd)
+		if err != nil {
+			return err
+		}
+		res, err := c.client.Create(c.ctx, hubPlaylistsPath(teamID, hubID, ""), attrs)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
+var mediaHubPlaylistsListCmd = &cobra.Command{
+	Use:     "list",
+	Short:   "List playlists published to the active hub.",
+	Long:    "List the media playlists published to the active hub (hub_media rows).",
+	Example: `  mio media hub-playlists list --hub hub_123`,
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		c, teamID, hubID, err := mediaHubContext(cmd)
+		if err != nil {
+			return err
+		}
+		query := url.Values{}
+		addPageFlags(cmd, query)
+		col, err := c.client.List(c.ctx, hubPlaylistsPath(teamID, hubID, ""), query)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, col)
+	},
+}
+
+var mediaHubPlaylistsUnpublishCmd = &cobra.Command{
+	Use:     "unpublish <playlist_id>",
+	Short:   "Unpublish a playlist from the active hub.",
+	Long:    "Remove a playlist's hub_media row from the active hub. The playlist itself is not deleted. Pass --yes to skip the confirmation prompt.",
+	Example: `  mio media hub-playlists unpublish pl_abc --hub hub_123 --yes`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, teamID, hubID, err := mediaHubContext(cmd)
+		if err != nil {
+			return err
+		}
+		if err := confirmDestructive(cmd, fmt.Sprintf("Unpublish playlist %s from the hub?", args[0])); err != nil {
+			return err
+		}
+		if err := c.client.Delete(c.ctx, hubPlaylistsPath(teamID, hubID, args[0])); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Unpublished playlist %s from the hub.\n", args[0])
+		return nil
+	},
 }
 
 // mediaContext returns context + team id for media commands (team-scoped).

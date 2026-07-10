@@ -140,6 +140,9 @@ var typeOverrides = []struct {
 	{"coupons/products", "coupon_products"},
 	{"hubs/products", "hub_product_displays"},
 	{"hubs/prices", "hub_price_displays"},
+	// Publishing a playlist to a hub writes a hub_media row (MIO-2259); the
+	// bare "playlists" segment would derive the team-scoped "playlists" type.
+	{"hubs/playlists", "hub_media"},
 	{"products/deliverables", "product_deliverables"},
 	{"contact-attributes/options", "contact_attribute_options"},
 	// hub-config lives at /hubs/{hub}/contact-attributes — same trailing
