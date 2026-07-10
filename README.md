@@ -178,6 +178,13 @@ mio contacts delete <id> --yes
 # Hubs
 mio hubs list
 mio hubs create --name "My Hub" --slug my-hub
+# Author the presentation layer at create time (opaque JSONB blobs; inline JSON or @file).
+# --logo-url merges into --branding-json rather than replacing it.
+mio hubs create --name "My Hub" --slug my-hub \
+  --branding-json '{"primary":"#6747E3","heading_font_size":32}' \
+  --navigation-json @nav.json \
+  --settings-json '{"policies":{"enabled":true}}' \
+  --meta-json '{"discussions":{"enabled":true}}'
 
 # Products & prices  (the product id is a positional argument, not a flag)
 mio products list

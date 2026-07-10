@@ -46,7 +46,7 @@ mio roles update — update a role
 mio roles delete — delete a role
 mio roles permissions list — list all available permissions
 
-mio hubs create — create a new hub within the active team
+mio hubs create — create a new hub within the active team; author the presentation layer via --branding-json/--navigation-json/--settings-json/--meta-json (opaque JSONB objects; inline JSON or @file); --logo-url merges into branding rather than replacing it
 mio hubs list — list hubs in the active team
 mio hubs retrieve — retrieve a hub by id
 mio hubs update — update hub attributes
