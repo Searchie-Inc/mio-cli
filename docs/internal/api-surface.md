@@ -96,6 +96,7 @@ plain JSON.
 - `list`     GET `/api/teams/{team_id}/hubs`
 - `retrieve` GET `/api/teams/{team_id}/hubs/{id}`
 - `update`   PATCH `/api/teams/{team_id}/hubs/{id}`
+  - `--navigation-json` authors the header/footer menu (typed items; inline JSON or `@file`); whole-blob replace, validated client-side (untyped items rejected) (MIO-2255)
 - `delete`   DELETE `/api/teams/{team_id}/hubs/{id}`
 
 ## contacts  (`cmd/contacts.go`) — backend module contacts_admin
