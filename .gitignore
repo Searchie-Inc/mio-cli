@@ -33,3 +33,4 @@ go.work.sum
 
 # goreleaser build output
 dist/
+.remem/

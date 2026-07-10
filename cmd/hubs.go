@@ -127,8 +127,14 @@ var hubsCreateCmd = &cobra.Command{
 
 		// Untyped header/footer items are dropped by the hub renderer, so reject
 		// them up front rather than shipping a menu that renders empty. (MIO-2255)
+		// Hub-relative url hrefs must stay within this hub's "/{slug}" mount — on
+		// create the slug is the --slug flag value. (MIO-2270)
 		if nav, ok := attrs["navigation"].(map[string]any); ok {
 			if err := validateNavigationBlob(nav); err != nil {
+				return err
+			}
+			slug, _ := attrs["slug"].(string)
+			if err := validateNavigationHrefs(nav, slug); err != nil {
 				return err
 			}
 		}
@@ -235,12 +241,26 @@ var hubsUpdateCmd = &cobra.Command{
 
 		// --navigation-json authors the header/footer menu — a whole-blob REPLACE
 		// (MIO-2255), validated for the typed shape the mio-hub parser requires.
+		// The hub-scoped href check (MIO-2270) needs the hub's slug, which is not
+		// known client-side, so it runs after the retrieve below.
 		if err := setMappedJSONObjectFlag(cmd, attrs, "navigation-json", "navigation"); err != nil {
 			return err
 		}
-		if nav, ok := attrs["navigation"].(map[string]any); ok {
+		nav, navSet := attrs["navigation"].(map[string]any)
+		// navSlug is the hub's FINAL slug when --slug is set in this same update
+		// (setStringFlag only populates attrs["slug"] when the flag changed); it is
+		// authoritative over the hub's current slug, so hrefs must scope to it.
+		navSlug, navSlugFromFlag := attrs["slug"].(string)
+		if navSet {
 			if err := validateNavigationBlob(nav); err != nil {
 				return err
+			}
+			// When --slug is changing in this update, validate hrefs against the new
+			// slug now — no retrieve needed, so this fires no request (MIO-2270).
+			if navSlugFromFlag {
+				if err := validateNavigationHrefs(nav, navSlug); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -279,14 +299,27 @@ var hubsUpdateCmd = &cobra.Command{
 			return err
 		}
 
-		// Read-modify-write the whole-blob fields: fetch the hub's current
-		// branding/settings/meta, deep-merge the provided keys on top, and PATCH the
-		// merged object so untouched siblings survive. --logo-url merges into
-		// branding here — this is what unblocks it on update (MIO-901).
-		if rmw {
+		// Retrieve the hub when we need its current whole-blob fields (RMW) or its
+		// slug (to validate hub-scoped navigation hrefs when --slug is NOT also
+		// being changed, MIO-2270) — one GET serves both. Read-modify-write fetches
+		// the current branding/settings/meta, deep-merges the provided keys on top,
+		// and PATCHes the merged object so untouched siblings survive; --logo-url
+		// merges into branding here — this is what unblocks it on update (MIO-901).
+		navNeedsRetrieve := navSet && !navSlugFromFlag
+		if rmw || navNeedsRetrieve {
 			cur, rerr := c.client.Retrieve(c.ctx, hubsPath(teamID, args[0]))
 			if rerr != nil {
 				return rerr
+			}
+			// Validate hub-relative navigation hrefs against the hub's current slug
+			// before issuing the PATCH, so a bad link fails with ExitUsage and no
+			// write happens (MIO-2270). Skipped above when --slug is changing, which
+			// is validated pre-auth against the new slug.
+			if navNeedsRetrieve {
+				slug, _ := cur.Attributes["slug"].(string)
+				if err := validateNavigationHrefs(nav, slug); err != nil {
+					return err
+				}
 			}
 			if branding != nil || logoChanged {
 				b := attrMap(cur.Attributes["branding"])

@@ -64,7 +64,8 @@ func TestHubsCreate_NavigationSettingsMetaJSONFlags(t *testing.T) {
 		withTeam("t_team1",
 			"hubs", "create",
 			"--name", "Full",
-			"--navigation-json", `{"header":[{"type":"url","label":"Home","href":"/","position":0}]}`,
+			"--slug", "full",
+			"--navigation-json", `{"header":[{"type":"url","label":"Home","href":"/full/","position":0}]}`,
 			"--settings-json", `{"policies":{"enabled":true}}`,
 			"--meta-json", `{"discussions":{"enabled":true}}`,
 		)...)
@@ -207,7 +208,7 @@ func TestHubsCreate_InvalidBlobJSONNoResolveRequest(t *testing.T) {
 func TestHubsCreate_BlobJSONFromFile(t *testing.T) {
 	dir := t.TempDir()
 	fp := dir + "/nav.json"
-	if err := os.WriteFile(fp, []byte(`{"header":[{"type":"url","label":"Home","href":"/","position":0}]}`), 0o600); err != nil {
+	if err := os.WriteFile(fp, []byte(`{"header":[{"type":"url","label":"Home","href":"/f/","position":0}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -217,6 +218,7 @@ func TestHubsCreate_BlobJSONFromFile(t *testing.T) {
 		withTeam("t_team1",
 			"hubs", "create",
 			"--name", "F",
+			"--slug", "f",
 			"--navigation-json", "@"+fp,
 		)...)
 
