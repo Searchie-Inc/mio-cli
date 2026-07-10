@@ -46,6 +46,10 @@ func init() {
 	)
 	pagesCmd.AddCommand(pagesSectionsCmd)
 
+	// pages tree <action>  (draft node-tree authoring, MIO-2258)
+	pagesTreeCmd.AddCommand(pagesTreeGetCmd, pagesTreeSetCmd)
+	pagesCmd.AddCommand(pagesTreeCmd)
+
 	// Self-register the whole tree on root.
 	rootCmd.AddCommand(pagesCmd)
 }
@@ -315,6 +319,13 @@ func init() {
 
 	// --tree on retrieve: return the raw published node tree (page-trees) instead of page metadata.
 	pagesRetrieveCmd.Flags().Bool("tree", false, "Return the raw published node tree (page-trees) instead of page metadata.")
+
+	// pages tree set flags (MIO-2258).
+	pagesTreeSetCmd.Flags().String("file", "", "Path to the tree JSON file (optionally @-prefixed). Required.")
+	pagesTreeSetCmd.Flags().Int("if-match", 0, "draft_version from a prior 'pages tree get' (optimistic concurrency lock). Required.")
+	if err := pagesTreeSetCmd.MarkFlagRequired("if-match"); err != nil {
+		panic("MarkFlagRequired if-match: " + err.Error())
+	}
 }
 
 // pagesContext is the shared boilerplate for page commands: build the context,
