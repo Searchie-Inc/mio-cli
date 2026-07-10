@@ -219,28 +219,16 @@ var hubsUpdateCmd = &cobra.Command{
   mio hubs update hub_abc123 --published=true`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// --logo-url is not supported on update: the backend assigns branding
-		// wholesale (setattr, not merge), so patching any branding field would
-		// silently clobber all sibling keys (primary_color, background_color, etc.).
-		// Fail fast, before any network call, so the caller knows the logo was NOT
-		// updated. (MIO-901)
-		if cmd.Flags().Changed("logo-url") {
-			return errs.New(errs.ExitUsage,
-				"--logo-url is not supported on `hubs update` yet: updating it would overwrite other branding fields. Set the logo when creating the hub. (tracked: MIO-901)")
-		}
-
 		// Build and validate attributes BEFORE resolving auth/team so a malformed
-		// menu exits with a usage error and fires no HTTP request.
+		// flag exits with a usage error and fires no HTTP request.
 		attrs := map[string]any{}
 		setMappedString(cmd, attrs, "name", "title")
 		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "description")
 		setMappedBoolInverted(cmd, attrs, "published", "is_private")
 
-		// --navigation-json authors the header/footer menu. navigation is a
-		// whole-blob field, so this REPLACES the hub's navigation; a nav-only PATCH
-		// leaves branding/settings/meta untouched. Items are validated for the
-		// typed shape the mio-hub parser requires. (MIO-2255)
+		// --navigation-json authors the header/footer menu — a whole-blob REPLACE
+		// (MIO-2255), validated for the typed shape the mio-hub parser requires.
 		if err := setMappedJSONObjectFlag(cmd, attrs, "navigation-json", "navigation"); err != nil {
 			return err
 		}
@@ -250,7 +238,33 @@ var hubsUpdateCmd = &cobra.Command{
 			}
 		}
 
-		if len(attrs) == 0 {
+		// --branding-json / --settings-json / --meta-json are read-modify-write:
+		// these blobs are assigned WHOLESALE server-side, so a partial edit would
+		// clobber sibling keys. Parse now (fail fast on bad JSON); the deep-merge
+		// against the hub's current blobs happens after the retrieve below. (MIO-2256)
+		branding, err := parseJSONObjectFlag(cmd, "branding-json")
+		if err != nil {
+			return err
+		}
+		settings, err := parseJSONObjectFlag(cmd, "settings-json")
+		if err != nil {
+			return err
+		}
+		meta, err := parseJSONObjectFlag(cmd, "meta-json")
+		if err != nil {
+			return err
+		}
+		logoChanged := cmd.Flags().Changed("logo-url")
+		var logo string
+		if logoChanged {
+			logo, err = cmd.Flags().GetString("logo-url")
+			if err != nil {
+				return errs.New(errs.ExitUsage, "--logo-url: %s", err)
+			}
+		}
+		rmw := branding != nil || settings != nil || meta != nil || logoChanged
+
+		if len(attrs) == 0 && !rmw {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
@@ -258,6 +272,34 @@ var hubsUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		// Read-modify-write the whole-blob fields: fetch the hub's current
+		// branding/settings/meta, deep-merge the provided keys on top, and PATCH the
+		// merged object so untouched siblings survive. --logo-url merges into
+		// branding here — this is what unblocks it on update (MIO-901).
+		if rmw {
+			cur, rerr := c.client.Retrieve(c.ctx, hubsPath(teamID, args[0]))
+			if rerr != nil {
+				return rerr
+			}
+			if branding != nil || logoChanged {
+				b := attrMap(cur.Attributes["branding"])
+				if branding != nil {
+					b = deepMergeMap(b, branding)
+				}
+				if logoChanged {
+					b["logo_url"] = logo
+				}
+				attrs["branding"] = b
+			}
+			if settings != nil {
+				attrs["settings"] = deepMergeMap(attrMap(cur.Attributes["settings"]), settings)
+			}
+			if meta != nil {
+				attrs["meta"] = deepMergeMap(attrMap(cur.Attributes["meta"]), meta)
+			}
+		}
+
 		res, err := c.client.Update(c.ctx, hubsPath(teamID, args[0]), attrs)
 		if err != nil {
 			return err
@@ -305,10 +347,7 @@ func init() {
 		cmd.Flags().Bool("published", false, "Whether the hub is publicly published.")
 	}
 
-	// Presentation-blob flags. branding/settings/meta are create-only for now:
-	// `hubs update` needs read-modify-write handling (they are whole-blob
-	// overwrites server-side) which lands in MIO-2256. navigation-json is also
-	// registered on update below (MIO-2255).
+	// Presentation-blob flags, all authorable on create.
 	for _, f := range []struct{ name, desc string }{
 		{"branding-json", "Hub branding as a JSON object — colors, fonts, logo. Inline JSON or @file."},
 		{"navigation-json", "Hub navigation as a JSON object — header/footer menu items. Inline JSON or @file."},
@@ -318,11 +357,17 @@ func init() {
 		hubsCreateCmd.Flags().String(f.name, "", f.desc)
 	}
 
-	// --navigation-json is authorable on `hubs update` too (menu authoring,
-	// MIO-2255): navigation is a complete-object replace, so unlike --logo-url it
-	// does not clobber sibling keys.
+	// On `hubs update`: navigation is a whole-blob REPLACE (MIO-2255); branding /
+	// settings / meta are read-modify-write DEEP-MERGES (MIO-2256) so a partial
+	// edit does not clobber sibling keys, and --logo-url merges into branding.
 	hubsUpdateCmd.Flags().String("navigation-json",
 		"", "Hub navigation as a JSON object — header/footer menu items (each needs a \"type\"). Inline JSON or @file. Replaces the hub's navigation.")
+	hubsUpdateCmd.Flags().String("branding-json",
+		"", "Hub branding keys to merge (read-modify-write) as a JSON object. Inline JSON or @file.")
+	hubsUpdateCmd.Flags().String("settings-json",
+		"", "Hub settings keys to merge (read-modify-write) as a JSON object. Inline JSON or @file.")
+	hubsUpdateCmd.Flags().String("meta-json",
+		"", "Hub meta keys to merge (read-modify-write) as a JSON object. Inline JSON or @file.")
 
 	addPaginationFlags(hubsListCmd)
 }
