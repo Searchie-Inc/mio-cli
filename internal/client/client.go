@@ -212,6 +212,19 @@ var typeOverrides = []struct {
 	// Verified-domain admin commands (External Login v2 verified-domain SSO,
 	// MIO-1513, 2026-06-25). URL segment uses hyphens; JSON:API type is snake_case.
 	{"verified-domains", "verified_domains"},
+	// Long-tail admin bundle (MIO-2269).
+	// Hub policy enforcement gate: PATCH .../hubs/{hub}/policies/gate binds
+	// HubPolicyGateEnvelope whose data.type Literal is "hub_policy_gate"; the
+	// bare "gate" segment would not match. Two-segment tail wins over "policies".
+	{"policies/gate", "hub_policy_gate"},
+	// Magic-link redirect-origin allowlist: PUT .../hubs/{hub}/redirect-origins
+	// binds RedirectOriginsUpdateEnvelope whose data.type Literal is
+	// "hub_redirect_origin_allowlists"; the hyphenated segment would not match.
+	{"redirect-origins", "hub_redirect_origin_allowlists"},
+	// Hub email-suppression admin-block create: POST
+	// .../hubs/{hub}/email-suppressions binds HubCreateSuppressionData whose
+	// type is "email_suppressions"; the hyphenated segment would not match.
+	{"email-suppressions", "email_suppressions"},
 	// Community moderation report-reasons (MIO-2265): the create POST derives
 	// its JSON:API type from the .../report-reasons collection tail. The URL
 	// segment uses hyphens; the backend ReportReasonCreateData type Literal is
@@ -310,6 +323,9 @@ var knownCollections = map[string]bool{
 	"external-login-providers": true,
 	// Verified-domain admin commands (External Login v2, MIO-1513, 2026-06-25).
 	"verified-domains": true,
+	// Long-tail admin bundle (MIO-2269): hub policy gate, redirect-origin
+	// allowlist, and hub-scoped email-suppression admin surfaces.
+	"gate": true, "redirect-origins": true, "email-suppressions": true,
 }
 
 // collectionSegments returns the path segments that are static collection

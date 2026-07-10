@@ -316,6 +316,13 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/folders/fo1", "folders"},
 		{"/api/teams/t1/playlists", "playlists"},
 		{"/api/teams/t1/playlists/pl1", "playlists"},
+		// Long-tail admin bundle (MIO-2269): hub policy gate, redirect-origin
+		// allowlist, and hub-scoped email suppressions. Each URL segment differs
+		// from its backend JSON:API type Literal.
+		{"/api/teams/t1/hubs/h1/policies/gate", "hub_policy_gate"},
+		{"/api/teams/t1/hubs/h1/redirect-origins", "hub_redirect_origin_allowlists"},
+		{"/v1/hubs/h1/email-suppressions", "email_suppressions"},
+		{"/v1/hubs/h1/email-suppressions/esp1", "email_suppressions"},
 	}
 	for _, tc := range cases {
 		if got := resourceTypeFromPath(tc.path); got != tc.want {

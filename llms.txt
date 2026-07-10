@@ -45,6 +45,8 @@ mio roles retrieve — retrieve a role by id
 mio roles update — update a role
 mio roles delete — delete a role
 mio roles permissions list — list all available permissions
+mio roles permissions assign — assign a permission to a role by --slug (flat {slug} body; requires user-JWT auth, API keys are rejected 401)
+mio roles permissions remove — remove a permission from a role (positional role_id + permission_slug; destructive, needs --yes; user-JWT only)
 
 mio hubs create — create a new hub within the active team; author the presentation layer via --branding-json/--navigation-json/--settings-json/--meta-json (opaque JSONB objects; inline JSON or @file); --logo-url merges into branding rather than replacing it
 mio hubs list — list hubs in the active team
@@ -52,6 +54,9 @@ mio hubs retrieve — retrieve a hub by id
 mio hubs update — update hub attributes; --navigation-json authors the header/footer menu (whole-blob replace, typed items validated); --branding-json/--settings-json/--meta-json deep-merge (read-modify-write, sibling keys preserved); --logo-url merges into branding (all inline JSON or @file)
 mio hubs delete — delete a hub
 mio hubs policies update — create or replace a hub legal policy (tos or privacy_policy); hub id is a POSITIONAL arg; --content supports @file; --require-acceptance for tos only
+mio hubs policies gate — toggle hub policy enforcement (settings.policies.enabled); positional hub id; --enabled required and explicit (--enabled or --enabled=false). There is no admin policies READ (the only /policies GET is the member portal route, which rejects API keys), so no `policies get`
+mio hubs redirect-origins get — read the magic-link redirect-origin allowlist for a hub (owner-only; positional hub id)
+mio hubs redirect-origins set — full-replace the redirect-origin allowlist; positional hub id; provide --origins (comma-separated) or --clear to empty it
 
 mio contacts create — create a new contact in the active team; flags: --email --first-name --last-name --phone --status (kebab-case; legacy --first_name/--last_name still accepted as hidden aliases)
 mio contacts list — list contacts (supports filter flags)
@@ -186,6 +191,9 @@ mio email config test — send a test email to verify configuration
 mio email enrollments list — list contacts enrolled in a drip campaign
 mio email enrollments exit — remove a contact from a drip campaign enrollment
 mio email stats get — retrieve email send/open/click stats for a hub
+mio email suppressions list — list active email suppressions for the active hub
+mio email suppressions create — suppress (admin_block) an email address for the active hub via --email; reason is forced to admin_block server-side
+mio email suppressions lift — lift (un-suppress) a hub suppression by id; destructive, needs --yes. NOTE: the hub suppression routes require platform_admin, so team-admin API keys get 403
 
 mio access-rules rules create — create an access rule for a hub
 mio access-rules rules list — list access rules
