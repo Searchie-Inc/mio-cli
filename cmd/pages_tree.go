@@ -2,7 +2,8 @@ package cmd
 
 // pages_tree.go — `mio pages tree` sub-group: author (PUT) and read (GET) a
 // page's draft node-tree (the page-builder tree). This is how the homepage
-// hero + content-grid + cta are built from the CLI (MIO-2258).
+// sections are built from the CLI (MIO-2258). Tree shape follows mio-hub's
+// DS-conformed section recipes (mio-backend docs/specs seeder homepage guide).
 //
 // Routes:
 //
@@ -70,8 +71,16 @@ draft_version. The tree JSON is read from --file (a path, optionally @-prefixed)
 success the response carries the new draft_version; pass it to
 'pages publish --if-match <new>'.
 
-The content-grid -> hub-playlists binding rides IN the tree body as
-dataSource:{type:"hub_playlists", query:{scope:"all"}} — never as dataSource.id.`,
+Tree shape follows mio-hub's DS-conformed section recipes — see the guide at
+mio-backend docs/specs/2026-07-10-seeder-homepage-recipes-guide.md (MIO-2280).
+Every node needs an "id" and inlines its values (the defaults cascade is a no-op
+in prod), and there is exactly one level:1 headline per page.
+
+For the HOMEPAGE, use STATIC cards, NOT a data-source binding: the homepage route
+prefetches only type:"playlist" sources and runs "hub_playlists" with
+enabled:false, so a content-grid bound to dataSource:{type:"hub_playlists"}
+renders EMPTY there. (hub_playlists feeds the /content browse page, not the
+homepage.)`,
 	Example: `  mio pages tree set page_abc123 --hub hub_123 --if-match 0 --file tree.json`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
