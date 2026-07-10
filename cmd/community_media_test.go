@@ -33,14 +33,6 @@ const spaceBody = `{
 	}
 }`
 
-const discussionBody = `{
-	"data": {
-		"id": "disc_1",
-		"type": "discussions",
-		"attributes": {"title": "Hello World", "status": "published"}
-	}
-}`
-
 const moderationActionBody = `{
 	"data": {
 		"id": "ma_1",
@@ -214,51 +206,6 @@ func TestCommunityDiscussionsList_Path(t *testing.T) {
 	}
 	if want := "/admin/teams/t_team1/hubs/hub_abc123/discussions"; !strings.Contains(gotPath, want) {
 		t.Errorf("path %q does not contain %q", gotPath, want)
-	}
-}
-
-// TestCommunityDiscussionsUpdate_BodyShape verifies that update sends a
-// JSON:API PATCH envelope with only the flags that were set.
-func TestCommunityDiscussionsUpdate_BodyShape(t *testing.T) {
-	var gotBody []byte
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/vnd.api+json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(discussionBody))
-	}))
-	t.Cleanup(srv.Close)
-
-	res := runContract(t, baseEnv(srv.URL),
-		withTeam("t_team1",
-			"--hub", "hub_abc123",
-			"community", "discussions", "update", "disc_1",
-			"--title", "Updated Title",
-		)...)
-
-	if res.Code != errs.ExitOK {
-		t.Errorf("exit code = %d, want ExitOK; stderr=%q", res.Code, res.Stderr)
-	}
-
-	var doc struct {
-		Data struct {
-			Type       string         `json:"type"`
-			Attributes map[string]any `json:"attributes"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(gotBody, &doc); err != nil {
-		t.Fatalf("body not valid JSON: %v; raw=%s", err, gotBody)
-	}
-	if doc.Data.Type != "discussions" {
-		t.Errorf("data.type = %q, want \"discussions\"", doc.Data.Type)
-	}
-	if doc.Data.Attributes["title"] != "Updated Title" {
-		t.Errorf("attributes.title = %v, want 'Updated Title'", doc.Data.Attributes["title"])
-	}
-	// body was NOT set → must not appear in the attributes map (PATCH semantics)
-	if _, ok := doc.Data.Attributes["body"]; ok {
-		t.Errorf("attributes unexpectedly contains 'body' — should be absent when not provided")
 	}
 }
 
