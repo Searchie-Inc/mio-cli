@@ -10,11 +10,19 @@ package cmd
 //	update                   PATCH  /api/teams/{team_id}/hubs/{id}
 //	delete                   DELETE /api/teams/{team_id}/hubs/{id}
 //	policies update          PATCH  /api/teams/{team_id}/hubs/{hub_id}/policies
+//	policies gate            PATCH  /api/teams/{team_id}/hubs/{hub_id}/policies/gate
+//	redirect-origins get     GET    /api/teams/{team_id}/hubs/{hub_id}/redirect-origins
+//	redirect-origins set     PUT    /api/teams/{team_id}/hubs/{hub_id}/redirect-origins
 //	email-settings get       GET    /api/teams/{team_id}/hubs/{hub_id}/email-settings
 //	email-settings update    PATCH  /api/teams/{team_id}/hubs/{hub_id}/email-settings
 //
 // All routes are team-scoped. Hub id comes from a positional argument (not the
 // --hub context flag) so operators can manage any hub, not just the active one.
+//
+// NOTE: there is no admin/team-scoped policies READ. The only policies GET is
+// the hub portal route /api/hubs/{hub_id}/policies, which requires member
+// (contact) auth and rejects admin API keys with 401 — so it is intentionally
+// not exposed here (see MIO-2269 deferred items).
 
 import (
 	"fmt"
@@ -37,8 +45,18 @@ func init() {
 	)
 
 	// hubs policies <action>  (nested sub-resource)
-	hubsPoliciesCmd.AddCommand(hubsPoliciesUpdateCmd)
+	hubsPoliciesCmd.AddCommand(
+		hubsPoliciesUpdateCmd,
+		hubsPoliciesGateCmd,
+	)
 	hubsCmd.AddCommand(hubsPoliciesCmd)
+
+	// hubs redirect-origins <action>  (magic-link allowlist, MIO-616)
+	hubsRedirectOriginsCmd.AddCommand(
+		hubsRedirectOriginsGetCmd,
+		hubsRedirectOriginsSetCmd,
+	)
+	hubsCmd.AddCommand(hubsRedirectOriginsCmd)
 
 	// hubs email-settings <action>  (per-hub sender identity, MIO-1229)
 	hubsEmailSettingsCmd.AddCommand(
@@ -494,6 +512,171 @@ func init() {
 	hubsPoliciesUpdateCmd.Flags().Bool("reset-content", false, "Revert the policy to the backend default (sends content: null). Mutually exclusive with --content.")
 
 	hubsPoliciesUpdateCmd.Flags().Bool("require-acceptance", false, "Require hub members to accept the policy before accessing content (TOS only).")
+}
+
+// ---- hubs policies gate + get (MIO-2020 / MIO-364) --------------------------
+
+// hubsPoliciesGatePath returns /api/teams/{team_id}/hubs/{hub_id}/policies/gate.
+func hubsPoliciesGatePath(teamID, hubID string) string {
+	return fmt.Sprintf("/api/teams/%s/hubs/%s/policies/gate", teamID, hubID)
+}
+
+var hubsPoliciesGateCmd = &cobra.Command{
+	Use:   "gate <hub_id>",
+	Short: "Toggle the hub policy enforcement gate.",
+	Long: `Enable or disable hub-level policy enforcement (settings.policies.enabled).
+
+This only flips the enforcement gate; it does not change policy content, the
+TOS version, or member acceptance state. The hub identifier is a positional
+argument (not the --hub context flag).
+
+--enabled is required and must be given explicitly:
+  --enabled           turn enforcement ON
+  --enabled=false     turn enforcement OFF`,
+	Example: `  mio hubs policies gate hub_abc123 --enabled
+  mio hubs policies gate hub_abc123 --enabled=false`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Require --enabled explicitly BEFORE resolving auth/team so a usage
+		// error fires no HTTP request. A bare bool flag defaults to false, so we
+		// cannot distinguish "off" from "unset" without the Changed check.
+		if !cmd.Flags().Changed("enabled") {
+			return errs.New(errs.ExitUsage, "missing required flag: --enabled (use --enabled or --enabled=false)")
+		}
+		enabled, ferr := cmd.Flags().GetBool("enabled")
+		if ferr != nil {
+			return errs.New(errs.ExitUsage, "--enabled: %s", ferr.Error())
+		}
+
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		// Enveloped PATCH: the backend HubPolicyGateEnvelope pins data.type to
+		// "hub_policy_gate" (derived from the .../policies/gate tail).
+		res, err := c.client.Action(c.ctx, "PATCH",
+			hubsPoliciesGatePath(teamID, args[0]), map[string]any{"enabled": enabled})
+		if err != nil {
+			return err
+		}
+		if res == nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "Set policy gate on hub %s to enabled=%t.\n", args[0], enabled)
+			return nil
+		}
+		return c.render(cmd, res)
+	},
+}
+
+func init() {
+	hubsPoliciesGateCmd.Flags().Bool("enabled", false, "Enable (--enabled) or disable (--enabled=false) policy enforcement. Required.")
+}
+
+// ---- hubs redirect-origins sub-resource (MIO-616) ---------------------------
+
+var hubsRedirectOriginsCmd = &cobra.Command{
+	Use:   "redirect-origins",
+	Short: "Manage the magic-link redirect-origin allowlist.",
+	Long:  "Read or full-replace the magic-link redirect-origin allowlist for a hub (owner-only, MIO-616).",
+}
+
+// hubsRedirectOriginsPath returns /api/teams/{team_id}/hubs/{hub_id}/redirect-origins.
+func hubsRedirectOriginsPath(teamID, hubID string) string {
+	return fmt.Sprintf("/api/teams/%s/hubs/%s/redirect-origins", teamID, hubID)
+}
+
+var hubsRedirectOriginsGetCmd = &cobra.Command{
+	Use:     "get <hub_id>",
+	Short:   "Read the redirect-origin allowlist for a hub.",
+	Long:    "Return the current magic-link redirect-origin allowlist for a hub (may be empty). Owner-only.",
+	Example: `  mio hubs redirect-origins get hub_abc123`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		res, err := c.client.Retrieve(c.ctx, hubsRedirectOriginsPath(teamID, args[0]))
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
+var hubsRedirectOriginsSetCmd = &cobra.Command{
+	Use:   "set <hub_id>",
+	Short: "Full-replace the redirect-origin allowlist for a hub.",
+	Long: `Full-replace the magic-link redirect-origin allowlist for a hub (owner-only).
+
+This is an atomic replacement: the supplied origins REPLACE the entire stored
+list. Every entry is validated at write time (scheme, host, IPv6 brackets, no
+wildcards); an invalid entry returns a 422 with a per-index error pointer and
+nothing is persisted.
+
+Provide the new list as a comma-separated --origins value, or pass --clear to
+empty the allowlist (which rejects all magic-link redirects at runtime).
+Exactly one of --origins or --clear is required.`,
+	Example: `  mio hubs redirect-origins set hub_abc123 --origins "https://app.example.com,https://portal.example.com"
+  mio hubs redirect-origins set hub_abc123 --clear`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Validate the origins/clear contract BEFORE resolving auth/team so a
+		// usage error fires no HTTP request.
+		originsChanged := cmd.Flags().Changed("origins")
+		clearChanged := cmd.Flags().Changed("clear")
+		if originsChanged && clearChanged {
+			return errs.New(errs.ExitUsage, "--origins and --clear are mutually exclusive: provide exactly one")
+		}
+		if !originsChanged && !clearChanged {
+			return errs.New(errs.ExitUsage, "provide the allowlist with --origins or --clear")
+		}
+
+		// Default to an empty (non-nil) slice so --clear sends origins: [] and
+		// the JSON marshals to an array, never null.
+		origins := []string{}
+		if originsChanged {
+			raw, ferr := cmd.Flags().GetString("origins")
+			if ferr != nil {
+				return errs.New(errs.ExitUsage, "--origins: %s", ferr.Error())
+			}
+			// Split the comma-separated value, trimming whitespace and dropping
+			// empty entries so a trailing comma or padded value is harmless.
+			for _, part := range strings.Split(raw, ",") {
+				if o := strings.TrimSpace(part); o != "" {
+					origins = append(origins, o)
+				}
+			}
+			if len(origins) == 0 {
+				return errs.New(errs.ExitUsage, "--origins is empty: pass at least one origin, or use --clear to empty the allowlist")
+			}
+		}
+
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		// Enveloped PUT: the backend RedirectOriginsUpdateEnvelope pins data.type
+		// to "hub_redirect_origin_allowlists" (derived from the redirect-origins
+		// tail).
+		res, err := c.client.Action(c.ctx, "PUT",
+			hubsRedirectOriginsPath(teamID, args[0]), map[string]any{"origins": origins})
+		if err != nil {
+			return err
+		}
+		if res == nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "Replaced redirect-origin allowlist for hub %s (%d origin(s)).\n", args[0], len(origins))
+			return nil
+		}
+		return c.render(cmd, res)
+	},
+}
+
+func init() {
+	hubsRedirectOriginsSetCmd.Flags().String("origins", "", "Comma-separated list of allowed redirect origins. Full-replaces the stored list.")
+	hubsRedirectOriginsSetCmd.Flags().Bool("clear", false, "Clear the allowlist (send an empty list). Mutually exclusive with --origins.")
 }
 
 // ---- hubs email-settings sub-resource (MIO-1229) ----------------------------

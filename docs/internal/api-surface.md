@@ -89,6 +89,8 @@ plain JSON.
 - `update` PATCH `/api/roles/{id}`
 - `delete` DELETE `/api/roles/{id}`
 - `permissions list` GET `/api/permissions`
+- `permissions assign` POST `/api/roles/{id}/permissions`  body: **flat** {slug} (user-JWT only; API keys 401)
+- `permissions remove` DELETE `/api/roles/{id}/permissions/{slug}`  (destructive; user-JWT only)
 
 ## hubs  (`cmd/hubs.go`)
 - `create`   POST `/api/teams/{team_id}/hubs`
@@ -99,6 +101,12 @@ plain JSON.
   - `--navigation-json` authors the header/footer menu (typed items; inline JSON or `@file`); whole-blob replace, validated client-side (untyped items rejected) (MIO-2255)
   - `--branding-json` / `--settings-json` / `--meta-json` deep-merge (read-modify-write: retrieve → merge → PATCH, so sibling keys survive); `--logo-url` merges into branding (MIO-2256, unblocks MIO-901)
 - `delete`   DELETE `/api/teams/{team_id}/hubs/{id}`
+- `policies update` PATCH `/api/teams/{team_id}/hubs/{hub_id}/policies`  envelope `policies` {policy_type, content?, require_acceptance?}; hub id POSITIONAL
+- `policies gate`   PATCH `/api/teams/{team_id}/hubs/{hub_id}/policies/gate`  envelope `hub_policy_gate` {enabled}; toggles settings.policies.enabled only (MIO-2020)
+- `redirect-origins get` GET `/api/teams/{team_id}/hubs/{hub_id}/redirect-origins`  (owner-only magic-link allowlist)
+- `redirect-origins set` PUT `/api/teams/{team_id}/hubs/{hub_id}/redirect-origins`  envelope `hub_redirect_origin_allowlists` {origins:[…]}; **full-replace**; `--origins` (comma-sep) or `--clear` (MIO-616)
+- `email-settings get/update` GET/PATCH `/api/teams/{team_id}/hubs/{hub_id}/email-settings`  envelope `hub_email_senders` {from_name?, reply_to?} (MIO-1229)
+- NOTE: no admin policies READ — the only `/policies` GET is the hub portal route (member auth; rejects API keys), so `hubs policies get` is intentionally not shipped
 
 ## contacts  (`cmd/contacts.go`) — backend module contacts_admin
 - `list`     GET `/api/teams/{team_id}/contacts`  (supports filters)
@@ -179,6 +187,7 @@ plain JSON.
 - config:         `set` PUT `…/email-config` (flat `mail_*`); `get` GET; `delete` DELETE; `test` POST `…/email-config/test` (no body — mails the authenticated user)
 - enrollments:    `list` GET `…/drip-campaigns/{id}/enrollments`; `exit` DELETE `…/{id}/enrollments/{eid}`
 - stats:          `get` GET `…/email-stats`
+- suppressions:   `list` GET `…/email-suppressions`; `create` POST `…/email-suppressions` (envelope `email_suppressions` {email_address}; reason forced `admin_block`); `lift` DELETE `…/email-suppressions/{id}` (destructive). NOTE: hub routes require platform_admin (API keys → 403)
 
 ## access-rules  (`cmd/accessrules.go`) — base `/api/teams/{team_id}/hubs/{hub_id}/…`
 - rules:     `create/list/retrieve/update/delete` `…/access-rules[/{id}]`

@@ -10,6 +10,7 @@ package cmd
 //	email config          set/get/delete/test
 //	email enrollments     create/list/exit/list-by-contact     (under a drip campaign / by contact)
 //	email stats           get
+//	email suppressions    list/create/lift                     (hub-scoped admin block list)
 //
 // Self-registered: init() attaches emailCmd to rootCmd. No other file is touched.
 
@@ -74,6 +75,13 @@ func init() {
 		emailStatsGetCmd,
 	)
 
+	// suppressions sub-commands
+	emailSuppressionsCmd.AddCommand(
+		emailSuppressionsListCmd,
+		emailSuppressionsCreateCmd,
+		emailSuppressionsLiftCmd,
+	)
+
 	// Attach all sub-groups to email root.
 	emailCmd.AddCommand(
 		emailDripCampaignsCmd,
@@ -82,6 +90,7 @@ func init() {
 		emailConfigCmd,
 		emailEnrollmentsCmd,
 		emailStatsCmd,
+		emailSuppressionsCmd,
 	)
 
 	// Self-register on root.
@@ -986,4 +995,109 @@ var emailStatsGetCmd = &cobra.Command{
 func init() {
 	emailStatsGetCmd.Flags().String("from", "", "Start date for the stats window (ISO 8601, e.g. 2026-01-01).")
 	emailStatsGetCmd.Flags().String("to", "", "End date for the stats window (ISO 8601, e.g. 2026-06-01).")
+}
+
+// ---- suppressions -----------------------------------------------------------
+
+var emailSuppressionsCmd = &cobra.Command{
+	Use:   "suppressions",
+	Short: "Manage the hub email-suppression list.",
+	Long:  "List, create (admin_block), and lift email suppressions for the active hub.",
+}
+
+// suppressionsPath returns /v1/hubs/{hub_id}/email-suppressions[/{id}].
+func suppressionsPath(hubID, id string) string {
+	if id != "" {
+		return emailHubPath(hubID, "email-suppressions/"+id)
+	}
+	return emailHubPath(hubID, "email-suppressions")
+}
+
+var emailSuppressionsListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List email suppressions for the active hub.",
+	Long:  "List the active email suppressions scoped to the active hub.",
+	Example: `  mio email suppressions list
+  mio email suppressions list --limit 50`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		c, hubID, err := emailContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		query := url.Values{}
+		addPageFlags(cmd, query)
+
+		col, err := c.client.List(c.ctx, suppressionsPath(hubID, ""), query)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, col)
+	},
+}
+
+var emailSuppressionsCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Suppress (admin_block) an email address for the active hub.",
+	Long: `Create a manual admin_block suppression for an email address in the active hub.
+
+Suppressed addresses are skipped by all hub email sends until the suppression
+is lifted. The scope is always the hub and the reason is always admin_block.`,
+	Example: `  mio email suppressions create --email blocked@example.com`,
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Validate the required flag BEFORE resolving auth so a usage error
+		// fires no HTTP request.
+		if !cmd.Flags().Changed("email") {
+			return errs.New(errs.ExitUsage, "missing required flag: --email")
+		}
+
+		c, hubID, err := emailContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		attrs := map[string]any{}
+		setMappedString(cmd, attrs, "email", "email_address")
+
+		// Enveloped POST: the backend HubCreateSuppressionData type is
+		// "email_suppressions" (derived from the email-suppressions tail).
+		res, err := c.client.Create(c.ctx, suppressionsPath(hubID, ""), attrs)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
+var emailSuppressionsLiftCmd = &cobra.Command{
+	Use:   "lift <suppression_id>",
+	Short: "Lift (un-suppress) a hub email suppression.",
+	Long: `Lift a suppression for the active hub, re-enabling email delivery to that
+address. Lifting an address that hard-bounced or complained can resume sending
+to a bad recipient, so this requires --yes in non-interactive shells.`,
+	Example: `  mio email suppressions lift esp_abc123 --yes`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, hubID, err := emailContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		if err := confirmDestructive(cmd, fmt.Sprintf("Lift suppression %s (re-enable email delivery)?", args[0])); err != nil {
+			return err
+		}
+
+		if err := c.client.Delete(c.ctx, suppressionsPath(hubID, args[0])); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Lifted suppression %s.\n", args[0])
+		return nil
+	},
+}
+
+func init() {
+	addPaginationFlags(emailSuppressionsListCmd)
+	emailSuppressionsCreateCmd.Flags().String("email", "", "Email address to suppress (admin_block). Required.")
 }
