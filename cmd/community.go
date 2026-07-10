@@ -46,6 +46,7 @@ func init() {
 		communitySpacesRetrieveCmd,
 		communitySpacesUpdateCmd,
 		communitySpacesDeleteCmd,
+		communitySpacesReorderCmd,
 	)
 	communityCmd.AddCommand(communitySpacesCmd)
 
@@ -166,21 +167,22 @@ var communitySpacesCreateCmd = &cobra.Command{
   mio community spaces create --hub hub_abc123 --name "Announcements" --slug announcements --description "Official announcements"`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Validate before resolving auth/team/hub so a bad flag fires no request.
+		attrs := map[string]any{}
+		if err := setSpaceWriteAttrs(cmd, attrs); err != nil {
+			return err
+		}
+		if _, ok := attrs["name"]; !ok {
+			return errs.New(errs.ExitUsage, "--name is required to create a space")
+		}
+		if _, ok := attrs["slug"]; !ok {
+			return errs.New(errs.ExitUsage, "--slug is required to create a space")
+		}
+
 		c, teamID, hubID, err := communityContext(cmd)
 		if err != nil {
 			return err
 		}
-
-		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "name")
-		setStringFlag(cmd, attrs, "slug")
-		setStringFlag(cmd, attrs, "description")
-		setBoolFlag(cmd, attrs, "is-private")
-
-		if _, ok := attrs["name"]; !ok {
-			return errs.New(errs.ExitUsage, "--name is required to create a space")
-		}
-
 		res, err := c.client.Create(c.ctx, spacesPath(teamID, hubID, ""), attrs)
 		if err != nil {
 			return err
@@ -218,24 +220,21 @@ var communitySpacesUpdateCmd = &cobra.Command{
 	Short: "Update a space by id.",
 	Long:  "Update one or more fields on a space. Only the flags you provide are changed (partial update).",
 	Example: `  mio community spaces update space_abc123 --hub hub_abc123 --name "New Name"
-  mio community spaces update space_abc123 --hub hub_abc123 --is-private=true`,
+  mio community spaces update space_abc123 --hub hub_abc123 --access-level restricted --segment-id seg_vip`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, teamID, hubID, err := communityContext(cmd)
-		if err != nil {
+		attrs := map[string]any{}
+		if err := setSpaceWriteAttrs(cmd, attrs); err != nil {
 			return err
 		}
-
-		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "name")
-		setStringFlag(cmd, attrs, "slug")
-		setStringFlag(cmd, attrs, "description")
-		setBoolFlag(cmd, attrs, "is-private")
-
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
+		c, teamID, hubID, err := communityContext(cmd)
+		if err != nil {
+			return err
+		}
 		res, err := c.client.Update(c.ctx, spacesPath(teamID, hubID, args[0]), attrs)
 		if err != nil {
 			return err
@@ -278,8 +277,16 @@ func init() {
 		cmd.Flags().String("name", "", "Space display name.")
 		cmd.Flags().String("slug", "", "Space URL slug (unique within the hub).")
 		cmd.Flags().String("description", "", "Short description of the space.")
-		cmd.Flags().Bool("is-private", false, "Whether the space is private (members only).")
+		cmd.Flags().String("access-level", "", "Access level: public or restricted (default public).")
+		cmd.Flags().String("posting-permission", "", "Who can post: any_member, admins_only, or segment (default any_member).")
+		cmd.Flags().Int("position", 0, "Zero-based display position within the hub.")
+		cmd.Flags().String("segment-id", "", "Segment id gating a restricted space.")
+		cmd.Flags().Bool("is-default", false, "Whether this is a default space.")
+		cmd.Flags().Bool("is-pinned", false, "Whether the space is pinned.")
+		cmd.Flags().String("icon", "", "Space icon name.")
+		cmd.Flags().String("color", "", "Space accent color as a hex value (e.g. #6747E3).")
 	}
+	communitySpacesReorderCmd.Flags().String("order", "", "Comma-separated list of space ids in the desired display order.")
 
 	addPaginationFlags(communitySpacesListCmd)
 }
