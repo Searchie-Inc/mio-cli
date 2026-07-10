@@ -93,10 +93,11 @@ plain JSON.
 ## hubs  (`cmd/hubs.go`)
 - `create`   POST `/api/teams/{team_id}/hubs`
   - presentation-blob flags (create-only): `--branding-json` `--navigation-json` `--settings-json` `--meta-json` (opaque JSONB objects; inline JSON or `@file`); `--logo-url` merges into `branding` (MIO-2254)
+  - `--navigation-json` header/footer `type:"url"` items with a hub-relative `href` (leading `/`) must stay within the hub — start with `/{--slug}` — else ExitUsage; absolute `http(s)://` hrefs pass as-is (MIO-2270)
 - `list`     GET `/api/teams/{team_id}/hubs`
 - `retrieve` GET `/api/teams/{team_id}/hubs/{id}`
 - `update`   PATCH `/api/teams/{team_id}/hubs/{id}`
-  - `--navigation-json` authors the header/footer menu (typed items; inline JSON or `@file`); whole-blob replace, validated client-side (untyped items rejected) (MIO-2255)
+  - `--navigation-json` authors the header/footer menu (typed items; inline JSON or `@file`); whole-blob replace, validated client-side (untyped items rejected) (MIO-2255). Hub-relative `type:"url"` hrefs (leading `/`) must start with `/{hub.slug}` — the update retrieves the hub for its slug — else ExitUsage; absolute `http(s)://` hrefs pass as-is (MIO-2270)
   - `--branding-json` / `--settings-json` / `--meta-json` deep-merge (read-modify-write: retrieve → merge → PATCH, so sibling keys survive); `--logo-url` merges into branding (MIO-2256, unblocks MIO-901)
 - `delete`   DELETE `/api/teams/{team_id}/hubs/{id}`
 
