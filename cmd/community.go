@@ -378,10 +378,15 @@ var communityDiscussionsRetrieveCmd = &cobra.Command{
 
 var communityDiscussionsUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
-	Short: "Update a discussion by id.",
-	Long:  "Partially update a discussion post (admin). Only the flags you provide are changed.",
-	Example: `  mio community discussions update disc_abc123 --hub hub_abc123 --title "New Title"
-  mio community discussions update disc_abc123 --hub hub_abc123 --pinned=true`,
+	Short: "Update a discussion's moderation state by id.",
+	Long: `Update a discussion's moderation state (admin). Only the flags you provide
+are changed.
+
+The admin PATCH endpoint sets moderation state only — pin, lock, and broadcast —
+not title/body (those are authored by the member and are not admin-editable).`,
+	Example: `  mio community discussions update disc_abc123 --hub hub_abc123 --is-pinned=true
+  mio community discussions update disc_abc123 --hub hub_abc123 --is-locked=true
+  mio community discussions update disc_abc123 --hub hub_abc123 --is-broadcast=false`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := communityContext(cmd)
@@ -390,12 +395,12 @@ var communityDiscussionsUpdateCmd = &cobra.Command{
 		}
 
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "title")
-		setStringFlag(cmd, attrs, "body")
-		setBoolFlag(cmd, attrs, "pinned")
+		setBoolFlag(cmd, attrs, "is-pinned")
+		setBoolFlag(cmd, attrs, "is-locked")
+		setBoolFlag(cmd, attrs, "is-broadcast")
 
 		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
+			return errs.New(errs.ExitUsage, "nothing to update: set at least one of --is-pinned/--is-locked/--is-broadcast")
 		}
 
 		res, err := c.client.Update(c.ctx, discussionsAdminPath(teamID, hubID, args[0]), attrs)
@@ -437,9 +442,9 @@ var communityDiscussionsDeleteCmd = &cobra.Command{
 
 func init() {
 	for _, cmd := range []*cobra.Command{communityDiscussionsUpdateCmd} {
-		cmd.Flags().String("title", "", "Discussion title.")
-		cmd.Flags().String("body", "", "Discussion body text.")
-		cmd.Flags().Bool("pinned", false, "Whether the discussion is pinned.")
+		cmd.Flags().Bool("is-pinned", false, "Pin (true) or unpin (false) the discussion.")
+		cmd.Flags().Bool("is-locked", false, "Lock (true) or unlock (false) the discussion.")
+		cmd.Flags().Bool("is-broadcast", false, "Mark (true) or unmark (false) the discussion as a broadcast announcement.")
 	}
 
 	addPaginationFlags(communityDiscussionsListCmd)
