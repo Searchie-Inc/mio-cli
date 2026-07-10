@@ -199,6 +199,11 @@ var typeOverrides = []struct {
 	// Verified-domain admin commands (External Login v2 verified-domain SSO,
 	// MIO-1513, 2026-06-25). URL segment uses hyphens; JSON:API type is snake_case.
 	{"verified-domains", "verified_domains"},
+	// Community moderation report-reasons (MIO-2265): the create POST derives
+	// its JSON:API type from the .../report-reasons collection tail. The URL
+	// segment uses hyphens; the backend ReportReasonCreateData type Literal is
+	// snake_case "report_reasons", so without this override the write 422s.
+	{"report-reasons", "report_reasons"},
 }
 
 // resourceTypeFromPath returns the JSON:API resource `type` for a write to the
@@ -273,6 +278,10 @@ var knownCollections = map[string]bool{
 	"automations": true, "webhook-endpoints": true, "versions": true, "events": true,
 	// Community admin (2026-06-09): spaces, discussions wired in community.go.
 	"spaces": true, "discussions": true,
+	// Community moderation console (MIO-2265): report-reasons CRUD write path
+	// (create derives type "report_reasons" via the typeOverride above) and the
+	// admin comments list/delete collection segment.
+	"report-reasons": true, "comments": true,
 	// Hub membership role sub-resource (MIO-2263).
 	"role": true,
 	// Media (2026-06-09): files, folders, playlists wired in media.go.
