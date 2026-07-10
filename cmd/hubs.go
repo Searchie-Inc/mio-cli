@@ -98,11 +98,9 @@ var hubsCreateCmd = &cobra.Command{
   mio hubs create --name "Support Hub" --slug support --description "Help articles"`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		c, teamID, err := hubsContext(cmd)
-		if err != nil {
-			return err
-		}
-
+		// Build and validate attributes BEFORE resolving auth/team: a malformed
+		// flag must exit with a usage error and fire NO HTTP request, even when
+		// --team is a name/slug that would otherwise trigger a resolution GET.
 		attrs := map[string]any{}
 		setMappedString(cmd, attrs, "name", "title")
 		setStringFlag(cmd, attrs, "slug")
@@ -141,6 +139,11 @@ var hubsCreateCmd = &cobra.Command{
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
+		}
+
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
 		}
 
 		res, err := c.client.Create(c.ctx, hubsPath(teamID, ""), attrs)

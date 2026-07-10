@@ -18,6 +18,7 @@ package cmd
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
@@ -168,5 +169,67 @@ func TestHubsCreate_InvalidBlobJSONErrorsFast(t *testing.T) {
 				t.Errorf("no HTTP request must be fired for invalid %s", tc.flag)
 			}
 		})
+	}
+}
+
+// TestHubsCreate_InvalidBlobJSONNoResolveRequest verifies that a malformed blob
+// flag fails fast with ExitUsage BEFORE any HTTP call — even when --team is a
+// NAME/SLUG that would otherwise trigger a team-resolution GET /api/teams inside
+// hubsContext. Regression for the codex-review finding: flag validation must run
+// before auth/team resolution, else a bad --branding-json still fires a request.
+func TestHubsCreate_InvalidBlobJSONNoResolveRequest(t *testing.T) {
+	fired := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fired = true
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		"hubs", "create",
+		"--team", "acme-name", // NOT id-shaped → would trigger ResolveTeam GET /api/teams
+		"--name", "X",
+		"--branding-json", `{not json`,
+	)
+
+	if res.Code != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if fired {
+		t.Error("malformed --branding-json must exit before any HTTP request, even when --team is a name that needs resolution")
+	}
+}
+
+// TestHubsCreate_BlobJSONFromFile verifies a blob flag reads its JSON from an
+// @file path (large blobs like a full navigation tree live in a file).
+func TestHubsCreate_BlobJSONFromFile(t *testing.T) {
+	dir := t.TempDir()
+	fp := dir + "/nav.json"
+	if err := os.WriteFile(fp, []byte(`{"header":[{"type":"url","label":"Home","href":"/","position":0}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"hubs", "create",
+			"--name", "F",
+			"--navigation-json", "@"+fp,
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	attrs := decodeHubAttrs(t, *gotBody)
+	nav, ok := attrs["navigation"].(map[string]any)
+	if !ok {
+		t.Fatalf("data.attributes.navigation is absent or not an object; attrs=%v", attrs)
+	}
+	if header, ok := nav["header"].([]any); !ok || len(header) != 1 {
+		t.Errorf("navigation.header from @file should be a 1-item array; got %#v", nav["header"])
 	}
 }

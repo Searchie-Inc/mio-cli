@@ -173,6 +173,10 @@ func parseJSONFlag(raw string) (any, error) {
 // null is a usage error rather than a silent pass-through the backend would
 // 422 on. Mirrors setMappedString for the JSON-object case. Returns ExitUsage
 // on malformed JSON or a non-object value; leaves attrs untouched when unset.
+//
+// JSON numbers decode via float64, which is lossless for the small UI-scale
+// values these hub-config blobs carry (colors, font sizes, positions, flags).
+// Integers needing >2^53 precision are out of scope for hub presentation blobs.
 func setMappedJSONObjectFlag(cmd *cobra.Command, attrs map[string]any, name, key string) error {
 	if !cmd.Flags().Changed(name) {
 		return nil
