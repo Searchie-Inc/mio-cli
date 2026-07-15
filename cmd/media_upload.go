@@ -58,6 +58,8 @@ func init() {
 
 	mediaFilesReplaceCmd.Flags().String("mime-type", "", "Content type of the replacement (default: sniffed).")
 	mediaFilesReplaceCmd.Flags().String("filename", "", "Original filename to record (default: the file's base name).")
+	mediaFilesReplaceCmd.Flags().Bool("multipart", false, "Force a multipart (chunked) replace regardless of size.")
+	mediaFilesReplaceCmd.Flags().Int("part-size-mb", 16, "Multipart chunk size in MB (min 5).")
 
 	mediaFilesRegisterSyntheticCmd.Flags().String("title", "", "File title. Required.")
 	mediaFilesRegisterSyntheticCmd.Flags().String("asset-kind", "document", "Synthetic asset kind: document or pdf.")
@@ -178,30 +180,23 @@ file id — the media is relinked atomically on finalize. Single-part upload.`,
 			mimeType = sniffMime(path)
 		}
 
+		forceMultipart, _ := cmd.Flags().GetBool("multipart")
+		if pmb, _ := cmd.Flags().GetInt("part-size-mb"); (forceMultipart || fi.Size() > autoMultipartThreshold) && pmb < minPartSizeMB {
+			return errs.New(errs.ExitUsage, "--part-size-mb must be >= %d (S3 minimum part size)", minPartSizeMB)
+		}
+
 		c, teamID, err := mediaContext(cmd)
 		if err != nil {
 			return err
 		}
 
-		// 1. Init the replacement → presigned upload URL (type file_replacements).
-		repl, err := c.client.Create(c.ctx, replaceInitPath(teamID, fileID), map[string]any{
-			"original_filename": filename,
-			"mime_type":         mimeType,
-			"size_bytes":        fi.Size(),
-		})
-		if err != nil {
-			return err
+		var res *client.Resource
+		if forceMultipart || fi.Size() > autoMultipartThreshold {
+			partMB, _ := cmd.Flags().GetInt("part-size-mb")
+			res, err = replaceMultipart(c, teamID, fileID, path, filename, mimeType, fi.Size(), int64(partMB)*1024*1024)
+		} else {
+			res, err = replaceSinglePart(c, teamID, fileID, path, filename, mimeType, fi.Size())
 		}
-		uploadURL, _ := repl.Meta["upload_url"].(string)
-		if uploadURL == "" {
-			return errs.New(errs.ExitGeneric, "replace init did not return a presigned upload_url")
-		}
-		// 2. Stream the new bytes to S3.
-		if _, err := client.PutFileToURL(c.ctx, uploadURL, path, mimeType); err != nil {
-			return err
-		}
-		// 3. Finalize — relinks the existing file to the new media atomically.
-		res, err := c.client.Action(c.ctx, http.MethodPost, replaceFinalizePath(teamID, fileID, repl.ID), nil)
 		if err != nil {
 			return err
 		}
@@ -353,42 +348,12 @@ func uploadMultipart(c *cmdContext, teamID, path, title, mimeType string, size, 
 
 	abort := func() { _ = c.client.Delete(c.ctx, multipartUploadPath(teamID, fileID, uploadID)) }
 
-	buf := make([]byte, partSize)
-	parts := make([]map[string]any, 0)
-	for partNumber := 1; ; partNumber++ {
-		n, readErr := io.ReadFull(f, buf)
-		if n > 0 {
-			partRes, err := c.client.Action(c.ctx, http.MethodPost, multipartPartPath(teamID, fileID, uploadID, partNumber), nil)
-			if err != nil {
-				abort()
-				return fileID, nil, err
-			}
-			partURL := ""
-			if partRes != nil {
-				partURL, _ = partRes.Meta["part_url"].(string)
-			}
-			if partURL == "" {
-				abort()
-				return fileID, nil, errs.New(errs.ExitGeneric, "part %d did not return a part_url", partNumber)
-			}
-			etag, err := client.PutBytesToURL(c.ctx, partURL, buf[:n], mimeType)
-			if err != nil {
-				abort()
-				return fileID, nil, err
-			}
-			parts = append(parts, map[string]any{"part_number": partNumber, "etag": etag})
-		}
-		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
-			break
-		}
-		if readErr != nil {
-			abort()
-			return fileID, nil, errs.New(errs.ExitGeneric, "read %s: %s", path, readErr)
-		}
-	}
-	if len(parts) == 0 {
+	parts, err := streamParts(c, f, partSize, mimeType, func(partNumber int) string {
+		return multipartPartPath(teamID, fileID, uploadID, partNumber)
+	})
+	if err != nil {
 		abort()
-		return fileID, nil, errs.New(errs.ExitUsage, "nothing to upload (empty file)")
+		return fileID, nil, err
 	}
 
 	// Complete assembles the object (flat {parts:[…]} body, not a JSON:API envelope).
@@ -423,6 +388,122 @@ func multipartPartPath(teamID, fileID, uploadID string, partNumber int) string {
 
 func multipartCompletePath(teamID, fileID, uploadID string) string {
 	return multipartUploadPath(teamID, fileID, uploadID) + "/complete"
+}
+
+// streamParts uploads the open file in partSize chunks: it POSTs partPathFor(n)
+// to presign each part, PUTs the chunk, and collects {part_number, etag}. Shared
+// by upload-multipart and replace-multipart (the only difference is the part
+// path). Callers own init/complete/finalize and any abort.
+func streamParts(c *cmdContext, f *os.File, partSize int64, mimeType string, partPathFor func(partNumber int) string) ([]map[string]any, error) {
+	buf := make([]byte, partSize)
+	parts := make([]map[string]any, 0)
+	for partNumber := 1; ; partNumber++ {
+		n, readErr := io.ReadFull(f, buf)
+		if n > 0 {
+			partRes, err := c.client.Action(c.ctx, http.MethodPost, partPathFor(partNumber), nil)
+			if err != nil {
+				return nil, err
+			}
+			partURL := ""
+			if partRes != nil {
+				partURL, _ = partRes.Meta["part_url"].(string)
+			}
+			if partURL == "" {
+				return nil, errs.New(errs.ExitGeneric, "part %d did not return a part_url", partNumber)
+			}
+			etag, err := client.PutBytesToURL(c.ctx, partURL, buf[:n], mimeType)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, map[string]any{"part_number": partNumber, "etag": etag})
+		}
+		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
+			break
+		}
+		if readErr != nil {
+			return nil, errs.New(errs.ExitGeneric, "read: %s", readErr)
+		}
+	}
+	if len(parts) == 0 {
+		return nil, errs.New(errs.ExitUsage, "nothing to upload (empty file)")
+	}
+	return parts, nil
+}
+
+// replaceSinglePart runs the single presigned-PUT replace flow: init → PUT →
+// replace/finalize (atomic relink). Returns the relinked file resource.
+func replaceSinglePart(c *cmdContext, teamID, fileID, path, filename, mimeType string, size int64) (*client.Resource, error) {
+	repl, err := c.client.Create(c.ctx, replaceInitPath(teamID, fileID), map[string]any{
+		"original_filename": filename,
+		"mime_type":         mimeType,
+		"size_bytes":        size,
+	})
+	if err != nil {
+		return nil, err
+	}
+	uploadURL, _ := repl.Meta["upload_url"].(string)
+	if uploadURL == "" {
+		return nil, errs.New(errs.ExitGeneric, "replace init did not return a presigned upload_url")
+	}
+	if _, err := client.PutFileToURL(c.ctx, uploadURL, path, mimeType); err != nil {
+		return nil, err
+	}
+	return c.client.Action(c.ctx, http.MethodPost, replaceFinalizePath(teamID, fileID, repl.ID), nil)
+}
+
+// replaceMultipart runs the chunked replace flow: init → per-part → complete →
+// replace/finalize. There is no replace-multipart abort route, so a failure just
+// surfaces (the backend reaps the pending replacement).
+func replaceMultipart(c *cmdContext, teamID, fileID, path, filename, mimeType string, size, partSize int64) (*client.Resource, error) {
+	repl, err := c.client.Create(c.ctx, replaceMultipartInitPath(teamID, fileID), map[string]any{
+		"original_filename": filename,
+		"mime_type":         mimeType,
+		"size_bytes":        size,
+	})
+	if err != nil {
+		return nil, err
+	}
+	replID := repl.ID
+	uploadID, _ := repl.Meta["upload_id"].(string)
+	if uploadID == "" {
+		return nil, errs.New(errs.ExitGeneric, "replace multipart init did not return an upload_id")
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, errs.New(errs.ExitGeneric, "open %s: %s", path, err)
+	}
+	defer f.Close()
+
+	parts, err := streamParts(c, f, partSize, mimeType, func(partNumber int) string {
+		return replaceMultipartPartPath(teamID, fileID, replID, uploadID, partNumber)
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Unlike upload-multipart, the replace-multipart complete is TERMINAL: it
+	// relinks the file and returns the updated file resource (no separate
+	// finalize — calling one 404s the already-consumed replacement).
+	return c.client.ActionWith(c.ctx, client.StyleFlat, http.MethodPost,
+		replaceMultipartCompletePath(teamID, fileID, replID, uploadID), map[string]any{"parts": parts})
+}
+
+// replaceMultipartInitPath returns /api/teams/{team}/files/{id}/replace/multipart.
+func replaceMultipartInitPath(teamID, fileID string) string {
+	return replaceInitPath(teamID, fileID) + "/multipart"
+}
+
+// replaceMultipartBase returns .../files/{id}/replace/{replacement_media_id}/multipart/{upload_id}.
+func replaceMultipartBase(teamID, fileID, replID, uploadID string) string {
+	return fmt.Sprintf("%s/replace/%s/multipart/%s", filesPath(teamID, fileID), replID, uploadID)
+}
+
+func replaceMultipartPartPath(teamID, fileID, replID, uploadID string, partNumber int) string {
+	return fmt.Sprintf("%s/parts/%d", replaceMultipartBase(teamID, fileID, replID, uploadID), partNumber)
+}
+
+func replaceMultipartCompletePath(teamID, fileID, replID, uploadID string) string {
+	return replaceMultipartBase(teamID, fileID, replID, uploadID) + "/complete"
 }
 
 // ---- helpers ----------------------------------------------------------------
