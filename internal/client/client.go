@@ -118,7 +118,12 @@ type envelope struct {
 }
 
 type envelopeData struct {
-	Type       string         `json:"type"`
+	Type string `json:"type"`
+	// ID is included in the write body only when set (omitempty). Most write
+	// schemas take the id from the URL, but a few pin data.id in the body too
+	// (e.g. AttachmentUpdateRequest → "Field required (/data/id)"); those use
+	// UpdateWithID to populate it.
+	ID         string         `json:"id,omitempty"`
 	Attributes map[string]any `json:"attributes"`
 }
 
@@ -435,6 +440,19 @@ func (c *Client) Update(ctx context.Context, path string, attrs map[string]any) 
 // UpdateWith performs a PATCH shaping the body per the given BodyStyle.
 func (c *Client) UpdateWith(ctx context.Context, style BodyStyle, path string, attrs map[string]any) (*Resource, error) {
 	body, err := c.do(ctx, http.MethodPatch, path, nil, buildWriteBody(style, path, attrs), contentTypeJSONAPI)
+	if err != nil {
+		return nil, err
+	}
+	return decodeResourceWrapped(body)
+}
+
+// UpdateWithID performs a PATCH whose JSON:API envelope carries data.id in the
+// body (in addition to the URL). Use it for write schemas that require the id in
+// the body — e.g. AttachmentUpdateRequest, which 400s with "Field required
+// (/data/id)" otherwise. The `type` is still derived from the path.
+func (c *Client) UpdateWithID(ctx context.Context, path, id string, attrs map[string]any) (*Resource, error) {
+	env := envelope{Data: envelopeData{Type: resourceTypeFromPath(path), ID: id, Attributes: attrs}}
+	body, err := c.do(ctx, http.MethodPatch, path, nil, env, contentTypeJSONAPI)
 	if err != nil {
 		return nil, err
 	}

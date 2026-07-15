@@ -146,7 +146,8 @@ var mediaAttachmentsUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		res, err := c.client.Update(c.ctx, attachmentsPath(teamID, args[0]), attrs)
+		// AttachmentUpdateRequest requires data.id in the body (not just the URL).
+		res, err := c.client.UpdateWithID(c.ctx, attachmentsPath(teamID, args[0]), args[0], attrs)
 		if err != nil {
 			return err
 		}

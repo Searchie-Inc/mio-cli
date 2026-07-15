@@ -5,6 +5,7 @@ package cmd
 // list (with media_id/target filters), show, update (position/role), delete.
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"testing"
@@ -94,6 +95,18 @@ func TestAttachmentsUpdate_Body(t *testing.T) {
 	}
 	if attrs["role"] != "thumbnail" {
 		t.Errorf("role=%v want thumbnail", attrs["role"])
+	}
+	// AttachmentUpdateRequest requires data.id in the body (backend 400s otherwise).
+	var doc struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(*body, &doc); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if doc.Data.ID != "att_x" {
+		t.Errorf("data.id = %q, want att_x (backend requires it in the body)", doc.Data.ID)
 	}
 }
 
