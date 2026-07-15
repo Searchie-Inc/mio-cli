@@ -18,7 +18,12 @@ type Resource struct {
 	ID         string         `json:"id"`
 	Type       string         `json:"type"`
 	Attributes map[string]any `json:"attributes"`
-	RawBody    []byte         `json:"-"`
+	// Meta is the resource-level `meta` object. Most reads leave it nil; a few
+	// writes return operational data here (e.g. the presigned `upload_url` on
+	// files create, MIO-2267). Excluded from Flatten so it never leaks into the
+	// agent-facing view.
+	Meta    map[string]any `json:"meta,omitempty"`
+	RawBody []byte         `json:"-"`
 }
 
 // Flatten merges id, type and every attribute into a single flat map suitable
