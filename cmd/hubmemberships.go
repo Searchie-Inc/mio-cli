@@ -7,30 +7,82 @@ package cmd
 //
 // Routes backed by app/community/routers/moderation_admin.py:
 //
+//	list   GET  /api/admin/teams/{team_id}/hubs/{hub_id}/members            (MIO-2284)
 //	ban    POST /api/admin/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/ban
 //	unban  POST /api/admin/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/unban
 //	warn   POST /api/admin/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/warn
 //
-// NOTE: A team-admin list endpoint for hub members does not yet exist in the
-// backend (GET /api/hubs/{hub_id}/members requires a contact JWT, not a team
-// owner JWT). Once a team-admin list route is added to the backend, a `list`
-// action can be wired here without breaking the existing sub-commands.
+// `list` returns members across ALL statuses (the team-admin read added in
+// MIO-2284); it is the API-key counterpart to the contact-JWT-only
+// GET /api/hubs/{hub_id}/members.
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Searchie-Inc/mio-cli/internal/client"
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
 func init() {
 	hubMembershipsCmd.AddCommand(
+		hubMembershipsListCmd,
 		hubMembershipsBanCmd,
 		hubMembershipsUnbanCmd,
 		hubMembershipsWarnCmd,
 	)
 	rootCmd.AddCommand(hubMembershipsCmd)
+}
+
+// hubMembershipStatuses are the moderation statuses accepted by --filter-status,
+// mirroring the backend CHECK constraint (ck_hub_memberships_status).
+var hubMembershipStatuses = map[string]bool{
+	"active": true, "banned": true, "soft_banned": true, "left": true,
+}
+
+// ---- list -------------------------------------------------------------------
+
+var hubMembershipsListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List hub members (all statuses).",
+	Long: `List the active hub's members for operator verification, across all
+moderation statuses (active, banned, soft_banned, left). Requires --hub and a
+team-owner API key.
+
+Cursor pagination: --limit sets page[size] (max 100), --after sets page[after]
+(a contact id from the previous page). Narrow to a single status with
+--filter-status.`,
+	Example: `  mio hub-memberships list --hub hub_abc123
+  mio hub-memberships list --hub hub_abc123 --filter-status active --limit 50`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Validate --filter-status BEFORE resolving auth/team/hub so a bad value
+		// fails with a usage error and fires no HTTP request (repo contract).
+		query := url.Values{}
+		if cmd.Flags().Changed("filter-status") {
+			status, _ := cmd.Flags().GetString("filter-status")
+			if status != "" {
+				if !hubMembershipStatuses[status] {
+					return errs.New(errs.ExitUsage, "invalid --filter-status %q: must be active, banned, soft_banned, or left", status)
+				}
+				query.Set("filter[status]", status)
+			}
+		}
+
+		c, teamID, hubID, err := hubMembershipsContext(cmd)
+		if err != nil {
+			return err
+		}
+		addPageFlags(cmd, query)
+
+		col, err := c.client.List(c.ctx, hubMembersPath(teamID, hubID, ""), query)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, col)
+	},
 }
 
 // ---- hub-memberships group --------------------------------------------------
@@ -180,4 +232,7 @@ func init() {
 	} {
 		cmd.Flags().String("notes", "", "Optional admin notes for the moderation action.")
 	}
+
+	addPaginationFlags(hubMembershipsListCmd)
+	hubMembershipsListCmd.Flags().String("filter-status", "", "Filter by moderation status: active, banned, soft_banned, or left.")
 }
