@@ -240,6 +240,9 @@ var typeOverrides = []struct {
 	// PATCH .../media/{id}/transcript and POST .../transcript/revert ("revert" is
 	// left out of knownCollections so its last collection resolves to transcript).
 	{"transcript", "transcripts"},
+	// Media file content-replace init (MIO-2423): .../files/{id}/replace →
+	// "file_replacements" (the "replace" segment != the backend type Literal).
+	{"replace", "file_replacements"},
 	// Playlist cover set (MIO-2289): POST .../playlist-cover-attachments binds
 	// the AttachmentCreateRequest whose type Literal is "attachments"; the
 	// hyphenated segment would not match without this override.
@@ -334,6 +337,9 @@ var knownCollections = map[string]bool{
 	// bare-segment override. "revert" is deliberately NOT a known token so the
 	// revert path's last collection resolves to "transcript".
 	"transcript": true,
+	// Media file content-replace init (MIO-2423): POST .../files/{id}/replace
+	// binds FileReplacementInitRequest (type "file_replacements").
+	"replace": true,
 	// Attachments admin (MIO-2289): list/show/update/delete. Bare "attachments"
 	// self-derives the JSON:API type "attachments". The hyphenated
 	// playlist-cover-attachments create collection maps to "attachments" too

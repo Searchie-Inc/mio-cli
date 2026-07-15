@@ -5,6 +5,7 @@ package cmd
 // `files finalize`, `files transcode`, and `files register-synthetic`.
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,6 +73,192 @@ func TestFilesUpload_Orchestration(t *testing.T) {
 	}
 	if s, _ := attrs["mime_type"].(string); s == "" {
 		t.Errorf("mime_type missing from create body")
+	}
+}
+
+func TestFilesUpload_Multipart(t *testing.T) {
+	var initHit, partHit, completeHit, finalizeHit bool
+	var completeBody, putBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files/multipart":
+			initHit = true
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"data":{"id":"file_mp","type":"files","attributes":{},"meta":{"upload_id":"up1","s3_key":"k1"}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files/file_mp/multipart/up1/parts/1":
+			partHit = true
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"data":{"id":"file_mp","type":"files","meta":{"part_url":%q}}}`, "http://"+r.Host+"/s3part1")
+		case r.Method == http.MethodPut && r.URL.Path == "/s3part1":
+			putBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("ETag", `"pe1"`)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files/file_mp/multipart/up1/complete":
+			completeHit = true
+			completeBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"data":{"id":"file_mp","type":"files","meta":{"completed":true}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files/file_mp/finalize":
+			finalizeHit = true
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"data":{"id":"file_mp","type":"files","attributes":{"status_upload":"READY"}}}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "big.bin")
+	if err := os.WriteFile(path, []byte("multipart chunk payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "media", "files", "upload", path, "--multipart")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	if !initHit || !partHit || !completeHit || !finalizeHit {
+		t.Fatalf("init=%v part=%v complete=%v finalize=%v — all must fire", initHit, partHit, completeHit, finalizeHit)
+	}
+	if string(putBody) != "multipart chunk payload" {
+		t.Errorf("part PUT body=%q, want the file contents", putBody)
+	}
+	var cb struct {
+		Parts []struct {
+			PartNumber int    `json:"part_number"`
+			ETag       string `json:"etag"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(completeBody, &cb); err != nil {
+		t.Fatalf("complete body not JSON: %v; body=%q", err, completeBody)
+	}
+	if len(cb.Parts) != 1 || cb.Parts[0].PartNumber != 1 || cb.Parts[0].ETag != "pe1" {
+		t.Errorf("complete parts=%+v, want [{1 pe1}]", cb.Parts)
+	}
+}
+
+func TestFilesReplace_Orchestration(t *testing.T) {
+	var initHit, putHit, finalizeHit bool
+	var initBody, putBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files/file_x/replace":
+			initHit = true
+			initBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{"data":{"id":"repl_1","type":"file_replacements","attributes":{"file_id":"file_x","status_upload":"PENDING"},"meta":{"upload_url":%q}}}`, "http://"+r.Host+"/s3repl")
+		case r.Method == http.MethodPut && r.URL.Path == "/s3repl":
+			putHit = true
+			putBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("ETag", `"re1"`)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files/file_x/replace/repl_1/finalize":
+			finalizeHit = true
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"data":{"id":"file_x","type":"files","attributes":{"status_upload":"READY"}}}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "new-content.png")
+	if err := os.WriteFile(path, []byte("replacement bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "media", "files", "replace", "file_x", path)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	if !initHit || !putHit || !finalizeHit {
+		t.Fatalf("init=%v put=%v finalize=%v — all must fire", initHit, putHit, finalizeHit)
+	}
+	if string(putBody) != "replacement bytes" {
+		t.Errorf("PUT body=%q, want the new file contents", putBody)
+	}
+	typ, attrs := decodeDataTypeAttrs(t, initBody)
+	if typ != "file_replacements" {
+		t.Errorf("replace init type=%q want file_replacements", typ)
+	}
+	if attrs["original_filename"] != "new-content.png" {
+		t.Errorf("original_filename=%v want new-content.png", attrs["original_filename"])
+	}
+	if attrs["size_bytes"] != float64(len("replacement bytes")) {
+		t.Errorf("size_bytes=%v", attrs["size_bytes"])
+	}
+	if s, _ := attrs["mime_type"].(string); s == "" {
+		t.Errorf("mime_type missing")
+	}
+}
+
+func TestFilesReplace_Multipart(t *testing.T) {
+	// Note: replace-multipart `complete` is terminal (relinks + returns the file);
+	// there is NO separate finalize call, unlike upload-multipart.
+	var initHit, partHit, completeHit bool
+	var completeBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files/file_x/replace/multipart":
+			initHit = true
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"data":{"id":"repl_m","type":"file_replacements","attributes":{"file_id":"file_x"},"meta":{"upload_id":"up9","s3_key":"k9"}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files/file_x/replace/repl_m/multipart/up9/parts/1":
+			partHit = true
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"data":{"id":"repl_m","type":"file_replacements","meta":{"part_url":%q}}}`, "http://"+r.Host+"/s3rp1")
+		case r.Method == http.MethodPut && r.URL.Path == "/s3rp1":
+			w.Header().Set("ETag", `"rpe1"`)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files/file_x/replace/repl_m/multipart/up9/complete":
+			completeHit = true
+			completeBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"data":{"id":"file_x","type":"files","attributes":{"status_upload":"READY"}}}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "big-replacement.png")
+	if err := os.WriteFile(path, []byte("big replacement content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "media", "files", "replace", "file_x", path, "--multipart")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	if !initHit || !partHit || !completeHit {
+		t.Fatalf("init=%v part=%v complete=%v — all must fire", initHit, partHit, completeHit)
+	}
+	var cb struct {
+		Parts []struct {
+			PartNumber int    `json:"part_number"`
+			ETag       string `json:"etag"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(completeBody, &cb); err != nil {
+		t.Fatalf("complete body not JSON: %v", err)
+	}
+	if len(cb.Parts) != 1 || cb.Parts[0].PartNumber != 1 || cb.Parts[0].ETag != "rpe1" {
+		t.Errorf("complete parts=%+v, want [{1 rpe1}]", cb.Parts)
 	}
 }
 
