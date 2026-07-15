@@ -118,7 +118,12 @@ type envelope struct {
 }
 
 type envelopeData struct {
-	Type       string         `json:"type"`
+	Type string `json:"type"`
+	// ID is included in the write body only when set (omitempty). Most write
+	// schemas take the id from the URL, but a few pin data.id in the body too
+	// (e.g. AttachmentUpdateRequest → "Field required (/data/id)"); those use
+	// UpdateWithID to populate it.
+	ID         string         `json:"id,omitempty"`
 	Attributes map[string]any `json:"attributes"`
 }
 
@@ -230,6 +235,15 @@ var typeOverrides = []struct {
 	// segment uses hyphens; the backend ReportReasonCreateData type Literal is
 	// snake_case "report_reasons", so without this override the write 422s.
 	{"report-reasons", "report_reasons"},
+	// Media transcript edit/revert (MIO-2289): the singular "transcript" URL
+	// segment maps to the backend "transcripts" type Literal. Applies to both
+	// PATCH .../media/{id}/transcript and POST .../transcript/revert ("revert" is
+	// left out of knownCollections so its last collection resolves to transcript).
+	{"transcript", "transcripts"},
+	// Playlist cover set (MIO-2289): POST .../playlist-cover-attachments binds
+	// the AttachmentCreateRequest whose type Literal is "attachments"; the
+	// hyphenated segment would not match without this override.
+	{"playlist-cover-attachments", "attachments"},
 }
 
 // resourceTypeFromPath returns the JSON:API resource `type` for a write to the
@@ -315,6 +329,17 @@ var knownCollections = map[string]bool{
 	// Media enrichment (MIO-2266): in-video cards, authorable chapters, folder
 	// subtree move, and standalone-file hub publishing (hubs/{hub}/media).
 	"cards": true, "chapters": true, "move": true, "media": true,
+	// Media transcripts (MIO-2289): edit (PATCH .../media/{id}/transcript) +
+	// revert (POST .../transcript/revert) derive type "transcripts" via the
+	// bare-segment override. "revert" is deliberately NOT a known token so the
+	// revert path's last collection resolves to "transcript".
+	"transcript": true,
+	// Attachments admin (MIO-2289): list/show/update/delete. Bare "attachments"
+	// self-derives the JSON:API type "attachments". The hyphenated
+	// playlist-cover-attachments create collection maps to "attachments" too
+	// (via the typeOverride below).
+	"attachments":                true,
+	"playlist-cover-attachments": true,
 	// Contact-scoped drip enrollment reader (email enrollments list-by-contact).
 	"drip-enrollments": true,
 	// OAuth client management (Hub-as-IdP SSO, 2026-06-24).
@@ -415,6 +440,19 @@ func (c *Client) Update(ctx context.Context, path string, attrs map[string]any) 
 // UpdateWith performs a PATCH shaping the body per the given BodyStyle.
 func (c *Client) UpdateWith(ctx context.Context, style BodyStyle, path string, attrs map[string]any) (*Resource, error) {
 	body, err := c.do(ctx, http.MethodPatch, path, nil, buildWriteBody(style, path, attrs), contentTypeJSONAPI)
+	if err != nil {
+		return nil, err
+	}
+	return decodeResourceWrapped(body)
+}
+
+// UpdateWithID performs a PATCH whose JSON:API envelope carries data.id in the
+// body (in addition to the URL). Use it for write schemas that require the id in
+// the body — e.g. AttachmentUpdateRequest, which 400s with "Field required
+// (/data/id)" otherwise. The `type` is still derived from the path.
+func (c *Client) UpdateWithID(ctx context.Context, path, id string, attrs map[string]any) (*Resource, error) {
+	env := envelope{Data: envelopeData{Type: resourceTypeFromPath(path), ID: id, Attributes: attrs}}
+	body, err := c.do(ctx, http.MethodPatch, path, nil, env, contentTypeJSONAPI)
 	if err != nil {
 		return nil, err
 	}

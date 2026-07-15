@@ -309,6 +309,14 @@ func TestResourceTypeFromPath(t *testing.T) {
 		// snake_case type "report_reasons" on both create and update paths.
 		{"/api/admin/teams/t1/hubs/h1/report-reasons", "report_reasons"},
 		{"/api/admin/teams/t1/hubs/h1/report-reasons/rr1", "report_reasons"},
+		// Media transcript edit/revert (MIO-2289): singular "transcript" segment →
+		// "transcripts" type; "revert" stays opaque so it resolves to transcript.
+		{"/api/teams/t1/media/m1/transcript", "transcripts"},
+		{"/api/teams/t1/media/m1/transcript/revert", "transcripts"},
+		// Playlist cover set (MIO-2289): hyphenated create collection → "attachments".
+		{"/api/teams/t1/attachments", "attachments"},
+		{"/api/teams/t1/attachments/att1", "attachments"},
+		{"/api/teams/t1/playlist-cover-attachments", "attachments"},
 		// Media files, folders, playlists (MIO-811).
 		{"/api/teams/t1/files", "files"},
 		{"/api/teams/t1/files/f1", "files"},
