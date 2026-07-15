@@ -313,6 +313,8 @@ func TestResourceTypeFromPath(t *testing.T) {
 		// "transcripts" type; "revert" stays opaque so it resolves to transcript.
 		{"/api/teams/t1/media/m1/transcript", "transcripts"},
 		{"/api/teams/t1/media/m1/transcript/revert", "transcripts"},
+		// Media file content-replace init (MIO-2423): "replace" → file_replacements.
+		{"/api/teams/t1/files/f1/replace", "file_replacements"},
 		// Playlist cover set (MIO-2289): hyphenated create collection → "attachments".
 		{"/api/teams/t1/attachments", "attachments"},
 		{"/api/teams/t1/attachments/att1", "attachments"},

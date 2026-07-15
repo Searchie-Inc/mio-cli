@@ -53,6 +53,36 @@ func TestPutFileToURL_PutsRawBytesNoAuth(t *testing.T) {
 	}
 }
 
+func TestPutBytesToURL_PutsChunkNoAuth(t *testing.T) {
+	var gotMethod, gotAuth string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("ETag", `"part-etag"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	etag, err := PutBytesToURL(context.Background(), srv.URL, []byte("chunk-data"), "application/octet-stream")
+	if err != nil {
+		t.Fatalf("PutBytesToURL: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", gotMethod)
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization = %q, want empty", gotAuth)
+	}
+	if string(gotBody) != "chunk-data" {
+		t.Errorf("body = %q, want chunk-data", gotBody)
+	}
+	if etag != "part-etag" {
+		t.Errorf("etag = %q, want part-etag", etag)
+	}
+}
+
 func TestPutFileToURL_NonSuccessIsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
