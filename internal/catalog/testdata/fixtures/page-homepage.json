@@ -1,0 +1,49 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-homepage",
+  "settings": {
+    "gap": 0
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "row",
+      "template": "hero",
+      "settings": {},
+      "children": [
+        {
+          "id": "#2",
+          "kind": "headline",
+          "settings": {
+            "level": 1
+          }
+        },
+        {
+          "id": "#3",
+          "kind": "text",
+          "settings": {}
+        },
+        {
+          "id": "#4",
+          "kind": "button",
+          "settings": {}
+        }
+      ]
+    },
+    {
+      "id": "#5",
+      "kind": "carousel",
+      "template": "carousel",
+      "settings": {},
+      "children": []
+    },
+    {
+      "id": "#6",
+      "kind": "row",
+      "template": "row",
+      "settings": {},
+      "children": []
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-file-detail",
+  "settings": {
+    "gap": 0
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "file-player",
+      "system": true,
+      "settings": {}
+    },
+    {
+      "id": "#2",
+      "kind": "stack",
+      "settings": {},
+      "children": [
+        {
+          "id": "#3",
+          "kind": "stack",
+          "settings": {},
+          "children": [
+            {
+              "id": "#4",
+              "kind": "headline",
+              "value": "Content title",
+              "settings": {
+                "level": 1,
+                "slot": "title"
+              }
+            },
+            {
+              "id": "#5",
+              "kind": "text",
+              "value": "Duration · Author · Published",
+              "settings": {
+                "slot": "meta"
+              }
+            }
+          ]
+        },
+        {
+          "id": "#6",
+          "kind": "tabs",
+          "settings": {
+            "slot": "tabs"
+          },
+          "children": [
+            {
+              "id": "#7",
+              "kind": "stack",
+              "settings": {
+                "tab_label": "Info",
+                "slot": "tab-info"
+              },
+              "children": [
+                {
+                  "id": "#8",
+                  "kind": "text",
+                  "value": "Content description",
+                  "settings": {
+                    "slot": "description"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "#9",
+              "kind": "stack",
+              "settings": {
+                "tab_label": "Attachments",
+                "slot": "tab-attachments"
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

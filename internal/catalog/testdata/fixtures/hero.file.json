@@ -1,0 +1,129 @@
+{
+  "id": "#0",
+  "kind": "container",
+  "template": "hero",
+  "settings": {
+    "maxWidth": "content",
+    "padding": 0,
+    "surface": {
+      "padding": "section",
+      "background": {
+        "type": "tint"
+      }
+    }
+  },
+  "dataSource": {
+    "type": "file",
+    "id": ""
+  },
+  "repeat": {
+    "over": "dataSource",
+    "limit": 1
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "row",
+      "settings": {
+        "responsive": true,
+        "split": true,
+        "gap": "section"
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "media-slot",
+          "settings": {
+            "name": "cover",
+            "preset": "medium-720",
+            "aspectRatio": "16:9",
+            "radius": "m",
+            "outline": true,
+            "progressBar": true
+          }
+        },
+        {
+          "id": "#3",
+          "kind": "stack",
+          "settings": {
+            "gap": 2,
+            "align": "start"
+          },
+          "children": [
+            {
+              "id": "#4",
+              "kind": "field",
+              "settings": {
+                "name": "title",
+                "role": "title",
+                "size": "title",
+                "weight": 700
+              }
+            },
+            {
+              "id": "#5",
+              "kind": "row",
+              "settings": {
+                "gap": 2.5,
+                "align": "center"
+              },
+              "children": [
+                {
+                  "id": "#6",
+                  "kind": "field",
+                  "settings": {
+                    "name": "status",
+                    "role": "meta",
+                    "tone": "primary",
+                    "ring": {
+                      "value": 100,
+                      "size": 16
+                    }
+                  }
+                },
+                {
+                  "id": "#7",
+                  "kind": "field",
+                  "settings": {
+                    "name": "duration",
+                    "role": "meta",
+                    "icon": "clock"
+                  }
+                },
+                {
+                  "id": "#8",
+                  "kind": "field",
+                  "settings": {
+                    "name": "plays",
+                    "role": "meta",
+                    "icon": "eye"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "#9",
+              "kind": "field",
+              "settings": {
+                "name": "description",
+                "role": "body",
+                "clamp": 5,
+                "marginBottom": 4
+              }
+            },
+            {
+              "id": "#10",
+              "kind": "button",
+              "settings": {
+                "size": "lg",
+                "icon": "play-filled",
+                "actionFromScope": "action"
+              },
+              "value": "Play"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

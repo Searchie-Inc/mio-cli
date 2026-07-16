@@ -1,0 +1,49 @@
+{
+  "id": "#0",
+  "kind": "grid",
+  "template": "content-grid",
+  "settings": {
+    "variant": "ds-content"
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "content-card",
+      "template": "content-card",
+      "settings": {
+        "actionFromScope": "action"
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "media-slot",
+          "settings": {
+            "name": "cover",
+            "aspectRatio": "16:9",
+            "radius": "m",
+            "outline": true
+          }
+        },
+        {
+          "id": "#3",
+          "kind": "stack",
+          "settings": {
+            "gap": 0.5
+          },
+          "children": [
+            {
+              "id": "#4",
+              "kind": "field",
+              "settings": {
+                "name": "title",
+                "role": "title",
+                "size": "body",
+                "weight": 700
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

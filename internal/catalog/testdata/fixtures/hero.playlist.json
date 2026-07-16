@@ -1,0 +1,161 @@
+{
+  "id": "#0",
+  "kind": "container",
+  "template": "hero",
+  "settings": {
+    "maxWidth": "content",
+    "padding": 0,
+    "surface": {
+      "padding": "section",
+      "background": {
+        "type": "tint"
+      }
+    }
+  },
+  "dataSource": {
+    "type": "playlist",
+    "id": "",
+    "resume": true
+  },
+  "repeat": {
+    "over": "dataSource",
+    "limit": 1
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "row",
+      "settings": {
+        "responsive": true,
+        "split": true,
+        "gap": "section"
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "media-slot",
+          "settings": {
+            "name": "cover",
+            "preset": "medium-720",
+            "aspectRatio": "16:9",
+            "radius": "m",
+            "outline": true,
+            "progressBar": true
+          }
+        },
+        {
+          "id": "#3",
+          "kind": "stack",
+          "settings": {
+            "gap": 2,
+            "align": "start"
+          },
+          "children": [
+            {
+              "id": "#4",
+              "kind": "row",
+              "settings": {
+                "align": "center",
+                "gap": 1.5
+              },
+              "children": [
+                {
+                  "id": "#5",
+                  "kind": "progress-ring",
+                  "settings": {
+                    "valueFrom": "progressPercent",
+                    "size": 16,
+                    "strokeWidth": 2,
+                    "fillColor": "primary",
+                    "trackColor": "border",
+                    "showLabel": false
+                  }
+                },
+                {
+                  "id": "#6",
+                  "kind": "field",
+                  "settings": {
+                    "name": "playlistLabel",
+                    "size": "body",
+                    "tone": "primary"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "#7",
+              "kind": "field",
+              "settings": {
+                "name": "title",
+                "role": "title",
+                "size": "title",
+                "weight": 700
+              }
+            },
+            {
+              "id": "#8",
+              "kind": "row",
+              "settings": {
+                "gap": 2.5,
+                "align": "center"
+              },
+              "children": [
+                {
+                  "id": "#9",
+                  "kind": "field",
+                  "settings": {
+                    "name": "status",
+                    "role": "meta",
+                    "tone": "primary",
+                    "ring": {
+                      "value": 100,
+                      "size": 16
+                    }
+                  }
+                },
+                {
+                  "id": "#10",
+                  "kind": "field",
+                  "settings": {
+                    "name": "duration",
+                    "role": "meta",
+                    "icon": "clock"
+                  }
+                },
+                {
+                  "id": "#11",
+                  "kind": "field",
+                  "settings": {
+                    "name": "plays",
+                    "role": "meta",
+                    "icon": "eye"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "#12",
+              "kind": "field",
+              "settings": {
+                "name": "description",
+                "role": "body",
+                "clamp": 5,
+                "marginBottom": 4
+              }
+            },
+            {
+              "id": "#13",
+              "kind": "button",
+              "settings": {
+                "size": "lg",
+                "icon": "play-filled",
+                "actionFromScope": "action"
+              },
+              "value": "Resume"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

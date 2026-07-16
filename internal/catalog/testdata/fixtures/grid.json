@@ -1,0 +1,79 @@
+{
+  "id": "#0",
+  "kind": "container",
+  "template": "grid",
+  "settings": {
+    "maxWidth": "content",
+    "padding": 0,
+    "surface": {
+      "padding": "section"
+    }
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "stack",
+      "settings": {
+        "gap": 6
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "headline",
+          "settings": {
+            "level": 2,
+            "weight": 700
+          }
+        },
+        {
+          "id": "#3",
+          "kind": "grid",
+          "settings": {
+            "variant": "responsive"
+          },
+          "children": [
+            {
+              "id": "#4",
+              "kind": "content-card",
+              "template": "content-card",
+              "settings": {
+                "actionFromScope": "action"
+              },
+              "children": [
+                {
+                  "id": "#5",
+                  "kind": "media-slot",
+                  "settings": {
+                    "name": "cover",
+                    "aspectRatio": "16:9",
+                    "radius": "m",
+                    "outline": true
+                  }
+                },
+                {
+                  "id": "#6",
+                  "kind": "stack",
+                  "settings": {
+                    "gap": 0.5
+                  },
+                  "children": [
+                    {
+                      "id": "#7",
+                      "kind": "field",
+                      "settings": {
+                        "name": "title",
+                        "role": "title",
+                        "size": "body",
+                        "weight": 700
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

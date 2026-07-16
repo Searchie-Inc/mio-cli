@@ -139,7 +139,9 @@ Every implemented resource and its verbs.
 | `segments` | `create` `list` `retrieve` `update` `delete` `search` `members` `count` |
 | `content` | `create` `list` `retrieve` `children` `update` `delete` `restore` `reorder` |
 | `pages` | `create` `list` `retrieve` (add `--tree` for raw node tree) `update` `delete` `home` `publish` |
-| `pages sections` | `create` `list` `update` `delete` `reorder` |
+| `pages sections` | `create` (`--type` validated against the catalog writable set) `list` `update` `delete` `reorder` |
+| `pages tree` | `get` `set` (author a page's draft node-tree; `set` takes `--file` + `--if-match`) |
+| `pages catalog` | `scaffold` (`--template`/`--variant` → a node-tree for `pages tree set`) `templates` (`--page-type`) `section-types` (`--writable-only`) |
 | `products` | `create` `list` `retrieve` `update` `delete` |
 | `products prices` | `create` `list` `retrieve` `update` `delete` |
 | `checkout orders` | `list` `retrieve` |
@@ -164,6 +166,13 @@ Every implemented resource and its verbs.
 
 - **`pages publish` requires `--if-match <draft_version>`** — read the `draft_version` attribute from a prior `pages retrieve`, then pass it as `--if-match`. The backend uses it as an optimistic-concurrency guard and will return 409 if the draft has changed since you read it.
 - **`pages retrieve --tree`** returns a `page-trees` resource (raw published node tree) instead of page metadata. Use this for admin editor access.
+- **Scaffold real pages via the tree door, not imperative sections.** `pages catalog scaffold --template <id>` emits the same node-tree artifact the visual builder produces (a Go port of the reference applier mints fresh UUIDv7 ids). It is emit-only — pipe a PAGE template's `{"root":…}` output straight into `pages tree set`:
+  ```sh
+  V=$(mio pages tree get <page_id> --jq '.draft_version')
+  mio pages catalog scaffold --template page-homepage > tree.json
+  mio pages tree set <page_id> --if-match "$V" --file tree.json
+  ```
+  The catalog is live-fetched (`GET /api/page-builder/catalog`, ETag/304-cached) with a digest-pinned embedded fallback, so scaffolding works offline (`--offline` forces the embedded copy; `--catalog <file>` overrides). `pages catalog templates --page-type <pt>` lists what's recommended per page type; `pages catalog section-types --writable-only` is the `sections create --type` allow-list.
 - **`hubs policies update <hub_id>`** takes the hub identifier as a positional argument, NOT the `--hub` context flag. Policy content supports the `@file` convention: `--content @tos.md`.
 - **`hubs policies update --policy-type`** must be exactly `tos` or `privacy_policy`; the CLI validates this client-side. The `--require-acceptance` flag is only meaningful for `tos`; passing it with `privacy_policy` will result in a backend 422.
 - **`hubs policies update` content flags** — exactly one of `--content` or `--reset-content` is required (they are mutually exclusive):
