@@ -392,9 +392,10 @@ section-type-specific.`,
   mio pages sections create page_abc123 --hub hub_123 --type grid --settings @section-settings.json`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate --type against the catalog-derived writable allow-list FIRST,
-		// so a typo or non-writable type fails fast (ExitUsage) before any HTTP
-		// or scope resolution — mirrors the publish command's --if-match pre-check.
+		// Validate --type against the catalog FIRST, before any HTTP or scope
+		// resolution (mirrors the publish command's --if-match pre-check). The
+		// check is read-tolerant: a KNOWN non-writable type fails fast here, while
+		// an unknown type is deferred to the backend (see validateSectionType).
 		if !cmd.Flags().Changed("type") {
 			return errs.New(errs.ExitUsage, "missing required flag: --type")
 		}
@@ -605,14 +606,16 @@ var writableSectionTypesHelp = func() string {
 	return strings.Join(cat.WritableSectionTypes(), ", ")
 }()
 
-// validateSectionType rejects a --type that is not a catalog writable section
-// type (the imperative-door allow-list). It validates against the EMBEDDED
-// vendored catalog — a fast, offline, network-free check on the write path; the
-// backend remains the authority on the actual write (charter §6.3/§6.4/D10), so
-// a slightly stale client-side list only ever fails a typo early, never a valid
-// type wrongly (a genuinely new writable type still round-trips to the backend).
+// validateSectionType rejects a --type that the catalog KNOWS is not writable on
+// the imperative door (e.g. compact/testimonials/calendar). It is deliberately
+// read-tolerant (charter §6.3: write-strict at the BACKEND, tolerant clients):
+// an UNKNOWN type is passed through to the backend rather than rejected, because
+// the embedded vendored catalog may simply predate a newly-added writable type —
+// blocking it here would be a false negative. It validates against the embedded
+// vendored catalog so the check is fast, offline, and adds no network to the
+// write path; the value is checked as-is (untrimmed), matching exactly what is
+// sent to the backend.
 func validateSectionType(typ string) error {
-	typ = strings.TrimSpace(typ)
 	cat, err := catalog.Load()
 	if err != nil {
 		// The vendored catalog is embedded + tested; a load failure here is
@@ -620,9 +623,11 @@ func validateSectionType(typ string) error {
 		// the backend's own validation.
 		return nil
 	}
-	if !cat.IsWritableSectionType(typ) {
+	if st, known := cat.SectionType(typ); known && !st.Writable {
 		return errs.New(errs.ExitUsage,
-			"invalid --type %q: must be one of %s", typ, strings.Join(cat.WritableSectionTypes(), ", "))
+			"section type %q is not writable on the imperative door (writable types: %s) — "+
+				"author it via the tree door instead: 'mio pages catalog scaffold' + 'mio pages tree set'",
+			typ, strings.Join(cat.WritableSectionTypes(), ", "))
 	}
 	return nil
 }

@@ -305,6 +305,51 @@ func TestCanonicalJSON_NoHTMLEscaping(t *testing.T) {
 	}
 }
 
+// TestCanonicalJSON_MatchesTSReference_UnicodeEdges pins the exact byte output
+// against the TS canonicalizer (JSON.stringify(sortKeys(v))) for the cases where
+// Go's encoding/json would diverge — proven equal to node's output. If these
+// diverged, a valid upstream catalog carrying such characters would be wrongly
+// rejected as a digest mismatch.
+func TestCanonicalJSON_MatchesTSReference_UnicodeEdges(t *testing.T) {
+	ls := string(rune(0x2028))      // U+2028 line separator
+	ps := string(rune(0x2029))      // U+2029 paragraph separator
+	pua := string(rune(0xE000))     // U+E000 private-use (BMP)
+	astral := string(rune(0x10000)) // U+10000 (astral plane)
+	cases := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{
+			// JS emits U+2028/U+2029 raw; Go's encoding/json escapes them. The
+			// runes are built explicitly here to keep this source pure ASCII.
+			name: "line/paragraph separators emitted raw",
+			in:   Node{"s": "a" + ls + "b" + ps + "c"},
+			want: `{"s":"a` + ls + "b" + ps + `c"}`,
+		},
+		{
+			// UTF-16 key sort: the astral char's lead surrogate (0xD800) sorts
+			// BELOW the BMP char U+E000, so it comes first — the opposite of Go's
+			// UTF-8/codepoint ordering.
+			name: "astral key sorts before high-BMP key (UTF-16 order)",
+			in:   Node{pua: json.Number("1"), astral: json.Number("2")},
+			want: `{"` + astral + `":2,"` + pua + `":1}`,
+		},
+		{
+			name: "C0 controls use short forms then backslash-u00XX",
+			in:   Node{"s": "\b\t\n\f\r" + string(rune(0x01))},
+			want: `{"s":"\b\t\n\f\r\u0001"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mustCanonical(t, tc.in); got != tc.want {
+				t.Errorf("CanonicalJSON =\n  %q\nwant\n  %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestFixturesDirExists is a canary: the golden fixtures must be vendored.
 func TestFixturesDirExists(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join("testdata", "fixtures"))

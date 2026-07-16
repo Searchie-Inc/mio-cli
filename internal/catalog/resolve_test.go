@@ -162,6 +162,64 @@ func TestResolve_NilFetcher_UsesVendored(t *testing.T) {
 	}
 }
 
+// refetchFetcher answers 304 to a conditional request (ifNoneMatch != "") and
+// 200 with body to an unconditional one — modeling the recovery path when a
+// cached ETag exists but the cached body is gone.
+type refetchFetcher struct {
+	body  []byte
+	calls int
+}
+
+func (f *refetchFetcher) FetchCatalog(_ context.Context, ifNoneMatch string) (FetchResult, error) {
+	f.calls++
+	if ifNoneMatch != "" {
+		return FetchResult{NotModified: true}, nil
+	}
+	return FetchResult{Body: f.body, ETag: `"ignored-by-resolver"`}, nil
+}
+
+func TestResolve_Live304_CacheBodyMissing_Refetches(t *testing.T) {
+	dir := t.TempDir()
+	// Seed only the ETag (no body): cache.load() will fail but etag() returns it,
+	// so the first fetch is conditional → 304.
+	if err := os.WriteFile(filepath.Join(dir, cacheETagFile), []byte(`"stale"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &refetchFetcher{body: vendoredBytes(t)}
+	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Warnf: func(string, ...any) {}})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if src != SourceLive {
+		t.Errorf("source = %q, want live (recovered via unconditional refetch)", src)
+	}
+	if f.calls != 2 {
+		t.Errorf("expected 2 fetches (conditional 304 + unconditional refetch); got %d", f.calls)
+	}
+}
+
+func TestResolve_Live200_CachesDigestDerivedETag(t *testing.T) {
+	dir := t.TempDir()
+	// The server sends a WRONG ETag; the resolver must persist the digest-derived
+	// ETag instead, so the cached body and ETag can never desync.
+	f := &fakeFetcher{res: FetchResult{Body: vendoredBytes(t), ETag: `"server-sent-wrong"`}}
+	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if src != SourceLive {
+		t.Fatalf("source = %q, want live", src)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, cacheETagFile))
+	if err != nil {
+		t.Fatalf("read cached etag: %v", err)
+	}
+	want := `"` + pinnedDigest + `"`
+	if string(got) != want {
+		t.Errorf("cached etag = %q, want digest-derived %q (not the server's header)", got, want)
+	}
+}
+
 // seedCache writes a body+etag into the cache dir the way Resolve expects.
 func seedCache(t *testing.T, dir string, body []byte, etag string) {
 	t.Helper()

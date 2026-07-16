@@ -22,7 +22,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
+	"unicode/utf16"
 )
 
 // vendoredCatalogJSON is the digest-pinned copy of mio-page-catalog/catalog.json
@@ -106,6 +108,12 @@ func Parse(data []byte) (*Catalog, error) {
 	var raw Node
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("catalog: parse: %w", err)
+	}
+	// Reject trailing content after the top-level object (json.Decoder stops at
+	// the first value; TS JSON.parse would reject the rest). A second decode must
+	// hit EOF — anything else means junk followed the catalog.
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		return nil, fmt.Errorf("catalog: parse: unexpected trailing content after the catalog object")
 	}
 
 	c := &Catalog{raw: raw}
@@ -230,6 +238,18 @@ func (c *Catalog) IsWritableSectionType(id string) bool {
 	return false
 }
 
+// SectionType returns the section type with the given id, and whether it exists
+// in the catalog. Used to distinguish a KNOWN non-writable type (reject) from an
+// UNKNOWN type (defer to the backend) on the imperative door.
+func (c *Catalog) SectionType(id string) (SectionType, bool) {
+	for _, s := range c.SectionTypes {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return SectionType{}, false
+}
+
 // RecommendedTemplates returns the section templates applicable to pageType
 // (pageType ∈ applicablePageTypes), ordered by recommendation.order ascending.
 func (c *Catalog) RecommendedTemplates(pageType string) []Template {
@@ -272,19 +292,139 @@ func recOrder(t Template) int {
 	return 1 << 30 // no recommendation → sort last
 }
 
-// CanonicalJSON returns deterministic JSON: object keys recursively sorted
-// (Go's encoder sorts map keys), no HTML escaping (TS JSON.stringify does not
-// escape <, >, &), and numbers emitted verbatim (json.Number). This is the
-// RFC 8785-ish JCS approximation shared across repos (canonical.ts) — matching
-// it is what lets the Go digest equal the TS digest.
+// CanonicalJSON returns deterministic JSON byte-identical to the cross-repo TS
+// canonicalizer (canonical.ts: JSON.stringify(sortKeys(value))): object keys
+// recursively sorted by UTF-16 code-unit order (matching JS String sort),
+// arrays in order, numbers emitted verbatim (json.Number), and strings escaped
+// exactly as JS JSON.stringify. Matching TS byte-for-byte is what lets the Go
+// digest equal the digest shipped in the catalog's meta.digest / HTTP ETag.
+//
+// Go's encoding/json is NOT usable here: it escapes U+2028/U+2029 (and, unless
+// disabled, <>&) where JS emits them raw, and it sorts map keys by UTF-8 bytes
+// rather than UTF-16 code units — both would diverge from the TS digest for a
+// catalog containing those characters.
 func CanonicalJSON(v any) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
+	var b bytes.Buffer
+	if err := writeCanonical(&b, v); err != nil {
 		return nil, err
 	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+	return b.Bytes(), nil
+}
+
+func writeCanonical(b *bytes.Buffer, v any) error {
+	switch t := v.(type) {
+	case nil:
+		b.WriteString("null")
+	case bool:
+		if t {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+	case string:
+		writeJSONString(b, t)
+	case json.Number:
+		b.WriteString(t.String())
+	case map[string]any:
+		return writeCanonicalObject(b, t)
+	case []any:
+		b.WriteByte('[')
+		for i, e := range t {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			if err := writeCanonical(b, e); err != nil {
+				return err
+			}
+		}
+		b.WriteByte(']')
+	default:
+		// Non-json.Number scalars (float64/int/…). The catalog is always decoded
+		// with UseNumber, so these never occur on the digest path; a plain marshal
+		// is sufficient and, being numeric, carries no string-escaping divergence.
+		raw, err := json.Marshal(t)
+		if err != nil {
+			return err
+		}
+		b.Write(raw)
+	}
+	return nil
+}
+
+// writeCanonicalObject writes a JSON object with keys sorted by UTF-16 code-unit
+// order — the ordering the TS canonicalizer's Object.keys(v).sort() produces.
+func writeCanonicalObject(b *bytes.Buffer, m map[string]any) error {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return utf16Less(keys[i], keys[j]) })
+	b.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		writeJSONString(b, k)
+		b.WriteByte(':')
+		if err := writeCanonical(b, m[k]); err != nil {
+			return err
+		}
+	}
+	b.WriteByte('}')
+	return nil
+}
+
+const hexDigits = "0123456789abcdef"
+
+// writeJSONString escapes s exactly as JS JSON.stringify: escape only " \ and
+// the C0 controls (< 0x20, using the short forms \b\t\n\f\r, else \u00XX), and
+// emit every other byte — <>&, U+2028, U+2029, and all multi-byte UTF-8 —
+// verbatim.
+func writeJSONString(b *bytes.Buffer, s string) {
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if c < 0x20 {
+				b.WriteString(`\u00`)
+				b.WriteByte(hexDigits[c>>4])
+				b.WriteByte(hexDigits[c&0xf])
+			} else {
+				b.WriteByte(c)
+			}
+		}
+	}
+	b.WriteByte('"')
+}
+
+// utf16Less reports whether a sorts before b in UTF-16 code-unit order — the
+// comparison JS String sort (and thus the TS canonicalizer) uses. For BMP text
+// this equals codepoint/byte order; it differs only for astral characters,
+// whose lead surrogate (0xD800–0xDBFF) sorts below BMP chars in 0xE000–0xFFFF.
+func utf16Less(a, b string) bool {
+	ua := utf16.Encode([]rune(a))
+	ub := utf16.Encode([]rune(b))
+	for i := 0; i < len(ua) && i < len(ub); i++ {
+		if ua[i] != ub[i] {
+			return ua[i] < ub[i]
+		}
+	}
+	return len(ua) < len(ub)
 }
 
 // Digest computes "sha256:<hex>" over the canonical catalog with meta.digest

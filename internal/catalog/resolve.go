@@ -98,6 +98,22 @@ func Resolve(ctx context.Context, opts ResolveOptions) (*Catalog, Source, error)
 
 	cache := diskCache{dir: opts.CacheDir}
 
+	// adopt verifies a fetched body's digest, persists it as the new last-good
+	// cache (keyed by the digest-derived ETag so body and ETag never desync), and
+	// returns the parsed catalog. A rejected body warns and returns ok=false.
+	adopt := func(body []byte) (*Catalog, bool) {
+		cat, derr := parseAndVerify(body)
+		if derr != nil {
+			warn("catalog: rejecting fetched catalog (%v); falling back to cached/vendored copy", derr)
+			return nil, false
+		}
+		// charter §5.2.1: the ETag equals the quoted meta.digest. Derive it from
+		// the verified catalog rather than trusting the server's header, so the
+		// cached body and ETag are always mutually consistent.
+		cache.store(body, `"`+cat.Meta.Digest+`"`)
+		return cat, true
+	}
+
 	if !opts.Offline && opts.Fetcher != nil {
 		res, err := opts.Fetcher.FetchCatalog(ctx, cache.etag())
 		switch {
@@ -107,13 +123,17 @@ func Resolve(ctx context.Context, opts ResolveOptions) (*Catalog, Source, error)
 			if cat, ok := cache.load(); ok {
 				return cat, SourceCache, nil
 			}
-			warn("catalog: server returned 304 but the local cache is unavailable; using vendored copy")
+			// The server says our cached ETag is current, but the cached body is
+			// missing/corrupt. Re-fetch unconditionally to recover the live catalog
+			// rather than silently dropping to a (possibly stale) vendored copy.
+			warn("catalog: 304 with an unavailable local cache; re-fetching unconditionally")
+			if fresh, ferr := opts.Fetcher.FetchCatalog(ctx, ""); ferr == nil && !fresh.NotModified {
+				if cat, ok := adopt(fresh.Body); ok {
+					return cat, SourceLive, nil
+				}
+			}
 		default:
-			cat, derr := parseAndVerify(res.Body)
-			if derr != nil {
-				warn("catalog: rejecting live catalog (%v); falling back to cached/vendored copy", derr)
-			} else {
-				cache.store(res.Body, res.ETag) // best-effort; failure is non-fatal
+			if cat, ok := adopt(res.Body); ok {
 				return cat, SourceLive, nil
 			}
 		}

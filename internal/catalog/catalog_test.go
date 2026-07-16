@@ -11,6 +11,35 @@ import (
 	"testing"
 )
 
+func TestParse_RejectsTrailingContent(t *testing.T) {
+	good := vendoredCatalogJSON
+	// A valid catalog followed by a stray JSON value must be rejected (TS
+	// JSON.parse would): otherwise a digest-consistent body with appended junk
+	// would be silently adopted.
+	bad := append(append([]byte{}, good...), []byte("\n{\"junk\":true}")...)
+	if _, err := Parse(bad); err == nil {
+		t.Error("Parse accepted trailing content after the catalog object")
+	}
+	// Trailing whitespace only is fine.
+	ws := append(append([]byte{}, good...), []byte("\n\n  \t")...)
+	if _, err := Parse(ws); err != nil {
+		t.Errorf("Parse rejected trailing whitespace: %v", err)
+	}
+}
+
+func TestSectionType_KnownVsUnknown(t *testing.T) {
+	c := loadForTest(t)
+	if st, ok := c.SectionType("compact"); !ok || st.Writable {
+		t.Errorf("SectionType(compact) = %+v, %v; want known + not writable", st, ok)
+	}
+	if st, ok := c.SectionType("grid"); !ok || !st.Writable {
+		t.Errorf("SectionType(grid) = %+v, %v; want known + writable", st, ok)
+	}
+	if _, ok := c.SectionType("brand-new-type"); ok {
+		t.Error("SectionType(brand-new-type) should be unknown")
+	}
+}
+
 func TestLoad_Counts(t *testing.T) {
 	c := loadForTest(t)
 	if got := len(c.Templates); got != 8 {
