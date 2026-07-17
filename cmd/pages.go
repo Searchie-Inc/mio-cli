@@ -17,9 +17,11 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
@@ -377,8 +379,10 @@ var pagesSectionsCreateCmd = &cobra.Command{
 	Short: "Create a section on a page.",
 	Long: `Add a new section to the specified page.
 
---type is required. Allowed values for --type:
-  carousel, grid, content-grid, video, text, cta, search, row, feature
+--type is required and is validated against the page-builder catalog's writable
+section types — run 'mio pages catalog section-types --writable-only' to list
+them. (For authoring a full page structure, prefer the tree door:
+'mio pages catalog scaffold' + 'mio pages tree set'.)
 
 --settings accepts a JSON object (or @file path) that controls the section's
 display configuration (layout, colours, limits, etc.). The exact keys are
@@ -388,13 +392,20 @@ section-type-specific.`,
   mio pages sections create page_abc123 --hub hub_123 --type grid --settings @section-settings.json`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, teamID, hubID, err := pagesContext(cmd)
-		if err != nil {
+		// Validate --type against the catalog FIRST, before any HTTP or scope
+		// resolution (mirrors the publish command's --if-match pre-check). The
+		// check is read-tolerant: a KNOWN non-writable type fails fast here, while
+		// an unknown type is deferred to the backend (see validateSectionType).
+		if !cmd.Flags().Changed("type") {
+			return errs.New(errs.ExitUsage, "missing required flag: --type")
+		}
+		if err := validateSectionType(getString(cmd, "type")); err != nil {
 			return err
 		}
 
-		if !cmd.Flags().Changed("type") {
-			return errs.New(errs.ExitUsage, "missing required flag: --type")
+		c, teamID, hubID, err := pagesContext(cmd)
+		if err != nil {
+			return err
 		}
 
 		attrs := map[string]any{}
@@ -564,7 +575,10 @@ var pagesSectionsReorderCmd = &cobra.Command{
 
 func init() {
 	// Create-only flag: --type is required on create but immutable on update.
-	pagesSectionsCreateCmd.Flags().String("type", "", "Section type: carousel, grid, content-grid, video, text, cta, search, row, or feature. Required.")
+	// The allowed values are derived from the catalog (no hardcoded list) so the
+	// help never drifts from the page-builder vocabulary (MIO-2340).
+	pagesSectionsCreateCmd.Flags().String("type", "",
+		"Section type — one of the catalog writable types ("+writableSectionTypesHelp+"). Required.")
 
 	// Shared mutable flags for create and update.
 	for _, c := range []*cobra.Command{pagesSectionsCreateCmd, pagesSectionsUpdateCmd} {
@@ -577,4 +591,43 @@ func init() {
 
 	addPaginationFlags(pagesSectionsListCmd)
 	pagesSectionsReorderCmd.Flags().String("order", "", "Comma-separated list of section ids in the desired display order.")
+}
+
+// writableSectionTypesHelp is the catalog-derived, comma-joined list of writable
+// section types, computed once from the embedded vendored catalog for help text
+// — so the imperative-door help never drifts from the page-builder vocabulary
+// (MIO-2340, replacing the former hardcoded 9-type strings). Empty only if the
+// embedded catalog somehow fails to load (it is tested to always load).
+var writableSectionTypesHelp = func() string {
+	cat, err := catalog.Load()
+	if err != nil {
+		return ""
+	}
+	return strings.Join(cat.WritableSectionTypes(), ", ")
+}()
+
+// validateSectionType rejects a --type that the catalog KNOWS is not writable on
+// the imperative door (e.g. compact/testimonials/calendar). It is deliberately
+// read-tolerant (charter §6.3: write-strict at the BACKEND, tolerant clients):
+// an UNKNOWN type is passed through to the backend rather than rejected, because
+// the embedded vendored catalog may simply predate a newly-added writable type —
+// blocking it here would be a false negative. It validates against the embedded
+// vendored catalog so the check is fast, offline, and adds no network to the
+// write path; the value is checked as-is (untrimmed), matching exactly what is
+// sent to the backend.
+func validateSectionType(typ string) error {
+	cat, err := catalog.Load()
+	if err != nil {
+		// The vendored catalog is embedded + tested; a load failure here is
+		// unexpected. Don't block the write on a client-side defect — defer to
+		// the backend's own validation.
+		return nil
+	}
+	if st, known := cat.SectionType(typ); known && !st.Writable {
+		return errs.New(errs.ExitUsage,
+			"section type %q is not writable on the imperative door (writable types: %s) — "+
+				"author it via the tree door instead: 'mio pages catalog scaffold' + 'mio pages tree set'",
+			typ, strings.Join(cat.WritableSectionTypes(), ", "))
+	}
+	return nil
 }

@@ -133,11 +133,16 @@ mio pages update — update a page
 mio pages delete — delete a page
 mio pages home — retrieve the hub's home page
 mio pages publish — publish a page draft; requires --if-match <draft_version> (read draft_version from a prior retrieve for optimistic concurrency)
-mio pages sections create — add a section to a page
+mio pages sections create — add a section to a page; --type is validated against the catalog writable section types (see 'pages catalog section-types --writable-only')
 mio pages sections list — list sections on a page
 mio pages sections update — update a section
 mio pages sections delete — delete a section from a page
 mio pages sections reorder — reorder sections on a page
+mio pages tree get — get a page's author draft node-tree (audience=author, resolve=true); draft_version is the OCC token for 'tree set'/'publish'
+mio pages tree set — replace a page's draft node-tree from --file (a tree JSON, {"root":{...}}); requires --if-match <draft_version>
+mio pages catalog scaffold — scaffold a node-tree from a catalog template (Go applier); --template <id> [--variant <v>]; page templates emit {"root":...} for 'tree set', section templates emit a bare node; emit-only (offline-capable; --offline forces vendored, --catalog <file> overrides)
+mio pages catalog templates — list catalog author templates; --page-type <pt> shows the section templates recommended for that page type (ordered) + its page template
+mio pages catalog section-types — list catalog compiled section types; --writable-only lists just the imperative-door allow-list
 
 mio products create — create a product
 mio products list — list products in the active team

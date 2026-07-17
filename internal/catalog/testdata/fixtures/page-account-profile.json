@@ -1,0 +1,30 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-account-profile",
+  "settings": {
+    "gap": 0
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "stack",
+      "settings": {},
+      "children": [
+        {
+          "id": "#2",
+          "kind": "headline",
+          "settings": {
+            "level": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "#3",
+      "kind": "account-profile-form",
+      "system": true,
+      "settings": {}
+    }
+  ]
+}

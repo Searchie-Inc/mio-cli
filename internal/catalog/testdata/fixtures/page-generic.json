@@ -1,0 +1,9 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-generic",
+  "settings": {
+    "gap": 0
+  },
+  "children": []
+}

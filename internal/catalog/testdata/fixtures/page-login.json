@@ -1,0 +1,47 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-login",
+  "settings": {
+    "gap": 0
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "stack",
+      "settings": {},
+      "children": [
+        {
+          "id": "#2",
+          "kind": "image",
+          "settings": {}
+        },
+        {
+          "id": "#3",
+          "kind": "headline",
+          "settings": {
+            "level": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "#4",
+      "kind": "login-form",
+      "system": true,
+      "settings": {}
+    },
+    {
+      "id": "#5",
+      "kind": "stack",
+      "settings": {},
+      "children": [
+        {
+          "id": "#6",
+          "kind": "button",
+          "settings": {}
+        }
+      ]
+    }
+  ]
+}

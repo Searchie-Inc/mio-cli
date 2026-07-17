@@ -1,0 +1,54 @@
+{
+  "id": "#0",
+  "kind": "container",
+  "template": "row",
+  "settings": {
+    "maxWidth": "content",
+    "padding": 0,
+    "surface": {
+      "padding": "section"
+    }
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "row",
+      "settings": {
+        "responsive": true,
+        "wrap": true,
+        "gap": 6,
+        "mobileGap": 3,
+        "align": "stretch"
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "stack",
+          "settings": {
+            "width": "1/3",
+            "gap": 4
+          },
+          "children": []
+        },
+        {
+          "id": "#3",
+          "kind": "stack",
+          "settings": {
+            "width": "1/3",
+            "gap": 4
+          },
+          "children": []
+        },
+        {
+          "id": "#4",
+          "kind": "stack",
+          "settings": {
+            "width": "1/3",
+            "gap": 4
+          },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

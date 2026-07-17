@@ -1,0 +1,126 @@
+{
+  "id": "#0",
+  "kind": "container",
+  "template": "carousel",
+  "settings": {
+    "maxWidth": "content",
+    "padding": 0,
+    "surface": {
+      "padding": "section"
+    }
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "carousel",
+      "settings": {
+        "slidesPerView": 1,
+        "show_dots": false
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "row",
+          "settings": {
+            "responsive": true,
+            "split": true,
+            "gap": "section"
+          },
+          "children": [
+            {
+              "id": "#3",
+              "kind": "media-slot",
+              "settings": {
+                "name": "cover",
+                "preset": "medium-720",
+                "aspectRatio": "16:9",
+                "radius": "m",
+                "outline": true,
+                "progressBar": true
+              }
+            },
+            {
+              "id": "#4",
+              "kind": "stack",
+              "settings": {
+                "gap": 2,
+                "align": "start"
+              },
+              "children": [
+                {
+                  "id": "#5",
+                  "kind": "field",
+                  "settings": {
+                    "name": "title",
+                    "role": "title",
+                    "size": "title",
+                    "weight": 700
+                  }
+                },
+                {
+                  "id": "#6",
+                  "kind": "row",
+                  "settings": {
+                    "gap": 2.5,
+                    "align": "center"
+                  },
+                  "children": [
+                    {
+                      "id": "#7",
+                      "kind": "field",
+                      "settings": {
+                        "name": "status",
+                        "role": "meta",
+                        "tone": "primary",
+                        "ring": {
+                          "value": 100,
+                          "size": 16
+                        }
+                      }
+                    },
+                    {
+                      "id": "#8",
+                      "kind": "field",
+                      "settings": {
+                        "name": "duration",
+                        "role": "meta",
+                        "icon": "clock"
+                      }
+                    },
+                    {
+                      "id": "#9",
+                      "kind": "field",
+                      "settings": {
+                        "name": "plays",
+                        "role": "meta",
+                        "icon": "eye"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "#10",
+                  "kind": "field",
+                  "settings": {
+                    "name": "description",
+                    "role": "body"
+                  }
+                },
+                {
+                  "id": "#11",
+                  "kind": "button",
+                  "settings": {
+                    "size": "md",
+                    "icon": "play-filled",
+                    "actionFromScope": "action"
+                  },
+                  "value": "Play"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

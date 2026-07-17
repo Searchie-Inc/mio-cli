@@ -1,0 +1,42 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-register",
+  "settings": {
+    "gap": 0
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "stack",
+      "settings": {},
+      "children": [
+        {
+          "id": "#2",
+          "kind": "headline",
+          "settings": {
+            "level": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "#3",
+      "kind": "register-form",
+      "system": true,
+      "settings": {}
+    },
+    {
+      "id": "#4",
+      "kind": "stack",
+      "settings": {},
+      "children": [
+        {
+          "id": "#5",
+          "kind": "button",
+          "settings": {}
+        }
+      ]
+    }
+  ]
+}
