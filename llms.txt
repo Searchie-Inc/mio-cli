@@ -146,6 +146,7 @@ mio pages catalog section-types — list catalog compiled section types; --writa
 
 mio media files list — list team media files (cursor-paginated); --limit --after
 mio media files retrieve — retrieve a media file by id (POSITIONAL)
+mio media files durable-url — print a file's durable (non-expiring) hub-scoped image URL(s) to inline into a page-tree image node; joins durable_variants[preset] with the REQUIRED ?hub_id=; --hub required, --preset (omit=all presets), --publish also publishes the file public to the hub so the URL resolves; image-only (MIO-2514, backend MIO-2525/#533)
 mio media files update — update file metadata; --title --description --visibility --folder-id
 mio media files delete — soft-delete a file; --yes
 mio media files upload — upload a file end-to-end from the CLI (create → presigned S3 PUT → finalize; auto-multipart for large files); path is POSITIONAL; --title --mime-type --folder-id --wait --timeout --multipart --part-size-mb

@@ -179,6 +179,7 @@ plain JSON.
 ## media files  (`cmd/media.go`, `cmd/media_upload.go`)
 - files:    `list/retrieve/update/delete` `/api/teams/{team_id}/files[/{id}]`
   - update flags: `--title` `--description` `--visibility` `--folder-id`
+- durable-url (derived) reads `durable_variants` from GET `…/files/{id}` and appends the REQUIRED `?hub_id={hub}` to each preset URL (safe to inline into a page-tree image node — non-expiring, unlike the imgproxy-signed `variants`). `--preset` filters; `--publish` POSTs a public `hub_media` row (visibility=public, published now) so the URL resolves for anon. Image-only. (MIO-2514; backend MIO-2525 / mio-backend #533)
 - upload   POST `…/files` → presigned PUT (meta `upload_url`) → POST `…/files/{id}/finalize`; auto-multipart (init `…/files/multipart`, part `…/files/{id}/multipart/{upload_id}/parts/{n}`, complete `…/complete`) when large or `--multipart`; `--title` `--mime-type` `--folder-id` `--wait` `--timeout` `--part-size-mb`
 - replace  single-part: POST `…/files/{id}/replace` → presigned PUT → POST `…/files/{id}/replace/{replacement_id}/finalize`. Multipart (`--multipart`/large): init `…/files/{id}/replace/multipart` → parts → POST `…/files/{id}/replace/{replacement_id}/multipart/{upload_id}/complete` — the complete is TERMINAL (relinks + returns the file; NO separate finalize — unlike upload-multipart, a finalize call 404s). `--mime-type` `--filename` `--multipart` `--part-size-mb`
 - finalize POST `…/files/{id}/finalize`
