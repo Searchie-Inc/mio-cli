@@ -39,7 +39,12 @@ import (
 // filter. A team's tag/hub/team counts are small in practice; capping the page
 // keeps the lookup a single bounded request instead of an unbounded sweep. If a
 // name genuinely lives beyond this cap the user can always pass the raw id.
-const resolveListCap = 200
+//
+// The value is 100 because that is the universal backend page[size] maximum
+// (the list endpoints validate page[size] with le=100 and 400 on anything
+// larger — e.g. tags list, MIO-2496). Requesting more makes name/slug
+// resolution fail before it can match.
+const resolveListCap = 100
 
 // id-prefix conventions per resource. Production ids are bare UUIDs (uuid7 via
 // the backend UUIDMixin), but the docs, examples, tests, and existing scripts
