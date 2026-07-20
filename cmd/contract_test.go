@@ -116,6 +116,16 @@ func resetGlobalFlags() {
 func resetCommandFlags(cmd *cobra.Command) {
 	reset := func(fs *pflag.FlagSet) {
 		fs.VisitAll(func(f *pflag.Flag) {
+			// Slice flags (StringArray/StringSlice) cannot be reset with
+			// Set(DefValue): Set APPENDS to a stringArray, so Set("[]") leaves a
+			// literal "[]" element behind and later user values append to it. Reset
+			// them through the SliceValue interface instead. All slice flags in this
+			// CLI default to empty, so Replace(nil) restores the registered default.
+			if sv, ok := f.Value.(pflag.SliceValue); ok {
+				_ = sv.Replace(nil)
+				f.Changed = false
+				return
+			}
 			_ = fs.Set(f.Name, f.DefValue)
 			f.Changed = false
 		})
