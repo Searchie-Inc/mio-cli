@@ -172,13 +172,53 @@ plain JSON.
   `update` PATCH `…/pages/{pid}/sections/{sid}`; `delete` DELETE `…/pages/{pid}/sections/{sid}`;
   `reorder` PATCH `…/pages/{pid}/sections` — body is a bare `{data:[{id,position}]}` list (SectionReorderEnvelope), built from `--order` (MIO-2257)
 
+## media files  (`cmd/media.go`, `cmd/media_upload.go`)
+- files:    `list/retrieve/update/delete` `/api/teams/{team_id}/files[/{id}]`
+  - update flags: `--title` `--description` `--visibility` `--folder-id`
+- upload   POST `…/files` → presigned PUT (meta `upload_url`) → POST `…/files/{id}/finalize`; auto-multipart (init `…/files/multipart`, part `…/files/{id}/multipart/{upload_id}/parts/{n}`, complete `…/complete`) when large or `--multipart`; `--title` `--mime-type` `--folder-id` `--wait` `--timeout` `--part-size-mb`
+- replace  POST `…/files/{id}/replace` → presigned PUT → POST `…/files/{id}/replace/{replacement_id}/finalize` (same multipart lifecycle); `--mime-type` `--filename` `--multipart` `--part-size-mb`
+- finalize POST `…/files/{id}/finalize`
+- transcode POST `…/files/{id}/transcode`
+- register-synthetic POST `/api/admin/teams/{team_id}/files/synthetic` (MIO-2285); `--title`(required) `--asset-kind`(document|pdf) `--visibility` `--mime-type` `--original-filename` `--description`
+- cards    `get` GET / `set` PUT `…/files/{id}/cards` (type `file_cards`; `--cards` JSON array/@file)
+- chapters `get` GET / `set` PUT `…/files/{id}/chapters` (type `file_chapters`; `--chapters` JSON array/@file)
+
+## media folders  (`cmd/media.go`)
+- folders: `list/create/retrieve/update/delete` `/api/teams/{team_id}/folders[/{id}]`
+- move    POST `…/folders/{id}/move` (type `folders`; body `{new_parent_id: <id>|null}`; exactly one of `--parent-id`/`--to-root`)
+
+## media search  (`cmd/media.go`)
+- search  GET `/api/teams/{team_id}/search/media?q=…&hub_id=…&page[size]=…` (top-N pagination; `--query` required, `--hub-id`, `--limit` 1-100)
+
+## media playlists  (`cmd/media.go`, `cmd/media_playlist_cover.go`)
+- playlists: `list/create/retrieve/update/delete` `/api/teams/{team_id}/playlists[/{id}]`
+  - create/update flags: `--title` `--description` `--visibility` `--hub-id`; update also `--podcast-feed-enabled`
+- set-cover POST `/api/teams/{team_id}/playlist-cover-attachments` (type `attachments`; playlist id POSITIONAL; `--file-id` required — the CLI GETs `…/files/{file_id}`, resolves its `media_id`, and sends `media_id`+`target_type=playlist`+`role=thumbnail` [pinned by the backend], optional `--position`). Role IS `thumbnail`, not `cover`: the cover mechanism keys on `role='thumbnail'` (router 422 guard, `ck_attachment_role` CHECK, `uq_playlist_cover_attachment` partial index, `resolve_cover_url`). (MIO-2289, MIO-2519)
+
 ## media playlist items  (`cmd/media_playlist_items.go`) — MIO-2513
 - add     POST   `/api/teams/{team_id}/playlists/{playlist_id}/items` (type `playlist_items`; body `file_id` [+ `position`]; negative `--position` → ExitUsage, no request)
 - list    GET    `/api/teams/{team_id}/playlists/{playlist_id}/items` (cursor-paginated)
 - remove  DELETE `/api/teams/{team_id}/playlists/{playlist_id}/items/{item_id}` (requires `--yes`)
 - reorder PATCH  `/api/teams/{team_id}/playlists/{playlist_id}/items/{item_id}` (UpdateWithID → `data.id` in body; `position`)
   - Needs the `playlists/items` → `playlist_items` typeOverride + `items` knownCollections token (client type derivation).
-  - _Note: the broader `media` group (playlists, files, attachments, transcripts, cover) predates this entry and is not yet catalogued here — follow-up._
+
+## media hub-media / hub-playlists  (`cmd/media.go`) — publish to a hub
+- hub-media:     `publish` POST / `list` GET `/api/teams/{team_id}/hubs/{hub_id}/media`; `unpublish` DELETE `…/media/{file_id}` (type `hub_media`; publish `--file-id`, `--visibility` `--published-at` `--position`)
+- hub-playlists: `publish` POST / `list` GET `/api/teams/{team_id}/hubs/{hub_id}/playlists`; `unpublish` DELETE `…/playlists/{playlist_id}` (type `hub_media` via typeOverride; publish `--playlist-id`, `--visibility` `--published-at` `--position`)
+
+## media attachments  (`cmd/media_attachments.go`)
+- list   GET    `/api/teams/{team_id}/attachments` (`--media-id` `--target-type` `--target-id`; cursor-paginated)
+- show   GET    `/api/teams/{team_id}/attachments/{id}`
+- update PATCH  `/api/teams/{team_id}/attachments/{id}` (UpdateWithID → `data.id`; `--role` `--position`)
+- delete DELETE `/api/teams/{team_id}/attachments/{id}` (requires `--yes`)
+
+## media transcripts  (`cmd/media_transcripts.go`)
+- get      GET  `/api/teams/{team_id}/media/{media_id}/transcript`
+- vtt      GET  `…/transcript.vtt`
+- content  GET  `…/transcript/content`
+- versions GET  `…/transcript/versions[/{version}]`
+- edit     PATCH `…/transcript` (type `transcripts`; `--words` JSON array/@file, `--language`)
+- revert   POST `…/transcript/revert` (type `transcripts`; `--version` required, >= 1)
 
 ## products  (`cmd/products.go`) — REFERENCE RESOURCE
 - products:     `create/list/retrieve/update/delete` `/api/teams/{team_id}/products[/{id}]`

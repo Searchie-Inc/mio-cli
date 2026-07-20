@@ -329,7 +329,14 @@ Scripts and agents can branch on these stable codes.
 | `segments` | `create`, `list`, `retrieve`, `update`, `delete`, `search`, `members`, `count` |
 | `content` | `create`, `list`, `retrieve`, `children`, `update`, `delete`, `restore`, `reorder` |
 | `pages` | `create`, `list`, `retrieve` (add `--tree` for raw published node tree), `update`, `delete`, `home`, `publish` (requires `--if-match <draft_version>`); `sections create/list/update/delete/reorder` |
-| `media playlists items` | `add`, `list`, `remove`, `reorder` — populate a playlist with media files (`--playlist-id`, `--file-id`, `--position`) |
+| `media files` | `list`, `retrieve`, `update`, `delete`; ingest from the CLI: `upload` (create → presigned S3 PUT → finalize; auto-multipart), `replace`, `finalize`, `transcode`, `register-synthetic`; `cards get/set`, `chapters get/set` |
+| `media folders` | `list`, `create`, `retrieve`, `update`, `delete`, `move` (`--parent-id`/`--to-root`) |
+| `media search` | hybrid search over the team's transcripts (`--query`, `--hub-id`, `--limit`) |
+| `media playlists` | `list`, `create`, `retrieve`, `update`, `delete`, `set-cover` (`--file-id`); `items add/list/remove/reorder` — populate a playlist with media files (`--playlist-id`, `--file-id`, `--position`) |
+| `media hub-media` | `publish`, `list`, `unpublish` — publish standalone files to a hub (`--file-id`) |
+| `media hub-playlists` | `publish`, `list`, `unpublish` — publish playlists to a hub (`--playlist-id`) |
+| `media attachments` | `list`, `show`, `update`, `delete` |
+| `media transcripts` | `get`, `vtt`, `content`, `versions`, `edit`, `revert` |
 | `products` | `create`, `list`, `retrieve`, `update`, `delete`; `prices create/list/retrieve/update/delete` |
 | `checkout` | `orders list/retrieve`; `subscriptions list/retrieve/cancel`; `payments list/retrieve/refund`; `webhooks list/retrieve/replay`; `accounts list/retrieve/onboarding-link`; `stripe-sync import/import-status/adopt-product` |
 | `email` | `drip-campaigns create/list/retrieve/update/delete/activate/pause` (create/update now accept `--enrollment-mode`, `--trigger-event-type`, `--segment-id`, `--segment-check-interval-minutes`, `--allow-reenrollment`); `steps create/list/update/delete`; `templates create/list/retrieve/update/delete/preview`; `config set/get/delete/test`; `enrollments list/exit`; `stats get` |
