@@ -149,7 +149,7 @@ mio media files retrieve — retrieve a media file by id (POSITIONAL)
 mio media files update — update file metadata; --title --description --visibility --folder-id
 mio media files delete — soft-delete a file; --yes
 mio media files upload — upload a file end-to-end from the CLI (create → presigned S3 PUT → finalize; auto-multipart for large files); path is POSITIONAL; --title --mime-type --folder-id --wait --timeout --multipart --part-size-mb
-mio media files replace — replace an existing file's underlying asset (same lifecycle as upload); <file_id> <path> POSITIONAL; --mime-type --filename --multipart --part-size-mb
+mio media files replace — replace an existing file's underlying asset; <file_id> <path> POSITIONAL; single-part finalizes at .../replace/{replacement_id}/finalize, but multipart replace ENDS at the terminal .../replace/{replacement_id}/multipart/{upload_id}/complete (no separate finalize); --mime-type --filename --multipart --part-size-mb
 mio media files finalize — finalize a file after its presigned upload (POST .../finalize); file id POSITIONAL
 mio media files transcode — (re)start transcoding for a file (POST .../transcode); file id POSITIONAL
 mio media files register-synthetic — register a synthetic (document/pdf) file; --title (required) --asset-kind (document|pdf) --visibility --mime-type --original-filename --description
