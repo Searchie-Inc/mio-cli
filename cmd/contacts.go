@@ -176,7 +176,8 @@ var contactsRetrieveCmd = &cobra.Command{
 	Long: `Retrieve a single contact record by its id (the TEAM-contact id).
 
 The returned .id is the TEAM-contact id. The GLOBAL contact id used by
-hub-memberships / activity / community members / email enrollments is the
+hub-memberships / activity / community members / email enrollments /
+access-rules overrides is the
 .attributes.contact_id field (top-level .contact_id in the flattened output).`,
 	Example: `  mio contacts retrieve ctt_abc123
 
