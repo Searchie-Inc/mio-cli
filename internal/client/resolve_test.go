@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -271,6 +272,37 @@ func TestResolveTag_SlugBeatsName(t *testing.T) {
 	}
 	if id != "019eb010-0000-7000-8000-00000000001a" {
 		t.Errorf("slug-first match = %q, want the slug owner", id)
+	}
+}
+
+// ─── name resolution respects the backend page[size] cap ────────────────────────
+
+// TestResolveTag_PageSizeWithinAPILimit asserts the internal tags-list request
+// used for name/slug resolution requests page[size] <= 100 (the backend caps
+// the tags list at le=100 and 400s on 200) — regression capture for MIO-2496.
+func TestResolveTag_PageSizeWithinAPILimit(t *testing.T) {
+	var gotSize string
+	srv := newCountingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/tags") {
+			gotSize = r.URL.Query().Get("page[size]")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[{"id":"tag_vip","type":"tags","attributes":{"name":"VIP","slug":"vip"}}]}`))
+	})
+	c := New(srv.URL, "k", WithHTTPClient(srv.Client()))
+
+	if _, err := c.ResolveTag(context.Background(), "t1", "VIP"); err != nil {
+		t.Fatalf("ResolveTag err: %v", err)
+	}
+	if gotSize == "" {
+		t.Fatal("tags-list request carried no page[size]")
+	}
+	n, err := strconv.Atoi(gotSize)
+	if err != nil {
+		t.Fatalf("page[size] %q not an integer: %v", gotSize, err)
+	}
+	if n > 100 {
+		t.Errorf("tags-list page[size] = %d, want <= 100 (backend max)", n)
 	}
 }
 

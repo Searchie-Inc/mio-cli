@@ -225,7 +225,11 @@ func TestWiring_TagsAssignByEmailAndTagName(t *testing.T) {
 			b := make([]byte, r.ContentLength)
 			_, _ = r.Body.Read(b)
 			assignBody = string(b)
-			_, _ = w.Write([]byte(`{"data":{"id":"asgn_1","type":"tag_assignments","attributes":{}}}`))
+			// The assign endpoint returns the refreshed contact tag list as a
+			// JSON:API COLLECTION (`data: [...]`, HTTP 201), NOT a single
+			// resource — decoding it as a single resource is the MIO-2495 bug.
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":[{"id":"tag_vip","type":"tags","attributes":{"name":"VIP","slug":"vip"}}],"meta":{"count":1}}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"unexpected ` + r.Method + " " + r.URL.Path + `"}]}`))
@@ -261,8 +265,12 @@ func TestWiring_TagsAssignRawIDsStillWork(t *testing.T) {
 			b := make([]byte, r.ContentLength)
 			_, _ = r.Body.Read(b)
 			assignBody = string(b)
+			// Assign returns a JSON:API collection (refreshed tag list), 201.
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":[{"id":"tag_abc","type":"tags","attributes":{"name":"VIP","slug":"vip"}}],"meta":{"count":1}}`))
+			return
 		}
-		_, _ = w.Write([]byte(`{"data":{"id":"asgn_1","type":"tag_assignments","attributes":{}}}`))
+		_, _ = w.Write([]byte(`{"data":[]}`))
 	}))
 	t.Cleanup(srv.Close)
 

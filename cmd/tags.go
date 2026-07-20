@@ -11,6 +11,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -274,12 +275,18 @@ by --tag-id <id> OR --tag <name-or-id> (a name/slug is resolved to its id).`,
 			return errs.New(errs.ExitUsage, "nothing to assign: set --tag <name-or-id> or --tag-id <id>")
 		}
 
+		// The assign endpoint returns the refreshed contact tag list as a
+		// JSON:API COLLECTION (`data: [...]`, HTTP 201), so it must be decoded
+		// with the collection decoder — decoding it as a single resource fails
+		// with "cannot unmarshal array into Go struct field singleDoc.data"
+		// (MIO-2495). ActionCollection envelopes the body identically to Create
+		// (type "tag_assignments" derived from the path).
 		attrs := map[string]any{"tag_id": tagID}
-		res, err := c.client.Create(c.ctx, contactTagsPath(teamID, contactID, ""), attrs)
+		col, err := c.client.ActionCollection(c.ctx, http.MethodPost, contactTagsPath(teamID, contactID, ""), attrs)
 		if err != nil {
 			return err
 		}
-		return c.render(cmd, res)
+		return c.render(cmd, col)
 	},
 }
 
