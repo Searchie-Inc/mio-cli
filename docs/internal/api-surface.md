@@ -166,6 +166,14 @@ plain JSON.
   `update` PATCH `…/pages/{pid}/sections/{sid}`; `delete` DELETE `…/pages/{pid}/sections/{sid}`;
   `reorder` PATCH `…/pages/{pid}/sections` — body is a bare `{data:[{id,position}]}` list (SectionReorderEnvelope), built from `--order` (MIO-2257)
 
+## media playlist items  (`cmd/media_playlist_items.go`) — MIO-2513
+- add     POST   `/api/teams/{team_id}/playlists/{playlist_id}/items` (type `playlist_items`; body `file_id` [+ `position`]; negative `--position` → ExitUsage, no request)
+- list    GET    `/api/teams/{team_id}/playlists/{playlist_id}/items` (cursor-paginated)
+- remove  DELETE `/api/teams/{team_id}/playlists/{playlist_id}/items/{item_id}` (requires `--yes`)
+- reorder PATCH  `/api/teams/{team_id}/playlists/{playlist_id}/items/{item_id}` (UpdateWithID → `data.id` in body; `position`)
+  - Needs the `playlists/items` → `playlist_items` typeOverride + `items` knownCollections token (client type derivation).
+  - _Note: the broader `media` group (playlists, files, attachments, transcripts, cover) predates this entry and is not yet catalogued here — follow-up._
+
 ## products  (`cmd/products.go`) — REFERENCE RESOURCE
 - products:     `create/list/retrieve/update/delete` `/api/teams/{team_id}/products[/{id}]`
 - prices:       `create/list/retrieve/update/delete` `/api/teams/{team_id}/products/{id}/prices[/{pid}]`
