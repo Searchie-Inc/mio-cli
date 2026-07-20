@@ -32,7 +32,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
+	"github.com/Searchie-Inc/mio-cli/internal/output"
 )
 
 func init() {
@@ -106,6 +108,77 @@ func hubsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	return c, teamID, nil
 }
 
+// injectHubDerivedState adds convenience booleans to a hub resource's rendered
+// attributes so the CLI surfaces state the backend only encodes indirectly:
+//
+//   - registration_enabled — settings.registration.enabled === true, fail-closed
+//     (any missing/non-object/non-true value is false), mirroring the backend read
+//     path (app/hubs/registration.py, MIO-761) and the CLI's own
+//     --registration-enabled vocabulary (MIO-2516).
+//   - published — the inverse of is_private, in the CLI's --published vocabulary
+//     (MIO-2521); only added when is_private is present.
+//
+// These are DERIVED views for readability; they are never sent back on a write,
+// and --raw output bypasses them (it renders the untouched API envelope). It
+// mirrors how the backend already ships a derived policies_enabled field.
+func injectHubDerivedState(res *client.Resource) {
+	if res == nil || res.Attributes == nil {
+		return
+	}
+	res.Attributes["registration_enabled"] = hubRegistrationEnabled(res.Attributes)
+	if v, ok := res.Attributes["is_private"].(bool); ok {
+		res.Attributes["published"] = !v
+	}
+}
+
+// hubRegistrationEnabled reports settings.registration.enabled === true,
+// fail-closed: any missing key, non-object node, or non-true value is false.
+func hubRegistrationEnabled(attrs map[string]any) bool {
+	settings, ok := attrs["settings"].(map[string]any)
+	if !ok {
+		return false
+	}
+	reg, ok := settings["registration"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, _ := reg["enabled"].(bool)
+	return enabled
+}
+
+// printHubCreateHint writes a human-only (stderr) note after `hubs create`
+// explaining the hub's private/published state and how to publish it. It runs
+// only in table (human) format so --output json/yaml on stdout is never
+// corrupted (same rationale as the blob-key warnings).
+//
+// HONESTY (MIO-2521): the hub's public URL is NOT echoed. The create response
+// carries no domain/url field (verified against app/hubs/schemas.py HubAttributes
+// and models.py — there is no domain column) and the CLI knows only the API base,
+// not the hub-frontend host, so a fabricated URL scheme would be dishonest. The
+// slug is surfaced as the best-available public reference and the limitation is
+// stated plainly.
+func printHubCreateHint(cmd *cobra.Command, res *client.Resource) {
+	if res == nil {
+		return
+	}
+	slug, _ := res.Attributes["slug"].(string)
+	isPrivate, _ := res.Attributes["is_private"].(bool)
+	w := cmd.ErrOrStderr()
+	if isPrivate {
+		fmt.Fprintf(w, "Created hub %s — private/unpublished (not reachable by members yet).\n", res.ID)
+		if slug != "" {
+			fmt.Fprintf(w, "  Slug: %s\n", slug)
+		}
+		fmt.Fprintf(w, "  Publish it with: mio hubs update %s --published\n", res.ID)
+	} else {
+		fmt.Fprintf(w, "Created hub %s — published.\n", res.ID)
+		if slug != "" {
+			fmt.Fprintf(w, "  Slug: %s\n", slug)
+		}
+	}
+	fmt.Fprintln(w, "  Note: the public hub URL is not returned by the API and cannot be derived by the CLI; combine the slug above with your hub-frontend host.")
+}
+
 // ---- create -----------------------------------------------------------------
 
 var hubsCreateCmd = &cobra.Command{
@@ -173,6 +246,22 @@ var hubsCreateCmd = &cobra.Command{
 			attrs["branding"] = branding
 		}
 
+		// --favicon-url merges into the branding object (branding.favicon_url is an
+		// accepted branding key), exactly like --logo-url, so it composes with
+		// --branding-json (the backend assigns branding wholesale). (MIO-2522)
+		if cmd.Flags().Changed("favicon-url") {
+			favicon, ferr := cmd.Flags().GetString("favicon-url")
+			if ferr != nil {
+				return errs.New(errs.ExitUsage, "--favicon-url: %s", ferr)
+			}
+			branding, _ := attrs["branding"].(map[string]any)
+			if branding == nil {
+				branding = map[string]any{}
+			}
+			branding["favicon_url"] = favicon
+			attrs["branding"] = branding
+		}
+
 		// Best-effort key validation for the opaque JSONB blobs: an unknown key is
 		// stored verbatim by the API (no server-side schema), so a typo silently
 		// has no effect. Warn by default (stderr, so --output json/yaml is never
@@ -208,7 +297,20 @@ var hubsCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return c.render(cmd, res)
+		// Surface the private/published state as a derived attribute so it is
+		// explicit in json/yaml/table output (MIO-2521).
+		injectHubDerivedState(res)
+		if rerr := c.render(cmd, res); rerr != nil {
+			return rerr
+		}
+		// Human-only discoverability hint (table format): a freshly created hub is
+		// private by default with no signal it is unreachable. Written to stderr so
+		// --output json/yaml on stdout is never corrupted (same rationale as the
+		// blob-key warnings). (MIO-2521)
+		if c.out.Format == output.FormatTable {
+			printHubCreateHint(cmd, res)
+		}
+		return nil
 	},
 }
 
@@ -255,6 +357,10 @@ var hubsRetrieveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		// Surface the registration-enabled and published state as derived
+		// convenience attributes (fail-closed), mirroring the backend's own derived
+		// policies_enabled field (MIO-2516 surface side, MIO-2521).
+		injectHubDerivedState(res)
 		return c.render(cmd, res)
 	},
 }
@@ -328,7 +434,38 @@ var hubsUpdateCmd = &cobra.Command{
 				return errs.New(errs.ExitUsage, "--logo-url: %s", err)
 			}
 		}
-		rmw := branding != nil || settings != nil || meta != nil || logoChanged
+		// --favicon-url merges into branding (branding.favicon_url), mirroring
+		// --logo-url. (MIO-2522)
+		faviconChanged := cmd.Flags().Changed("favicon-url")
+		var favicon string
+		if faviconChanged {
+			favicon, err = cmd.Flags().GetString("favicon-url")
+			if err != nil {
+				return errs.New(errs.ExitUsage, "--favicon-url: %s", err)
+			}
+		}
+		// --registration-enabled sets settings.registration.enabled. A bare bool
+		// cannot distinguish false-from-unset, so gate on Changed() (same pattern as
+		// the policies gate --enabled flag) and read the value only when set; the
+		// nested write below preserves sibling settings.* AND registration.* keys.
+		// (MIO-2516)
+		registrationChanged := cmd.Flags().Changed("registration-enabled")
+		var regEnabled bool
+		if registrationChanged {
+			regEnabled, err = cmd.Flags().GetBool("registration-enabled")
+			if err != nil {
+				return errs.New(errs.ExitUsage, "--registration-enabled: %s", err)
+			}
+		}
+		// --unset deletes keys from the branding/settings/meta blobs by dotted path
+		// (read-modify-write). Parsed/validated pre-auth so a bad path exits
+		// ExitUsage and fires no HTTP request. (MIO-2517)
+		unsetPaths, err := parseUnsetFlag(cmd)
+		if err != nil {
+			return err
+		}
+		rmw := branding != nil || settings != nil || meta != nil || logoChanged ||
+			faviconChanged || registrationChanged || len(unsetPaths) > 0
 
 		// Best-effort key validation on the INCOMING blob keys only (never the
 		// hub's retrieved/merged blob — older hubs legitimately carry unlisted
@@ -377,7 +514,11 @@ var hubsUpdateCmd = &cobra.Command{
 					return err
 				}
 			}
-			if branding != nil || logoChanged {
+			// Deterministic apply ORDER per blob (documented): (1) --*-json deep-merge,
+			// (2) scalar convenience overrides (--logo-url/--favicon-url/
+			// --registration-enabled), (3) --unset removals LAST — so an explicit unset
+			// in the same command wins over a merge.
+			if branding != nil || logoChanged || faviconChanged {
 				b := attrMap(cur.Attributes["branding"])
 				if branding != nil {
 					b = deepMergeMap(b, branding)
@@ -385,13 +526,37 @@ var hubsUpdateCmd = &cobra.Command{
 				if logoChanged {
 					b["logo_url"] = logo
 				}
+				if faviconChanged {
+					b["favicon_url"] = favicon
+				}
 				attrs["branding"] = b
 			}
-			if settings != nil {
-				attrs["settings"] = deepMergeMap(attrMap(cur.Attributes["settings"]), settings)
+			if settings != nil || registrationChanged {
+				s := attrMap(cur.Attributes["settings"])
+				if settings != nil {
+					s = deepMergeMap(s, settings)
+				}
+				if registrationChanged {
+					// Preserve sibling registration.* keys: copy the current sub-object and
+					// set only enabled.
+					reg := attrMap(s["registration"])
+					reg["enabled"] = regEnabled
+					s["registration"] = reg
+				}
+				attrs["settings"] = s
 			}
 			if meta != nil {
 				attrs["meta"] = deepMergeMap(attrMap(cur.Attributes["meta"]), meta)
+			}
+			// --unset removals apply LAST on each staged blob. When a blob is touched
+			// ONLY by unset, seed it from the hub's current blob; deleteAtPath copies
+			// each node it descends so the retrieved resource is never mutated.
+			for _, u := range unsetPaths {
+				blob, ok := attrs[u.blob].(map[string]any)
+				if !ok {
+					blob = attrMap(cur.Attributes[u.blob])
+				}
+				attrs[u.blob] = deleteAtPath(blob, u.segments)
 			}
 		}
 
@@ -399,6 +564,7 @@ var hubsUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		injectHubDerivedState(res)
 		return c.render(cmd, res)
 	},
 }
@@ -438,7 +604,8 @@ func init() {
 		cmd.Flags().String("name", "", "Hub display name.")
 		cmd.Flags().String("slug", "", "Hub URL slug (unique within the team).")
 		cmd.Flags().String("description", "", "Short description of the hub.")
-		cmd.Flags().String("logo-url", "", "URL of the hub's logo image.")
+		cmd.Flags().String("logo-url", "", "URL of the hub's logo image (branding.logo_url).")
+		cmd.Flags().String("favicon-url", "", "URL of the hub's favicon image (branding.favicon_url). Read-modify-write on update; sibling branding keys are preserved.")
 		cmd.Flags().Bool("published", false, "Whether the hub is publicly published.")
 		cmd.Flags().String("discussions-default-title", "", "Default title for the hub's discussions surface (MIO-2274). Pass \"\" to clear.")
 		cmd.Flags().String("discussions-default-description", "", "Default description for the hub's discussions surface. Pass \"\" to clear.")
@@ -474,6 +641,18 @@ func init() {
 		"", "Hub settings keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted top-level keys: "+settingsKeysHelp+". Unknown keys warn (error with --strict-keys).")
 	hubsUpdateCmd.Flags().String("meta-json",
 		"", "Hub meta keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted keys: "+metaKeysHelp+". Unknown keys warn (error with --strict-keys).")
+
+	// MIO-2516: first-class flag for settings.registration.enabled (read-modify-
+	// write, preserves sibling settings keys). A bare bool cannot tell false from
+	// unset, so it is gated on Changed() — pass --registration-enabled=false to
+	// disable explicitly. `hubs retrieve` surfaces the derived registration_enabled.
+	hubsUpdateCmd.Flags().Bool("registration-enabled", false, "Enable (--registration-enabled) or disable (--registration-enabled=false) member self-registration (settings.registration.enabled). Read-modify-write: sibling settings/registration keys are preserved.")
+
+	// MIO-2517: delete keys from the branding/settings/meta blobs. The *-json flags
+	// are merge-only (a null persists as literal null, {} is a no-op); --unset is
+	// the only real delete. Applied AFTER --*-json merges and scalar flags, so an
+	// unset in the same command wins.
+	hubsUpdateCmd.Flags().StringArray("unset", nil, "Delete a key from a hub blob by dotted path, e.g. --unset settings.registration.enabled (the first segment selects the blob: branding|settings|meta). Repeatable and comma-separated. Read-modify-write; applied AFTER --*-json merges and scalar flags.")
 
 	addPaginationFlags(hubsListCmd)
 }

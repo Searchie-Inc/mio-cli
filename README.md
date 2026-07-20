@@ -193,14 +193,35 @@ mio contacts delete <id> --yes
 
 # Hubs
 mio hubs list
+# A new hub is PRIVATE by default. In table mode create prints the slug and how to
+# publish on stderr; output also carries a derived `published` (= !is_private).
+# No public URL is echoed — the API returns no domain/url field, so the CLI cannot
+# derive one; combine the slug with your hub-frontend host.
 mio hubs create --name "My Hub" --slug my-hub
+mio hubs create --name "My Hub" --slug my-hub --published   # publish immediately
 # Author the presentation layer at create time (opaque JSONB blobs; inline JSON or @file).
-# --logo-url merges into --branding-json rather than replacing it.
+# --logo-url and --favicon-url merge into --branding-json rather than replacing it.
 mio hubs create --name "My Hub" --slug my-hub \
+  --logo-url https://cdn.example.com/logo.png \
+  --favicon-url https://cdn.example.com/favicon.ico \
   --branding-json '{"primary":"#6747E3","heading_font_size":32}' \
   --navigation-json @nav.json \
   --settings-json '{"policies":{"enabled":true}}' \
   --meta-json '{"discussions":{"enabled":true}}'
+# retrieve surfaces derived registration_enabled + published booleans.
+mio hubs retrieve <hub-id>
+# Enable member self-registration (settings.registration.enabled) — read-modify-write,
+# sibling settings keys are preserved. Pass =false to disable explicitly.
+mio hubs update <hub-id> --registration-enabled
+mio hubs update <hub-id> --registration-enabled=false
+# Set the favicon on an existing hub (branding.favicon_url; RMW-merges into branding).
+mio hubs update <hub-id> --favicon-url https://cdn.example.com/favicon.ico
+# DELETE a key from a blob. The *-json flags are merge-only (a null persists as
+# literal null, {} is a no-op); --unset is the only real delete. The first dotted
+# segment selects the blob (branding/settings/meta); nested paths and comma-lists
+# and repeats are supported. Applied AFTER --*-json merges and scalar flags.
+mio hubs update <hub-id> --unset settings.registration.enabled
+mio hubs update <hub-id> --unset branding.favicon_url,settings.customCss
 # Author the header/footer menu on an existing hub. Each item needs a "type"
 # (url|page|playlist|discussions) — untyped items are rejected. Whole-blob replace.
 mio hubs update <hub-id> --navigation-json '{"header":[{"type":"url","label":"Home","href":"/my-hub/","position":0}]}'
