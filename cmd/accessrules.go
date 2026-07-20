@@ -267,7 +267,12 @@ var accessRulesOverridesCreateCmd = &cobra.Command{
 	Long: `Create a new per-contact access override for the active hub.
 
 --contact-id and --scope are required. Scope must be one of: full, basic, product.
-When scope is "product", --product-id is also required.`,
+When scope is "product", --product-id is also required.
+
+--contact-id takes the GLOBAL contact id — the .attributes.contact_id field from
+'mio contacts', NOT its .id (that is the team-contact id and this route will 404
+with "not found or is inactive"). Extract it with:
+  mio contacts retrieve <id> -o json --jq '.contact_id'`,
 	Example: `  mio access-rules overrides create --hub hub_abc --contact-id con_123 --scope full
   mio access-rules overrides create --hub hub_abc \
     --contact-id con_123 --scope product --product-id prod_456 \
@@ -295,7 +300,7 @@ When scope is "product", --product-id is also required.`,
 
 		res, err := c.client.Create(c.ctx, overridesPath(teamID, hubID, ""), attrs)
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		return c.render(cmd, res)
 	},
@@ -420,7 +425,7 @@ func init() {
 	addPaginationFlags(accessRulesRulesListCmd)
 
 	// Overrides create flags.
-	accessRulesOverridesCreateCmd.Flags().String("contact-id", "", "Id of the contact to grant or restrict access for.")
+	accessRulesOverridesCreateCmd.Flags().String("contact-id", "", "GLOBAL contact id (.attributes.contact_id from 'mio contacts', NOT its .id) to grant or restrict access for. Required.")
 	accessRulesOverridesCreateCmd.Flags().String("scope", "", "Override scope: full, basic, or product.")
 	accessRulesOverridesCreateCmd.Flags().String("product-id", "", "Id of the product (required when scope is \"product\").")
 	accessRulesOverridesCreateCmd.Flags().String("expires-at", "", "Override expiry timestamp in RFC 3339 format (e.g. 2026-12-31T00:00:00Z).")

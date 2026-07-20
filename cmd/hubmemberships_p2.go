@@ -30,8 +30,13 @@ var hubMembershipsAddCmd = &cobra.Command{
 	Short: "Add a contact as an active hub member.",
 	Long: `Add (or re-activate) a contact as an ACTIVE member of the hub, optionally
 granting an admin or moderator role. Emits MemberAdded, so the contact's
-community profile is created as a side effect.`,
-	Example: `  mio hub-memberships add contact_xyz --hub hub_abc123
+community profile is created as a side effect.
+
+<contact_id> is the GLOBAL contact id — the .attributes.contact_id field from
+'mio contacts', NOT its .id (that is the team-contact id and this verb will 404
+on it).`,
+	Example: `  # contact_id is the GLOBAL id: read it from 'mio contacts', not the .id
+  mio hub-memberships add "$(mio contacts retrieve ctt_abc -o json --jq '.contact_id')" --hub hub_abc123
   mio hub-memberships add contact_xyz --hub hub_abc123 --role moderator`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -53,16 +58,19 @@ community profile is created as a side effect.`,
 		}
 		res, err := c.client.Create(c.ctx, hubMembersPath(teamID, hubID, ""), attrs)
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		return c.render(cmd, res)
 	},
 }
 
 var hubMembershipsSetRoleCmd = &cobra.Command{
-	Use:     "set-role <contact_id>",
-	Short:   "Set a hub member's role.",
-	Long:    "Set an active member's role to admin or moderator. The member must already be active (add them with 'hub-memberships add' first).",
+	Use:   "set-role <contact_id>",
+	Short: "Set a hub member's role.",
+	Long: `Set an active member's role to admin or moderator. The member must already be active (add them with 'hub-memberships add' first).
+
+<contact_id> is the GLOBAL contact id — the .attributes.contact_id field from
+'mio contacts', NOT its .id (the team-contact id).`,
 	Example: `  mio hub-memberships set-role contact_xyz --hub hub_abc123 --role moderator`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -85,7 +93,7 @@ var hubMembershipsSetRoleCmd = &cobra.Command{
 		res, err := c.client.ActionWith(c.ctx, client.StyleEnvelope, "PATCH",
 			hubMembersPath(teamID, hubID, args[0])+"/role", map[string]any{"role": role})
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		return c.render(cmd, res)
 	},

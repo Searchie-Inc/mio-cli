@@ -37,7 +37,19 @@ func init() {
 var contactsCmd = &cobra.Command{
 	Use:   "contacts",
 	Short: "Manage contacts.",
-	Long:  "Create, list, retrieve, update, delete and restore contacts for the active team.",
+	Long: `Create, list, retrieve, update, delete and restore contacts for the active team.
+
+TWO ID NAMESPACES — this matters when piping ids between commands:
+
+  .id                     the TEAM-contact id. Use it with 'contacts',
+                          'contact-attributes' and 'tags' verbs.
+  .attributes.contact_id  the GLOBAL contact id (promoted to top-level
+                          .contact_id in the default flattened output). Use it
+                          with 'hub-memberships', 'activity', 'community members',
+                          'email enrollments' and 'access-rules overrides' verbs.
+
+Passing .id where a GLOBAL contact id is expected 404s for a live contact.
+Extract the global id with: mio contacts retrieve <id> -o json --jq '.contact_id'`,
 }
 
 // contactsPath returns /api/teams/{team_id}/contacts[/{id}].
@@ -54,7 +66,13 @@ func contactsPath(teamID, id string) string {
 var contactsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List contacts.",
-	Long:  "List all contacts for the active team. Supports pagination and optional filters.",
+	Long: `List all contacts for the active team. Supports pagination and optional filters.
+
+Each row's .id is the TEAM-contact id. The GLOBAL contact id (needed by
+hub-memberships / activity / community members / email enrollments /
+access-rules overrides) is the
+.attributes.contact_id field, promoted to top-level .contact_id in the default
+flattened output.`,
 	Example: `  # List contacts with table output
   mio contacts list
 
@@ -62,7 +80,10 @@ var contactsListCmd = &cobra.Command{
   mio contacts list --limit 50 --after <cursor>
 
   # Filter by email
-  mio contacts list --filter-email user@example.com`,
+  mio contacts list --filter-email user@example.com
+
+  # Extract the GLOBAL contact_id of every contact (for member-shaped verbs)
+  mio contacts list -o json --jq '.[].contact_id'`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
@@ -102,11 +123,19 @@ var contactsListCmd = &cobra.Command{
 // ---- contacts create ---------------------------------------------------------
 
 var contactsCreateCmd = &cobra.Command{
-	Use:     "create",
-	Short:   "Create a contact.",
-	Long:    "Create a new contact in the active team.",
-	Example: `  mio contacts create --email user@example.com --first-name Alice --last-name Smith`,
-	Args:    cobra.NoArgs,
+	Use:   "create",
+	Short: "Create a contact.",
+	Long: `Create a new contact in the active team.
+
+The returned .id is the TEAM-contact id (for 'contacts'/'contact-attributes'/
+'tags'). To feed the new contact into a member-shaped verb (hub-memberships,
+activity, community members, email enrollments, access-rules overrides) use the GLOBAL contact id — the
+.attributes.contact_id field (top-level .contact_id in the flattened output).`,
+	Example: `  mio contacts create --email user@example.com --first-name Alice --last-name Smith
+
+  # Capture the GLOBAL contact_id for a follow-up 'hub-memberships add'
+  mio contacts create --email user@example.com -o json --jq '.contact_id'`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
 		if err != nil {
@@ -142,11 +171,19 @@ var contactsCreateCmd = &cobra.Command{
 // ---- contacts retrieve -------------------------------------------------------
 
 var contactsRetrieveCmd = &cobra.Command{
-	Use:     "retrieve <id>",
-	Short:   "Retrieve a contact by id.",
-	Long:    "Retrieve a single contact record by its id.",
-	Example: `  mio contacts retrieve ctt_abc123`,
-	Args:    cobra.ExactArgs(1),
+	Use:   "retrieve <id>",
+	Short: "Retrieve a contact by id.",
+	Long: `Retrieve a single contact record by its id (the TEAM-contact id).
+
+The returned .id is the TEAM-contact id. The GLOBAL contact id used by
+hub-memberships / activity / community members / email enrollments /
+access-rules overrides is the
+.attributes.contact_id field (top-level .contact_id in the flattened output).`,
+	Example: `  mio contacts retrieve ctt_abc123
+
+  # Print the GLOBAL contact_id for use with member-shaped verbs
+  mio contacts retrieve ctt_abc123 -o json --jq '.contact_id'`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newContext(cmd)
 		if err != nil {
