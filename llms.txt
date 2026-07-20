@@ -144,10 +144,52 @@ mio pages catalog scaffold — scaffold a node-tree from a catalog template (Go 
 mio pages catalog templates — list catalog author templates; --page-type <pt> shows the section templates recommended for that page type (ordered) + its page template
 mio pages catalog section-types — list catalog compiled section types; --writable-only lists just the imperative-door allow-list
 
+mio media files list — list team media files (cursor-paginated); --limit --after
+mio media files retrieve — retrieve a media file by id (POSITIONAL)
+mio media files update — update file metadata; --title --description --visibility --folder-id
+mio media files delete — soft-delete a file; --yes
+mio media files upload — upload a file end-to-end from the CLI (create → presigned S3 PUT → finalize; auto-multipart for large files); path is POSITIONAL; --title --mime-type --folder-id --wait --timeout --multipart --part-size-mb
+mio media files replace — replace an existing file's underlying asset; <file_id> <path> POSITIONAL; single-part finalizes at .../replace/{replacement_id}/finalize, but multipart replace ENDS at the terminal .../replace/{replacement_id}/multipart/{upload_id}/complete (no separate finalize); --mime-type --filename --multipart --part-size-mb
+mio media files finalize — finalize a file after its presigned upload (POST .../finalize); file id POSITIONAL
+mio media files transcode — (re)start transcoding for a file (POST .../transcode); file id POSITIONAL
+mio media files register-synthetic — register a synthetic (document/pdf) file; --title (required) --asset-kind (document|pdf) --visibility --mime-type --original-filename --description
+mio media files cards get — list a file's in-video CTA cards; file id POSITIONAL
+mio media files cards set — replace a file's CTA cards (full-list PUT); --cards (JSON array or @file)
+mio media files chapters get — list a file's effective chapters (authored else auto); file id POSITIONAL
+mio media files chapters set — replace a file's authored chapters (full-list PUT); --chapters (JSON array or @file)
+mio media folders list — list team media folders (cursor-paginated); --limit --after
+mio media folders create — create a folder; --name (required) --parent-id
+mio media folders retrieve — retrieve a folder by id (POSITIONAL)
+mio media folders update — rename a folder; --name
+mio media folders delete — soft-delete an empty folder; --yes
+mio media folders move — move a folder subtree to a new parent or root; folder id POSITIONAL; exactly one of --parent-id / --to-root
+mio media search — hybrid (lexical+semantic) search over the team's media transcripts; --query (required) --hub-id --limit (1-100)
+mio media playlists list — list team media playlists (cursor-paginated); --limit --after
+mio media playlists create — create a playlist; --title (required) --description --visibility --hub-id
+mio media playlists retrieve — retrieve a playlist by id (POSITIONAL)
+mio media playlists update — update a playlist; --title --description --visibility --hub-id --podcast-feed-enabled
+mio media playlists delete — soft-delete a playlist; --yes
+mio media playlists set-cover — set (replace) a playlist's cover from a media file; playlist id POSITIONAL; --file-id (required; the FILE id — its media_id is resolved automatically) --position
 mio media playlists items add — add a media file to a playlist; --playlist-id --file-id --position (0-based; omit → position 0/front; negative rejected client-side)
 mio media playlists items list — list a playlist's items in order (cursor-paginated); --playlist-id
 mio media playlists items remove — remove an item by its item id (the 'id' from 'items list', not the file id); --playlist-id --yes
 mio media playlists items reorder — move an item to a new position; item id is POSITIONAL; --playlist-id --position (required, >= 0)
+mio media hub-media publish — publish a standalone file to the active hub (writes a hub_media row); --file-id (required) --visibility --published-at --position
+mio media hub-media list — list files published to the active hub; cursor-paginated
+mio media hub-media unpublish — remove a file's hub_media row from the active hub; file id POSITIONAL; --yes
+mio media hub-playlists publish — publish a playlist to the active hub (writes a hub_media row); --playlist-id (required) --visibility --published-at --position
+mio media hub-playlists list — list playlists published to the active hub; cursor-paginated
+mio media hub-playlists unpublish — remove a playlist's hub_media row from the active hub; playlist id POSITIONAL; --yes
+mio media attachments list — list media attachment rows; --media-id --target-type --target-id (cursor-paginated)
+mio media attachments show — retrieve an attachment by id (POSITIONAL)
+mio media attachments update — update an attachment's --role and/or --position; attachment id POSITIONAL
+mio media attachments delete — delete an attachment row; attachment id POSITIONAL; --yes
+mio media transcripts get — get a media's transcript (media_id POSITIONAL)
+mio media transcripts vtt — get the transcript as WebVTT (media_id POSITIONAL)
+mio media transcripts content — get the transcript plain-text content (media_id POSITIONAL)
+mio media transcripts versions — list transcript versions, or retrieve one; media_id POSITIONAL, optional [version]
+mio media transcripts edit — replace a transcript's words (creates a new version); media_id POSITIONAL; --words (JSON array or @file) --language
+mio media transcripts revert — revert a transcript to a prior version; media_id POSITIONAL; --version (required, >= 1)
 
 mio products create — create a product
 mio products list — list products in the active team

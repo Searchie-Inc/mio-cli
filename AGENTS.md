@@ -142,7 +142,17 @@ Every implemented resource and its verbs.
 | `pages sections` | `create` (`--type` validated against the catalog writable set) `list` `update` `delete` `reorder` |
 | `pages tree` | `get` `set` (author a page's draft node-tree; `set` takes `--file` + `--if-match`) |
 | `pages catalog` | `scaffold` (`--template`/`--variant` → a node-tree for `pages tree set`) `templates` (`--page-type`) `section-types` (`--writable-only`) |
+| `media files` | `list` `retrieve` `update` `delete` `upload` (create → presigned PUT → finalize, auto-multipart) `replace` `finalize` `transcode` `register-synthetic` |
+| `media files cards` | `get` `set` (`--cards` JSON array/@file) |
+| `media files chapters` | `get` `set` (`--chapters` JSON array/@file) |
+| `media folders` | `list` `create` `retrieve` `update` `delete` `move` (`--parent-id`/`--to-root`) |
+| `media search` | hybrid transcript search (`--query` `--hub-id` `--limit`) |
+| `media playlists` | `list` `create` `retrieve` `update` `delete` `set-cover` (`--file-id`) |
 | `media playlists items` | `add` `list` `remove` `reorder` (populate a playlist: `--playlist-id` `--file-id` `--position`) |
+| `media hub-media` | `publish` `list` `unpublish` (standalone files → hub; `--file-id`) |
+| `media hub-playlists` | `publish` `list` `unpublish` (playlists → hub; `--playlist-id`) |
+| `media attachments` | `list` `show` `update` `delete` |
+| `media transcripts` | `get` `vtt` `content` `versions` `edit` `revert` |
 | `products` | `create` `list` `retrieve` `update` `delete` |
 | `products prices` | `create` `list` `retrieve` `update` `delete` |
 | `checkout orders` | `list` `retrieve` |

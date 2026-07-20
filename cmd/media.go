@@ -42,10 +42,11 @@ package cmd
 //	update   PATCH  /api/teams/{team_id}/playlists/{id}
 //	delete   DELETE /api/teams/{team_id}/playlists/{id}
 //
-// NOTE: file creation (upload) requires a two-step flow (POST + presigned S3 PUT
-// + POST /finalize) which cannot be done with a single CLI call today. The `files`
-// sub-group therefore exposes list/retrieve/update/delete only. Use the API
-// directly or the dashboard for file upload.
+// files also supports the full ingest lifecycle end-to-end from the CLI (see
+// cmd/media_upload.go): `upload` orchestrates create → presigned S3 PUT →
+// finalize (auto-multipart for large files), `replace` swaps an existing file's
+// asset, `finalize`/`transcode` re-drive processing, and `register-synthetic`
+// registers a synthetic (document/pdf) file. No dashboard/API detour is needed.
 //
 // All routes are team-scoped. Requires a team-member user JWT.
 
@@ -144,15 +145,21 @@ func init() {
 var mediaCmd = &cobra.Command{
 	Use:   "media",
 	Short: "Manage media assets.",
-	Long: `Manage media files, folders, and playlists for the active team.
+	Long: `Manage media files, folders, playlists, and transcripts for the active team.
 
-Files: list, retrieve, update and delete files in the team media library.
-Folders: full CRUD for organising files into folders.
-Playlists: full CRUD for curated media playlists.
-
-Note: file upload requires a multi-step presigned URL flow; use the dashboard
-or API directly for new file uploads.`,
-	Example: `  mio media files list
+Files: full library management plus the complete upload lifecycle — list,
+  retrieve, update, delete, and ingest with 'files upload' (create → presigned
+  S3 PUT → finalize, all from the CLI; large files chunk automatically), plus
+  'files replace', 'files finalize', 'files transcode', and
+  'files register-synthetic'. See 'mio media files --help'.
+Folders: full CRUD (create/list/retrieve/update/delete) plus 'move'.
+Search: 'media search' runs hybrid search over the team's transcripts.
+Playlists: full CRUD, 'set-cover', and 'playlists items' to curate contents.
+Transcripts: get/vtt/content/versions and edit/revert authored transcripts.
+Attachments: inspect and manage media attachment rows ('media attachments').
+Publishing: 'media hub-media' / 'media hub-playlists' publish to a hub.`,
+	Example: `  mio media files upload ./clip.mp4 --title "Intro"
+  mio media files list
   mio media folders list
   mio media playlists list`,
 }
@@ -339,7 +346,13 @@ func mediaContext(cmd *cobra.Command) (*cmdContext, string, error) {
 var mediaFilesCmd = &cobra.Command{
 	Use:   "files",
 	Short: "Manage media files.",
-	Long:  "List, retrieve, update and delete files in the team media library.",
+	Long: `Manage files in the team media library — and ingest new ones from the CLI.
+
+Library:  list, retrieve, update, delete.
+Ingest:   upload (create → presigned S3 PUT → finalize, auto-multipart for large
+          files), replace (swap an existing file's asset), finalize/transcode
+          (re-drive processing), register-synthetic (register a document/pdf).
+Enrich:   cards (in-video CTAs) and chapters, each get/set.`,
 }
 
 // filesPath returns /api/teams/{team_id}/files[/{id}].
