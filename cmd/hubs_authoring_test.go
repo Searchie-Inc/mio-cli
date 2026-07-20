@@ -493,6 +493,70 @@ func TestHubsUpdate_UnsetEmptyNoRequest(t *testing.T) {
 	}
 }
 
+// TestHubsUpdate_UnsetTrailingCommaNoRequest verifies a blank entry INSIDE a
+// comma-list (e.g. a stray trailing comma "settings.header.color,") is a usage
+// error firing no request — the blank must not be silently dropped so the valid
+// part proceeds.
+func TestHubsUpdate_UnsetTrailingCommaNoRequest(t *testing.T) {
+	fired := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fired = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(hubWithBlobsBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"hubs", "update", "hub_abc123",
+			"--unset", "settings.header.color,",
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if fired {
+		t.Error("a blank comma-list entry must exit before any HTTP request")
+	}
+}
+
+// TestHubsUpdate_RMWRequestSequence asserts the read-modify-write path issues
+// exactly one GET (retrieve) then one PATCH (update) to the SAME hub resource —
+// catching a regression that adds an extra GET or targets the wrong PATCH path.
+func TestHubsUpdate_RMWRequestSequence(t *testing.T) {
+	var seq []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seq = append(seq, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(hubWithBlobsBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"hubs", "update", "hub_abc123",
+			"--unset", "settings.header.color",
+		)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(seq) != 2 {
+		t.Fatalf("request count = %d, want 2 (one GET retrieve + one PATCH update); seq=%v", len(seq), seq)
+	}
+	if !strings.HasPrefix(seq[0], "GET ") || !strings.HasPrefix(seq[1], "PATCH ") {
+		t.Errorf("request sequence = %v, want [GET…, PATCH…]", seq)
+	}
+	getPath := strings.TrimPrefix(seq[0], "GET ")
+	patchPath := strings.TrimPrefix(seq[1], "PATCH ")
+	if getPath != patchPath {
+		t.Errorf("GET path %q != PATCH path %q — RMW must target the same hub resource", getPath, patchPath)
+	}
+	if !strings.HasSuffix(patchPath, "/hubs/hub_abc123") {
+		t.Errorf("PATCH path %q must target the hub resource …/hubs/hub_abc123", patchPath)
+	}
+}
+
 // ─── MIO-2521: create discoverability (state + hint) ─────────────────────────
 
 // TestHubsCreate_SurfacesPublishedDerivedPrivate verifies create injects a

@@ -53,7 +53,8 @@ func parseUnsetFlag(cmd *cobra.Command) ([]unsetPath, error) {
 		for _, part := range strings.Split(entry, ",") {
 			p := strings.TrimSpace(part)
 			if p == "" {
-				continue
+				return nil, errs.New(errs.ExitUsage,
+					"--unset %q has a blank entry (stray comma?); every comma-separated entry must be a dotted path", entry)
 			}
 			segs := strings.Split(p, ".")
 			for i := range segs {
