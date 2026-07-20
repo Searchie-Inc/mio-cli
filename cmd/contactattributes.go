@@ -13,6 +13,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -458,7 +459,7 @@ var contactAttributesHubConfigCreateCmd = &cobra.Command{
 	Short: "Enable a contact attribute on a hub.",
 	Long: `Enable a contact attribute definition on the active hub, optionally configuring
 its display order and visibility.`,
-	Example: `  mio contact-attributes hub-config create attr_abc123 --hub hub_xyz --position=1 --visible=true`,
+	Example: `  mio contact-attributes hub-config create attr_abc123 --hub hub_xyz --position=1 --in-profile`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := caHubContext(cmd)
@@ -466,11 +467,14 @@ its display order and visibility.`,
 			return err
 		}
 
-		attrs := map[string]any{}
+		// The definition id travels in the body, not the URL: create POSTs to
+		// the COLLECTION path .../contact-attributes. The /{definition_id}
+		// path only supports PATCH/DELETE, so a POST there 405s.
+		attrs := map[string]any{"definition_id": args[0]}
 		setIntFlag(cmd, attrs, "position")
-		setBoolFlag(cmd, attrs, "visible")
+		setHubConfigBoolFlags(cmd, attrs)
 
-		res, err := c.client.Create(c.ctx, contactAttributesHubConfigPath(teamID, hubID, args[0]), attrs)
+		res, err := c.client.Create(c.ctx, contactAttributesHubConfigPath(teamID, hubID, ""), attrs)
 		if err != nil {
 			return err
 		}
@@ -505,7 +509,7 @@ var contactAttributesHubConfigUpdateCmd = &cobra.Command{
 	Use:     "update <def_id>",
 	Short:   "Update a contact attribute's hub configuration.",
 	Long:    "Update the position or visibility of a contact attribute on the active hub.",
-	Example: `  mio contact-attributes hub-config update attr_abc123 --hub hub_xyz --position=3`,
+	Example: `  mio contact-attributes hub-config update attr_abc123 --hub hub_xyz --position=3 --required`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := caHubContext(cmd)
@@ -515,7 +519,7 @@ var contactAttributesHubConfigUpdateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setIntFlag(cmd, attrs, "position")
-		setBoolFlag(cmd, attrs, "visible")
+		setHubConfigBoolFlags(cmd, attrs)
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -556,9 +560,24 @@ var contactAttributesHubConfigDeleteCmd = &cobra.Command{
 func init() {
 	for _, cmd := range []*cobra.Command{contactAttributesHubConfigCreateCmd, contactAttributesHubConfigUpdateCmd} {
 		cmd.Flags().Int("position", 0, "Display order position within the hub (lower numbers appear first).")
-		cmd.Flags().Bool("visible", false, "Whether the attribute is visible to contacts in this hub.")
+		cmd.Flags().Bool("in-profile", false, "Show this attribute on the contact's hub profile.")
+		cmd.Flags().Bool("in-onboarding", false, "Collect this attribute during hub onboarding.")
+		cmd.Flags().Bool("required", false, "Require a value for this attribute in the hub.")
+		cmd.Flags().Bool("read-only", false, "Make this attribute read-only for contacts in the hub.")
+		cmd.Flags().Bool("searchable", false, "Allow searching contacts by this attribute in the hub.")
 	}
 	addPaginationFlags(contactAttributesHubConfigListCmd)
+}
+
+// setHubConfigBoolFlags maps the hub-config boolean flags onto their backend
+// attribute keys. Only flags the caller changed are sent, matching the
+// partial-update / upsert semantics of the backend schema.
+func setHubConfigBoolFlags(cmd *cobra.Command, attrs map[string]any) {
+	setMappedBool(cmd, attrs, "in-profile", "is_in_profile")
+	setMappedBool(cmd, attrs, "in-onboarding", "is_in_onboarding")
+	setMappedBool(cmd, attrs, "required", "is_required")
+	setMappedBool(cmd, attrs, "read-only", "is_read_only")
+	setMappedBool(cmd, attrs, "searchable", "is_searchable")
 }
 
 // ============================================================================
@@ -583,11 +602,13 @@ var contactAttributesValuesGetCmd = &cobra.Command{
 			return err
 		}
 
-		res, err := c.client.Retrieve(c.ctx, contactAttributesValuesPath(teamID, args[0]))
+		// GET .../attributes returns a ContactValueListResponse (a LIST at
+		// /data); decode it as a collection, not a single resource.
+		col, err := c.client.List(c.ctx, contactAttributesValuesPath(teamID, args[0]), url.Values{})
 		if err != nil {
 			return err
 		}
-		return c.render(cmd, res)
+		return c.render(cmd, col)
 	},
 }
 
@@ -612,20 +633,35 @@ Pass each attribute as --attr <key>=<value>. Multiple --attr flags may be used.`
 			return errs.New(errs.ExitUsage, "nothing to set: provide at least one --attr key=value pair")
 		}
 
-		attrs := map[string]any{}
+		ops := make([]map[string]any, 0, len(rawAttrs))
 		for _, kv := range rawAttrs {
 			key, val, ok := splitKV(kv)
 			if !ok {
 				return errs.New(errs.ExitUsage, "invalid --attr value %q: expected key=value", kv)
 			}
-			attrs[key] = val
+			// Each --attr becomes a "set" operation keyed by definition slug.
+			// The value is sent as value_text (text attributes); type-typed
+			// attributes (number/boolean/date/select) are not yet expressible
+			// via bare key=value.
+			ops = append(ops, map[string]any{
+				"type": "set",
+				"attributes": map[string]any{
+					"definition_slug": key,
+					"value_text":      val,
+				},
+			})
 		}
 
-		res, err := c.client.Update(c.ctx, contactAttributesValuesPath(teamID, args[0]), attrs)
+		// The backend binds a BulkValuePatchEnvelope whose `data` is a LIST of
+		// value operations (extra="forbid"); a JSON:API object at /data 400s
+		// with "Input should be a valid list (/data)". Send the raw {data:[...]}
+		// list and decode the ContactValueListResponse it returns.
+		col, err := c.client.ActionCollectionRaw(c.ctx, http.MethodPatch,
+			contactAttributesValuesPath(teamID, args[0]), map[string]any{"data": ops})
 		if err != nil {
 			return err
 		}
-		return c.render(cmd, res)
+		return c.render(cmd, col)
 	},
 }
 
