@@ -328,7 +328,7 @@ Scripts and agents can branch on these stable codes.
 | `tags` | `create`, `list`, `retrieve`, `update`, `delete`, `assign`, `assign-bulk`, `remove` |
 | `segments` | `create`, `list`, `retrieve`, `update`, `delete`, `search`, `members`, `count` |
 | `content` | `create`, `list`, `retrieve`, `children`, `update`, `delete`, `restore`, `reorder` |
-| `pages` | `create`, `list`, `retrieve` (add `--tree` for raw published node tree), `update`, `delete`, `home`, `publish` (requires `--if-match <draft_version>`); `sections create/list/update/delete/reorder` |
+| `pages` | `create`, `list`, `retrieve` (add `--tree` for raw published node tree), `update`, `delete`, `home`, `publish` (requires `--if-match <draft_version>`); `tree get/set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit it for the first tree on a draft-less page, it defaults to `0`); `sections create/list/update/delete/reorder` |
 | `media files` | `list`, `retrieve`, `update`, `delete`; ingest from the CLI: `upload` (create → presigned S3 PUT → finalize; auto-multipart), `replace`, `finalize`, `transcode`, `register-synthetic`; `cards get/set`, `chapters get/set` |
 | `media folders` | `list`, `create`, `retrieve`, `update`, `delete`, `move` (`--parent-id`/`--to-root`) |
 | `media search` | hybrid search over the team's transcripts (`--query`, `--hub-id`, `--limit`) |

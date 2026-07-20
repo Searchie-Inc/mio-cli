@@ -77,17 +77,24 @@ func TestPagesTreeSet_PutWithIfMatch(t *testing.T) {
 	}
 }
 
-// TestPagesTreeSet_RequiresIfMatch verifies a missing --if-match exits ExitUsage
-// with no request.
-func TestPagesTreeSet_RequiresIfMatch(t *testing.T) {
+// TestPagesTreeSet_DefaultsIfMatchZero verifies that omitting --if-match is
+// allowed for the first tree on a draft-less page: the PUT still fires and sends
+// If-Match: "0" (the first-set sentinel). This is the MIO-2518 relaxation — the
+// backend's atomic OCC guard rejects a defaulted 0 against a page that already
+// has a draft, so the default can never clobber an existing draft.
+func TestPagesTreeSet_DefaultsIfMatchZero(t *testing.T) {
 	dir := t.TempDir()
 	fp := dir + "/tree.json"
-	if err := os.WriteFile(fp, []byte(`{"root":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(fp, []byte(`{"root":{"kind":"stack"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+
+	var gotMethod, gotPath, gotIfMatch string
 	fired := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fired = true
+		gotMethod, gotPath, gotIfMatch = r.Method, r.URL.Path, r.Header.Get("If-Match")
+		w.Header().Set("Content-Type", "application/vnd.api+json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(draftTreeBody))
 	}))
@@ -98,11 +105,20 @@ func TestPagesTreeSet_RequiresIfMatch(t *testing.T) {
 			"pages", "tree", "set", "page_x", "--file", fp,
 		)...)
 
-	if res.Code != errs.ExitUsage {
-		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
-	if fired {
-		t.Error("missing --if-match must exit before any HTTP request")
+	if !fired {
+		t.Fatal("omitting --if-match must still fire the PUT (defaults to If-Match: 0)")
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("HTTP method = %q, want PUT", gotMethod)
+	}
+	if !strings.HasSuffix(gotPath, "/pages/page_x/tree") {
+		t.Errorf("path %q does not end with /pages/page_x/tree", gotPath)
+	}
+	if gotIfMatch != "0" {
+		t.Errorf("If-Match = %q, want \"0\" (first-set default)", gotIfMatch)
 	}
 }
 

@@ -74,7 +74,7 @@ A PAGE template (page-*) is emitted as a complete, settable tree wrapped as
 {"root": ...}; pipe it straight into 'pages tree set':
 
   mio pages catalog scaffold --template page-homepage > tree.json
-  mio pages tree set <page_id> --if-match <v> --file tree.json
+  mio pages tree set <page_id> --file tree.json   # first tree: --if-match defaults to 0
 
 A SECTION template is emitted as a bare node subtree to drop into a page root's
 children. Scaffolding is offline-capable (falls back to the vendored catalog).`,

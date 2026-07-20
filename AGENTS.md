@@ -140,7 +140,7 @@ Every implemented resource and its verbs.
 | `content` | `create` `list` `retrieve` `children` `update` `delete` `restore` `reorder` |
 | `pages` | `create` `list` `retrieve` (add `--tree` for raw node tree) `update` `delete` `home` `publish` |
 | `pages sections` | `create` (`--type` validated against the catalog writable set) `list` `update` `delete` `reorder` |
-| `pages tree` | `get` `set` (author a page's draft node-tree; `set` takes `--file` + `--if-match`) |
+| `pages tree` | `get` `set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit for the first tree on a draft-less page, defaults to `0`) |
 | `pages catalog` | `scaffold` (`--template`/`--variant` → a node-tree for `pages tree set`) `templates` (`--page-type`) `section-types` (`--writable-only`) |
 | `media files` | `list` `retrieve` `update` `delete` `upload` (create → presigned PUT → finalize, auto-multipart) `replace` `finalize` `transcode` `register-synthetic` |
 | `media files cards` | `get` `set` (`--cards` JSON array/@file) |
@@ -176,11 +176,15 @@ Every implemented resource and its verbs.
 ## Command Gotchas
 
 - **`pages publish` requires `--if-match <draft_version>`** — read the `draft_version` attribute from a prior `pages retrieve`, then pass it as `--if-match`. The backend uses it as an optimistic-concurrency guard and will return 409 if the draft has changed since you read it.
+- **`pages tree set` `--if-match` is OPTIONAL (defaults to `0`) — publish's is not.** `pages tree get` 404s on a page that has no draft yet, so the very FIRST tree set has no `draft_version` to echo back: omit `--if-match` and it defaults to `0`, which the backend accepts only while the page is still at `draft_version 0` (a fresh page starts there). For every subsequent set pass the current `draft_version`. The default does NOT bypass optimistic concurrency: a defaulted (or stale) `0` against a page that already has a draft returns a 409 conflict, so you can never silently clobber an existing draft.
 - **`pages retrieve --tree`** returns a `page-trees` resource (raw published node tree) instead of page metadata. Use this for admin editor access.
 - **Scaffold real pages via the tree door, not imperative sections.** `pages catalog scaffold --template <id>` emits the same node-tree artifact the visual builder produces (a Go port of the reference applier mints fresh UUIDv7 ids). It is emit-only — pipe a PAGE template's `{"root":…}` output straight into `pages tree set`:
   ```sh
-  V=$(mio pages tree get <page_id> --jq '.draft_version')
   mio pages catalog scaffold --template page-homepage > tree.json
+  # FIRST tree on a draft-less page: omit --if-match (defaults to 0). 'tree get' 404s until a draft exists.
+  mio pages tree set <page_id> --file tree.json
+  # SUBSEQUENT edits: read the current draft_version and pass it back for OCC.
+  V=$(mio pages tree get <page_id> --jq '.draft_version')
   mio pages tree set <page_id> --if-match "$V" --file tree.json
   ```
   The catalog is live-fetched (`GET /api/page-builder/catalog`, ETag/304-cached) with a digest-pinned embedded fallback, so scaffolding works offline (`--offline` forces the embedded copy; `--catalog <file>` overrides). `pages catalog templates --page-type <pt>` lists what's recommended per page type; `pages catalog section-types --writable-only` is the `sections create --type` allow-list.

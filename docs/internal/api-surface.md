@@ -168,6 +168,10 @@ plain JSON.
 ## pages  (`cmd/pages.go`)
 - pages:    `create/list/retrieve/update/delete` `/api/teams/{team_id}/hubs/{hub_id}/pages[/{id}]`; `home` GET `…/pages/home`
   - create/update flags match PageCreate/PageUpdateAttributes: `--title` `--slug` `--type` `--privacy`(public|members|private) `--position` `--is-home`(→`is_homepage`) `--settings`/`--meta`(@file). No `--published`/`--description`/`--layout` (MIO-2257)
+- publish: `publish` POST `…/pages/{id}/publish` (no body; `If-Match: <draft_version>` header, `--if-match` REQUIRED)
+- tree: `get` GET `…/pages/{id}/tree?audience=author&resolve=true` (draft_version = OCC token);
+  `set` PUT `…/pages/{id}/tree` — body `{data:{type:page_draft_trees,attributes:{tree}}}` (type via `pages/tree` typeOverride), `If-Match: <draft_version>` header from `--file` + `--if-match`.
+  `--if-match` is OPTIONAL and defaults to `0` (unlike publish): omit it for the FIRST tree on a draft-less page — `tree get` 404s until a draft exists, and a fresh page sits at `draft_version 0`, which the backend's atomic OCC update (`WHERE draft_version = expected`) matches only while no draft has been written. A defaulted/stale `0` against a page that already has a draft → 409 `stale_draft`, never a clobber, so OCC stays intact for later sets (MIO-2518, MIO-2258)
 - sections: `create` POST `…/pages/{pid}/sections`; `list` GET `…/pages/{pid}/sections`;
   `update` PATCH `…/pages/{pid}/sections/{sid}`; `delete` DELETE `…/pages/{pid}/sections/{sid}`;
   `reorder` PATCH `…/pages/{pid}/sections` — body is a bare `{data:[{id,position}]}` list (SectionReorderEnvelope), built from `--order` (MIO-2257)
