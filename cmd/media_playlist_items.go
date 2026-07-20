@@ -50,7 +50,7 @@ func init() {
 	}
 
 	mediaPlaylistsItemsAddCmd.Flags().String("file-id", "", "Media file id to add to the playlist. Required.")
-	mediaPlaylistsItemsAddCmd.Flags().Int("position", 0, "Optional position (>= 0) for the item; defaults to the end.")
+	mediaPlaylistsItemsAddCmd.Flags().Int("position", 0, "Optional 0-based position for the item; if omitted, the backend inserts it at position 0 (front).")
 
 	mediaPlaylistsItemsReorderCmd.Flags().Int("position", 0, "New position (>= 0) for the item. Required.")
 
