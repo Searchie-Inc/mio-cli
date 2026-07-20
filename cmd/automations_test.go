@@ -448,20 +448,26 @@ func TestWebhookEndpointsDelete_WithYes(t *testing.T) {
 
 // ── automations test (dry-run) ────────────────────────────────────────────────
 
-// TestAutomationsTest_FlatBody is the regression guard for the fix that switched
-// `automations test` from Action (envelope) to ActionWith(StyleFlat). It
-// captures the wire body and asserts it is a FLAT object with no top-level
-// "data" key — exactly {"team_contact_id": "..."}.
+// TestAutomationsTest_FlatBody is the regression guard for MIO-2503. The
+// POST .../automations/{id}/test endpoint intentionally returns a FLAT report
+// {"meta":{…},"trace":[…]} with NO JSON:API `data` member. The command must
+// decode that flat document and render meta+trace, exiting 0 — NOT run it
+// through the resource decoder (which errors "response had no `data` member" on
+// every successful dry-run). This test drives the REAL flat response shape and
+// asserts both the flat request body and that the rendered report reaches
+// stdout.
 func TestAutomationsTest_FlatBody(t *testing.T) {
 	var gotBody []byte
 	var gotPath string
 
+	// Real backend contract: DryRunResponse {meta: dict, trace: list} at 200,
+	// Content-Type application/vnd.api+json, no top-level `data`.
 	const testResponseBody = `{
-		"data": {
-			"id": "auto_1",
-			"type": "automations",
-			"attributes": {"dry_run": true, "steps_executed": 3}
-		}
+		"meta": {"steps_executed": 3, "dry_run": true},
+		"trace": [
+			{"node_id": "n1", "node_type": "entry", "outcome": "matched"},
+			{"node_id": "n2", "node_type": "exit", "outcome": "reached"}
+		]
 	}`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -487,12 +493,21 @@ func TestAutomationsTest_FlatBody(t *testing.T) {
 		t.Errorf("path %q does not end with /automations/auto_1/test", gotPath)
 	}
 
+	// The flat meta+trace report must be rendered to stdout (default JSON off a
+	// non-TTY), not swallowed by a resource-decode failure.
+	if !strings.Contains(res.Stdout, "steps_executed") {
+		t.Errorf("stdout does not contain rendered meta (steps_executed); stdout=%q", res.Stdout)
+	}
+	if !strings.Contains(res.Stdout, "n1") || !strings.Contains(res.Stdout, "trace") {
+		t.Errorf("stdout does not contain rendered trace; stdout=%q", res.Stdout)
+	}
+
 	var flat map[string]any
 	if err := json.Unmarshal(gotBody, &flat); err != nil {
 		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
 	}
 
-	// Regression guard: must be flat — no "data" wrapper (no JSON:API envelope).
+	// Regression guard: request must be flat — no "data" wrapper (no envelope).
 	if _, hasData := flat["data"]; hasData {
 		t.Error("automations test body must NOT have a top-level \"data\" key (must be flat, not a JSON:API envelope)")
 	}

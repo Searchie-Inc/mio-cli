@@ -515,16 +515,21 @@ var automationsTestCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "--team-contact-id is required for test")
 		}
 
+		// The dry-run endpoint returns a FLAT report {"meta":…,"trace":[…]} with
+		// no JSON:API `data` member, so it must be decoded as a raw document
+		// (ActionRaw) — the resource decoder used by ActionWith errors "response
+		// had no `data` member" on every successful run (MIO-2503). The trace is
+		// exactly what an operator wants to see, so render it directly.
 		path := automationsPath(teamID, hubID, args[0]) + "/test"
-		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
+		report, err := c.client.ActionRaw(c.ctx, client.StyleFlat, "POST", path, attrs)
 		if err != nil {
 			return err
 		}
-		if res == nil {
+		if report == nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Test run completed for automation %s.\n", args[0])
 			return nil
 		}
-		return c.render(cmd, res)
+		return c.render(cmd, report)
 	},
 }
 

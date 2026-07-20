@@ -552,6 +552,33 @@ func (c *Client) ActionWith(ctx context.Context, style BodyStyle, method, path s
 	return decodeResourceWrapped(raw)
 }
 
+// ActionRaw performs a custom action route whose response is a FLAT JSON
+// document — a plain object with NO JSON:API `data` member — and returns it
+// decoded into a map. It exists for the handful of action endpoints that return
+// a bespoke report rather than a resource/collection: e.g. POST
+// .../automations/{id}/test returns {"meta":…,"trace":[…]} (DryRunResponse) and
+// POST .../automations/events returns a meta-only ack {"meta":…}. Routing those
+// through ActionWith's resource decoder fails with "response had no `data`
+// member" on every SUCCESSFUL call (MIO-2503).
+//
+// The request body is shaped per the given BodyStyle (like ActionWith); an empty
+// 2xx body yields a nil map and nil error so callers can print a fallback line.
+func (c *Client) ActionRaw(ctx context.Context, style BodyStyle, method, path string, body map[string]any) (map[string]any, error) {
+	payload := buildWriteBody(style, path, body)
+	raw, err := c.do(ctx, method, path, nil, payload, contentTypeJSONAPI)
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	var out map[string]any
+	if uerr := json.Unmarshal(raw, &out); uerr != nil {
+		return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("decode response: %w", uerr))
+	}
+	return out, nil
+}
+
 // ActionWithHeaders is ActionWith plus a set of extra HTTP request headers. It
 // is the least-invasive way to send conditional headers (e.g. If-Match for the
 // pages publish endpoint) without altering the signatures of any existing method.
