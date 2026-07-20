@@ -78,7 +78,7 @@ var mediaPlaylistsItemsCmd = &cobra.Command{
 var mediaPlaylistsItemsAddCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Add a media file to a playlist.",
-	Long:  "Append a media file to a playlist (optionally at a specific position). The media file must already exist in the team library.",
+	Long:  "Add a media file to a playlist. Without --position the backend inserts it at position 0 (front); pass --position to place it explicitly. The media file must already exist in the team library.",
 	Example: `  mio media playlists items add --playlist-id pl_abc123 --file-id file_xyz789
   mio media playlists items add --playlist-id pl_abc123 --file-id file_xyz789 --position 2`,
 	Args: cobra.NoArgs,
@@ -91,6 +91,11 @@ var mediaPlaylistsItemsAddCmd = &cobra.Command{
 		fileID := flagValue(cmd, "file-id")
 		if fileID == "" {
 			return errs.New(errs.ExitUsage, "missing required flag: --file-id")
+		}
+		if cmd.Flags().Changed("position") {
+			if pos, _ := cmd.Flags().GetInt("position"); pos < 0 {
+				return errs.New(errs.ExitUsage, "invalid --position: must be >= 0")
+			}
 		}
 		attrs := map[string]any{"file_id": fileID}
 		setIntFlag(cmd, attrs, "position")
@@ -186,6 +191,9 @@ var mediaPlaylistsItemsReorderCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "missing required flag: --position")
 		}
 		pos, _ := cmd.Flags().GetInt("position")
+		if pos < 0 {
+			return errs.New(errs.ExitUsage, "invalid --position: must be >= 0")
+		}
 
 		c, teamID, err := mediaContext(cmd)
 		if err != nil {

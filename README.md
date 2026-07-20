@@ -308,6 +308,7 @@ Scripts and agents can branch on these stable codes.
 | `segments` | `create`, `list`, `retrieve`, `update`, `delete`, `search`, `members`, `count` |
 | `content` | `create`, `list`, `retrieve`, `children`, `update`, `delete`, `restore`, `reorder` |
 | `pages` | `create`, `list`, `retrieve` (add `--tree` for raw published node tree), `update`, `delete`, `home`, `publish` (requires `--if-match <draft_version>`); `sections create/list/update/delete/reorder` |
+| `media playlists items` | `add`, `list`, `remove`, `reorder` — populate a playlist with media files (`--playlist-id`, `--file-id`, `--position`) |
 | `products` | `create`, `list`, `retrieve`, `update`, `delete`; `prices create/list/retrieve/update/delete` |
 | `checkout` | `orders list/retrieve`; `subscriptions list/retrieve/cancel`; `payments list/retrieve/refund`; `webhooks list/retrieve/replay`; `accounts list/retrieve/onboarding-link`; `stripe-sync import/import-status/adopt-product` |
 | `email` | `drip-campaigns create/list/retrieve/update/delete/activate/pause` (create/update now accept `--enrollment-mode`, `--trigger-event-type`, `--segment-id`, `--segment-check-interval-minutes`, `--allow-reenrollment`); `steps create/list/update/delete`; `templates create/list/retrieve/update/delete/preview`; `config set/get/delete/test`; `enrollments list/exit`; `stats get` |

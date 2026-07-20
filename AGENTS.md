@@ -142,6 +142,7 @@ Every implemented resource and its verbs.
 | `pages sections` | `create` (`--type` validated against the catalog writable set) `list` `update` `delete` `reorder` |
 | `pages tree` | `get` `set` (author a page's draft node-tree; `set` takes `--file` + `--if-match`) |
 | `pages catalog` | `scaffold` (`--template`/`--variant` → a node-tree for `pages tree set`) `templates` (`--page-type`) `section-types` (`--writable-only`) |
+| `media playlists items` | `add` `list` `remove` `reorder` (populate a playlist: `--playlist-id` `--file-id` `--position`) |
 | `products` | `create` `list` `retrieve` `update` `delete` |
 | `products prices` | `create` `list` `retrieve` `update` `delete` |
 | `checkout orders` | `list` `retrieve` |

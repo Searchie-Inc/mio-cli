@@ -144,6 +144,11 @@ mio pages catalog scaffold — scaffold a node-tree from a catalog template (Go 
 mio pages catalog templates — list catalog author templates; --page-type <pt> shows the section templates recommended for that page type (ordered) + its page template
 mio pages catalog section-types — list catalog compiled section types; --writable-only lists just the imperative-door allow-list
 
+mio media playlists items add — add a media file to a playlist; --playlist-id --file-id --position (0-based; omit → position 0/front; negative rejected client-side)
+mio media playlists items list — list a playlist's items in order (cursor-paginated); --playlist-id
+mio media playlists items remove — remove an item by its item id (the 'id' from 'items list', not the file id); --playlist-id --yes
+mio media playlists items reorder — move an item to a new position; item id is POSITIONAL; --playlist-id --position (required, >= 0)
+
 mio products create — create a product
 mio products list — list products in the active team
 mio products retrieve — retrieve a product by id

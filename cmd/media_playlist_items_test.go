@@ -83,6 +83,32 @@ func TestPlaylistItemsAdd_RequiresFileID(t *testing.T) {
 	}
 }
 
+func TestPlaylistItemsAdd_RejectsNegativePosition(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "media", "playlists", "items", "add",
+			"--playlist-id", "pl_1", "--file-id", "file_x", "--position", "-1")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("negative --position must exit before any HTTP request")
+	}
+}
+
+func TestPlaylistItemsReorder_RejectsNegativePosition(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "media", "playlists", "items", "reorder", "it_1",
+			"--playlist-id", "pl_1", "--position", "-1")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("negative --position must exit before any HTTP request")
+	}
+}
+
 func TestPlaylistItemsList_Path(t *testing.T) {
 	srv, method, path, rawQuery, _ := captureAdminReq(t, http.StatusOK, `{"data":[]}`)
 	res := runContract(t, baseEnv(srv.URL),
