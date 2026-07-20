@@ -437,7 +437,7 @@ var mediaFilesUpdateCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
-		res, err := c.client.Update(c.ctx, filesPath(teamID, args[0]), attrs)
+		res, err := c.client.UpdateWithID(c.ctx, filesPath(teamID, args[0]), args[0], attrs)
 		if err != nil {
 			return err
 		}

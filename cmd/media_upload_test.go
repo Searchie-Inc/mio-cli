@@ -76,6 +76,72 @@ func TestFilesUpload_Orchestration(t *testing.T) {
 	}
 }
 
+// TestFilesUpload_FolderID verifies the post-upload move PATCHes the file with a
+// JSON:API envelope carrying data.id (FileUpdateData requires it, else 400
+// "Field required (/data/id)").
+func TestFilesUpload_FolderID(t *testing.T) {
+	var patchHit bool
+	var patchBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files":
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{"data":{"id":"file_new","type":"files","attributes":{"title":"x","status_upload":"PENDING"},"meta":{"upload_url":%q}}}`, "http://"+r.Host+"/s3put")
+		case r.Method == http.MethodPut && r.URL.Path == "/s3put":
+			w.Header().Set("ETag", `"etag1"`)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/teams/t_team1/files/file_new/finalize":
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"data":{"id":"file_new","type":"files","attributes":{"status_upload":"READY"}}}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/teams/t_team1/files/file_new":
+			patchHit = true
+			patchBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/vnd.api+json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"data":{"id":"file_new","type":"files","attributes":{"folder_id":"fold_1"}}}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "doc.txt")
+	if err := os.WriteFile(path, []byte("the contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "media", "files", "upload", path, "--folder-id", "fold_1")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	if !patchHit {
+		t.Fatal("post-upload folder move PATCH must fire")
+	}
+	var doc struct {
+		Data struct {
+			Type       string         `json:"type"`
+			ID         string         `json:"id"`
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(patchBody, &doc); err != nil {
+		t.Fatalf("PATCH body not JSON: %v; raw=%s", err, patchBody)
+	}
+	if doc.Data.Type != "files" {
+		t.Errorf("data.type=%q want files", doc.Data.Type)
+	}
+	if doc.Data.ID != "file_new" {
+		t.Errorf("data.id=%q want file_new (backend requires it in the body)", doc.Data.ID)
+	}
+	if doc.Data.Attributes["folder_id"] != "fold_1" {
+		t.Errorf("attributes.folder_id=%v want fold_1", doc.Data.Attributes["folder_id"])
+	}
+}
+
 func TestFilesUpload_Multipart(t *testing.T) {
 	var initHit, partHit, completeHit, finalizeHit bool
 	var completeBody, putBody []byte

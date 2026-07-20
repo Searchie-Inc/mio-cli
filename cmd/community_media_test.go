@@ -410,6 +410,7 @@ func TestMediaFilesUpdate_BodyShape(t *testing.T) {
 	var doc struct {
 		Data struct {
 			Type       string         `json:"type"`
+			ID         string         `json:"id"`
 			Attributes map[string]any `json:"attributes"`
 		} `json:"data"`
 	}
@@ -418,6 +419,11 @@ func TestMediaFilesUpdate_BodyShape(t *testing.T) {
 	}
 	if doc.Data.Type != "files" {
 		t.Errorf("data.type = %q, want \"files\"", doc.Data.Type)
+	}
+	// FileUpdateData requires data.id in the body (backend 400s "Field required
+	// (/data/id)" otherwise).
+	if doc.Data.ID != "file_1" {
+		t.Errorf("data.id = %q, want file_1 (backend requires it in the body)", doc.Data.ID)
 	}
 	if doc.Data.Attributes["title"] != "My Video" {
 		t.Errorf("attributes.title = %v, want 'My Video'", doc.Data.Attributes["title"])

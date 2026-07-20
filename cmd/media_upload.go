@@ -133,7 +133,7 @@ Single-part upload only (multipart for very large files is a follow-on).`,
 
 		// Optional: place in a folder (create does not accept folder_id).
 		if folderID := flagValue(cmd, "folder-id"); folderID != "" {
-			if res, err = c.client.Update(c.ctx, filesPath(teamID, fileID), map[string]any{"folder_id": folderID}); err != nil {
+			if res, err = c.client.UpdateWithID(c.ctx, filesPath(teamID, fileID), fileID, map[string]any{"folder_id": folderID}); err != nil {
 				return err
 			}
 		}
