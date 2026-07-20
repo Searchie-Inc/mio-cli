@@ -66,10 +66,16 @@ var pagesTreeSetCmd = &cobra.Command{
 	Long: `Replace a page's draft node-tree (the page-builder tree) and bump its
 draft_version. The tree JSON is read from --file (a path, optionally @-prefixed).
 
---if-match is REQUIRED and must be the draft_version from a prior
-'pages tree get' (or 'pages retrieve') — optimistic concurrency control. On
-success the response carries the new draft_version; pass it to
-'pages publish --if-match <new>'.
+--if-match is OPTIONAL and defaults to 0. Omit it for the FIRST tree on a
+draft-less page: 'pages tree get' 404s until a draft exists, so there is no
+draft_version to read back for the very first set — a fresh page starts at
+draft_version 0 and the backend accepts If-Match 0 only while the page has never
+had a draft. For every subsequent set, pass the draft_version from a prior
+'pages tree get' (or 'pages retrieve') — optimistic concurrency control. The
+default of 0 does NOT bypass that guard: sending 0 (or any stale value) against a
+page that already has a draft is rejected as a conflict, so you can never
+silently clobber an existing draft. On success the response carries the new
+draft_version; pass it to 'pages publish --if-match <new>'.
 
 Tree shape follows mio-hub's DS-conformed section recipes — see the guide at
 mio-backend docs/specs/2026-07-10-seeder-homepage-recipes-guide.md (MIO-2280).
@@ -84,9 +90,11 @@ homepage.)`,
 	Example: `  mio pages tree set page_abc123 --hub hub_123 --if-match 0 --file tree.json`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if !cmd.Flags().Changed("if-match") {
-			return errs.New(errs.ExitUsage, "--if-match is required: supply the draft_version from a prior 'pages tree get'")
-		}
+		// --if-match is optional (defaults to 0). Omitting it sends If-Match: 0,
+		// the first-set sentinel: the backend's atomic OCC update matches only a
+		// page still at draft_version 0 (never had a draft). A page that already
+		// has a draft (draft_version >= 1) is a conflict, not a clobber — so the
+		// default is safe and optimistic concurrency stays intact for later sets.
 		file, ferr := cmd.Flags().GetString("file")
 		if ferr != nil {
 			return errs.New(errs.ExitUsage, "--file: %s", ferr)

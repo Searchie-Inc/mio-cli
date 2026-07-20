@@ -323,11 +323,13 @@ func init() {
 	pagesRetrieveCmd.Flags().Bool("tree", false, "Return the raw published node tree (page-trees) instead of page metadata.")
 
 	// pages tree set flags (MIO-2258).
+	// --if-match is OPTIONAL here (unlike publish): it defaults to 0, the
+	// first-set sentinel for a draft-less page whose 'pages tree get' 404s and so
+	// has no draft_version to echo back. The backend's atomic OCC guard still
+	// rejects a defaulted 0 against a page that already has a draft, so omitting
+	// the flag can never clobber an existing draft (MIO-2518).
 	pagesTreeSetCmd.Flags().String("file", "", "Path to the tree JSON file (optionally @-prefixed). Required.")
-	pagesTreeSetCmd.Flags().Int("if-match", 0, "draft_version from a prior 'pages tree get' (optimistic concurrency lock). Required.")
-	if err := pagesTreeSetCmd.MarkFlagRequired("if-match"); err != nil {
-		panic("MarkFlagRequired if-match: " + err.Error())
-	}
+	pagesTreeSetCmd.Flags().Int("if-match", 0, "draft_version from a prior 'pages tree get' (optimistic concurrency lock). Optional: omit for the first tree on a draft-less page (defaults to 0).")
 }
 
 // pagesContext is the shared boilerplate for page commands: build the context,
