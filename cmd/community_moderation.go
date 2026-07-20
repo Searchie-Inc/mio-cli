@@ -646,7 +646,10 @@ var communityMembersSoftBanCmd = &cobra.Command{
 	Short: "Soft-ban (temporarily suspend) a hub member.",
 	Long: `Issue a standalone soft (temporary) ban on a hub member. Pass --until (ISO
 8601) to set the expiry; the backend defaults to now + 7 days when omitted.
---reason is a canonical ban-reason code; --notes records an admin note.`,
+--reason is a canonical ban-reason code; --notes records an admin note.
+
+<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
+'mio contacts', NOT its .id).`,
 	Example: `  mio community members soft-ban contact_xyz --hub hub_abc123
   mio community members soft-ban contact_xyz --hub hub_abc123 --reason spamming --until 2026-08-01T00:00:00Z`,
 	Args: cobra.ExactArgs(1),
@@ -677,7 +680,7 @@ var communityMembersSoftBanCmd = &cobra.Command{
 		body := rawDataEnvelope("moderation_actions", "", attrs)
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, body)
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		if res == nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Soft-banned member %s.\n", args[0])

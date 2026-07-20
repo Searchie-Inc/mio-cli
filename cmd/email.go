@@ -840,10 +840,14 @@ func enrollmentsPath(hubID, campaignID, enrollmentID string) string {
 }
 
 var emailEnrollmentsCreateCmd = &cobra.Command{
-	Use:     "create <campaign_id>",
-	Short:   "Manually enroll a contact in a drip campaign.",
-	Long:    "Manually enroll a contact in the specified drip campaign. The contact must be a member of the hub.",
-	Example: `  mio email enrollments create dc_abc123 --contact-id ctt_xyz789`,
+	Use:   "create <campaign_id>",
+	Short: "Manually enroll a contact in a drip campaign.",
+	Long: `Manually enroll a contact in the specified drip campaign. The contact must be a member of the hub.
+
+--contact-id takes the GLOBAL contact id — the .attributes.contact_id field from
+'mio contacts', NOT its .id (that is the team-contact id and enrollment will 404
+on it).`,
+	Example: `  mio email enrollments create dc_abc123 --contact-id contact_xyz789`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, hubID, err := emailContext(cmd)
@@ -860,7 +864,7 @@ var emailEnrollmentsCreateCmd = &cobra.Command{
 
 		res, err := c.client.Create(c.ctx, enrollmentsPath(hubID, args[0], ""), attrs)
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		return c.render(cmd, res)
 	},
@@ -920,10 +924,13 @@ func contactDripEnrollmentsPath(contactID string) string {
 }
 
 var emailEnrollmentsListByContactCmd = &cobra.Command{
-	Use:     "list-by-contact <contact_id>",
-	Short:   "List all drip enrollments for a contact.",
-	Long:    "List every drip campaign enrollment for a given contact across all campaigns.",
-	Example: `  mio email enrollments list-by-contact ctt_xyz789`,
+	Use:   "list-by-contact <contact_id>",
+	Short: "List all drip enrollments for a contact.",
+	Long: `List every drip campaign enrollment for a given contact across all campaigns.
+
+<contact_id> is the GLOBAL contact id — the .attributes.contact_id field from
+'mio contacts', NOT its .id (the team-contact id).`,
+	Example: `  mio email enrollments list-by-contact contact_xyz789`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newContext(cmd)
@@ -939,14 +946,14 @@ var emailEnrollmentsListByContactCmd = &cobra.Command{
 
 		col, err := c.client.List(c.ctx, contactDripEnrollmentsPath(args[0]), query)
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		return c.render(cmd, col)
 	},
 }
 
 func init() {
-	emailEnrollmentsCreateCmd.Flags().String("contact-id", "", "ID of the contact to enroll in the drip campaign.")
+	emailEnrollmentsCreateCmd.Flags().String("contact-id", "", "GLOBAL contact id to enroll (the .attributes.contact_id from 'mio contacts', not its .id).")
 	addPaginationFlags(emailEnrollmentsListCmd)
 	addPaginationFlags(emailEnrollmentsListByContactCmd)
 }

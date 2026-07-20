@@ -462,7 +462,11 @@ func init() {
 var communityMembersCmd = &cobra.Command{
 	Use:   "members",
 	Short: "Moderate hub members.",
-	Long:  "Perform moderation actions on hub members: ban, unban, or warn. Requires team-admin privileges.",
+	Long: `Perform moderation actions on hub members: ban, unban, or warn. Requires team-admin privileges.
+
+The <contact_id> positional on every action below is the GLOBAL contact id — the
+.attributes.contact_id field from 'mio contacts', NOT its .id (that is the
+team-contact id and these verbs will 404 on it).`,
 }
 
 // memberActionPath returns .../members/{contact_id}/{action}.
@@ -475,7 +479,10 @@ func memberActionPath(teamID, hubID, contactID, action string) string {
 var communityMembersBanCmd = &cobra.Command{
 	Use:   "ban <contact_id>",
 	Short: "Ban a hub member.",
-	Long:  "Issue a hard ban against a hub member. The contact will be blocked from accessing the hub.",
+	Long: `Issue a hard ban against a hub member. The contact will be blocked from accessing the hub.
+
+<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
+'mio contacts', NOT its .id).`,
 	Example: `  mio community members ban contact_xyz --hub hub_abc123
   mio community members ban contact_xyz --hub hub_abc123 --notes "Spam policy violation"`,
 	Args: cobra.ExactArgs(1),
@@ -491,7 +498,7 @@ var communityMembersBanCmd = &cobra.Command{
 		path := memberActionPath(teamID, hubID, args[0], "ban")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		if res == nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Banned member %s.\n", args[0])
@@ -506,7 +513,10 @@ var communityMembersBanCmd = &cobra.Command{
 var communityMembersUnbanCmd = &cobra.Command{
 	Use:   "unban <contact_id>",
 	Short: "Unban a hub member.",
-	Long:  "Lift a ban against a hub member, restoring their access.",
+	Long: `Lift a ban against a hub member, restoring their access.
+
+<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
+'mio contacts', NOT its .id).`,
 	Example: `  mio community members unban contact_xyz --hub hub_abc123
   mio community members unban contact_xyz --hub hub_abc123 --notes "Reviewed and cleared"`,
 	Args: cobra.ExactArgs(1),
@@ -522,7 +532,7 @@ var communityMembersUnbanCmd = &cobra.Command{
 		path := memberActionPath(teamID, hubID, args[0], "unban")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		if res == nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Unbanned member %s.\n", args[0])
@@ -537,7 +547,10 @@ var communityMembersUnbanCmd = &cobra.Command{
 var communityMembersWarnCmd = &cobra.Command{
 	Use:   "warn <contact_id>",
 	Short: "Warn a hub member.",
-	Long:  "Issue a formal warning to a hub member without banning them.",
+	Long: `Issue a formal warning to a hub member without banning them.
+
+<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
+'mio contacts', NOT its .id).`,
 	Example: `  mio community members warn contact_xyz --hub hub_abc123
   mio community members warn contact_xyz --hub hub_abc123 --notes "First offense warning"`,
 	Args: cobra.ExactArgs(1),
@@ -553,7 +566,7 @@ var communityMembersWarnCmd = &cobra.Command{
 		path := memberActionPath(teamID, hubID, args[0], "warn")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		if res == nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Warned member %s.\n", args[0])

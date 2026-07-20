@@ -128,6 +128,14 @@ plain JSON.
 - `update`   PATCH `/api/teams/{team_id}/contacts/{id}`
 - `delete`   DELETE `/api/teams/{team_id}/contacts/{id}`
 - `restore`  POST `/api/teams/{team_id}/contacts/{id}/restore`
+- **ID NAMESPACE TRAP (MIO-2504):** `{id}` on these routes is the TEAM-contact id
+  (route param `{team_contact_id}`; surfaced as `.id`, also used by
+  contact-attributes + tags). The GLOBAL contact id is a *separate* field,
+  `.attributes.contact_id` (top-level `.contact_id` when flattened), and is what
+  the `{contact_id}` routes below require: hub-memberships add/set-role/ban/
+  unban/warn, activity contact, community members ban/unban/warn/soft-ban, email
+  enrollments create. Piping `.id` into those 404s a live contact — the CLI
+  appends an actionable hint on exit-4 (`hintGlobalContactID`).
 
 ## contact-attributes  (`cmd/contactattributes.go`)
 - defs:    `create/list/retrieve/update/delete` `/api/teams/{team_id}/contact-attributes[/{id}]`
