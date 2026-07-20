@@ -45,8 +45,8 @@ TWO ID NAMESPACES — this matters when piping ids between commands:
                           'contact-attributes' and 'tags' verbs.
   .attributes.contact_id  the GLOBAL contact id (promoted to top-level
                           .contact_id in the default flattened output). Use it
-                          with 'hub-memberships', 'activity', 'community members'
-                          and 'email enrollments' verbs.
+                          with 'hub-memberships', 'activity', 'community members',
+                          'email enrollments' and 'access-rules overrides' verbs.
 
 Passing .id where a GLOBAL contact id is expected 404s for a live contact.
 Extract the global id with: mio contacts retrieve <id> -o json --jq '.contact_id'`,
@@ -69,7 +69,8 @@ var contactsListCmd = &cobra.Command{
 	Long: `List all contacts for the active team. Supports pagination and optional filters.
 
 Each row's .id is the TEAM-contact id. The GLOBAL contact id (needed by
-hub-memberships / activity / community members / email enrollments) is the
+hub-memberships / activity / community members / email enrollments /
+access-rules overrides) is the
 .attributes.contact_id field, promoted to top-level .contact_id in the default
 flattened output.`,
 	Example: `  # List contacts with table output
@@ -128,7 +129,7 @@ var contactsCreateCmd = &cobra.Command{
 
 The returned .id is the TEAM-contact id (for 'contacts'/'contact-attributes'/
 'tags'). To feed the new contact into a member-shaped verb (hub-memberships,
-activity, community members, email enrollments) use the GLOBAL contact id — the
+activity, community members, email enrollments, access-rules overrides) use the GLOBAL contact id — the
 .attributes.contact_id field (top-level .contact_id in the flattened output).`,
 	Example: `  mio contacts create --email user@example.com --first-name Alice --last-name Smith
 

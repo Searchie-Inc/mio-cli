@@ -46,6 +46,7 @@ func TestContract_MemberVerb404_HintsGlobalContactID(t *testing.T) {
 		{"community members ban", []string{"--team", "t_team1", "--hub", "hub_1", "community", "members", "ban", "contact_x"}},
 		{"email enrollments create", []string{"--team", "t_team1", "--hub", "hub_1", "email", "enrollments", "create", "dc_1", "--contact-id", "contact_x"}},
 		{"email enrollments list-by-contact", []string{"--team", "t_team1", "--hub", "hub_1", "email", "enrollments", "list-by-contact", "contact_x"}},
+		{"access-rules overrides create", []string{"--team", "t_team1", "--hub", "hub_1", "access-rules", "overrides", "create", "--contact-id", "contact_x", "--scope", "full"}},
 	}
 
 	for _, tc := range cases {
@@ -141,6 +142,7 @@ func TestContract_MemberVerbHelp_SaysGlobalContactID(t *testing.T) {
 		{"community", "members", "soft-ban"},
 		{"email", "enrollments", "create"},
 		{"email", "enrollments", "list-by-contact"},
+		{"access-rules", "overrides", "create"},
 	}
 	for _, args := range cases {
 		out := strings.ToLower(helpOutput(t, args...))

@@ -300,7 +300,7 @@ with "not found or is inactive"). Extract it with:
 
 		res, err := c.client.Create(c.ctx, overridesPath(teamID, hubID, ""), attrs)
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		return c.render(cmd, res)
 	},

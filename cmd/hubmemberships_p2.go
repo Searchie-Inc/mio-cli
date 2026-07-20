@@ -36,7 +36,7 @@ community profile is created as a side effect.
 'mio contacts', NOT its .id (that is the team-contact id and this verb will 404
 on it).`,
 	Example: `  # contact_id is the GLOBAL id: read it from 'mio contacts', not the .id
-  mio hub-memberships add "$(mio contacts retrieve ctt_abc -o json --jq '.attributes.contact_id')" --hub hub_abc123
+  mio hub-memberships add "$(mio contacts retrieve ctt_abc -o json --jq '.contact_id')" --hub hub_abc123
   mio hub-memberships add contact_xyz --hub hub_abc123 --role moderator`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

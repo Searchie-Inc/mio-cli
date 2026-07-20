@@ -134,7 +134,8 @@ plain JSON.
   `.attributes.contact_id` (top-level `.contact_id` when flattened), and is what
   the `{contact_id}` routes below require: hub-memberships add/set-role/ban/
   unban/warn, activity contact, community members ban/unban/warn/soft-ban, email
-  enrollments create. Piping `.id` into those 404s a live contact — the CLI
+  enrollments create, email enrollments list-by-contact, access-rules overrides
+  create. Piping `.id` into those 404s a live contact — the CLI
   appends an actionable hint on exit-4 (`hintGlobalContactID`).
 
 ## contact-attributes  (`cmd/contactattributes.go`)
