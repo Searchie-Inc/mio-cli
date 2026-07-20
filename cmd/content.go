@@ -302,23 +302,40 @@ var contentRestoreCmd = &cobra.Command{
 var contentReorderCmd = &cobra.Command{
 	Use:   "reorder",
 	Short: "Reorder content items in a hub.",
-	Long:  "Set the display order of content items. Pass --order as a comma-separated list of ids.",
-	Example: `  mio content reorder --hub hub_abc --order cnt_1,cnt_2,cnt_3
-  mio content reorder --hub hub_abc --parent-id cnt_folder --order cnt_a,cnt_b`,
-	Args: cobra.NoArgs,
+	Long: `Set the display order of content items. Pass --order as a comma-separated
+list of ids in the desired order; each id's position is its 0-based index in
+the list.`,
+	Example: `  mio content reorder --hub hub_abc --order cnt_1,cnt_2,cnt_3`,
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := contentContext(cmd)
 		if err != nil {
 			return err
 		}
 
-		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "order")
-		setStringFlag(cmd, attrs, "parent-id")
-
-		if len(attrs) == 0 {
+		if !cmd.Flags().Changed("order") {
 			return errs.New(errs.ExitUsage, "nothing to reorder: set --order with a comma-separated list of ids")
 		}
+		order, _ := cmd.Flags().GetString("order")
+
+		// The backend ReorderAttributes schema (extra="forbid") requires
+		// attributes.items — a LIST of {id, position} objects — and rejects any
+		// other field. Split --order into that ordered array, stamping each id
+		// with its 0-based position; the parent is determined by item context
+		// server-side, so nothing else is sent.
+		items := make([]map[string]any, 0)
+		for _, raw := range strings.Split(order, ",") {
+			id := strings.TrimSpace(raw)
+			if id == "" {
+				continue
+			}
+			items = append(items, map[string]any{"id": id, "position": len(items)})
+		}
+		if len(items) == 0 {
+			return errs.New(errs.ExitUsage, "nothing to reorder: --order must contain at least one content id")
+		}
+
+		attrs := map[string]any{"items": items}
 
 		path := contentBasePath(teamID, hubID, "") + "/reorder"
 		res, err := c.client.Action(c.ctx, http.MethodPost, path, attrs)
@@ -363,7 +380,9 @@ func init() {
 	addPaginationFlags(contentListCmd)
 	addPaginationFlags(contentChildrenCmd)
 
-	// Reorder flags.
-	contentReorderCmd.Flags().String("order", "", "Comma-separated list of content ids in the desired display order.")
-	contentReorderCmd.Flags().String("parent-id", "", "Id of the parent folder whose children are being reordered.")
+	// Reorder flags. There is no --parent-id: the backend reorder route
+	// (ReorderAttributes, extra="forbid") only accepts an items array and
+	// determines each node's parent from item context, so a parent flag would
+	// be a misleading no-op that the API rejects.
+	contentReorderCmd.Flags().String("order", "", "Comma-separated list of content ids in the desired display order (position = 0-based index).")
 }

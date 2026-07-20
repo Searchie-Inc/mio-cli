@@ -163,7 +163,7 @@ plain JSON.
 - `update`   PATCH `/api/teams/{team_id}/hubs/{hub_id}/content/{id}`
 - `delete`   DELETE `/api/teams/{team_id}/hubs/{hub_id}/content/{id}`
 - `restore`  POST `/api/teams/{team_id}/hubs/{hub_id}/content/{id}/restore`
-- `reorder`  POST `/api/teams/{team_id}/hubs/{hub_id}/content/reorder`
+- `reorder`  POST `/api/teams/{team_id}/hubs/{hub_id}/content/reorder` — envelope `content_nodes`; body `{data:{type:content_nodes,attributes:{items:[{id,position}, …]}}}`. `--order` (comma-separated ids) becomes the `items` array with `position` = 0-based index. No `--parent-id`: `ReorderAttributes` is `extra="forbid"` (only `items`) and the backend derives each node's parent from item context (MIO-2500).
 
 ## pages  (`cmd/pages.go`)
 - pages:    `create/list/retrieve/update/delete` `/api/teams/{team_id}/hubs/{hub_id}/pages[/{id}]`; `home` GET `…/pages/home`
