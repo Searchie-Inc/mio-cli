@@ -54,6 +54,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -69,6 +70,7 @@ func init() {
 	mediaFilesCmd.AddCommand(
 		mediaFilesListCmd,
 		mediaFilesRetrieveCmd,
+		mediaFilesDurableURLCmd,
 		mediaFilesUpdateCmd,
 		mediaFilesDeleteCmd,
 		mediaFilesCardsCmd,
@@ -78,6 +80,10 @@ func init() {
 
 	mediaFilesCardsSetCmd.Flags().String("cards", "", "JSON array of cards (or @file.json). Each: {label,start,url?,description?,id?}. Required.")
 	mediaFilesChaptersSetCmd.Flags().String("chapters", "", "JSON array of chapters (or @file.json). Each: {title,start,id?}. Required.")
+
+	mediaFilesDurableURLCmd.Flags().String("preset", "", "Image variant preset to emit (e.g. thumbnail-160, medium-720, large-1440, webp-medium). Omit to print every preset.")
+	mediaFilesDurableURLCmd.Flags().Bool("publish", false, "Also publish the file to the --hub (visibility public, published now) so the URL resolves for anonymous visitors.")
+	mediaFilesDurableURLCmd.Flags().String("visibility", "public", "Visibility used when --publish is set: members, private, or public (default public).")
 
 	// media folders <action>
 	mediaFoldersCmd.AddCommand(
@@ -410,6 +416,129 @@ var mediaFilesRetrieveCmd = &cobra.Command{
 		}
 		return c.render(cmd, res)
 	},
+}
+
+// ---- files durable-url ------------------------------------------------------
+
+// mediaFilesDurableURLCmd prints a file's durable (non-expiring) image URL(s),
+// each joined with the REQUIRED ?hub_id= param and ready to inline into a
+// page-tree image node. Unlike the imgproxy-signed `variants` (baked-in exp,
+// rot in ~24-48h), durable_variants are absolute + unsigned and safe to persist.
+// The URL only resolves once the file is PUBLISHED public to the hub (--publish).
+// Image-only: durable_variants is {} for non-image files.
+var mediaFilesDurableURLCmd = &cobra.Command{
+	Use:   "durable-url <file_id>",
+	Short: "Print a file's durable (non-expiring) hub-scoped image URL(s).",
+	Long: `Print a file's durable image URL(s) — safe to inline into a page-tree image
+node because they never expire (unlike the imgproxy-signed "variants", which rot
+in ~24-48h).
+
+Each URL is the file's durable_variants entry joined with the required
+"?hub_id=" param, so it resolves for the active --hub. The URL 404s until the
+file is PUBLISHED public to that hub: pass --publish to do it here (visibility
+public, published now), or run beforehand:
+  mio media hub-media publish --hub <hub> --file-id <file_id> --visibility public
+
+Durable URLs are image-only; a non-image file has no durable variants.`,
+	Example: `  mio media files durable-url file_abc --hub hub_123 --preset medium-720
+  mio media files durable-url file_abc --hub hub_123 --publish`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fileID := args[0]
+
+		// Validate --visibility before any request (mirrors applyHubMediaOptions).
+		visibility := "public"
+		if cmd.Flags().Changed("visibility") {
+			v, _ := cmd.Flags().GetString("visibility")
+			if !hubMediaVisibility[v] {
+				return errs.New(errs.ExitUsage, "invalid --visibility %q: must be members, private, or public", v)
+			}
+			visibility = v
+		}
+
+		c, teamID, hubID, err := mediaHubContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		// Read the file first so a non-image (no durable variants) fails BEFORE
+		// we publish anything.
+		res, err := c.client.Retrieve(c.ctx, filesPath(teamID, fileID))
+		if err != nil {
+			return err
+		}
+		variants, err := durableVariants(fileID, res.Attributes)
+		if err != nil {
+			return err
+		}
+		urls, err := buildDurableURLs(variants, hubID, flagValue(cmd, "preset"))
+		if err != nil {
+			return err
+		}
+
+		// Publish only after we know it's a real image with the requested preset,
+		// so the URL actually resolves for anonymous visitors.
+		if pub, _ := cmd.Flags().GetBool("publish"); pub {
+			pubAttrs := map[string]any{
+				"file_id":      fileID,
+				"visibility":   visibility,
+				"published_at": time.Now().UTC().Format(time.RFC3339),
+			}
+			if _, err := c.client.Create(c.ctx, hubMediaPath(teamID, hubID, ""), pubAttrs); err != nil {
+				return err
+			}
+		}
+
+		return c.render(cmd, urls)
+	},
+}
+
+// durableVariants extracts a file's durable_variants map (preset -> URL),
+// erroring clearly for non-image files (durable_variants is {} / absent there).
+func durableVariants(fileID string, attrs map[string]any) (map[string]string, error) {
+	raw, _ := attrs["durable_variants"].(map[string]any)
+	if len(raw) == 0 {
+		return nil, errs.New(errs.ExitUsage,
+			"file %q has no durable image variants — durable URLs are image-only", fileID)
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out, nil
+}
+
+// buildDurableURLs appends the REQUIRED ?hub_id= to each durable variant URL
+// (the bare durable_variants URL 404s for everyone). When preset is non-empty,
+// only that preset is returned; an unknown preset is a usage error.
+func buildDurableURLs(variants map[string]string, hubID, preset string) (map[string]any, error) {
+	withHub := func(u string) string {
+		sep := "?"
+		if strings.Contains(u, "?") {
+			sep = "&"
+		}
+		return u + sep + "hub_id=" + url.QueryEscape(hubID)
+	}
+	if preset != "" {
+		base, ok := variants[preset]
+		if !ok {
+			keys := make([]string, 0, len(variants))
+			for k := range variants {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			return nil, errs.New(errs.ExitUsage,
+				"unknown --preset %q; available presets: %s", preset, strings.Join(keys, ", "))
+		}
+		return map[string]any{preset: withHub(base)}, nil
+	}
+	out := make(map[string]any, len(variants))
+	for k, u := range variants {
+		out[k] = withHub(u)
+	}
+	return out, nil
 }
 
 // ---- files update -----------------------------------------------------------
