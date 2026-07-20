@@ -49,10 +49,10 @@ mio roles permissions list — list all available permissions
 mio roles permissions assign — assign a permission to a role by --slug (flat {slug} body; requires user-JWT auth, API keys are rejected 401)
 mio roles permissions remove — remove a permission from a role (positional role_id + permission_slug; destructive, needs --yes; user-JWT only)
 
-mio hubs create — create a new hub within the active team; author the presentation layer via --branding-json/--navigation-json/--settings-json/--meta-json (opaque JSONB objects; inline JSON or @file); --logo-url merges into branding rather than replacing it
+mio hubs create — create a new hub within the active team; author the presentation layer via --branding-json/--navigation-json/--settings-json/--meta-json (opaque JSONB objects; inline JSON or @file); --logo-url merges into branding rather than replacing it. Unknown keys in --branding-json/--settings-json/--meta-json WARN by default (stderr) and ERROR under --strict-keys (best-effort allowlist — the API stores these blobs verbatim with no schema, and the hub frontend is the authoritative render contract; accepted keys are in each flag's --help and docs/internal/api-surface.md) (MIO-2515)
 mio hubs list — list hubs in the active team
 mio hubs retrieve — retrieve a hub by id
-mio hubs update — update hub attributes; --navigation-json authors the header/footer menu (whole-blob replace, typed items validated); --branding-json/--settings-json/--meta-json deep-merge (read-modify-write, sibling keys preserved); --logo-url merges into branding (all inline JSON or @file)
+mio hubs update — update hub attributes; --navigation-json authors the header/footer menu (whole-blob replace, typed items validated); --branding-json/--settings-json/--meta-json deep-merge (read-modify-write, sibling keys preserved); --logo-url merges into branding (all inline JSON or @file). Unknown keys in the merged blobs WARN by default and ERROR under --strict-keys (only the keys you supply are checked, never the hub's existing stored blob; MIO-2515)
 mio hubs delete — delete a hub
 mio hubs policies update — create or replace a hub legal policy (tos or privacy_policy); hub id is a POSITIONAL arg; --content supports @file; --require-acceptance for tos only
 mio hubs policies gate — toggle hub policy enforcement (settings.policies.enabled); positional hub id; --enabled required and explicit (--enabled or --enabled=false). There is no admin policies READ (the only /policies GET is the member portal route, which rejects API keys), so no `policies get`

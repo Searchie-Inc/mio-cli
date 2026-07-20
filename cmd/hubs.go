@@ -173,6 +173,28 @@ var hubsCreateCmd = &cobra.Command{
 			attrs["branding"] = branding
 		}
 
+		// Best-effort key validation for the opaque JSONB blobs: an unknown key is
+		// stored verbatim by the API (no server-side schema), so a typo silently
+		// has no effect. Warn by default (stderr, so --output json/yaml is never
+		// corrupted); --strict-keys turns it into a usage error. Runs BEFORE
+		// hubsContext() so a strict rejection fires no HTTP request. (MIO-2515)
+		strictKeys, _ := cmd.Flags().GetBool("strict-keys")
+		if b, ok := attrs["branding"].(map[string]any); ok {
+			if err := validateBlobKeys(cmd, "branding", b, brandingKeys, nil, strictKeys); err != nil {
+				return err
+			}
+		}
+		if s, ok := attrs["settings"].(map[string]any); ok {
+			if err := validateBlobKeys(cmd, "settings", s, settingsKeys, settingsNestedKeys, strictKeys); err != nil {
+				return err
+			}
+		}
+		if m, ok := attrs["meta"].(map[string]any); ok {
+			if err := validateBlobKeys(cmd, "meta", m, metaKeys, nil, strictKeys); err != nil {
+				return err
+			}
+		}
+
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
 		}
@@ -308,6 +330,22 @@ var hubsUpdateCmd = &cobra.Command{
 		}
 		rmw := branding != nil || settings != nil || meta != nil || logoChanged
 
+		// Best-effort key validation on the INCOMING blob keys only (never the
+		// hub's retrieved/merged blob — older hubs legitimately carry unlisted
+		// keys the user did not touch). Warn by default (stderr); --strict-keys
+		// makes an unknown key a usage error. Runs BEFORE hubsContext()/retrieve
+		// so a strict rejection fires no HTTP request. (MIO-2515)
+		strictKeys, _ := cmd.Flags().GetBool("strict-keys")
+		if err := validateBlobKeys(cmd, "branding", branding, brandingKeys, nil, strictKeys); err != nil {
+			return err
+		}
+		if err := validateBlobKeys(cmd, "settings", settings, settingsKeys, settingsNestedKeys, strictKeys); err != nil {
+			return err
+		}
+		if err := validateBlobKeys(cmd, "meta", meta, metaKeys, nil, strictKeys); err != nil {
+			return err
+		}
+
 		if len(attrs) == 0 && !rmw {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
@@ -404,14 +442,23 @@ func init() {
 		cmd.Flags().Bool("published", false, "Whether the hub is publicly published.")
 		cmd.Flags().String("discussions-default-title", "", "Default title for the hub's discussions surface (MIO-2274). Pass \"\" to clear.")
 		cmd.Flags().String("discussions-default-description", "", "Default description for the hub's discussions surface. Pass \"\" to clear.")
+		// MIO-2515: an unknown key in --branding-json/--settings-json/--meta-json is
+		// stored verbatim (the API has no schema for these blobs), so a typo looks
+		// like success. By default the CLI WARNS naming the bad key + the accepted
+		// set; --strict-keys makes it a usage error. The allowlist is best-effort —
+		// the hub frontend is the authoritative render schema (see the flag help of
+		// each *-json flag and docs/internal/api-surface.md for the accepted keys).
+		cmd.Flags().Bool("strict-keys", false, "Reject unknown keys in --branding-json/--settings-json/--meta-json with an error instead of a warning (best-effort allowlist; accepted keys are listed in each *-json flag's help and docs/internal/api-surface.md).")
 	}
 
-	// Presentation-blob flags, all authorable on create.
+	// Presentation-blob flags, all authorable on create. The accepted keys are
+	// listed inline so `--help` surfaces the (best-effort) schema; an unknown key
+	// warns by default and errors under --strict-keys (MIO-2515).
 	for _, f := range []struct{ name, desc string }{
-		{"branding-json", "Hub branding as a JSON object — colors, fonts, logo. Inline JSON or @file."},
+		{"branding-json", "Hub branding as a JSON object — colors, fonts, logo. Inline JSON or @file. Accepted keys: " + brandingKeysHelp + ". Unknown keys warn (error with --strict-keys)."},
 		{"navigation-json", "Hub navigation as a JSON object — header/footer menu items. Inline JSON or @file."},
-		{"settings-json", "Hub settings as a JSON object — header/footer chrome, appearance, policies. Inline JSON or @file."},
-		{"meta-json", "Hub meta as a JSON object — feature guards. Inline JSON or @file."},
+		{"settings-json", "Hub settings as a JSON object — header/footer chrome, appearance, policies. Inline JSON or @file. Accepted top-level keys: " + settingsKeysHelp + ". Unknown keys warn (error with --strict-keys)."},
+		{"meta-json", "Hub meta as a JSON object — feature guards. Inline JSON or @file. Accepted keys: " + metaKeysHelp + ". Unknown keys warn (error with --strict-keys)."},
 	} {
 		hubsCreateCmd.Flags().String(f.name, "", f.desc)
 	}
@@ -422,11 +469,11 @@ func init() {
 	hubsUpdateCmd.Flags().String("navigation-json",
 		"", "Hub navigation as a JSON object — header/footer menu items (each needs a \"type\"). Inline JSON or @file. Replaces the hub's navigation.")
 	hubsUpdateCmd.Flags().String("branding-json",
-		"", "Hub branding keys to merge (read-modify-write) as a JSON object. Inline JSON or @file.")
+		"", "Hub branding keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted keys: "+brandingKeysHelp+". Unknown keys warn (error with --strict-keys).")
 	hubsUpdateCmd.Flags().String("settings-json",
-		"", "Hub settings keys to merge (read-modify-write) as a JSON object. Inline JSON or @file.")
+		"", "Hub settings keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted top-level keys: "+settingsKeysHelp+". Unknown keys warn (error with --strict-keys).")
 	hubsUpdateCmd.Flags().String("meta-json",
-		"", "Hub meta keys to merge (read-modify-write) as a JSON object. Inline JSON or @file.")
+		"", "Hub meta keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted keys: "+metaKeysHelp+". Unknown keys warn (error with --strict-keys).")
 
 	addPaginationFlags(hubsListCmd)
 }
