@@ -513,7 +513,7 @@ func durableVariants(fileID string, attrs map[string]any) (map[string]string, er
 // buildDurableURLs appends the REQUIRED ?hub_id= to each durable variant URL
 // (the bare durable_variants URL 404s for everyone). When preset is non-empty,
 // only that preset is returned; an unknown preset is a usage error.
-func buildDurableURLs(variants map[string]string, hubID, preset string) (map[string]string, error) {
+func buildDurableURLs(variants map[string]string, hubID, preset string) (map[string]any, error) {
 	withHub := func(u string) string {
 		sep := "?"
 		if strings.Contains(u, "?") {
@@ -532,9 +532,9 @@ func buildDurableURLs(variants map[string]string, hubID, preset string) (map[str
 			return nil, errs.New(errs.ExitUsage,
 				"unknown --preset %q; available presets: %s", preset, strings.Join(keys, ", "))
 		}
-		return map[string]string{preset: withHub(base)}, nil
+		return map[string]any{preset: withHub(base)}, nil
 	}
-	out := make(map[string]string, len(variants))
+	out := make(map[string]any, len(variants))
 	for k, u := range variants {
 		out[k] = withHub(u)
 	}
