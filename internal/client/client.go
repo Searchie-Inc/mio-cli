@@ -148,6 +148,11 @@ var typeOverrides = []struct {
 	// Publishing a playlist to a hub writes a hub_media row (MIO-2259); the
 	// bare "playlists" segment would derive the team-scoped "playlists" type.
 	{"hubs/playlists", "hub_media"},
+	// Playlist item verbs (MIO-2513): add (POST) and reorder (PATCH) on
+	// .../playlists/{id}/items[/{item_id}] bind PlaylistItemAttachData /
+	// PlaylistItemUpdateData whose type Literal is "playlist_items"; the bare
+	// "items" segment would otherwise resolve to the "playlists" parent type.
+	{"playlists/items", "playlist_items"},
 	// Publishing a standalone file to a hub also writes a hub_media row
 	// (MIO-2266); the bare "media" segment would derive "media".
 	{"hubs/media", "hub_media"},
@@ -329,6 +334,12 @@ var knownCollections = map[string]bool{
 	"role": true,
 	// Media (2026-06-09): files, folders, playlists wired in media.go.
 	"files": true, "folders": true, "playlists": true,
+	// Playlist item verbs (MIO-2513): add/list/remove/reorder items on a
+	// playlist (.../playlists/{id}/items[/{item_id}]). Without "items" as a known
+	// token the write path's last collection resolves to "playlists" and the
+	// backend 422s on the wrong type; the playlists/items typeOverride below maps
+	// the two-segment tail to "playlist_items".
+	"items": true,
 	// Media enrichment (MIO-2266): in-video cards, authorable chapters, folder
 	// subtree move, and standalone-file hub publishing (hubs/{hub}/media).
 	"cards": true, "chapters": true, "move": true, "media": true,

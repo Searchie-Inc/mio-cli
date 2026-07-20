@@ -326,6 +326,11 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/folders/fo1", "folders"},
 		{"/api/teams/t1/playlists", "playlists"},
 		{"/api/teams/t1/playlists/pl1", "playlists"},
+		// Playlist item verbs (MIO-2513): add (POST .../items) and reorder
+		// (PATCH .../items/{item_id}) derive "playlist_items" via the
+		// playlists/items typeOverride, not the "playlists" parent type.
+		{"/api/teams/t1/playlists/pl1/items", "playlist_items"},
+		{"/api/teams/t1/playlists/pl1/items/it1", "playlist_items"},
 		// Long-tail admin bundle (MIO-2269): hub policy gate, redirect-origin
 		// allowlist, and hub-scoped email suppressions. Each URL segment differs
 		// from its backend JSON:API type Literal.
