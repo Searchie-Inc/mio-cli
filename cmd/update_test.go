@@ -11,6 +11,11 @@ import (
 
 func TestUpdateCommandInvokesInstallerWithPrefixAndVersion(t *testing.T) {
 	resetGlobalFlags()
+	// update now runs refreshManagedSkills after a (mocked) successful update.
+	// Isolate HOME and CODEX_HOME to temp dirs so the test can never touch — let
+	// alone refresh — a real managed skill install in the developer's or CI home.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", t.TempDir())
 	oldRunner := selfUpdateRunner
 	t.Cleanup(func() { selfUpdateRunner = oldRunner })
 
