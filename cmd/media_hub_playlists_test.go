@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
@@ -190,6 +191,109 @@ func TestMediaHubPublish_RejectsExplicitEmptyVisibility(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMediaHubPublish_DefaultsPublishedAtToNow (MIO-2536) pins the fix: omitting
+// --published-at defaults published_at to now (RFC3339) on the COMMAND path, so a
+// plain `publish` writes a hub_media row with a NON-NULL published_at and surfaces
+// a VISIBLE card. (A null published_at is treated as "draft" by the card-disclosure
+// policy, so the published playlist/file is silently invisible on /content — the
+// bug.) When --published-at IS given, the exact value is used unchanged. Covers
+// BOTH publish commands (hub-media + hub-playlists) since both route through
+// applyHubMediaOptions.
+func TestMediaHubPublish_DefaultsPublishedAtToNow(t *testing.T) {
+	subs := []struct {
+		name    string
+		sub     string
+		idFlag  string
+		idValue string
+	}{
+		{"hub-media", "hub-media", "--file-id", "file_abc"},
+		{"hub-playlists", "hub-playlists", "--playlist-id", "pl_abc"},
+	}
+
+	t.Run("defaults_to_now_when_omitted", func(t *testing.T) {
+		for _, tc := range subs {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
+				before := time.Now().UTC().Add(-2 * time.Second)
+
+				res := runContract(t, baseEnv(srv.URL),
+					withTeam("t_team1", "--hub", "hub_123",
+						"media", tc.sub, "publish", tc.idFlag, tc.idValue,
+					)...)
+
+				if res.Code != errs.ExitOK {
+					t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+				}
+				_, attrs := decodeDataTypeAttrs(t, *gotBody)
+				at, ok := attrs["published_at"].(string)
+				if !ok || at == "" {
+					t.Fatalf("published_at must default to now (non-null RFC3339); attrs=%v", attrs)
+				}
+				got, perr := time.Parse(time.RFC3339, at)
+				if perr != nil {
+					t.Fatalf("published_at %q must be RFC3339: %v", at, perr)
+				}
+				after := time.Now().UTC().Add(2 * time.Second)
+				if got.Before(before) || got.After(after) {
+					t.Errorf("published_at %v not within [%v, %v] — want ~now", got, before, after)
+				}
+			})
+		}
+	})
+
+	t.Run("uses_given_value_when_set", func(t *testing.T) {
+		for _, tc := range subs {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
+
+				res := runContract(t, baseEnv(srv.URL),
+					withTeam("t_team1", "--hub", "hub_123",
+						"media", tc.sub, "publish", tc.idFlag, tc.idValue,
+						"--published-at", "2026-06-11T00:00:00Z",
+					)...)
+
+				if res.Code != errs.ExitOK {
+					t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+				}
+				_, attrs := decodeDataTypeAttrs(t, *gotBody)
+				if attrs["published_at"] != "2026-06-11T00:00:00Z" {
+					t.Errorf("published_at = %v, want the given 2026-06-11T00:00:00Z", attrs["published_at"])
+				}
+			})
+		}
+	})
+
+	t.Run("rejects_invalid_value_no_request", func(t *testing.T) {
+		for _, tc := range subs {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				fired := false
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					fired = true
+					w.WriteHeader(http.StatusCreated)
+					_, _ = w.Write([]byte(minimalHubBody))
+				}))
+				t.Cleanup(srv.Close)
+
+				res := runContract(t, baseEnv(srv.URL),
+					withTeam("t_team1", "--hub", "hub_123",
+						"media", tc.sub, "publish", tc.idFlag, tc.idValue,
+						"--published-at", "not-a-timestamp",
+					)...)
+
+				if res.Code != errs.ExitUsage {
+					t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+				}
+				if fired {
+					t.Error("an invalid --published-at must exit before any HTTP request")
+				}
+			})
+		}
+	})
 }
 
 // TestMediaHubPlaylistsUnpublish_DeletesPath verifies unpublish sends a DELETE
