@@ -305,6 +305,69 @@ func TestAutomationsFireEvent_FlatBody(t *testing.T) {
 	}
 }
 
+// TestAutomationsFireEvent_MetaOnly202 is the regression guard for MIO-2554.
+// POST .../automations/events returns a META-ONLY JSON:API response
+// (CustomEventAcceptedResponse — 202 for a newly-accepted event, 200 for a
+// duplicate) carrying a top-level `meta` object and NO `data` member — valid
+// per JSON:API §7.1. The command must decode that flat document via ActionRaw
+// and render the meta, exiting 0 — NOT run it through the resource decoder,
+// which errors "response had no `data` member" on every SUCCESSFUL fire. This
+// mirrors the MIO-2503 fix for `automations test`.
+func TestAutomationsFireEvent_MetaOnly202(t *testing.T) {
+	var gotBody []byte
+	var gotMethod string
+	var gotPath string
+
+	// Real backend contract: CustomEventAcceptedResponse — meta-only, no `data`.
+	const acceptedBody = `{
+		"meta": {"status": "accepted", "event_id": "evt_abc123", "enrollments_triggered": 2}
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(acceptedBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"automations", "fire-event",
+			"--event-type", "purchase_completed",
+			"--team-contact-id", "tcid_xyz",
+			"--idempotency-key", "idem_abc",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Errorf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("HTTP method = %q, want POST", gotMethod)
+	}
+	if !strings.HasSuffix(gotPath, "/automations/events") {
+		t.Errorf("path %q does not end with /automations/events", gotPath)
+	}
+
+	// The meta-only ack must be rendered to stdout (default JSON off a non-TTY),
+	// not swallowed by a resource-decode failure.
+	if !strings.Contains(res.Stdout, "event_id") || !strings.Contains(res.Stdout, "evt_abc123") {
+		t.Errorf("stdout does not contain rendered meta (event_id); stdout=%q", res.Stdout)
+	}
+
+	var flat map[string]any
+	if err := json.Unmarshal(gotBody, &flat); err != nil {
+		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
+	}
+	// Regression guard: request must stay flat — no "data" wrapper (no envelope).
+	if _, hasData := flat["data"]; hasData {
+		t.Error("fire-event body must NOT have a top-level \"data\" key (must be flat)")
+	}
+}
+
 // TestAutomationsFireEvent_MissingEventType verifies that omitting --event-type exits 2.
 func TestAutomationsFireEvent_MissingEventType(t *testing.T) {
 	srv := newMockServer(t, nil)
