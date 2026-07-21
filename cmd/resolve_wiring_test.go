@@ -5,8 +5,11 @@ package cmd
 // (runContract / newMockServer / baseEnv / withTeam) defined in contract_test.go.
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -287,6 +290,113 @@ func TestWiring_TagsAssignRawIDsStillWork(t *testing.T) {
 	}
 	if !strings.Contains(assignBody, "tag_abc") {
 		t.Errorf("assign body = %q, want tag_abc", assignBody)
+	}
+}
+
+// TestWiring_TagsAssignBulkSendsArrayAndDecodesCollection: assign-bulk must
+// (1) send tag_ids as a JSON ARRAY (not a comma-joined string) — the backend
+// BulkAssign schema is tag_ids: list[str] — and (2) decode the refreshed tag
+// list, which comes back as a JSON:API COLLECTION (`data: [...]`), with the
+// collection decoder rather than the single-resource decoder (MIO-2552, same
+// array-into-singleDoc class as MIO-2495).
+func TestWiring_TagsAssignBulkSendsArrayAndDecodesCollection(t *testing.T) {
+	var bulkPath, bulkBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/tags/bulk") {
+			bulkPath = r.URL.Path
+			b, _ := io.ReadAll(r.Body)
+			bulkBody = string(b)
+			// Bulk-assign returns the refreshed contact tag list as a JSON:API
+			// COLLECTION (`data: [...]`), HTTP 201 — decoding it as a single
+			// resource fails with "cannot unmarshal array into Go struct field
+			// singleDoc.data".
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":[` +
+				`{"id":"tag_abc","type":"tags","attributes":{"name":"VIP","slug":"vip"}},` +
+				`{"id":"tag_def","type":"tags","attributes":{"name":"Lead","slug":"lead"}}` +
+				`],"meta":{"count":2}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"unexpected ` + r.Method + " " + r.URL.Path + `"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "tags", "assign-bulk", "ctt_xyz", "--tag-ids", "tag_abc,tag_def")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("command failed (code %d): %s", res.Code, res.Stderr)
+	}
+	if !strings.HasSuffix(bulkPath, "/contacts/ctt_xyz/tags/bulk") {
+		t.Errorf("bulk path = %q, want .../contacts/ctt_xyz/tags/bulk", bulkPath)
+	}
+	// Pin the exact JSON:API envelope: data.type derived from the path
+	// (contacts/tags/bulk -> tag_assignments) and attributes.tag_ids an ARRAY,
+	// not the broken comma-joined string.
+	var env struct {
+		Data struct {
+			Type       string `json:"type"`
+			Attributes struct {
+				TagIDs any `json:"tag_ids"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(bulkBody), &env); err != nil {
+		t.Fatalf("bulk body is not a valid JSON:API document: %v; body=%q", err, bulkBody)
+	}
+	if env.Data.Type != "tag_assignments" {
+		t.Errorf("data.type = %q, want \"tag_assignments\"; body=%q", env.Data.Type, bulkBody)
+	}
+	wantIDs := []any{"tag_abc", "tag_def"}
+	if !reflect.DeepEqual(env.Data.Attributes.TagIDs, wantIDs) {
+		t.Errorf("attributes.tag_ids = %#v, want %#v (an array, not a comma-joined string); body=%q",
+			env.Data.Attributes.TagIDs, wantIDs, bulkBody)
+	}
+}
+
+// TestWiring_TagsAssignBulkWhitespaceTagIDsIsUsageError: a --tag-ids value that is
+// present but resolves to zero ids after trimming (e.g. "  ,  ") is a usage error
+// and makes NO request — the split must not send an empty tag_ids array.
+func TestWiring_TagsAssignBulkWhitespaceTagIDsIsUsageError(t *testing.T) {
+	var called atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called.Store(true)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errors":[{"status":"404"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "tags", "assign-bulk", "ctt_xyz", "--tag-ids", "  ,  ")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("whitespace-only --tag-ids exit code = %d, want %d (ExitUsage)", res.Code, errs.ExitUsage)
+	}
+	if called.Load() {
+		t.Error("usage error should make NO HTTP request")
+	}
+}
+
+// TestWiring_TagsAssignBulkNoTagIDsIsUsageError: assign-bulk without --tag-ids
+// is a usage error and makes NO request (no-request-on-usage-error contract).
+func TestWiring_TagsAssignBulkNoTagIDsIsUsageError(t *testing.T) {
+	var called atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called.Store(true)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errors":[{"status":"404"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "tags", "assign-bulk", "ctt_xyz")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("missing --tag-ids exit code = %d, want %d (ExitUsage)", res.Code, errs.ExitUsage)
+	}
+	if called.Load() {
+		t.Error("usage error should make NO HTTP request")
 	}
 }
 
