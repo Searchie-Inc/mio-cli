@@ -98,15 +98,14 @@ mio media playlists items add --playlist-id pl_abc --file-id file_intro
 mio media playlists items add --playlist-id pl_abc --file-id file_lesson2 --position 1
 mio media playlists set-cover pl_abc --file-id file_cover        # pass the FILE id; media id is resolved
 mio media hub-playlists publish --hub hub_abc123 --playlist-id pl_abc \
-  --visibility public \
-  --published-at 2026-07-21T00:00:00Z
+  --visibility public
 ```
 
-> **The card is invisible without an explicit `--published-at`.** Despite the help
-> saying "now", the CLI omits the field when unset and the backend stores `null` —
-> a null `published_at` is treated as a **draft** and never appears on `/content`,
-> with **no error** (known bug). Always pass a past/now RFC3339 timestamp AND
-> `--visibility public` so anonymous visitors can see it.
+> **Pass `--visibility public` so anonymous visitors can see the card.**
+> `--published-at` is optional: when omitted the CLI now defaults it to *now*, so
+> the card publishes immediately. Pass an explicit past/future RFC3339 timestamp
+> only to backdate or schedule. (A `null` `published_at` would be treated as a
+> silent draft — the CLI no longer sends null, so an unset flag can't hide the card.)
 
 `playlists items` also has `list`, `remove <item_id>`, `reorder <item_id> --position N`.
 `set-cover` and `items add` take the **file id**; `items remove`/`reorder` take the
