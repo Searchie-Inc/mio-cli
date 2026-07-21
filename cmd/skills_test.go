@@ -67,6 +67,9 @@ func TestSkillsInstall_WritesClaudeUserTarget(t *testing.T) {
 }
 
 func TestSkillsInstall_ProjectScopeWritesDotClaude(t *testing.T) {
+	// --project writes a relative ./.claude path, but isolate HOME too so target
+	// detection can never so much as stat a real home.
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	t.Chdir(dir)
 

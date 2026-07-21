@@ -152,7 +152,9 @@ func runSkillsInstall(cmd *cobra.Command, _ []string) error {
 		// Safe to write: absent, or a managed install the user has not edited.
 	case skillManagedModified, skillUnmanaged:
 		if !skillsInstallForce {
-			return errs.New(errs.ExitGeneric,
+			// A rejected-but-correctable op ("pass --force"), not an unexpected
+			// failure — use the usage exit code (2) so agents branch on it.
+			return errs.New(errs.ExitUsage,
 				"%s already exists and looks hand-edited or unmanaged; pass --force to overwrite", path)
 		}
 	}
@@ -345,12 +347,37 @@ func classifySkillFile(path string) (skillFileState, error) {
 	return skillManagedModified, nil
 }
 
-// writeSkillFile writes content to path, creating parent directories.
+// writeSkillFile atomically writes content to path, creating parent directories.
+// It writes to a temp file in the SAME directory and renames on success, so a
+// failure mid-write can never leave a truncated/corrupted skill in place (rename
+// is atomic on the same filesystem). This matters most for the best-effort
+// `mio update` refresh, which must never damage an existing install.
 func writeSkillFile(path, content string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(content), 0o644)
+	tmp, err := os.CreateTemp(dir, ".mio-skill-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	// Best-effort cleanup of the temp file if we bail before a successful rename.
+	// After a successful rename tmpName no longer exists and Remove is a no-op.
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // splitFrontmatter separates a leading `---`-delimited YAML frontmatter block
