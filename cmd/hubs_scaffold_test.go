@@ -946,8 +946,8 @@ func TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0(t *testing.T) {
 	}
 	// Create body carries the homepage identity — title/slug/is_homepage + privacy.
 	ca := decodeHubAttrs(t, createBody)
-	if ca["title"] != "Home" || ca["slug"] != "home" || ca["is_homepage"] != true || ca["privacy"] != "public" {
-		t.Errorf("create attrs = %v, want title=Home slug=home is_homepage=true privacy=public", ca)
+	if ca["title"] != "Home" || ca["slug"] != "homepage" || ca["is_homepage"] != true || ca["privacy"] != "public" {
+		t.Errorf("create attrs = %v, want title=Home slug=homepage is_homepage=true privacy=public", ca)
 	}
 	// The tree PUT uses the first-set OCC sentinel (If-Match 0) and the settable
 	// {"root":…} envelope with instantiated nodes (fresh ids + the page children).
@@ -1479,5 +1479,44 @@ func TestScaffold_DryRunPrintsPlanNotSummary(t *testing.T) {
 	}
 	if strings.Contains(res.Stdout, "Scaffolded hub") {
 		t.Errorf("dry-run must NOT print the real-run summary; stdout=%q", res.Stdout)
+	}
+}
+
+// TestScopeNavHrefs verifies hub-relative menu hrefs are rewritten to stay
+// within the hub ("/{slug}/…"), while absolute/typed/already-scoped items pass
+// through unchanged (MIO-2543 — templates are authored slug-agnostically).
+func TestScopeNavHrefs(t *testing.T) {
+	nav := map[string]any{
+		"header": []any{
+			map[string]any{"type": "url", "label": "Home", "href": "/"},
+			map[string]any{"type": "url", "label": "Content", "href": "/content"},
+			map[string]any{"type": "discussions", "label": "Discussions"},
+			map[string]any{"type": "url", "label": "Ext", "href": "https://example.com/x"},
+			map[string]any{"type": "url", "label": "Already", "href": "/demo/members"},
+		},
+	}
+	scopeNavHrefs(nav, "demo")
+	items := nav["header"].([]any)
+	got := func(i int) string { h, _ := items[i].(map[string]any)["href"].(string); return h }
+	if got(0) != "/demo" {
+		t.Errorf("Home href = %q, want /demo", got(0))
+	}
+	if got(1) != "/demo/content" {
+		t.Errorf("Content href = %q, want /demo/content", got(1))
+	}
+	if _, has := items[2].(map[string]any)["href"]; has {
+		t.Errorf("discussions item must not gain an href")
+	}
+	if got(3) != "https://example.com/x" {
+		t.Errorf("absolute href must pass through, got %q", got(3))
+	}
+	if got(4) != "/demo/members" {
+		t.Errorf("already-scoped href must be unchanged, got %q", got(4))
+	}
+	// Empty slug must be a no-op (leave everything as-is).
+	nav2 := map[string]any{"header": []any{map[string]any{"type": "url", "href": "/content"}}}
+	scopeNavHrefs(nav2, "")
+	if h, _ := nav2["header"].([]any)[0].(map[string]any)["href"].(string); h != "/content" {
+		t.Errorf("empty slug must be a no-op, got %q", h)
 	}
 }

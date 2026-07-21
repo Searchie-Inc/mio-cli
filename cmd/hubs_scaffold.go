@@ -209,6 +209,50 @@ func stepHub(sc *scaffoldContext, _ *hubtemplate.Template) error {
 // navigation href validator scopes links to THIS hub. Navigation is carried ONLY
 // via blobPatches.Navigation (the seam's single nav source); applyHubBlobs
 // validates its hub-scoped hrefs and injects it into the PATCH itself.
+// scopeNavHrefs rewrites the template's hub-relative navigation hrefs to be
+// scoped under the hub's own slug, so a slug-agnostic template href ("/content")
+// becomes a within-hub link ("/{slug}/content") that passes the CLI's MIO-2270
+// hub-scoping validation. Only header/footer type=="url" items with a leading
+// "/" same-origin path that is NOT already scoped are rewritten; absolute
+// http(s):// hrefs, protocol-relative "//" hrefs, non-url items, and
+// already-scoped hrefs pass through unchanged. Mutates nav in place — the
+// template is loaded fresh per invocation, so there is no shared state.
+func scopeNavHrefs(nav map[string]any, slug string) {
+	if slug == "" || nav == nil {
+		return
+	}
+	prefix := "/" + slug
+	for _, bucket := range []string{"header", "footer"} {
+		items, ok := nav[bucket].([]any)
+		if !ok {
+			continue
+		}
+		for _, it := range items {
+			obj, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, _ := obj["type"].(string); t != "url" {
+				continue
+			}
+			href, _ := obj["href"].(string)
+			href = strings.TrimSpace(href)
+			norm := strings.ReplaceAll(href, `\`, "/")
+			if !strings.HasPrefix(norm, "/") || strings.HasPrefix(norm, "//") {
+				continue // absolute / protocol-relative / non-path — leave as-is
+			}
+			if hrefScopedToHub(href, slug) {
+				continue // already "/{slug}…"
+			}
+			if href == "/" {
+				obj["href"] = prefix
+			} else {
+				obj["href"] = prefix + href
+			}
+		}
+	}
+}
+
 func stepBlobs(sc *scaffoldContext, t *hubtemplate.Template) error {
 	detail := fmt.Sprintf("PATCH %s — branding+settings+navigation (strict keys)",
 		hubsPath(sc.teamID, sc.hubIDOrPlaceholder()))
@@ -225,6 +269,12 @@ func stepBlobs(sc *scaffoldContext, t *hubtemplate.Template) error {
 			if err := validateNavigationBlob(t.Navigation); err != nil {
 				return err
 			}
+			// A template is authored slug-agnostically (e.g. href "/content"), but
+			// mio-hub mounts each hub under "/{slug}" and the CLI's MIO-2270 check
+			// requires a hub-relative menu href to stay within this hub. The
+			// scaffold knows the slug (from create or the resume GET), so rewrite
+			// the template's hub-relative hrefs to "/{slug}/…" before applying.
+			scopeNavHrefs(t.Navigation, sc.hubSlug)
 		}
 		_, err := applyHubBlobs(sc.ctx, sc.cl, sc.teamID, sc.hubID, sc.hubSlug, blobPatches{
 			Branding:     t.Branding,
@@ -635,7 +685,10 @@ func stepPlaylists(sc *scaffoldContext, t *hubtemplate.Template) error {
 // its own identity — so the page itself gets a stable, conventional title+slug.
 const (
 	homepageTitle = "Home"
-	homepageSlug  = "home"
+	// The homepage is marked by is_homepage:true, not by its slug — and the
+	// backend RESERVES the slug "home" (rejects it, telling you to use the
+	// is_homepage flag). So the page carries a non-reserved slug.
+	homepageSlug  = "homepage"
 )
 
 // stepHomepage builds the hub's homepage: it creates a "home" page (reusing an
