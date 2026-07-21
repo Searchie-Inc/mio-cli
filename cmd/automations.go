@@ -481,16 +481,23 @@ var automationsFireEventCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "--idempotency-key is required")
 		}
 
+		// POST .../automations/events returns a META-ONLY JSON:API ack
+		// (CustomEventAcceptedResponse — 202 for a newly-accepted event, 200 for
+		// a duplicate) with a top-level `meta` object and NO `data` member —
+		// valid per JSON:API §7.1. It must be decoded as a raw document
+		// (ActionRaw), not a resource: the resource decoder used by ActionWith
+		// errors "response had no `data` member" on every SUCCESSFUL fire
+		// (MIO-2554, same class as MIO-2503). Render the meta directly.
 		path := automationsBase(teamID, hubID) + "/events"
-		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, body)
+		ack, err := c.client.ActionRaw(c.ctx, client.StyleFlat, "POST", path, body)
 		if err != nil {
 			return err
 		}
-		if res == nil {
+		if ack == nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Event fired.\n")
 			return nil
 		}
-		return c.render(cmd, res)
+		return c.render(cmd, ack)
 	},
 }
 
