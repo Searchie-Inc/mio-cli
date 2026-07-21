@@ -132,7 +132,7 @@ func (t *Template) Validate() error {
 }
 ```
 
-- [ ] **Step 4: Add a minimal `hubtemplates/community.json`** (id + one space + a homepage ref) so the tests load. Real content lands in Task 12.
+- [ ] **Step 4: Add a minimal-but-COMPLETE `hubtemplates/community.json`** — one instance of *every* section (id, branding w/ favicon, a typed navigation menu, `settings.registration.enabled`, one space, one onboarding def, one policy, one playlist, a homepage ref using **static cards**). This lets the Task-11 dry-run CLI test exercise all pipeline steps. Task 22 enriches it to real content; it must stay schema-valid throughout.
 - [ ] **Step 5: Run → verify PASS**; gofmt/vet/lint clean.
 - [ ] **Step 6: Commit** (`feat(hubtemplate): template struct + embedded loader + schema validation (MIO-2543)`).
 
@@ -175,7 +175,7 @@ type blobPatches struct {
 func applyHubBlobs(ctx context.Context, cl *client.Client, teamID, hubID, hubSlug string, p blobPatches) (*client.Resource, error) { … }
 ```
 
-  Then rewire `hubsUpdateCmd.RunE` to build a `blobPatches` from its `Changed()` flags and call `applyHubBlobs`. The nav validation (`validateNavigationBlob`/`validateNavigationHrefs`) moves inside `applyHubBlobs`. `validateBlobKeys` is called with `strict` from `p.Strict` (the update command passes `--strict-keys`; scaffold passes `true`).
+  Then rewire `hubsUpdateCmd.RunE` to build a `blobPatches` from its `Changed()` flags and call `applyHubBlobs`. The nav validation (`validateNavigationBlob`/`validateNavigationHrefs`) moves inside `applyHubBlobs`. `validateBlobKeys` is called with `strict` from `p.Strict` (the update command passes `--strict-keys`; scaffold passes `true`). **Note (resolves review #3):** `validateBlobKeys(cmd, …)` takes a `*cobra.Command` only for the warn-to-stderr path; on the strict path (scaffold's) it errors before touching `cmd`, so passing `nil` is safe — but to avoid a surprising nil, give `applyHubBlobs` an `io.Writer warnW` (default `os.Stderr`) and pass a small shim, OR change `validateBlobKeys` to take an `io.Writer` instead of `cmd`. Pick one during extraction; the `io.Writer` refactor is cleaner and touches only the warn call.
 - [ ] **Step 4: Run → verify GREEN** — the new unit test passes AND every existing `hubs update`/blob/authoring contract test still passes (identical emitted attrs = behavior preserved). gofmt/vet/lint clean.
 - [ ] **Step 5: Commit** (`refactor(hubs): extract applyHubBlobs from hubsUpdateCmd for reuse (MIO-2543)`).
 
@@ -185,14 +185,16 @@ For each row: regression-guard via the original command's existing contract test
 
 | Task | New builder | Extract from | File:line | Notes |
 |---|---|---|---|---|
-| 3 | `buildHubCreateAttrs(t *Template, ov overrides) map[string]any` | `hubsCreateCmd.RunE` | `cmd/hubs.go:184` | includes `--published`→`is_private` via `setMappedBoolInverted` logic (make it data-driven) |
-| 4 | `buildHubUpdateAttrs(...)` incl. published→is_private | `hubsUpdateCmd.RunE` | `cmd/hubs.go:370,384` | used by step 8 publish (`is_private:false`); `published` is NOT a writable attr |
-| 5 | `applyHubPolicies(ctx, cl, teamID, hubID, pol map[string]any)` | `hubsPoliciesUpdateCmd.RunE` | `cmd/hubs.go:680` | RunE-welded (no helper today) |
-| 6 | `buildSpaceAttrs(s Space) map[string]any` | `setSpaceWriteAttrs` | `cmd/community_spaces.go:22` | already helper-shaped; just data-drive it |
-| 7 | `buildPageAttrs(...) map[string]any` | `setPageWriteAttrs` | `cmd/pages_write.go:26` | `--is-home`→`is_homepage`; used by homepage step |
-| 8 | `buildHubMediaPublishAttrs(fileID, visibility string, publishedAt time.Time) map[string]any` | `applyHubMediaOptions` | `cmd/media.go:213` | scaffold sets `published_at` UNCONDITIONALLY (sidesteps MIO-2536) |
-| 9 | `buildHubConfigAttrs(defID string, flags AttrDef) map[string]any` + `buildAttrDefCreateAttrs(d AttrDef)` | `setHubConfigBoolFlags` + `contactAttributesCreateCmd.RunE` | `cmd/contactattributes.go:575,156` | hub-config puts `definition_id` in the body (MIO-2502); onboarding sets `is_in_onboarding` |
-| 10 | `buildPlaylistCreateAttrs(p Playlist) map[string]any` | `mediaPlaylistsCreateCmd.RunE` | `cmd/media.go:827` | include the O1 marker field if Task 0a chose option (b) |
+| 3 | `buildHubCreateAttrs(t *Template, ov overrides) (map[string]any, error)` | `hubsCreateCmd.RunE` | `cmd/hubs.go:184` | includes `--published`→`is_private` via `setMappedBoolInverted` logic (data-driven) |
+| 4 | `buildHubUpdateAttrs(...) (map[string]any, error)` incl. published→is_private | `hubsUpdateCmd.RunE` | `cmd/hubs.go:370,384` | used by step 8 publish (`is_private:false`); `published` is NOT a writable attr |
+| 5 | `applyHubPolicies(ctx, cl, teamID, hubID, pol map[string]any) error` | `hubsPoliciesUpdateCmd.RunE` | `cmd/hubs.go:680` | RunE-welded (no helper today) |
+| 6 | `buildSpaceAttrs(s Space) (map[string]any, error)` | `setSpaceWriteAttrs` | `cmd/community_spaces.go:22` | **keep the enum validation** (`access_level`/`posting_permission`) — return error (resolves review #2) |
+| 7 | `buildPageAttrs(...) (map[string]any, error)` | `setPageWriteAttrs` | `cmd/pages_write.go:26` | `--is-home`→`is_homepage`; **keep `privacy` enum validation** → return error |
+| 8 | `buildHubMediaPublishAttrs(visibility string, publishedAt time.Time, position *int) (map[string]any, error)` | `applyHubMediaOptions` | `cmd/media.go:213` | body is `{visibility,published_at,position}` — the id is in the PATH (playlist id), NO fileID arg (resolves review #4); **keep `visibility` enum validation**; scaffold sets `published_at` UNCONDITIONALLY (sidesteps MIO-2536) |
+| 9 | `buildHubConfigAttrs(defID string, d AttrDef) map[string]any` + `buildAttrDefCreateAttrs(d AttrDef) (map[string]any, error)` | `setHubConfigBoolFlags` + `contactAttributesCreateCmd.RunE` | `cmd/contactattributes.go:575,156` | hub-config puts `definition_id` in the body (MIO-2502); onboarding sets `is_in_onboarding`; def create **validates `field_type` enum** → error |
+| 10 | `buildPlaylistCreateAttrs(p Playlist) map[string]any` | `mediaPlaylistsCreateCmd.RunE` | `cmd/media.go:827` | include the O1 marker field per Task 0a (playlist create currently writes only `title/description/visibility/hub_id` — no `meta` — so option (b) uses `description` as the marker) |
+
+**Enum validation (resolves review #2):** builders that validate enums today keep an `error` return and own that validation, so scaffold — calling the builder directly — gets the same checks the command does (honoring spec §Error-handling "malformed template values are caught by the same validators"). `Template.Validate()` (Task 1) additionally rejects an out-of-range enum in the template JSON as a fast fail.
 
 Each is its own commit. After Task 10: full suite green (minus the 2 known failures), lint 0.
 
@@ -200,11 +202,13 @@ Each is its own commit. After Task 10: full suite green (minus the 2 known failu
 
 ## Phase 3 — Orchestrator skeleton
 
-### Task 11: `scaffoldContext` + pipeline runner + dry-run plan
+### Task 11: command skeleton + `scaffoldContext` + pipeline runner + dry-run plan
 
 **Files:**
-- Create: `cmd/hubs_scaffold.go` (context + runner; steps added in Phase 4)
+- Create: `cmd/hubs_scaffold.go` (the `hubs scaffold` cobra command + core flags + registration on `hubsCmd` + context + runner; steps added in Phase 4)
 - Test: `cmd/hubs_scaffold_test.go`
+
+> **Wiring boundary (resolves plan-review issue #1):** this task creates the `scaffold` cobra command with its **core flags** (`--template`, `--name`, `--slug`, `--hub`, `--dry-run`) and registers it on `hubsCmd`, so the dry-run CLI test below runs here. Task 21 adds only the extras (`hubs templates`, `--publish`, `--favicon-url`/`--logo-url`/`--registration-enabled` overrides). **Phase-4 step tests call the step functions directly with in-memory `*hubtemplate.Template` values** (unit-style) — they do NOT depend on Task-22 content or full CLI wiring; only the one end-to-end dry-run test drives `--template community`.
 
 - [ ] **Step 1: Write the failing test.** A `scaffoldContext` threads ids; the runner executes an ordered `[]scaffoldStep`; `--dry-run` collects a plan of `{step, path, attrs-with-placeholders}` and fires NO HTTP; resume mode GETs the hub to populate `hubSlug`.
 
@@ -263,13 +267,13 @@ Each step task follows: write a contract test asserting the step's request(s) (m
 
 ---
 
-## Phase 5 — Command wiring + `hubs templates`
+## Phase 5 — `hubs templates` + override flags
 
-### Task 21: register `hubs scaffold` + `hubs templates`, flags, overrides
+### Task 21: add `hubs templates` + the `--publish`/override flags
 
-**Files:** modify `cmd/hubs_scaffold.go` (add the cobra commands), `cmd/hubs.go` (register under `hubsCmd`).
+**Files:** modify `cmd/hubs_scaffold.go` (the scaffold command + core flags + `hubsCmd` registration already exist from Task 11).
 
-- [ ] Contract test: `hubs templates` lists `community`; `hubs scaffold --template community --name X --slug x --dry-run` runs the full ordered plan. Wire flags: `--template`, `--name`, `--slug`, `--hub`, `--dry-run`, `--publish`, `--favicon-url`, `--logo-url`, `--registration-enabled`. Register on `hubsCmd`. Green. Commit.
+- [ ] Contract test: `hubs templates` lists `community`; `hubs scaffold … --publish` reaches step 8; `--favicon-url`/`--logo-url`/`--registration-enabled` overrides flow into the template. Add the `hubsTemplatesCmd` (calls `hubtemplate.List()`) and register it; add the `--publish`, `--favicon-url`, `--logo-url`, `--registration-enabled` flags to the scaffold command. Green. Commit.
 
 ---
 
@@ -278,6 +282,7 @@ Each step task follows: write a contract test asserting the step's request(s) (m
 ### Task 22: author `community.json`
 
 - [ ] Fill `internal/hubtemplate/hubtemplates/community.json` with a real full-experience template (branding+favicon, typed navigation menu, `settings.registration.enabled`, 2–3 spaces, an onboarding schema, 1–2 playlists, a homepage catalog template ref, policies). Validate via `hubs scaffold --template community --dry-run`. Commit.
+- **CRITICAL (resolves review #5):** the homepage template MUST use **static cards**, not a content-grid bound to `dataSource:{type:"hub_playlists"}`. Per `cmd/pages_tree.go:85–89`, the homepage route renders such a data-bound grid **empty** — exactly the silent-drop failure this whole feature exists to prevent. Verify the scaffolded homepage renders visible content in Task 23.
 
 ### Task 23: e2e on dev / :8000
 
