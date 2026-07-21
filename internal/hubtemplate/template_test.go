@@ -82,6 +82,9 @@ func TestValidate_Rejects(t *testing.T) {
 		{"playlist missing title", "playlists[0] missing title", func(tm *Template) { tm.Playlists[0].Title = "" }},
 		{"playlist missing key", "playlists[0] missing key", func(tm *Template) { tm.Playlists[0].Key = "" }},
 		{"playlist bad visibility", "invalid visibility", func(tm *Template) { tm.Playlists[0].Visibility = "bogus" }},
+		{"playlist duplicate key", "duplicate playlist key", func(tm *Template) {
+			tm.Playlists = append(tm.Playlists, Playlist{Title: "Welcome Again", Key: "welcome"})
+		}},
 		{"homepage empty template", "homepage template is required", func(tm *Template) { tm.Homepage.Template = "" }},
 		{"homepage nil", "homepage template is required", func(tm *Template) { tm.Homepage = nil }},
 		{"homepage bad privacy", "homepage invalid privacy", func(tm *Template) { tm.Homepage.Privacy = "bogus" }},

@@ -23,7 +23,9 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -358,14 +360,256 @@ func templateSpaceInput(s hubtemplate.Space) SpaceInput {
 	}
 	return in
 }
-func stepOnboarding(sc *scaffoldContext, _ *hubtemplate.Template) error {
-	return sc.step("onboarding", "", func() error { return nil })
+
+// stepOnboarding builds the hub's onboarding schema: for each template attribute
+// it creates the contact-attribute definition (skipping any whose slug already
+// exists on the team — reusing that def's id) and then ENABLEs it on the hub via a
+// hub-config CREATE (design §Apply pipeline step 4, MIO-2543 Task 15).
+//
+// Two idempotency mechanisms, one per resource:
+//   - Definitions are team-scoped and have no server-side slug filter, so the
+//     skip-if-slug-exists pre-check is EXHAUSTIVE (existingContactAttrDefs follows
+//     the pagination cursor to exhaustion, same convention + stall guard as
+//     stepSpaces). A def found on any page is reused, never duplicated.
+//   - The hub-config CREATE is a backend UPSERT (mio-backend
+//     contact_attributes.service.upsert_hub_config → hub_config_repo.upsert), so
+//     POSTing the same (hub, definition) again just re-applies the config — no 409,
+//     no duplicate. That is why the step can always POST the config without a
+//     pre-check and stay idempotent on resume.
+//
+// The hub-config POST goes to the COLLECTION path (empty def segment) with
+// definition_id IN THE BODY — the MIO-2502 fix; the /{definition_id}-suffixed path
+// only supports PATCH/DELETE. is_in_onboarding + is_required carry the template's
+// intent (mapping Required through too, so a required-in-template attribute is
+// never silently dropped).
+func stepOnboarding(sc *scaffoldContext, t *hubtemplate.Template) error {
+	if len(t.Onboarding) == 0 {
+		return sc.step("onboarding", "no onboarding attributes in template", func() error { return nil })
+	}
+	slugs := make([]string, len(t.Onboarding))
+	for i, d := range t.Onboarding {
+		slugs[i] = d.Slug
+	}
+	detail := fmt.Sprintf("GET+POST %s then POST %s — create missing def(s) [%s] (skip-if-slug-exists, exhaustive) + enable on hub (definition_id in body, is_in_onboarding)",
+		contactAttributesDefsPath(sc.teamID, ""),
+		contactAttributesHubConfigPath(sc.teamID, sc.hubIDOrPlaceholder(), ""),
+		strings.Join(slugs, ", "))
+	return sc.step("onboarding", detail, func() error {
+		existing, err := sc.existingContactAttrDefs()
+		if err != nil {
+			return err
+		}
+		for _, d := range t.Onboarding {
+			defID := existing[d.Slug]
+			if defID == "" {
+				attrs, berr := buildAttrDefCreateAttrs(templateAttrDefInput(d))
+				if berr != nil {
+					return berr
+				}
+				res, cerr := sc.cl.Create(sc.ctx, contactAttributesDefsPath(sc.teamID, ""), attrs)
+				if cerr != nil {
+					return cerr
+				}
+				defID = res.ID
+			}
+			sc.defIDsBySlug[d.Slug] = defID
+
+			// Enable on the hub via the COLLECTION path with the def id in the body
+			// (MIO-2502). The backend upserts, so re-running is idempotent.
+			inOnboarding, required := d.InOnboarding, d.Required
+			cfg := buildHubConfigAttrs(defID, HubConfigInput{
+				IsInOnboarding: &inOnboarding,
+				IsRequired:     &required,
+			})
+			if _, cerr := sc.cl.Create(sc.ctx, contactAttributesHubConfigPath(sc.teamID, sc.hubID, ""), cfg); cerr != nil {
+				return cerr
+			}
+		}
+		return nil
+	})
 }
-func stepPolicies(sc *scaffoldContext, _ *hubtemplate.Template) error {
-	return sc.step("policies", "", func() error { return nil })
+
+// existingContactAttrDefs returns slug→id for every contact-attribute definition
+// on the team, following the backend's pagination cursor to exhaustion (same
+// meta.page.next_cursor convention + seen-cursor/maxPages stall guard as
+// existingSpaceSlugs) so the onboarding skip-if-exists pre-check reuses a def
+// created on a prior run instead of duplicating it. The defs list exposes no
+// server-side slug filter, so a first-page-only scan would be a resume bug.
+func (sc *scaffoldContext) existingContactAttrDefs() (map[string]string, error) {
+	bySlug := map[string]string{}
+	seen := map[string]bool{}
+	query := url.Values{}
+	const maxPages = 1000 // hard ceiling; a team never has this many attribute defs
+	for page := 0; page < maxPages; page++ {
+		col, err := sc.cl.List(sc.ctx, contactAttributesDefsPath(sc.teamID, ""), query)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range col.Data {
+			if s, ok := r.Attributes["slug"].(string); ok && s != "" {
+				bySlug[s] = r.ID
+			}
+		}
+		next := nextPageCursor(col)
+		if next == "" || seen[next] {
+			break
+		}
+		seen[next] = true
+		query = url.Values{}
+		query.Set("page[after]", next)
+	}
+	return bySlug, nil
 }
-func stepPlaylists(sc *scaffoldContext, _ *hubtemplate.Template) error {
-	return sc.step("playlists", "", func() error { return nil })
+
+// templateAttrDefInput maps a template AttrDef onto the AttrDefInput the shared
+// buildAttrDefCreateAttrs consumes. Slug + FieldType are always present (the
+// template validator guarantees them); Name is set only when non-empty.
+// buildAttrDefCreateAttrs still validates the field_type enum, so the scaffold
+// gets the same check `contact-attributes create` does.
+func templateAttrDefInput(d hubtemplate.AttrDef) AttrDefInput {
+	in := AttrDefInput{Slug: &d.Slug, FieldType: &d.FieldType}
+	if d.Name != "" {
+		in.Name = &d.Name
+	}
+	return in
+}
+
+// policyTypeAliases resolves a template policy key to the backend policy_type
+// enum. The template models policies as a map keyed by policy identifier; both the
+// canonical backend types ("tos"/"privacy_policy") and friendly aliases
+// ("terms"/"privacy") are accepted so a template reads naturally while still
+// hitting the validated enum. A key absent here is an ERROR (fail loud).
+var policyTypeAliases = map[string]string{
+	"tos":              "tos",
+	"terms":            "tos",
+	"terms_of_service": "tos",
+	"privacy":          "privacy_policy",
+	"privacy_policy":   "privacy_policy",
+}
+
+// stepPolicies applies the template's legal policies via the shared
+// applyHubPolicies helper — one PATCH per policy, keys sorted for deterministic
+// ordering (design §Apply pipeline step 5, MIO-2543 Task 16). An empty/nil
+// Policies map is a clean no-op.
+func stepPolicies(sc *scaffoldContext, t *hubtemplate.Template) error {
+	if len(t.Policies) == 0 {
+		return sc.step("policies", "no policies in template", func() error { return nil })
+	}
+	keys := make([]string, 0, len(t.Policies))
+	for k := range t.Policies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	detail := fmt.Sprintf("PATCH %s — set policy(ies) [%s]",
+		hubsPoliciesPath(sc.teamID, sc.hubIDOrPlaceholder()), strings.Join(keys, ", "))
+	return sc.step("policies", detail, func() error {
+		for _, key := range keys {
+			pol, err := templateHubPolicy(key, t.Policies[key])
+			if err != nil {
+				return err
+			}
+			if _, err := applyHubPolicies(sc.ctx, sc.cl, sc.teamID, sc.hubID, pol); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// templateHubPolicy maps one template policy entry (key + value) onto the
+// hubPolicy the shared applyHubPolicies consumes. The key resolves to the backend
+// policy_type via policyTypeAliases (an unknown key ERRORS — never a silent drop).
+//
+// CONTENT SEMANTICS (template authors take note): a template policy that OMITS
+// "content" does NOT mean "leave the existing policy content unchanged" — it maps
+// to a nil hubPolicy.Content, and applyHubPolicies ALWAYS sends content (nil →
+// JSON null), so an omitted content RESETS the policy to the backend default on
+// every apply. This is correct-by-contract for the declarative scaffold (the
+// template is the source of truth), but it means a template that only wants to
+// flip require_acceptance still reverts custom content to default. To keep custom
+// content, put it in the template. "require_acceptance" (or its friendly alias
+// "required") sets require_acceptance; nil omits it (partial update).
+func templateHubPolicy(key string, raw any) (hubPolicy, error) {
+	policyType, ok := policyTypeAliases[key]
+	if !ok {
+		return hubPolicy{}, errs.New(errs.ExitUsage,
+			"invalid policy %q: must be one of tos, terms, privacy, privacy_policy", key)
+	}
+	p := hubPolicy{PolicyType: policyType}
+	val, _ := raw.(map[string]any)
+	if c, ok := val["content"].(string); ok {
+		content := c
+		p.Content = &content
+	}
+	if ra, ok := val["require_acceptance"].(bool); ok {
+		p.RequireAcceptance = &ra
+	} else if ra, ok := val["required"].(bool); ok {
+		p.RequireAcceptance = &ra
+	}
+	return p, nil
+}
+
+// stepPlaylists creates the template's playlists, adds their items, and publishes
+// them to the hub — GATED on the O1 decision (option c: playlists are create-only,
+// so if the hub already has ≥1 published playlist the ENTIRE step is skipped; that
+// gate IS the idempotency mechanism — item-level idempotency is therefore N/A).
+// On a fresh hub it creates each team playlist, adds an item per file id, and
+// publishes it with published_at set to NOW unconditionally (sidesteps MIO-2536)
+// and visibility public, POSTing playlist_id in the BODY to the hub-playlists
+// COLLECTION path (design §Apply pipeline step 6, MIO-2543 Task 17).
+func stepPlaylists(sc *scaffoldContext, t *hubtemplate.Template) error {
+	if len(t.Playlists) == 0 {
+		return sc.step("playlists", "no playlists in template", func() error { return nil })
+	}
+	keys := make([]string, len(t.Playlists))
+	for i, p := range t.Playlists {
+		keys[i] = p.Key
+	}
+	detail := fmt.Sprintf("GET %s (gate — skip all if the hub already has published playlists) else create playlist(s) [%s], add items per file, and publish each to the hub (playlist_id in body, visibility=public, published_at=now)",
+		hubPlaylistsPath(sc.teamID, sc.hubIDOrPlaceholder(), ""), strings.Join(keys, ", "))
+	return sc.step("playlists", detail, func() error {
+		// O1 gate: if the hub already has ≥1 published playlist, skip the whole step.
+		// One page suffices — any data means non-empty (create-only, no resume merge).
+		existing, err := sc.cl.List(sc.ctx, hubPlaylistsPath(sc.teamID, sc.hubID, ""), url.Values{})
+		if err != nil {
+			return err
+		}
+		if len(existing.Data) > 0 {
+			return nil
+		}
+		for _, p := range t.Playlists {
+			in := PlaylistInput{Title: &p.Title}
+			if p.Visibility != "" {
+				vis := p.Visibility
+				in.Visibility = &vis
+			}
+			res, cerr := sc.cl.Create(sc.ctx, playlistsPath(sc.teamID, ""), buildPlaylistCreateAttrs(in))
+			if cerr != nil {
+				return cerr
+			}
+			playlistID := res.ID
+			sc.playlistIDsByKey[p.Key] = playlistID
+
+			for _, fileID := range p.FileIDs {
+				if _, ierr := sc.cl.Create(sc.ctx, playlistItemsPath(sc.teamID, playlistID, ""),
+					map[string]any{"file_id": fileID}); ierr != nil {
+					return ierr
+				}
+			}
+
+			// Publish to the hub: published_at set unconditionally (sidesteps
+			// MIO-2536), visibility public, playlist_id in the body → COLLECTION path.
+			pubAttrs, berr := buildHubMediaPublishAttrs("public", time.Now().UTC(), nil)
+			if berr != nil {
+				return berr
+			}
+			pubAttrs["playlist_id"] = playlistID
+			if _, perr := sc.cl.Create(sc.ctx, hubPlaylistsPath(sc.teamID, sc.hubID, ""), pubAttrs); perr != nil {
+				return perr
+			}
+		}
+		return nil
+	})
 }
 func stepHomepage(sc *scaffoldContext, _ *hubtemplate.Template) error {
 	return sc.step("homepage", "", func() error { return nil })

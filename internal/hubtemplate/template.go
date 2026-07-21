@@ -164,6 +164,11 @@ func (t *Template) Validate() error {
 			return fmt.Errorf("template: onboarding[%d] invalid field_type %q", i, d.FieldType)
 		}
 	}
+	// Keys must be UNIQUE across playlists: the scaffold records playlist ids by
+	// key (playlistIDsByKey[p.Key]), so a duplicate key would silently overwrite an
+	// earlier playlist's id — and a future homepage step referencing playlists by
+	// key would collapse them. Reject duplicates at load rather than silently drop.
+	seenPlaylistKeys := map[string]bool{}
 	for i, p := range t.Playlists {
 		if p.Title == "" {
 			return fmt.Errorf("template: playlists[%d] missing title", i)
@@ -171,6 +176,10 @@ func (t *Template) Validate() error {
 		if p.Key == "" {
 			return fmt.Errorf("template: playlists[%d] missing key", i)
 		}
+		if seenPlaylistKeys[p.Key] {
+			return fmt.Errorf("template: playlists[%d] duplicate playlist key %q", i, p.Key)
+		}
+		seenPlaylistKeys[p.Key] = true
 		if p.Visibility != "" && !hubMediaVisibilityValues[p.Visibility] {
 			return fmt.Errorf("template: playlists[%d] invalid visibility %q", i, p.Visibility)
 		}

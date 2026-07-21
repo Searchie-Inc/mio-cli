@@ -19,6 +19,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -68,19 +70,22 @@ func TestScaffold_DryRunEmitsPlanNoHTTP(t *testing.T) {
 		t.Errorf("dry-run must fire NO mutating (non-GET) request")
 	}
 
-	// The plan must name every step, in the pipeline order.
-	prev := -1
-	for _, name := range scaffoldStepNames {
-		idx := strings.Index(res.Stdout, name)
-		if idx < 0 {
-			t.Errorf("dry-run plan is missing step %q; stdout:\n%s", name, res.Stdout)
-			continue
-		}
-		if idx <= prev {
-			t.Errorf("dry-run plan step %q is out of order (idx %d <= prev %d); stdout:\n%s",
-				name, idx, prev, res.Stdout)
-		}
-		prev = idx
+	// The plan prints one step per line as "  N. <step> — <detail>". Extract the
+	// step TOKEN from each line (line-anchored: ^\s*\d+\.\s+(\S+)) and compare the
+	// ordered token slice to the expected pipeline order. Matching the per-line
+	// token — NOT a substring search over the whole output — means a detail string
+	// that happens to contain a later step's name (e.g. "publish" inside the
+	// playlists detail) can never trip the ordering check. This removes the
+	// invisible "don't put a step name in any detail" constraint that a raw
+	// strings.Index scan imposed.
+	stepLineRE := regexp.MustCompile(`(?m)^\s*\d+\.\s+(\S+)`)
+	var gotSteps []string
+	for _, m := range stepLineRE.FindAllStringSubmatch(res.Stdout, -1) {
+		gotSteps = append(gotSteps, m[1])
+	}
+	if !reflect.DeepEqual(gotSteps, scaffoldStepNames) {
+		t.Errorf("dry-run plan steps = %v, want %v (every step, in order); stdout:\n%s",
+			gotSteps, scaffoldStepNames, res.Stdout)
 	}
 }
 
@@ -491,5 +496,390 @@ func TestStepSpaces_ExhaustiveLookupFindsPage2(t *testing.T) {
 	}
 	if len(posted) != 0 {
 		t.Errorf("POSTed %v; want none — 'general' exists on page 2 and an exhaustive lookup must find it", posted)
+	}
+}
+
+// ─── Task 15: stepOnboarding ──────────────────────────────────────────────────
+
+// TestStepOnboarding_CreatesDefAndEnablesOnHubCollectionPath: a new onboarding
+// def is CREATEd on the team, then ENABLEd on the hub via a hub-config CREATE that
+// POSTs to the COLLECTION path (no /{def} suffix) with definition_id IN THE BODY
+// (the MIO-2502 fix) and is_in_onboarding from the template. The def id is
+// recorded by slug.
+func TestStepOnboarding_CreatesDefAndEnablesOnHubCollectionPath(t *testing.T) {
+	var defBody, cfgBody []byte
+	var cfgPath string
+	var defPosts, cfgPosts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		isHub := strings.Contains(r.URL.Path, "/hubs/")
+		switch {
+		case r.Method == http.MethodGet && !isHub: // defs list — no existing defs
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case r.Method == http.MethodPost && !isHub: // def create
+			defPosts++
+			defBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"def_company","type":"contact_attributes","attributes":{"slug":"company"}}}`))
+		case r.Method == http.MethodPost && isHub: // hub-config create
+			cfgPosts++
+			cfgPath = r.URL.Path
+			cfgBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"cfg_1","type":"contact_attribute_hub_configs","attributes":{"definition_id":"def_company"}}}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &hubtemplate.Template{
+		ID: "community",
+		Onboarding: []hubtemplate.AttrDef{
+			{Name: "Company", Slug: "company", FieldType: "text", InOnboarding: true, Required: false},
+		},
+	}
+	if err := stepOnboarding(sc, tmpl); err != nil {
+		t.Fatalf("stepOnboarding: %v", err)
+	}
+	if defPosts != 1 || cfgPosts != 1 {
+		t.Fatalf("want 1 def POST + 1 hub-config POST; got %d def, %d cfg", defPosts, cfgPosts)
+	}
+	defAttrs := decodeHubAttrs(t, defBody)
+	if defAttrs["name"] != "Company" || defAttrs["slug"] != "company" || defAttrs["type"] != "text" {
+		t.Errorf("def create attrs = %v, want name=Company slug=company type=text", defAttrs)
+	}
+	// hub-config MUST POST to the COLLECTION path (no /{def} suffix).
+	if !strings.HasSuffix(cfgPath, "/hubs/hub_1/contact-attributes") {
+		t.Errorf("hub-config path = %q, want collection .../hubs/hub_1/contact-attributes (no def suffix)", cfgPath)
+	}
+	cfgAttrs := decodeHubAttrs(t, cfgBody)
+	if cfgAttrs["definition_id"] != "def_company" {
+		t.Errorf("hub-config definition_id = %v, want def_company (in the BODY, MIO-2502)", cfgAttrs["definition_id"])
+	}
+	if cfgAttrs["is_in_onboarding"] != true {
+		t.Errorf("hub-config is_in_onboarding = %v, want true", cfgAttrs["is_in_onboarding"])
+	}
+	if sc.defIDsBySlug["company"] != "def_company" {
+		t.Errorf("defIDsBySlug[company] = %q, want def_company", sc.defIDsBySlug["company"])
+	}
+}
+
+// TestStepOnboarding_ExistingDefReusedNoDuplicateCreate: a def whose slug already
+// exists on the team is REUSED (no duplicate def create) — its id is recorded and
+// the hub-config is still enabled (upsert) with the reused id.
+func TestStepOnboarding_ExistingDefReusedNoDuplicateCreate(t *testing.T) {
+	var defPosts, cfgPosts int
+	var cfgBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		isHub := strings.Contains(r.URL.Path, "/hubs/")
+		switch {
+		case r.Method == http.MethodGet && !isHub: // defs list — "company" already exists
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"def_existing","type":"contact_attributes","attributes":{"slug":"company"}}]}`))
+		case r.Method == http.MethodPost && !isHub:
+			defPosts++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"def_new","type":"contact_attributes","attributes":{"slug":"company"}}}`))
+		case r.Method == http.MethodPost && isHub:
+			cfgPosts++
+			cfgBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"cfg_1","type":"contact_attribute_hub_configs","attributes":{}}}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &hubtemplate.Template{
+		ID:         "community",
+		Onboarding: []hubtemplate.AttrDef{{Name: "Company", Slug: "company", FieldType: "text", InOnboarding: true}},
+	}
+	if err := stepOnboarding(sc, tmpl); err != nil {
+		t.Fatalf("stepOnboarding: %v", err)
+	}
+	if defPosts != 0 {
+		t.Errorf("existing def slug must be reused — want 0 def POSTs, got %d", defPosts)
+	}
+	if cfgPosts != 1 {
+		t.Errorf("hub-config must still be enabled with the reused def — want 1 cfg POST, got %d", cfgPosts)
+	}
+	if got := decodeHubAttrs(t, cfgBody)["definition_id"]; got != "def_existing" {
+		t.Errorf("hub-config definition_id = %v, want reused def_existing", got)
+	}
+	if sc.defIDsBySlug["company"] != "def_existing" {
+		t.Errorf("defIDsBySlug[company] = %q, want reused def_existing", sc.defIDsBySlug["company"])
+	}
+}
+
+// TestStepOnboarding_ExhaustiveDefLookupFindsPage2: the skip-if-slug-exists
+// pre-check must follow the pagination cursor to exhaustion — "company" exists
+// only on page 2, so a first-page-only scan would wrongly create a duplicate.
+func TestStepOnboarding_ExhaustiveDefLookupFindsPage2(t *testing.T) {
+	defPosts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		isHub := strings.Contains(r.URL.Path, "/hubs/")
+		switch {
+		case r.Method == http.MethodPost && !isHub:
+			defPosts++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"def_new","type":"contact_attributes","attributes":{"slug":"company"}}}`))
+		case r.Method == http.MethodPost && isHub:
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"cfg_1","type":"contact_attribute_hub_configs","attributes":{}}}`))
+		case r.URL.Query().Get("page[after]") == "cursor2":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"def_c","type":"contact_attributes","attributes":{"slug":"company"}}],"meta":{"page":{"has_more":false}}}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"def_o","type":"contact_attributes","attributes":{"slug":"other"}}],"meta":{"page":{"has_more":true,"next_cursor":"cursor2"}}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &hubtemplate.Template{
+		ID:         "community",
+		Onboarding: []hubtemplate.AttrDef{{Name: "Company", Slug: "company", FieldType: "text", InOnboarding: true}},
+	}
+	if err := stepOnboarding(sc, tmpl); err != nil {
+		t.Fatalf("stepOnboarding: %v", err)
+	}
+	if defPosts != 0 {
+		t.Errorf("def POSTed %d time(s); want 0 — 'company' exists on page 2 and an exhaustive lookup must find it", defPosts)
+	}
+	if sc.defIDsBySlug["company"] != "def_c" {
+		t.Errorf("defIDsBySlug[company] = %q, want def_c (found on page 2)", sc.defIDsBySlug["company"])
+	}
+}
+
+// ─── Task 16: stepPolicies ────────────────────────────────────────────────────
+
+// TestStepPolicies_MapsKeysAndFieldsToPatches: the template's policies map is
+// applied one PATCH per policy — friendly keys resolve to the backend
+// policy_type enum, content maps to the body, and required maps to
+// require_acceptance. Keys are sorted for deterministic ordering.
+func TestStepPolicies_MapsKeysAndFieldsToPatches(t *testing.T) {
+	var patchBodies [][]byte
+	var patchPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if r.Method == http.MethodPatch {
+			b, _ := io.ReadAll(r.Body)
+			patchBodies = append(patchBodies, b)
+			patchPaths = append(patchPaths, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"pol_1","type":"hub_policies","attributes":{}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	// "privacy" sorts before "terms"; both are friendly aliases for the enum types.
+	tmpl := &hubtemplate.Template{
+		ID: "community",
+		Policies: map[string]any{
+			"terms":   map[string]any{"content": "TOS body", "required": true},
+			"privacy": map[string]any{"content": "Privacy body"},
+		},
+	}
+	if err := stepPolicies(sc, tmpl); err != nil {
+		t.Fatalf("stepPolicies: %v", err)
+	}
+	if len(patchBodies) != 2 {
+		t.Fatalf("want 2 PATCHes (one per policy), got %d", len(patchBodies))
+	}
+	for _, p := range patchPaths {
+		if !strings.HasSuffix(p, "/hubs/hub_1/policies") {
+			t.Errorf("policy PATCH path = %q, want .../hubs/hub_1/policies", p)
+		}
+	}
+	// Sorted keys → privacy first, terms second.
+	first := decodeHubAttrs(t, patchBodies[0])
+	if first["policy_type"] != "privacy_policy" || first["content"] != "Privacy body" {
+		t.Errorf("first PATCH = %v, want policy_type=privacy_policy content='Privacy body'", first)
+	}
+	second := decodeHubAttrs(t, patchBodies[1])
+	if second["policy_type"] != "tos" || second["content"] != "TOS body" || second["require_acceptance"] != true {
+		t.Errorf("second PATCH = %v, want policy_type=tos content='TOS body' require_acceptance=true", second)
+	}
+}
+
+// TestStepPolicies_EmptyTemplateNoRequest: a template with no policies fires no
+// request.
+func TestStepPolicies_EmptyTemplateNoRequest(t *testing.T) {
+	fired := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			fired = true
+		}
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"x","type":"hub_policies","attributes":{}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	if err := stepPolicies(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+		t.Fatalf("stepPolicies empty: %v", err)
+	}
+	if fired {
+		t.Error("empty policies template must fire NO request")
+	}
+}
+
+// TestStepPolicies_UnknownKeyErrorsNoRequest: an unresolvable policy key ERRORS
+// (ExitUsage) and fires no request — fail loud, never a silent drop.
+func TestStepPolicies_UnknownKeyErrorsNoRequest(t *testing.T) {
+	fired := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			fired = true
+		}
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"x","type":"hub_policies","attributes":{}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &hubtemplate.Template{ID: "community", Policies: map[string]any{"bogus": map[string]any{}}}
+	err := stepPolicies(sc, tmpl)
+	if err == nil {
+		t.Fatal("unknown policy key must ERROR")
+	}
+	if errs.CodeOf(err) != errs.ExitUsage {
+		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
+	}
+	if fired {
+		t.Error("no PATCH must fire when a policy key is invalid")
+	}
+}
+
+// ─── Task 17: stepPlaylists (O1 = option c) ───────────────────────────────────
+
+// TestStepPlaylists_EmptyHubCreatesItemsAndPublishes: on a hub with NO published
+// playlists, the step creates each team playlist, adds an item per file id, and
+// publishes it to the hub with visibility public + published_at set + playlist_id
+// in the BODY to the COLLECTION path.
+func TestStepPlaylists_EmptyHubCreatesItemsAndPublishes(t *testing.T) {
+	var createBody, publishBody []byte
+	var publishPath string
+	var itemFileIDs []string
+	var creates, items, publishes int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		path := r.URL.Path
+		switch {
+		case strings.Contains(path, "/items"): // item add
+			items++
+			b, _ := io.ReadAll(r.Body)
+			fid, _ := decodeHubAttrs(t, b)["file_id"].(string)
+			itemFileIDs = append(itemFileIDs, fid)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"it_1","type":"playlist_items","attributes":{}}}`))
+		case strings.Contains(path, "/hubs/") && r.Method == http.MethodGet: // O1 gate — empty
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case strings.Contains(path, "/hubs/") && r.Method == http.MethodPost: // publish to hub
+			publishes++
+			publishPath = path
+			publishBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"hm_1","type":"hub_media","attributes":{}}}`))
+		case r.Method == http.MethodPost: // team playlist create
+			creates++
+			createBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"pl_made","type":"playlists","attributes":{}}}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &hubtemplate.Template{
+		ID: "community",
+		Playlists: []hubtemplate.Playlist{
+			{Title: "Welcome", Key: "welcome", Visibility: "public", FileIDs: []string{"file_a", "file_b"}},
+		},
+	}
+	if err := stepPlaylists(sc, tmpl); err != nil {
+		t.Fatalf("stepPlaylists: %v", err)
+	}
+	if creates != 1 || items != 2 || publishes != 1 {
+		t.Fatalf("want 1 create + 2 items + 1 publish; got %d create, %d items, %d publish", creates, items, publishes)
+	}
+	ca := decodeHubAttrs(t, createBody)
+	if ca["title"] != "Welcome" || ca["visibility"] != "public" {
+		t.Errorf("playlist create attrs = %v, want title=Welcome visibility=public", ca)
+	}
+	if len(itemFileIDs) != 2 || itemFileIDs[0] != "file_a" || itemFileIDs[1] != "file_b" {
+		t.Errorf("item file_ids = %v, want [file_a file_b] (in order)", itemFileIDs)
+	}
+	if !strings.HasSuffix(publishPath, "/hubs/hub_1/playlists") {
+		t.Errorf("publish path = %q, want COLLECTION .../hubs/hub_1/playlists (id in body, not path)", publishPath)
+	}
+	pa := decodeHubAttrs(t, publishBody)
+	if pa["playlist_id"] != "pl_made" {
+		t.Errorf("publish playlist_id = %v, want pl_made (in the body)", pa["playlist_id"])
+	}
+	if pa["visibility"] != "public" {
+		t.Errorf("publish visibility = %v, want public", pa["visibility"])
+	}
+	if at, _ := pa["published_at"].(string); at == "" {
+		t.Errorf("publish published_at must be set (non-empty, sidesteps MIO-2536); attrs=%v", pa)
+	}
+	if sc.playlistIDsByKey["welcome"] != "pl_made" {
+		t.Errorf("playlistIDsByKey[welcome] = %q, want pl_made", sc.playlistIDsByKey["welcome"])
+	}
+}
+
+// TestStepPlaylists_NonEmptyHubSkipsWholeStep: the O1 gate — if the hub already
+// has ≥1 published playlist, the ENTIRE step is skipped (create-only), so no
+// playlist/item/publish request fires and nothing is recorded.
+func TestStepPlaylists_NonEmptyHubSkipsWholeStep(t *testing.T) {
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if r.Method == http.MethodPost {
+			posts++
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/hubs/") {
+			// O1 gate: hub already has a published playlist.
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"hm_existing","type":"hub_media","attributes":{}}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &hubtemplate.Template{
+		ID: "community",
+		Playlists: []hubtemplate.Playlist{
+			{Title: "Welcome", Key: "welcome", FileIDs: []string{"file_a"}},
+		},
+	}
+	if err := stepPlaylists(sc, tmpl); err != nil {
+		t.Fatalf("stepPlaylists: %v", err)
+	}
+	if posts != 0 {
+		t.Errorf("non-empty hub must skip the WHOLE step — want 0 POSTs, got %d", posts)
+	}
+	if len(sc.playlistIDsByKey) != 0 {
+		t.Errorf("no playlist should be recorded when the step is skipped; map=%v", sc.playlistIDsByKey)
 	}
 }
