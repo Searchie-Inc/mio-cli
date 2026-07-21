@@ -113,6 +113,12 @@ homepage.)`,
 		if !ok {
 			return errs.New(errs.ExitUsage, "--file must contain a JSON object (the tree)")
 		}
+		// Pre-flight: reject the well-defined malformed node settings the API
+		// accepts (200) but the renderer silently drops, so the author gets a clear
+		// error here rather than a phantom success (MIO-2537). Runs before any HTTP.
+		if verr := validatePageTree(treeObj); verr != nil {
+			return verr
+		}
 
 		ifMatch, ierr := cmd.Flags().GetInt("if-match")
 		if ierr != nil {
