@@ -3,20 +3,17 @@
   "branding": {
     "favicon_url": "https://cdn.example.com/community/favicon.png",
     "logo_url": "https://cdn.example.com/community/logo.png",
-    "colors": {
-      "primary": "#4f46e5"
-    }
+    "primary": "#4f46e5"
   },
   "navigation": {
-    "header": {
-      "items": [
-        {
-          "type": "link",
-          "label": "Home",
-          "href": "/"
-        }
-      ]
-    }
+    "header": [
+      {
+        "type": "url",
+        "label": "Home",
+        "href": "https://community.example.com",
+        "position": 0
+      }
+    ]
   },
   "settings": {
     "registration": {
