@@ -13,9 +13,12 @@ package cmd
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -736,22 +739,44 @@ Pass each attribute as --attr <key>=<value>. Multiple --attr flags may be used.`
 			return errs.New(errs.ExitUsage, "nothing to set: provide at least one --attr key=value pair")
 		}
 
-		ops := make([]map[string]any, 0, len(rawAttrs))
+		// Split every pair up front so a malformed --attr exits ExitUsage
+		// before any request fires (no-request-on-usage-error contract).
+		type attrPair struct{ key, val string }
+		pairs := make([]attrPair, 0, len(rawAttrs))
 		for _, kv := range rawAttrs {
 			key, val, ok := splitKV(kv)
 			if !ok {
 				return errs.New(errs.ExitUsage, "invalid --attr value %q: expected key=value", kv)
 			}
+			pairs = append(pairs, attrPair{key, val})
+		}
+
+		// Look up each attribute's field type once (MIO-2553): the value must
+		// travel in the typed field the def declares (value_number/
+		// value_boolean/value_date/value_text). Sending value_text for a
+		// non-text attribute 422s (TypeCompatibilityError), so we cannot guess:
+		// a slug the team has no definition for is a usage error (exit 2, no
+		// write) rather than a value_text guess that the backend rejects anyway.
+		fieldTypes, err := caDefFieldTypesBySlug(c, teamID)
+		if err != nil {
+			return err
+		}
+
+		ops := make([]map[string]any, 0, len(pairs))
+		for _, p := range pairs {
+			fieldType, known := fieldTypes[p.key]
+			if !known {
+				return errs.New(errs.ExitUsage,
+					"unknown attribute slug %q: this team has no contact-attribute definition with that slug", p.key)
+			}
 			// Each --attr becomes a "set" operation keyed by definition slug.
-			// The value is sent as value_text (text attributes); type-typed
-			// attributes (number/boolean/date/select) are not yet expressible
-			// via bare key=value.
+			attrs := map[string]any{"definition_slug": p.key}
+			if err := setTypedAttrValue(attrs, p.key, fieldType, p.val); err != nil {
+				return err
+			}
 			ops = append(ops, map[string]any{
-				"type": "set",
-				"attributes": map[string]any{
-					"definition_slug": key,
-					"value_text":      val,
-				},
+				"type":       "set",
+				"attributes": attrs,
 			})
 		}
 
@@ -780,4 +805,118 @@ func splitKV(s string) (key, val string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// caDefFieldTypesBySlug lists the team's contact-attribute definitions and
+// returns a slug→field_type map (the backend AttributeType: text/number/
+// boolean/date/multiple/single). `values set` uses it to route each --attr
+// value into the correct typed field and to reject unknown slugs before any
+// write (MIO-2553). It follows the backend's pagination cursor to exhaustion
+// (meta.page.next_cursor gated by has_more — the same convention as the scaffold's
+// nextPageCursor) so every definition resolves even for teams with more than one
+// page of attributes; without that, a slug on a later page would look unknown.
+// The seen-cursor set + maxPages bound are a stall guard against a buggy server
+// returning a stable/looping cursor.
+func caDefFieldTypesBySlug(c *cmdContext, teamID string) (map[string]string, error) {
+	out := map[string]string{}
+	seen := map[string]bool{}
+	query := url.Values{}
+	query.Set("page[size]", "100")
+	const maxPages = 1000
+	for page := 0; page < maxPages; page++ {
+		col, err := c.client.List(c.ctx, contactAttributesDefsPath(teamID, ""), query)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range col.Data {
+			slug, _ := r.Attributes["slug"].(string)
+			ft, _ := r.Attributes["type"].(string)
+			if slug != "" && ft != "" {
+				out[slug] = ft
+			}
+		}
+		next := nextPageCursor(col)
+		if next == "" || seen[next] {
+			break
+		}
+		seen[next] = true
+		query = url.Values{}
+		query.Set("page[size]", "100")
+		query.Set("page[after]", next)
+	}
+	return out, nil
+}
+
+// caDateLayouts are the ISO-8601 shapes a date attribute value may take. A value
+// is validated client-side against these before the write so an obviously bad
+// date exits ExitUsage instead of round-tripping to a backend error; the original
+// string is passed through for the backend to parse canonically.
+var caDateLayouts = []string{
+	"2006-01-02",           // date only (the common case)
+	time.RFC3339,           // 2006-01-02T15:04:05Z07:00
+	time.RFC3339Nano,       // with sub-second precision
+	"2006-01-02T15:04:05",  // naive datetime (no zone)
+	"2006-01-02T15:04:05Z", // explicit UTC
+}
+
+// setTypedAttrValue writes val into attrs under the typed value field the
+// attribute's field type requires, mirroring the backend SetOperationAttributes
+// schema (MIO-2553):
+//
+//	number  → value_number  (parsed with strconv; finite JSON number)
+//	boolean → value_boolean (parsed with strconv; JSON bool)
+//	date    → value_date    (validated as ISO-8601, then the string is passed through)
+//	text    → value_text
+//
+// number/boolean/date parse failures exit ExitUsage (no round-trip). Non-finite
+// numbers (NaN/±Inf, which strconv.ParseFloat accepts but JSON cannot encode) are
+// rejected the same way rather than failing later as a generic marshal error.
+// Multi-select (multiple/single) attributes take option_slugs/option_ids, not a
+// scalar; those are not yet expressible via bare key=value, so they exit ExitUsage
+// with a clear message rather than sending value_text (which the backend 422s
+// anyway) — a documented follow-up. The caller has already rejected slugs the team
+// has no definition for, so fieldType here is always a resolved backend type.
+func setTypedAttrValue(attrs map[string]any, slug, fieldType, val string) error {
+	switch fieldType {
+	case "number":
+		n, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return errs.New(errs.ExitUsage, "invalid number value %q for attribute %q: %v", val, slug, err)
+		}
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return errs.New(errs.ExitUsage, "invalid number value %q for attribute %q: must be a finite number", val, slug)
+		}
+		attrs["value_number"] = n
+	case "boolean":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return errs.New(errs.ExitUsage, "invalid boolean value %q for attribute %q (use true/false): %v", val, slug, err)
+		}
+		attrs["value_boolean"] = b
+	case "date":
+		if !isValidCADate(val) {
+			return errs.New(errs.ExitUsage,
+				"invalid date value %q for attribute %q: use an ISO-8601 date like 2006-01-02 or 2006-01-02T15:04:05Z", val, slug)
+		}
+		attrs["value_date"] = val
+	case "multiple", "single":
+		return errs.New(errs.ExitUsage,
+			"attribute %q is a %q-select type; setting its option value(s) via --attr is not yet supported", slug, fieldType)
+	default:
+		// "text" and any type the backend adds later that we do not specially
+		// route → value_text.
+		attrs["value_text"] = val
+	}
+	return nil
+}
+
+// isValidCADate reports whether val parses as one of the accepted ISO-8601 date
+// shapes (caDateLayouts).
+func isValidCADate(val string) bool {
+	for _, layout := range caDateLayouts {
+		if _, err := time.Parse(layout, val); err == nil {
+			return true
+		}
+	}
+	return false
 }
