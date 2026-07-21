@@ -18,10 +18,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
+
+// sbPtr returns a pointer to v, for populating the builder input structs (whose
+// pointer fields distinguish "flag unset" from "flag set to the zero value").
+func sbPtr[T any](v T) *T { return &v }
 
 // applyHubBlobsServer answers a GET retrieve with getBody and captures the
 // subsequent PATCH body, returning a client pointed at it. Used to unit-test
@@ -411,5 +416,273 @@ func TestApplyHubPolicies_ResetSendsNullContent(t *testing.T) {
 	}
 	if _, has := doc.Data.Attributes["require_acceptance"]; has {
 		t.Errorf("require_acceptance must be omitted when not provided; attrs=%v", doc.Data.Attributes)
+	}
+}
+
+// ─── buildSpaceAttrs (Task 6) ────────────────────────────────────────────────
+
+// TestBuildSpaceAttrs_MapsFieldsAndKeys verifies the space builder maps every set
+// field onto its backend attribute key (segment_id/is_default/is_pinned/
+// access_level/posting_permission), and omits fields whose pointer is nil.
+func TestBuildSpaceAttrs_MapsFieldsAndKeys(t *testing.T) {
+	attrs, err := buildSpaceAttrs(SpaceInput{
+		Name:              sbPtr("General"),
+		Slug:              sbPtr("general"),
+		Description:       sbPtr("desc"),
+		Icon:              sbPtr("star"),
+		Color:             sbPtr("#111"),
+		SegmentID:         sbPtr("seg_vip"),
+		IsDefault:         sbPtr(true),
+		IsPinned:          sbPtr(false),
+		AccessLevel:       sbPtr("restricted"),
+		PostingPermission: sbPtr("segment"),
+		Position:          sbPtr(0),
+	})
+	if err != nil {
+		t.Fatalf("buildSpaceAttrs returned error: %v", err)
+	}
+	want := map[string]any{
+		"name": "General", "slug": "general", "description": "desc", "icon": "star",
+		"color": "#111", "segment_id": "seg_vip", "is_default": true, "is_pinned": false,
+		"access_level": "restricted", "posting_permission": "segment", "position": 0,
+	}
+	if len(attrs) != len(want) {
+		t.Fatalf("attrs = %v, want exactly %v", attrs, want)
+	}
+	for k, v := range want {
+		if attrs[k] != v {
+			t.Errorf("attrs[%q] = %v, want %v", k, attrs[k], v)
+		}
+	}
+	// A nil pointer must be omitted, not written as a zero value.
+	if _, err := buildSpaceAttrs(SpaceInput{Name: sbPtr("Only")}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestBuildSpaceAttrs_ValidatesEnumsAndPosition verifies the enum/range checks the
+// builder keeps (so the scaffold caller gets them too): a bad access_level,
+// posting_permission, or negative position each returns ExitUsage.
+func TestBuildSpaceAttrs_ValidatesEnumsAndPosition(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   SpaceInput
+	}{
+		{"bad access_level", SpaceInput{AccessLevel: sbPtr("everyone")}},
+		{"bad posting_permission", SpaceInput{PostingPermission: sbPtr("nobody")}},
+		{"negative position", SpaceInput{Position: sbPtr(-1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildSpaceAttrs(tc.in)
+			if err == nil {
+				t.Fatalf("%s must return an error", tc.name)
+			}
+			if got := errs.CodeOf(err); got != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
+			}
+		})
+	}
+}
+
+// ─── buildPageAttrs (Task 7) ─────────────────────────────────────────────────
+
+// TestBuildPageAttrs_MapsFieldsAndBlobs verifies the page builder maps --is-home
+// to is_homepage, passes settings/meta through as objects, and omits nil fields.
+func TestBuildPageAttrs_MapsFieldsAndBlobs(t *testing.T) {
+	settings := map[string]any{"theme": "dark"}
+	meta := map[string]any{"seo": true}
+	attrs, err := buildPageAttrs(PageInput{
+		Title:    sbPtr("Home"),
+		Slug:     sbPtr("dashboard"),
+		Type:     sbPtr("generic"),
+		IsHome:   sbPtr(true),
+		Position: sbPtr(0),
+		Privacy:  sbPtr("public"),
+		Settings: settings,
+		Meta:     meta,
+	})
+	if err != nil {
+		t.Fatalf("buildPageAttrs returned error: %v", err)
+	}
+	if attrs["is_homepage"] != true {
+		t.Errorf("is_homepage = %v, want true (--is-home mapping)", attrs["is_homepage"])
+	}
+	if _, leaked := attrs["is_home"]; leaked {
+		t.Errorf("is_home must not be present (schema uses is_homepage); attrs=%v", attrs)
+	}
+	if attrs["title"] != "Home" || attrs["slug"] != "dashboard" || attrs["type"] != "generic" ||
+		attrs["privacy"] != "public" || attrs["position"] != 0 {
+		t.Errorf("scalar fields not carried through; attrs=%v", attrs)
+	}
+	s, ok := attrs["settings"].(map[string]any)
+	if !ok || s["theme"] != "dark" {
+		t.Errorf("settings not passed through as object; attrs=%v", attrs)
+	}
+	if m, ok := attrs["meta"].(map[string]any); !ok || m["seo"] != true {
+		t.Errorf("meta not passed through as object; attrs=%v", attrs)
+	}
+}
+
+// TestBuildPageAttrs_ValidatesPrivacyAndPosition verifies the privacy enum + the
+// position >= 0 check the builder keeps for the scaffold caller.
+func TestBuildPageAttrs_ValidatesPrivacyAndPosition(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   PageInput
+	}{
+		{"bad privacy", PageInput{Privacy: sbPtr("secret")}},
+		{"negative position", PageInput{Position: sbPtr(-1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildPageAttrs(tc.in)
+			if err == nil {
+				t.Fatalf("%s must return an error", tc.name)
+			}
+			if got := errs.CodeOf(err); got != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
+			}
+		})
+	}
+}
+
+// ─── buildHubMediaPublishAttrs (Task 8) ──────────────────────────────────────
+
+// TestBuildHubMediaPublishAttrs_SetsProvided verifies a valid visibility, an RFC3339
+// published_at (formatted from the time.Time), and a position are all set.
+func TestBuildHubMediaPublishAttrs_SetsProvided(t *testing.T) {
+	when := time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
+	pos := 3
+	attrs, err := buildHubMediaPublishAttrs("public", when, &pos)
+	if err != nil {
+		t.Fatalf("buildHubMediaPublishAttrs returned error: %v", err)
+	}
+	if attrs["visibility"] != "public" {
+		t.Errorf("visibility = %v, want public", attrs["visibility"])
+	}
+	if attrs["published_at"] != "2026-01-02T15:04:05Z" {
+		t.Errorf("published_at = %v, want RFC3339 2026-01-02T15:04:05Z", attrs["published_at"])
+	}
+	if attrs["position"] != 3 {
+		t.Errorf("position = %v, want 3", attrs["position"])
+	}
+}
+
+// TestBuildHubMediaPublishAttrs_OmitsSentinels verifies the "omit" sentinels: an
+// empty visibility, a zero time, and a nil position produce an empty map (the
+// command path relies on this to preserve "only set when flag changed").
+func TestBuildHubMediaPublishAttrs_OmitsSentinels(t *testing.T) {
+	attrs, err := buildHubMediaPublishAttrs("", time.Time{}, nil)
+	if err != nil {
+		t.Fatalf("buildHubMediaPublishAttrs returned error: %v", err)
+	}
+	if len(attrs) != 0 {
+		t.Errorf("attrs = %v, want empty (all sentinels omit)", attrs)
+	}
+}
+
+// TestBuildHubMediaPublishAttrs_Validates verifies a bad visibility and a negative
+// position each return ExitUsage.
+func TestBuildHubMediaPublishAttrs_Validates(t *testing.T) {
+	if _, err := buildHubMediaPublishAttrs("everyone", time.Time{}, nil); err == nil {
+		t.Error("a bad visibility must error")
+	} else if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
+	}
+	neg := -1
+	if _, err := buildHubMediaPublishAttrs("", time.Time{}, &neg); err == nil {
+		t.Error("a negative position must error")
+	} else if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
+	}
+}
+
+// ─── buildAttrDefCreateAttrs + buildHubConfigAttrs (Task 9) ───────────────────
+
+// TestBuildAttrDefCreateAttrs_MapsFieldTypeToType verifies --field-type maps to the
+// backend "type" key (NOT field_type) and the other fields carry through.
+func TestBuildAttrDefCreateAttrs_MapsFieldTypeToType(t *testing.T) {
+	attrs, err := buildAttrDefCreateAttrs(AttrDefInput{
+		Name:              sbPtr("Company"),
+		Slug:              sbPtr("company"),
+		FieldType:         sbPtr("text"),
+		Description:       sbPtr("Employer"),
+		IsContactEditable: sbPtr(false),
+		Position:          sbPtr(2),
+	})
+	if err != nil {
+		t.Fatalf("buildAttrDefCreateAttrs returned error: %v", err)
+	}
+	if attrs["type"] != "text" {
+		t.Errorf("type = %v, want text (--field-type maps to \"type\")", attrs["type"])
+	}
+	if _, leaked := attrs["field_type"]; leaked {
+		t.Errorf("field_type must NOT be present (wrong key); attrs=%v", attrs)
+	}
+	if attrs["name"] != "Company" || attrs["slug"] != "company" ||
+		attrs["description"] != "Employer" || attrs["is_contact_editable"] != false ||
+		attrs["position"] != 2 {
+		t.Errorf("fields not carried through; attrs=%v", attrs)
+	}
+}
+
+// TestBuildAttrDefCreateAttrs_RejectsBadFieldType verifies the NEW client-side
+// field-type enum validation (MIO-2543): an out-of-enum value returns ExitUsage.
+func TestBuildAttrDefCreateAttrs_RejectsBadFieldType(t *testing.T) {
+	_, err := buildAttrDefCreateAttrs(AttrDefInput{
+		Name: sbPtr("X"), Slug: sbPtr("x"), FieldType: sbPtr("select"),
+	})
+	if err == nil {
+		t.Fatal("an out-of-enum --field-type must return an error")
+	}
+	if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
+	}
+}
+
+// TestBuildHubConfigAttrs_IncludesDefinitionIDAndBools verifies the create builder
+// puts the definition id in the body (MIO-2502) and maps the bool flags; unset
+// bools are omitted.
+func TestBuildHubConfigAttrs_IncludesDefinitionIDAndBools(t *testing.T) {
+	attrs := buildHubConfigAttrs("attr_abc123", HubConfigInput{
+		IsInProfile:  sbPtr(true),
+		IsRequired:   sbPtr(false),
+		IsSearchable: sbPtr(true),
+	})
+	if attrs["definition_id"] != "attr_abc123" {
+		t.Errorf("definition_id = %v, want attr_abc123", attrs["definition_id"])
+	}
+	if attrs["is_in_profile"] != true || attrs["is_required"] != false || attrs["is_searchable"] != true {
+		t.Errorf("bool flags not mapped; attrs=%v", attrs)
+	}
+	// Unset bools must be omitted (partial-update semantics).
+	for _, k := range []string{"is_in_onboarding", "is_read_only"} {
+		if _, has := attrs[k]; has {
+			t.Errorf("%s must be omitted when unset; attrs=%v", k, attrs)
+		}
+	}
+}
+
+// ─── buildPlaylistCreateAttrs (Task 10) ──────────────────────────────────────
+
+// TestBuildPlaylistCreateAttrs_MapsFields verifies title/description/visibility map
+// through and --hub-id maps to hub_id; unset fields are omitted.
+func TestBuildPlaylistCreateAttrs_MapsFields(t *testing.T) {
+	attrs := buildPlaylistCreateAttrs(PlaylistInput{
+		Title:      sbPtr("Course Videos"),
+		Visibility: sbPtr("public"),
+		HubID:      sbPtr("hub_abc123"),
+	})
+	if attrs["title"] != "Course Videos" || attrs["visibility"] != "public" {
+		t.Errorf("title/visibility not carried; attrs=%v", attrs)
+	}
+	if attrs["hub_id"] != "hub_abc123" {
+		t.Errorf("hub_id = %v, want hub_abc123 (--hub-id mapping)", attrs["hub_id"])
+	}
+	if _, leaked := attrs["hub-id"]; leaked {
+		t.Errorf("hub-id (wrong key) must not be present; attrs=%v", attrs)
+	}
+	// --description unset → omitted.
+	if _, has := attrs["description"]; has {
+		t.Errorf("description must be omitted when unset; attrs=%v", attrs)
 	}
 }

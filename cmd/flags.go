@@ -152,6 +152,50 @@ func setMappedBoolInverted(cmd *cobra.Command, attrs map[string]any, name, key s
 	}
 }
 
+// changedString returns a pointer to a string flag's value iff the user changed
+// it, and nil otherwise. It is the pointer-returning counterpart of
+// setStringFlag: a builder input struct can then distinguish "flag unset" (nil)
+// from "flag set to empty" (non-nil ""), preserving the partial-update semantics
+// while decoupling the pure builders (MIO-2543) from *cobra.Command. A GetString
+// error on a registered string flag is unreachable, so it maps to nil (unset),
+// exactly as setStringFlag silently skips it.
+func changedString(cmd *cobra.Command, name string) *string {
+	if !cmd.Flags().Changed(name) {
+		return nil
+	}
+	v, err := cmd.Flags().GetString(name)
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
+// changedBool returns a pointer to a bool flag's value iff the user changed it,
+// and nil otherwise (the pointer-returning counterpart of setBoolFlag).
+func changedBool(cmd *cobra.Command, name string) *bool {
+	if !cmd.Flags().Changed(name) {
+		return nil
+	}
+	v, err := cmd.Flags().GetBool(name)
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
+// changedInt returns a pointer to an int flag's value iff the user changed it,
+// and nil otherwise (the pointer-returning counterpart of setIntFlag).
+func changedInt(cmd *cobra.Command, name string) *int {
+	if !cmd.Flags().Changed(name) {
+		return nil
+	}
+	v, err := cmd.Flags().GetInt(name)
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
 // parseJSONFlag parses a flag value as JSON, returning the decoded value (an
 // object, array, or scalar). A value beginning with "@" is treated as a path to
 // a file whose contents are the JSON (e.g. --conditions @conditions.json). Used
