@@ -51,6 +51,10 @@ release, or --prefix to install into a different directory.`,
 		if err := selfUpdateRunner(cmd.Context(), opts, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 			return errs.Wrap(errs.ExitGeneric, err)
 		}
+		// After a successful self-update, keep any managed agent skill in sync:
+		// refresh an unmodified install, never clobber a hand-edited one, and
+		// nudge if none is installed. Best-effort — never fails the update.
+		refreshManagedSkills(cmd.OutOrStdout())
 		return nil
 	},
 }
