@@ -194,100 +194,79 @@ var hubsCreateCmd = &cobra.Command{
 		// Build and validate attributes BEFORE resolving auth/team: a malformed
 		// flag must exit with a usage error and fire NO HTTP request, even when
 		// --team is a name/slug that would otherwise trigger a resolution GET.
-		attrs := map[string]any{}
-		setMappedString(cmd, attrs, "name", "title")
-		setStringFlag(cmd, attrs, "slug")
-		setStringFlag(cmd, attrs, "description")
-		setMappedBoolInverted(cmd, attrs, "published", "is_private")
+		// The typed-column base is assembled here with the shared flag helpers
+		// (which encode the partial-update "only changed flags" semantics); the
+		// presentation blobs, logo/favicon overrides and all shape validation are
+		// applied by buildHubCreateAttrs so the scaffold (MIO-2543) can build the
+		// same POST body without a *cobra.Command.
+		base := map[string]any{}
+		setMappedString(cmd, base, "name", "title")
+		setStringFlag(cmd, base, "slug")
+		setStringFlag(cmd, base, "description")
+		setMappedBoolInverted(cmd, base, "published", "is_private")
 		// discussions_default_title/description are typed columns (MIO-2274) — a
 		// plain partial update; an empty string clears to null.
-		setNullableMappedString(cmd, attrs, "discussions-default-title", "discussions_default_title")
-		setNullableMappedString(cmd, attrs, "discussions-default-description", "discussions_default_description")
+		setNullableMappedString(cmd, base, "discussions-default-title", "discussions_default_title")
+		setNullableMappedString(cmd, base, "discussions-default-description", "discussions_default_description")
 
 		// Presentation-blob flags: opaque JSONB objects passed through verbatim so
 		// an operator or agent can author a hub's branding, navigation, settings and
-		// feature-guard meta in the same POST. (MIO-2254)
-		for _, jf := range []struct{ flag, key string }{
-			{"branding-json", "branding"},
-			{"navigation-json", "navigation"},
-			{"settings-json", "settings"},
-			{"meta-json", "meta"},
-		} {
-			if err := setMappedJSONObjectFlag(cmd, attrs, jf.flag, jf.key); err != nil {
-				return err
-			}
+		// feature-guard meta in the same POST. Parsed in a stable order so the first
+		// malformed blob is the one reported. (MIO-2254)
+		branding, err := parseJSONObjectFlag(cmd, "branding-json")
+		if err != nil {
+			return err
+		}
+		navigation, err := parseJSONObjectFlag(cmd, "navigation-json")
+		if err != nil {
+			return err
+		}
+		settings, err := parseJSONObjectFlag(cmd, "settings-json")
+		if err != nil {
+			return err
+		}
+		meta, err := parseJSONObjectFlag(cmd, "meta-json")
+		if err != nil {
+			return err
 		}
 
-		// Untyped header/footer items are dropped by the hub renderer, so reject
-		// them up front rather than shipping a menu that renders empty. (MIO-2255)
-		// Hub-relative url hrefs must stay within this hub's "/{slug}" mount — on
-		// create the slug is the --slug flag value. (MIO-2270)
-		if nav, ok := attrs["navigation"].(map[string]any); ok {
-			if err := validateNavigationBlob(nav); err != nil {
-				return err
-			}
-			slug, _ := attrs["slug"].(string)
-			if err := validateNavigationHrefs(nav, slug); err != nil {
-				return err
-			}
-		}
-
-		// --logo-url merges into the branding object rather than replacing it, so it
-		// composes with --branding-json (the backend assigns branding wholesale, so
-		// the CLI must send one already-merged object).
+		// --logo-url / --favicon-url merge into the branding object (a nil pointer
+		// means the flag was not given, so branding is left untouched); the merge
+		// itself lives in buildHubCreateAttrs. (MIO-2522)
+		var logo *string
 		if cmd.Flags().Changed("logo-url") {
-			logo, err := cmd.Flags().GetString("logo-url")
-			if err != nil {
-				return errs.New(errs.ExitUsage, "--logo-url: %s", err)
+			v, ferr := cmd.Flags().GetString("logo-url")
+			if ferr != nil {
+				return errs.New(errs.ExitUsage, "--logo-url: %s", ferr)
 			}
-			branding, _ := attrs["branding"].(map[string]any)
-			if branding == nil {
-				branding = map[string]any{}
-			}
-			branding["logo_url"] = logo
-			attrs["branding"] = branding
+			logo = &v
 		}
-
-		// --favicon-url merges into the branding object (branding.favicon_url is an
-		// accepted branding key), exactly like --logo-url, so it composes with
-		// --branding-json (the backend assigns branding wholesale). (MIO-2522)
+		var favicon *string
 		if cmd.Flags().Changed("favicon-url") {
-			favicon, ferr := cmd.Flags().GetString("favicon-url")
+			v, ferr := cmd.Flags().GetString("favicon-url")
 			if ferr != nil {
 				return errs.New(errs.ExitUsage, "--favicon-url: %s", ferr)
 			}
-			branding, _ := attrs["branding"].(map[string]any)
-			if branding == nil {
-				branding = map[string]any{}
-			}
-			branding["favicon_url"] = favicon
-			attrs["branding"] = branding
+			favicon = &v
 		}
-
-		// Best-effort key validation for the opaque JSONB blobs: an unknown key is
-		// stored verbatim by the API (no server-side schema), so a typo silently
-		// has no effect. Warn by default (stderr, so --output json/yaml is never
-		// corrupted); --strict-keys turns it into a usage error. Runs BEFORE
-		// hubsContext() so a strict rejection fires no HTTP request. (MIO-2515)
 		strictKeys, _ := cmd.Flags().GetBool("strict-keys")
-		if b, ok := attrs["branding"].(map[string]any); ok {
-			if err := validateBlobKeys(cmd.ErrOrStderr(), "branding", b, brandingKeys, nil, strictKeys); err != nil {
-				return err
-			}
-		}
-		if s, ok := attrs["settings"].(map[string]any); ok {
-			if err := validateBlobKeys(cmd.ErrOrStderr(), "settings", s, settingsKeys, settingsNestedKeys, strictKeys); err != nil {
-				return err
-			}
-		}
-		if m, ok := attrs["meta"].(map[string]any); ok {
-			if err := validateBlobKeys(cmd.ErrOrStderr(), "meta", m, metaKeys, nil, strictKeys); err != nil {
-				return err
-			}
-		}
 
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
+		// buildHubCreateAttrs runs BEFORE hubsContext() below so any blob/nav/key
+		// validation failure exits with a usage error and fires no HTTP request,
+		// even when --team is a name/slug that would otherwise trigger a resolution
+		// GET (MIO-2254/2255/2515).
+		attrs, err := buildHubCreateAttrs(hubCreateParams{
+			Base:       base,
+			Branding:   branding,
+			Navigation: navigation,
+			Settings:   settings,
+			Meta:       meta,
+			Logo:       logo,
+			Favicon:    favicon,
+			Strict:     strictKeys,
+		}, cmd.ErrOrStderr())
+		if err != nil {
+			return err
 		}
 
 		c, teamID, err := hubsContext(cmd)
@@ -314,6 +293,120 @@ var hubsCreateCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+// hubCreateParams carries the pre-parsed inputs for `hubs create`, decoupled from
+// *cobra.Command so both the command and the scaffold (MIO-2543) can build the
+// same POST body. The CALLER owns flag parsing (each --*-json blob, --logo-url/
+// --favicon-url); buildHubCreateAttrs owns the shape validation the command
+// performs — the navigation blob + hub-scoped href check (the slug is the create
+// --slug value, known up front, so no retrieve is needed) and the best-effort
+// blob-key check. It mirrors blobPatches, the update-side equivalent.
+type hubCreateParams struct {
+	// Base is the typed-column attribute set the caller already built with the
+	// set* flag helpers (title/slug/description/is_private/discussions_*). The
+	// blobs and logo/favicon merges are layered onto a COPY of it, so the caller's
+	// map is never mutated.
+	Base map[string]any
+
+	// Branding/Navigation/Settings/Meta are the parsed --*-json blobs, passed
+	// through verbatim (nil = flag not given).
+	Branding   map[string]any
+	Navigation map[string]any
+	Settings   map[string]any
+	Meta       map[string]any
+
+	// Logo/Favicon are the scalar convenience overrides merged into branding
+	// (a nil pointer means the flag was not given).
+	Logo    *string // --logo-url → branding.logo_url
+	Favicon *string // --favicon-url → branding.favicon_url
+
+	// Strict selects strict blob-key validation (an unknown key errors instead of
+	// warning). Only the INCOMING blob keys are inspected.
+	Strict bool
+}
+
+// buildHubCreateAttrs assembles the POST body for `hubs create` from p: it layers
+// the presentation blobs onto a COPY of the typed-column base, validates the
+// navigation blob + hub-scoped hrefs (the slug is the create --slug value, known
+// up front), merges the --logo-url/--favicon-url overrides into branding, runs
+// the best-effort blob-key check, and rejects an empty create. It is a pure
+// builder: it takes no *cobra.Command and mutates neither p.Base nor p.Branding.
+// warnW receives the best-effort blob-key warnings.
+func buildHubCreateAttrs(p hubCreateParams, warnW io.Writer) (map[string]any, error) {
+	// Start from a COPY of the caller's base attrs so the blob merges never mutate
+	// p.Base (the scaffold may reuse a template's base across hubs).
+	attrs := make(map[string]any, len(p.Base)+4)
+	for k, v := range p.Base {
+		attrs[k] = v
+	}
+	if p.Branding != nil {
+		attrs["branding"] = p.Branding
+	}
+	if p.Navigation != nil {
+		attrs["navigation"] = p.Navigation
+	}
+	if p.Settings != nil {
+		attrs["settings"] = p.Settings
+	}
+	if p.Meta != nil {
+		attrs["meta"] = p.Meta
+	}
+
+	// Untyped header/footer items are dropped by the hub renderer, so reject them
+	// up front rather than shipping a menu that renders empty (MIO-2255). Hub-
+	// relative url hrefs must stay within this hub's "/{slug}" mount — on create
+	// the slug is the --slug flag value carried in Base (MIO-2270).
+	if nav, ok := attrs["navigation"].(map[string]any); ok {
+		if err := validateNavigationBlob(nav); err != nil {
+			return nil, err
+		}
+		slug, _ := attrs["slug"].(string)
+		if err := validateNavigationHrefs(nav, slug); err != nil {
+			return nil, err
+		}
+	}
+
+	// --logo-url / --favicon-url merge into the branding object rather than
+	// replacing it, so they compose with --branding-json (the backend assigns
+	// branding wholesale, so the CLI must send one already-merged object). The
+	// merge is applied on a COPY so p.Branding is never mutated. (MIO-2522)
+	if p.Logo != nil || p.Favicon != nil {
+		branding := attrMap(attrs["branding"])
+		if p.Logo != nil {
+			branding["logo_url"] = *p.Logo
+		}
+		if p.Favicon != nil {
+			branding["favicon_url"] = *p.Favicon
+		}
+		attrs["branding"] = branding
+	}
+
+	// Best-effort key validation for the opaque JSONB blobs: an unknown key is
+	// stored verbatim by the API (no server-side schema), so a typo silently has
+	// no effect. Warn by default (to warnW, so --output json/yaml on stdout is
+	// never corrupted); Strict turns it into a usage error. (MIO-2515)
+	if b, ok := attrs["branding"].(map[string]any); ok {
+		if err := validateBlobKeys(warnW, "branding", b, brandingKeys, nil, p.Strict); err != nil {
+			return nil, err
+		}
+	}
+	if s, ok := attrs["settings"].(map[string]any); ok {
+		if err := validateBlobKeys(warnW, "settings", s, settingsKeys, settingsNestedKeys, p.Strict); err != nil {
+			return nil, err
+		}
+	}
+	if m, ok := attrs["meta"].(map[string]any); ok {
+		if err := validateBlobKeys(warnW, "meta", m, metaKeys, nil, p.Strict); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(attrs) == 0 {
+		return nil, errs.New(errs.ExitUsage, "nothing to create: set at least --name")
+	}
+
+	return attrs, nil
 }
 
 // ---- list -------------------------------------------------------------------
@@ -385,7 +478,18 @@ var hubsUpdateCmd = &cobra.Command{
 		setMappedString(cmd, attrs, "name", "title")
 		setStringFlag(cmd, attrs, "slug")
 		setStringFlag(cmd, attrs, "description")
-		setMappedBoolInverted(cmd, attrs, "published", "is_private")
+		// --published → is_private (inverted), via publishedStateAttrs so the
+		// scaffold publish step (MIO-2543) shares the exact inversion. Gated on
+		// Changed() so an unset flag stays out of the PATCH (partial update); a
+		// GetBool failure on a registered bool flag cannot occur, so it is silently
+		// skipped, exactly as setMappedBoolInverted did.
+		if cmd.Flags().Changed("published") {
+			if published, perr := cmd.Flags().GetBool("published"); perr == nil {
+				for k, v := range publishedStateAttrs(published) {
+					attrs[k] = v
+				}
+			}
+		}
 		setNullableMappedString(cmd, attrs, "discussions-default-title", "discussions_default_title")
 		setNullableMappedString(cmd, attrs, "discussions-default-description", "discussions_default_description")
 
@@ -500,6 +604,16 @@ var hubsUpdateCmd = &cobra.Command{
 		injectHubDerivedState(res)
 		return c.render(cmd, res)
 	},
+}
+
+// publishedStateAttrs maps the CLI's --published intent onto the single writable
+// backend attribute, is_private, with the polarity inverted (published=true →
+// is_private=false). "published" itself is NOT a writable attribute, so it is
+// never emitted. Both `hubs update`'s --published handling and the scaffold's
+// publish step (MIO-2543) route through this one helper so the inversion has a
+// single source of truth.
+func publishedStateAttrs(published bool) map[string]any {
+	return map[string]any{"is_private": !published}
 }
 
 // blobPatches carries the parsed, pre-validated blob edits for a hub read-modify-
@@ -824,15 +938,9 @@ Exactly one of --content or --reset-content must be provided:
 			return errs.New(errs.ExitUsage, "provide exactly one of --content or --reset-content")
 		}
 
-		attrs := map[string]any{
-			"policy_type": policyType,
-		}
+		policy := hubPolicy{PolicyType: policyType}
 
-		if resetChanged {
-			// Explicitly send content: null to revert to the backend default.
-			// A Go map value of nil marshals to JSON null.
-			attrs["content"] = nil
-		} else {
+		if !resetChanged {
 			rawContent, ferr := cmd.Flags().GetString("content")
 			if ferr != nil {
 				return errs.New(errs.ExitUsage, "--content: %s", ferr.Error())
@@ -848,21 +956,66 @@ Exactly one of --content or --reset-content must be provided:
 				}
 				content = string(b)
 			}
-			attrs["content"] = content
+			policy.Content = &content
 		}
+		// A --reset-content leaves policy.Content nil; applyHubPolicies sends that as
+		// content: null to revert to the backend default.
 
 		// --require-acceptance is only included when the flag was explicitly set.
 		// Sending it with policy_type=privacy_policy is a backend 422; we let the
 		// backend enforce that constraint rather than pre-blocking here.
-		setBoolFlag(cmd, attrs, "require-acceptance")
+		if cmd.Flags().Changed("require-acceptance") {
+			if ra, rerr := cmd.Flags().GetBool("require-acceptance"); rerr == nil {
+				policy.RequireAcceptance = &ra
+			}
+		}
 
-		hubID := args[0]
-		res, err := c.client.Update(c.ctx, hubsPoliciesPath(teamID, hubID), attrs)
+		res, err := applyHubPolicies(c.ctx, c.client, teamID, args[0], policy)
 		if err != nil {
 			return err
 		}
 		return c.render(cmd, res)
 	},
+}
+
+// hubPolicy carries the resolved inputs for a single hub legal-policy write,
+// decoupled from *cobra.Command so both `hubs policies update` and the scaffold
+// (MIO-2543) can PATCH the same body. The CALLER owns the flag ergonomics —
+// validating --policy-type, the --content/--reset-content mutual exclusion, and
+// the @file read — leaving applyHubPolicies to build and send the request.
+type hubPolicy struct {
+	// PolicyType is the validated policy kind ("tos" | "privacy_policy").
+	PolicyType string
+
+	// Content is the policy body. A nil pointer RESETS the policy (sends content:
+	// null to revert to the backend default); a non-nil pointer sets the content
+	// verbatim (an empty string is a valid, explicit empty body).
+	Content *string
+
+	// RequireAcceptance, when non-nil, sets require_acceptance; nil omits it from
+	// the write (partial update).
+	RequireAcceptance *bool
+}
+
+// applyHubPolicies builds the policies PATCH body from p and writes it to
+// /api/teams/{team_id}/hubs/{hub_id}/policies. content is ALWAYS present in the
+// body: the value when p.Content is set, JSON null (a Go nil) when it is not, so
+// a reset is an explicit null rather than an omitted field. It is a pure builder:
+// it takes no *cobra.Command.
+func applyHubPolicies(ctx context.Context, cl *client.Client, teamID, hubID string, p hubPolicy) (*client.Resource, error) {
+	attrs := map[string]any{
+		"policy_type": p.PolicyType,
+	}
+	if p.Content != nil {
+		attrs["content"] = *p.Content
+	} else {
+		// A Go map value of nil marshals to JSON null (revert to backend default).
+		attrs["content"] = nil
+	}
+	if p.RequireAcceptance != nil {
+		attrs["require_acceptance"] = *p.RequireAcceptance
+	}
+	return cl.Update(ctx, hubsPoliciesPath(teamID, hubID), attrs)
 }
 
 func init() {
