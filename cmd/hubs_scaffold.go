@@ -51,6 +51,12 @@ type scaffoldContext struct {
 
 	hubID, hubSlug string
 	isPrivate      bool
+	// isPrivateKnown reports whether isPrivate was actually observed from the server
+	// (create response / resume GET / publish PATCH) rather than left at its bool
+	// zero value. The summary keys the LIVE/PRIVATE label off the REAL state
+	// (isPrivate), so it must not read a never-populated false as "public": when the
+	// state is unknown it falls back to PRIVATE (the safe direction).
+	isPrivateKnown bool
 
 	// Create-mode identity overrides from the core --name/--slug flags (Task 11).
 	// The template carries no hub identity — it is the reusable "experience", and
@@ -179,7 +185,9 @@ func stepHub(sc *scaffoldContext, _ *hubtemplate.Template) error {
 		}
 		sc.hubID = res.ID
 		sc.hubSlug, _ = res.Attributes["slug"].(string)
-		sc.isPrivate, _ = res.Attributes["is_private"].(bool)
+		if p, ok := res.Attributes["is_private"].(bool); ok {
+			sc.isPrivate, sc.isPrivateKnown = p, true
+		}
 		return nil
 	})
 }
@@ -851,8 +859,10 @@ func stepPublish(sc *scaffoldContext, _ *hubtemplate.Template) error {
 		if err != nil {
 			return err
 		}
-		// Reflect the new public state back into the context.
-		sc.isPrivate = false
+		// Reflect the new public state back into the context. A successful publish
+		// PATCH means the hub IS public regardless of what the response echoes, so the
+		// state is now definitively known.
+		sc.isPrivate, sc.isPrivateKnown = false, true
 		if res != nil {
 			if p, ok := res.Attributes["is_private"].(bool); ok {
 				sc.isPrivate = p
@@ -972,7 +982,9 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 		}
 		sc.hubID = hubID
 		sc.hubSlug, _ = res.Attributes["slug"].(string)
-		sc.isPrivate, _ = res.Attributes["is_private"].(bool)
+		if p, ok := res.Attributes["is_private"].(bool); ok {
+			sc.isPrivate, sc.isPrivateKnown = p, true
+		}
 	}
 
 	if scaffoldAfterResolve != nil {
@@ -993,6 +1005,11 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 
 	if dryRun {
 		printScaffoldPlan(cmd.OutOrStdout(), templateID, plan)
+	} else {
+		// Real run: echo the finished hub's reference + published state + a recap so
+		// the operator knows what landed and how to go live (design §Apply pipeline
+		// step 8 + §Command surface). Dry-run keeps the plan output untouched.
+		printScaffoldSummary(cmd.OutOrStdout(), sc, tmpl, templateID)
 	}
 	return nil
 }
@@ -1022,18 +1039,110 @@ func printScaffoldRecovery(w io.Writer, sc *scaffoldContext, templateID string) 
 	}
 }
 
+// printScaffoldSummary writes the end-of-run summary for a REAL (non-dry-run)
+// scaffold (design §Apply pipeline step 8 + §Command surface):
+//
+//   - the hub's reference: its slug + id. NOTE (MIO-2521): the public hub URL is
+//     NOT returned by the API and cannot be derived by the CLI, so we echo the
+//     slug + id + the HOST-RELATIVE form (<your-hub-frontend-host>/<slug>) instead
+//     of fabricating an absolute URL that could point at the wrong host;
+//   - the published/private state: read from the REAL server state (isPrivate),
+//     NOT the --publish intent — so a resume onto an already-public hub reports
+//     LIVE, and a publish that left it private is never mislabeled. When the state
+//     was never observed (isPrivateKnown false) it falls back to PRIVATE (safe);
+//   - a recap of the hub's SHAPE from the template (space/playlist/onboarding/
+//     policy counts + homepage). Worded "Includes:" — not "Applied:" — because on a
+//     resume the skip-if-exists / O1-gate steps converge WITHOUT re-creating, so the
+//     line must describe what the hub contains, not claim this run wrote it all.
+func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *hubtemplate.Template, templateID string) {
+	fmt.Fprintf(w, "Scaffolded hub %q (id %s) from template %q.\n", sc.hubSlug, sc.hubID, templateID)
+
+	// Shape recap: counts come from the template (the experience the hub converged
+	// to), so a resume run still reports the full shape rather than only the
+	// resources this invocation happened to create.
+	parts := []string{
+		fmt.Sprintf("%d space(s)", len(t.Spaces)),
+		fmt.Sprintf("%d playlist(s)", len(t.Playlists)),
+	}
+	if len(t.Onboarding) > 0 {
+		parts = append(parts, fmt.Sprintf("%d onboarding attribute(s)", len(t.Onboarding)))
+	}
+	if len(t.Policies) > 0 {
+		parts = append(parts, fmt.Sprintf("%d policy(ies)", len(t.Policies)))
+	}
+	if t.Homepage != nil && t.Homepage.Template != "" {
+		parts = append(parts, "homepage set")
+	}
+	fmt.Fprintf(w, "  Includes: %s.\n", strings.Join(parts, ", "))
+
+	// Published state, read from the REAL server-observed is_private (published =
+	// !isPrivate). Only claim LIVE when the state is KNOWN and public; an unknown
+	// state falls back to PRIVATE (the safe direction) rather than a bool-zero LIVE.
+	published := sc.isPrivateKnown && !sc.isPrivate
+	if published {
+		fmt.Fprintln(w, "  State: LIVE — the hub is published (public).")
+	} else {
+		fmt.Fprintf(w, "  State: PRIVATE — the hub is not published yet. Publish with: mio hubs update %s --published (or re-run scaffold with --publish).\n", sc.hubID)
+	}
+
+	// Public URL (MIO-2521): host-relative only — the CLI cannot know the hub
+	// frontend host, so the operator substitutes it.
+	fmt.Fprintf(w, "  Public URL: <your-hub-frontend-host>/%s (the API does not return the hub's public URL; substitute your hub frontend host).\n", sc.hubSlug)
+}
+
+// hubsTemplatesCmd lists the built-in hub scaffold templates that
+// `hubs scaffold --template <id>` can apply. The templates are embedded in the
+// binary (internal/hubtemplate), so this is a purely OFFLINE listing — it needs
+// no API key. It renders through the standard output layer (c.render) so
+// --output json|table|plain and --jq all work like any other list command.
+var hubsTemplatesCmd = &cobra.Command{
+	Use:   "templates",
+	Short: "List the built-in hub scaffold templates.",
+	Long: `List the built-in hub scaffold templates that 'mio hubs scaffold --template <id>'
+can apply. Each template is embedded in the binary, so this command needs no
+network access or credentials.`,
+	Example: `  mio hubs templates
+  mio hubs templates --output json`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		c, err := newContext(cmd)
+		if err != nil {
+			return err
+		}
+		ids := hubtemplate.List()
+		rows := make([]any, 0, len(ids))
+		for _, id := range ids {
+			rows = append(rows, map[string]any{"id": id})
+		}
+		return c.render(cmd, rows)
+	},
+}
+
 func init() {
-	// Self-register on the hubs group (hubsCmd is defined in hubs.go). CORE flags
-	// only (MIO-2543 Task 11); Task 21 adds --publish + the --favicon-url/
-	// --logo-url/--registration-enabled overrides and the `hubs templates` list
-	// command. --hub is the persistent root context flag inherited here, so it is
-	// NOT redefined locally (a local redefinition would shadow the persistent one
-	// and drop it from the resolved context).
+	// Self-register on the hubs group (hubsCmd is defined in hubs.go). --hub is the
+	// persistent root context flag inherited here, so it is NOT redefined locally (a
+	// local redefinition would shadow the persistent one and drop it from the
+	// resolved context).
+	//
+	// CORE flags (MIO-2543 Task 11): --template/--name/--slug/--dry-run.
 	hubsScaffoldCmd.Flags().String("template", "", "Template id to apply (e.g. community). Required.")
 	hubsScaffoldCmd.Flags().String("name", "", "Display name for the new hub (create mode).")
 	hubsScaffoldCmd.Flags().String("slug", "", "URL slug for the new hub (create mode).")
 	hubsScaffoldCmd.Flags().Bool("dry-run", false, "Print the ordered plan and make no changes.")
 	_ = hubsScaffoldCmd.MarkFlagRequired("template")
 
+	// Phase-5 flags (MIO-2543 Task 21): the --publish gate + the presentation
+	// overrides. runHubsScaffold already reads these existence-guarded
+	// (GetBool("publish"), changedString/changedBool) and threads them into the
+	// scaffoldContext, from which stepBlobs applies favicon/logo/registration and
+	// stepPublish reads publish — so registering them here is all the wiring the
+	// overrides need to flow end-to-end.
+	hubsScaffoldCmd.Flags().Bool("publish", false,
+		"Publish the hub as the final step (go live). Default off — the hub stays private so you can review first.")
+	hubsScaffoldCmd.Flags().String("favicon-url", "", "Override the template's branding.favicon_url.")
+	hubsScaffoldCmd.Flags().String("logo-url", "", "Override the template's branding.logo_url.")
+	hubsScaffoldCmd.Flags().Bool("registration-enabled", false, "Override the template's settings.registration.enabled.")
+
 	hubsCmd.AddCommand(hubsScaffoldCmd)
+	hubsCmd.AddCommand(hubsTemplatesCmd)
 }

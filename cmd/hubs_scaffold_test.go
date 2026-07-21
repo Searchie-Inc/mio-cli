@@ -1226,3 +1226,258 @@ func TestStepBackendGated_RecordsSkipNoteWithTickets(t *testing.T) {
 		t.Errorf("skip detail = %q, want it to name MIO-2262 and MIO-2540", detail)
 	}
 }
+
+// ─── Task 21: `hubs templates` + --publish / override flags (CLI-level) ────────
+//
+// These drive the FULL cobra command tree (runContract) — not the step functions
+// directly — so they prove the Phase-5 flags are registered AND thread end-to-end
+// through runHubsScaffold → scaffoldContext → the relevant step. The step-level
+// tests above already pin each step's request shape; these pin the WIRING.
+
+// scaffoldCapture records the hub PATCH bodies a full scaffold run emits, so a
+// CLI-level test can inspect the blobs PATCH (branding/settings overrides) and
+// the publish PATCH (is_private) without threading through every step.
+type scaffoldCapture struct {
+	hubID          string
+	hubPatchBodies [][]byte
+}
+
+// fullScaffoldServer answers every request a full CREATE-mode scaffold run of the
+// community template makes (hub id hub_new, is_private:true), so a CLI-level test
+// can drive `hubs scaffold` end-to-end.
+func fullScaffoldServer(t *testing.T) (*httptest.Server, *scaffoldCapture) {
+	return fullScaffoldServerFor(t, "hub_new", true)
+}
+
+// fullScaffoldServerFor answers every request a full scaffold run of the community
+// template makes for the given hub id, reporting the hub's is_private on the hub
+// GET (so resume-mode tests can seed an already-published hub): the hub create +
+// retrieve, empty collection lists (so every idempotency pre-check creates on a
+// fresh hub), generic created children, the homepage tree PUT — and it CAPTURES
+// every PATCH to the hub itself (blobs + publish).
+func fullScaffoldServerFor(t *testing.T, hubID string, isPrivate bool) (*httptest.Server, *scaffoldCapture) {
+	t.Helper()
+	rec := &scaffoldCapture{hubID: hubID}
+	// Match the hub itself by SUFFIX: the client emits paths under /api/v1/... , so
+	// an exact "/api/teams/…/hubs/<id>" compare would never match. The hub's own
+	// sub-collections all carry a further segment (/spaces, /pages, …), so only the
+	// hub resource and its PATCHes end in "/hubs/<id>".
+	hubSuffix := "/hubs/" + hubID
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		path := r.URL.Path
+		switch {
+		case r.Method == http.MethodPatch && strings.HasSuffix(path, hubSuffix): // blobs OR publish PATCH
+			body, _ := io.ReadAll(r.Body)
+			rec.hubPatchBodies = append(rec.hubPatchBodies, body)
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"hubs","attributes":{"slug":"my-community","is_private":false}}}`, hubID)
+		case r.Method == http.MethodPatch && strings.HasSuffix(path, "/policies"): // policy PATCH
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pol_1","type":"hub_policies","attributes":{}}}`))
+		case r.Method == http.MethodPut && strings.HasSuffix(path, "/tree"): // homepage draft tree PUT
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(path, hubSuffix): // hub retrieve (resume + blobs RMW); branded so the merge has siblings
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"hubs","attributes":{"slug":"my-community","is_private":%t,"branding":{"primary":"#000"}}}}`, hubID, isPrivate)
+		case r.Method == http.MethodGet: // any other GET is a collection list — empty on a fresh hub
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/hubs"): // hub create
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"hubs","attributes":{"slug":"my-community","is_private":true}}}`, hubID)
+		case r.Method == http.MethodPost: // any created child (space/def/hub-config/playlist/page/publish)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"res_new","type":"resources","attributes":{"slug":"home","is_homepage":true}}}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, rec
+}
+
+// TestHubsTemplates_ListsCommunity: `hubs templates` lists the built-in templates,
+// including `community`, and needs no credentials (embedded, offline).
+func TestHubsTemplates_ListsCommunity(t *testing.T) {
+	res := runContract(t, offlineEnv(), "hubs", "templates")
+	if res.Code != errs.ExitOK {
+		t.Fatalf("hubs templates exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "community") {
+		t.Errorf("hubs templates output must include 'community'; stdout=%q", res.Stdout)
+	}
+}
+
+// TestScaffold_PublishFlagReachesStep8: with --publish, the pipeline reaches step
+// 8 and fires a hub PATCH carrying is_private:false (never `published`), and the
+// end-of-run summary reports the hub LIVE.
+func TestScaffold_PublishFlagReachesStep8(t *testing.T) {
+	srv, rec := fullScaffoldServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--publish")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold --publish exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	found := false
+	for _, b := range rec.hubPatchBodies {
+		attrs := decodeHubAttrs(t, b)
+		v, ok := attrs["is_private"]
+		if !ok {
+			continue
+		}
+		found = true
+		if v != false {
+			t.Errorf("publish PATCH is_private = %v, want false", v)
+		}
+		if _, present := attrs["published"]; present {
+			t.Errorf("publish PATCH must NOT carry `published` (not a writable attr); attrs=%v", attrs)
+		}
+	}
+	if !found {
+		t.Errorf("--publish must reach step 8 and PATCH the hub is_private:false; captured %d hub PATCH(es)", len(rec.hubPatchBodies))
+	}
+	if !strings.Contains(res.Stdout, "LIVE") {
+		t.Errorf("summary must report the hub LIVE when published; stdout=%q", res.Stdout)
+	}
+}
+
+// TestScaffold_NoPublishStaysPrivate: without --publish, step 8 fires NO hub
+// PATCH carrying is_private, and the summary reports PRIVATE + how to publish.
+func TestScaffold_NoPublishStaysPrivate(t *testing.T) {
+	srv, rec := fullScaffoldServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	for _, b := range rec.hubPatchBodies {
+		if _, ok := decodeHubAttrs(t, b)["is_private"]; ok {
+			t.Errorf("without --publish no hub PATCH may carry is_private (hub stays private); body=%s", b)
+		}
+	}
+	if !strings.Contains(res.Stdout, "PRIVATE") {
+		t.Errorf("summary must report the hub PRIVATE without --publish; stdout=%q", res.Stdout)
+	}
+	// The summary must say how to go live — both re-run --publish and the update path.
+	if !strings.Contains(res.Stdout, "--published") || !strings.Contains(res.Stdout, "--publish") {
+		t.Errorf("summary must explain how to publish (mio hubs update --published / re-run --publish); stdout=%q", res.Stdout)
+	}
+}
+
+// TestScaffold_ResumePublishedHubSummaryLive: a RESUME (--hub) onto a hub that is
+// ALREADY published (GET returns is_private:false) must report LIVE — even though
+// --publish was NOT passed. The state label keys off the real server-observed
+// is_private, not the --publish intent, so it never tells the operator to publish
+// a hub that is already live.
+func TestScaffold_ResumePublishedHubSummaryLive(t *testing.T) {
+	srv, _ := fullScaffoldServerFor(t, "hub_pub", false) // already public
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "scaffold", "--hub", "hub_pub", "--template", "community")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("resume scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "LIVE") {
+		t.Errorf("resume onto an already-public hub must report LIVE; stdout=%q", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, "PRIVATE") {
+		t.Errorf("resume onto an already-public hub must NOT report PRIVATE / a publish instruction; stdout=%q", res.Stdout)
+	}
+}
+
+// TestScaffold_OverridesReachBlobsPatch: the Phase-5 presentation overrides thread
+// end-to-end into the blobs PATCH — this is the "don't assume" wiring proof. The
+// community template sets branding.favicon_url and settings.registration.enabled:true;
+// passing --favicon-url/--logo-url with new values and --registration-enabled=FALSE
+// must WIN over the template, proving the overrides actually reach stepBlobs (not
+// just that the template values passed through).
+func TestScaffold_OverridesReachBlobsPatch(t *testing.T) {
+	srv, rec := fullScaffoldServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x",
+			"--favicon-url", "https://override.example/fav.png",
+			"--logo-url", "https://override.example/logo.png",
+			"--registration-enabled=false")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold overrides exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	// Find the blobs PATCH — the one carrying branding (the publish PATCH, if any,
+	// carries only is_private).
+	var blobs map[string]any
+	for _, b := range rec.hubPatchBodies {
+		attrs := decodeHubAttrs(t, b)
+		if _, ok := attrs["branding"]; ok {
+			blobs = attrs
+		}
+	}
+	if blobs == nil {
+		t.Fatalf("no blobs PATCH (with branding) captured; %d hub PATCH(es)", len(rec.hubPatchBodies))
+	}
+
+	branding, _ := blobs["branding"].(map[string]any)
+	if branding["favicon_url"] != "https://override.example/fav.png" {
+		t.Errorf("branding.favicon_url = %v, want the --favicon-url override (proves --favicon-url reached stepBlobs)", branding["favicon_url"])
+	}
+	if branding["logo_url"] != "https://override.example/logo.png" {
+		t.Errorf("branding.logo_url = %v, want the --logo-url override (proves --logo-url reached stepBlobs)", branding["logo_url"])
+	}
+	settings, _ := blobs["settings"].(map[string]any)
+	reg, _ := settings["registration"].(map[string]any)
+	// The template sets enabled:true; --registration-enabled=false must override it.
+	if reg["enabled"] != false {
+		t.Errorf("settings.registration.enabled = %v, want false — the --registration-enabled=false override must reach stepBlobs and WIN over the template's true", reg["enabled"])
+	}
+}
+
+// TestScaffold_RealRunPrintsSummaryWithSlugAndID: a real (non-dry-run) scaffold
+// prints the end-of-run summary echoing the hub's slug + id and the HOST-RELATIVE
+// public URL (never a fabricated absolute URL — MIO-2521).
+func TestScaffold_RealRunPrintsSummaryWithSlugAndID(t *testing.T) {
+	srv, _ := fullScaffoldServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	for _, want := range []string{"my-community", "hub_new"} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Errorf("real-run summary must echo the hub reference %q; stdout=%q", want, res.Stdout)
+		}
+	}
+	if !strings.Contains(res.Stdout, "<your-hub-frontend-host>/my-community") {
+		t.Errorf("summary must echo the host-relative public URL form (MIO-2521), not a fabricated URL; stdout=%q", res.Stdout)
+	}
+}
+
+// TestScaffold_DryRunPrintsPlanNotSummary: --dry-run prints the plan and NOT the
+// real-run summary (the dry-run output stays exactly as it was).
+func TestScaffold_DryRunPrintsPlanNotSummary(t *testing.T) {
+	srv, _ := mutationGuardServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--dry-run")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("dry-run exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "dry-run") {
+		t.Errorf("dry-run must print the plan header; stdout=%q", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, "Scaffolded hub") {
+		t.Errorf("dry-run must NOT print the real-run summary; stdout=%q", res.Stdout)
+	}
+}
