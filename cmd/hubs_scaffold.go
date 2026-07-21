@@ -1086,10 +1086,31 @@ func printScaffoldPlan(w io.Writer, templateID string, plan []planEntry) {
 // print the error text — main.go renders that once from the returned error, so
 // printing it here too would double it on stderr.
 func printScaffoldRecovery(w io.Writer, sc *scaffoldContext, templateID string) {
-	if sc.hubID != "" {
-		fmt.Fprintf(w, "Hub %s was created but the scaffold did not finish (no rollback).\n", sc.hubID)
-		fmt.Fprintf(w, "Resume with: mio hubs scaffold --hub %s --template %s\n", sc.hubID, templateID)
+	if sc.hubID == "" {
+		return
 	}
+	fmt.Fprintf(w, "Hub %s was created but the scaffold did not finish (no rollback).\n", sc.hubID)
+	// Reconstruct an EXACT resume command that preserves the caller's intent —
+	// team, --publish, and the presentation overrides — so following it verbatim
+	// doesn't leave a requested-published hub private or revert an override back
+	// to the template default.
+	parts := []string{"mio hubs scaffold", "--hub " + sc.hubID, "--template " + templateID}
+	if sc.teamID != "" {
+		parts = append(parts, "--team "+sc.teamID)
+	}
+	if sc.publish {
+		parts = append(parts, "--publish")
+	}
+	if sc.faviconOverride != nil {
+		parts = append(parts, fmt.Sprintf("--favicon-url %q", *sc.faviconOverride))
+	}
+	if sc.logoOverride != nil {
+		parts = append(parts, fmt.Sprintf("--logo-url %q", *sc.logoOverride))
+	}
+	if sc.registrationOverride != nil {
+		parts = append(parts, fmt.Sprintf("--registration-enabled=%t", *sc.registrationOverride))
+	}
+	fmt.Fprintf(w, "Resume with: %s\n", strings.Join(parts, " "))
 }
 
 // printScaffoldSummary writes the end-of-run summary for a REAL (non-dry-run)

@@ -1520,3 +1520,20 @@ func TestScopeNavHrefs(t *testing.T) {
 		t.Errorf("empty slug must be a no-op, got %q", h)
 	}
 }
+
+// TestPrintScaffoldRecovery_PreservesIntent verifies the resume command echoes
+// the caller's team, --publish, and overrides so following it verbatim doesn't
+// leave a requested-published hub private or revert an override (MIO-2543).
+func TestPrintScaffoldRecovery_PreservesIntent(t *testing.T) {
+	fav := "https://cdn/x.ico"
+	reg := false
+	sc := &scaffoldContext{hubID: "hub_9", teamID: "t_1", publish: true, faviconOverride: &fav, registrationOverride: &reg}
+	var b strings.Builder
+	printScaffoldRecovery(&b, sc, "community")
+	out := b.String()
+	for _, want := range []string{"--hub hub_9", "--template community", "--team t_1", "--publish", "--favicon-url", "--registration-enabled=false"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("recovery output missing %q; got:\n%s", want, out)
+		}
+	}
+}

@@ -142,10 +142,20 @@ func (t *Template) Validate() error {
 	if t.ID == "" {
 		return fmt.Errorf("template: missing id")
 	}
+	// Slugs must be UNIQUE across spaces and (separately) onboarding defs: each
+	// step snapshots existing server slugs ONCE and skip-if-exists against that
+	// snapshot, so a duplicate template slug would issue a duplicate create
+	// mid-pipeline (the snapshot can't yet include the sibling just created).
+	// Reject at load rather than silently double-create.
+	seenSpaceSlugs := map[string]bool{}
 	for i, s := range t.Spaces {
 		if s.Slug == "" {
 			return fmt.Errorf("template: spaces[%d] missing slug", i)
 		}
+		if seenSpaceSlugs[s.Slug] {
+			return fmt.Errorf("template: spaces[%d] duplicate slug %q", i, s.Slug)
+		}
+		seenSpaceSlugs[s.Slug] = true
 		if s.AccessLevel != "" && !spaceAccessLevels[s.AccessLevel] {
 			return fmt.Errorf("template: spaces[%d] invalid access_level %q", i, s.AccessLevel)
 		}
@@ -153,15 +163,28 @@ func (t *Template) Validate() error {
 			return fmt.Errorf("template: spaces[%d] invalid posting_permission %q", i, s.PostingPermission)
 		}
 	}
+	seenDefSlugs := map[string]bool{}
 	for i, d := range t.Onboarding {
 		if d.Slug == "" {
 			return fmt.Errorf("template: onboarding[%d] missing slug", i)
 		}
+		if seenDefSlugs[d.Slug] {
+			return fmt.Errorf("template: onboarding[%d] duplicate slug %q", i, d.Slug)
+		}
+		seenDefSlugs[d.Slug] = true
 		if d.FieldType == "" {
 			return fmt.Errorf("template: onboarding[%d] missing field_type", i)
 		}
 		if !attrFieldTypes[d.FieldType] {
 			return fmt.Errorf("template: onboarding[%d] invalid field_type %q", i, d.FieldType)
+		}
+	}
+	// Each policy value must be an OBJECT. A non-object (string/number/typo) would
+	// fall through the step's `raw.(map[string]any)` as an empty map and then send
+	// content:null — silently RESETTING the policy content instead of failing loud.
+	for k, v := range t.Policies {
+		if _, ok := v.(map[string]any); !ok {
+			return fmt.Errorf("template: policies[%q] must be an object", k)
 		}
 	}
 	// Keys must be UNIQUE across playlists: the scaffold records playlist ids by
