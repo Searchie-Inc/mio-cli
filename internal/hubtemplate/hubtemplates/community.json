@@ -52,7 +52,6 @@
     }
   ],
   "homepage": {
-    "template": "home-static-cards",
-    "variant": "default"
+    "template": "page-homepage"
   }
 }

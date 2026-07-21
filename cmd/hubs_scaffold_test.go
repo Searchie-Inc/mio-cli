@@ -883,3 +883,346 @@ func TestStepPlaylists_NonEmptyHubSkipsWholeStep(t *testing.T) {
 		t.Errorf("no playlist should be recorded when the step is skipped; map=%v", sc.playlistIDsByKey)
 	}
 }
+
+// ─── Task 18: stepHomepage ────────────────────────────────────────────────────
+
+// newDryRunStepSC builds a dry-run scaffoldContext (fn is NOT executed; steps
+// only record their plan detail) for asserting a step's skip-with-note without
+// firing HTTP. The client is present only so a step that would otherwise dial
+// has a target; dry-run guarantees it is never used.
+func newDryRunStepSC(cl *client.Client) (*scaffoldContext, *[]planEntry) {
+	plan := []planEntry{}
+	sc := newStepSC(cl, "hub_1", "acme")
+	sc.dryRun = true
+	sc.plan = &plan
+	return sc, &plan
+}
+
+// TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0: on a hub with no homepage
+// yet, the step (1) creates the "home" page with identity from the template
+// homepage ref (title/slug/is_homepage + privacy), then (2) PUTs the draft tree —
+// instantiated OFFLINE from the vendored catalog and wrapped as {"root":…} — with
+// the first-set If-Match: 0 header. The page id is captured into the context.
+func TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0(t *testing.T) {
+	var createBody, putBody []byte
+	var ifMatch, putPath string
+	var lists, creates, puts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/tree"):
+			puts++
+			ifMatch = r.Header.Get("If-Match")
+			putPath = r.URL.Path
+			putBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pages"):
+			creates++
+			createBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"page_home","type":"pages","attributes":{"slug":"home","is_homepage":true}}}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pages"): // existingHomepage — none
+			lists++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &hubtemplate.Template{
+		ID:       "community",
+		Homepage: &hubtemplate.HomepageRef{Template: "page-homepage", Privacy: "public"},
+	}
+	if err := stepHomepage(sc, tmpl); err != nil {
+		t.Fatalf("stepHomepage: %v", err)
+	}
+	if lists != 1 || creates != 1 || puts != 1 {
+		t.Fatalf("want 1 list + 1 create + 1 tree PUT; got %d list, %d create, %d put", lists, creates, puts)
+	}
+	// Create body carries the homepage identity — title/slug/is_homepage + privacy.
+	ca := decodeHubAttrs(t, createBody)
+	if ca["title"] != "Home" || ca["slug"] != "home" || ca["is_homepage"] != true || ca["privacy"] != "public" {
+		t.Errorf("create attrs = %v, want title=Home slug=home is_homepage=true privacy=public", ca)
+	}
+	// The tree PUT uses the first-set OCC sentinel (If-Match 0) and the settable
+	// {"root":…} envelope with instantiated nodes (fresh ids + the page children).
+	if ifMatch != "0" {
+		t.Errorf("If-Match = %q, want 0 (first set on a fresh page)", ifMatch)
+	}
+	if !strings.HasSuffix(putPath, "/pages/page_home/tree") {
+		t.Errorf("tree PUT path = %q, want .../pages/page_home/tree", putPath)
+	}
+	tree, ok := decodeHubAttrs(t, putBody)["tree"].(map[string]any)
+	if !ok {
+		t.Fatalf("PUT body has no `tree` attribute; body=%s", putBody)
+	}
+	root, ok := tree["root"].(map[string]any)
+	if !ok {
+		t.Fatalf("tree not wrapped as {\"root\":…}; tree=%v", tree)
+	}
+	if _, ok := root["id"].(string); !ok {
+		t.Errorf("root node missing an instantiated id; root=%v", root)
+	}
+	if kids, ok := root["children"].([]any); !ok || len(kids) == 0 {
+		t.Errorf("root node has no children (page-homepage instantiates 3); root=%v", root)
+	}
+	if sc.homePageID != "page_home" {
+		t.Errorf("homePageID = %q, want page_home", sc.homePageID)
+	}
+}
+
+// TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion: when a
+// homepage already exists (found by is_homepage in the exhaustive page list), the
+// step does NOT create a duplicate — it reuses that page id and reads the OCC
+// draft_version via a TREE-GET (RetrieveWithQuery on the author draft), NOT off the
+// page list, then PUTs the tree with that draft_version as the If-Match token. The
+// list here deliberately omits draft_version to prove it is never sourced there.
+func TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion(t *testing.T) {
+	var ifMatch, putPath, treeGetQuery string
+	var creates, treeGets, puts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/tree"):
+			puts++
+			ifMatch = r.Header.Get("If-Match")
+			putPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pdt_2","type":"page_draft_trees","attributes":{"draft_version":4}}}`))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/tree"): // tree-get for draft_version
+			treeGets++
+			treeGetQuery = r.URL.RawQuery
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pdt_2","type":"page_draft_trees","attributes":{"draft_version":3}}}`))
+		case r.Method == http.MethodPost:
+			creates++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"page_dupe","type":"pages","attributes":{}}}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pages"): // homepage exists (no draft_version on the list)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"page_existing","type":"pages","attributes":{"slug":"home","is_homepage":true}}]}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &hubtemplate.Template{
+		ID:       "community",
+		Homepage: &hubtemplate.HomepageRef{Template: "page-homepage"},
+	}
+	if err := stepHomepage(sc, tmpl); err != nil {
+		t.Fatalf("stepHomepage resume: %v", err)
+	}
+	if creates != 0 {
+		t.Errorf("existing homepage must be reused — want 0 page creates, got %d", creates)
+	}
+	if treeGets != 1 {
+		t.Fatalf("resume must TREE-GET the draft_version exactly once, got %d", treeGets)
+	}
+	if !strings.Contains(treeGetQuery, "audience=author") {
+		t.Errorf("tree-get query = %q, want the author-draft query (audience=author)", treeGetQuery)
+	}
+	if puts != 1 {
+		t.Fatalf("want exactly 1 tree PUT, got %d", puts)
+	}
+	if ifMatch != "3" {
+		t.Errorf("If-Match = %q, want 3 (the draft_version from the tree-get, not the list)", ifMatch)
+	}
+	if !strings.HasSuffix(putPath, "/pages/page_existing/tree") {
+		t.Errorf("tree PUT path = %q, want .../pages/page_existing/tree (reused id)", putPath)
+	}
+	if sc.homePageID != "page_existing" {
+		t.Errorf("homePageID = %q, want reused page_existing", sc.homePageID)
+	}
+}
+
+// TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0: on resume, if the existing
+// homepage has never had a draft, the tree-get 404s — the step TOLERATES that as
+// draft_version 0 and PUTs the first tree with If-Match 0 (never propagating the
+// 404), so a resume onto a created-but-never-tree-set page still converges.
+func TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0(t *testing.T) {
+	var ifMatch string
+	var creates, puts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/tree"):
+			puts++
+			ifMatch = r.Header.Get("If-Match")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/tree"): // tree-get 404 — no draft yet
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"no draft for this page"}]}`))
+		case r.Method == http.MethodPost:
+			creates++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"page_dupe","type":"pages","attributes":{}}}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pages"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"page_existing","type":"pages","attributes":{"slug":"home","is_homepage":true}}]}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &hubtemplate.Template{
+		ID:       "community",
+		Homepage: &hubtemplate.HomepageRef{Template: "page-homepage"},
+	}
+	if err := stepHomepage(sc, tmpl); err != nil {
+		t.Fatalf("stepHomepage resume (404 tree-get): %v", err)
+	}
+	if creates != 0 {
+		t.Errorf("existing homepage must be reused — want 0 creates, got %d", creates)
+	}
+	if puts != 1 {
+		t.Fatalf("want exactly 1 tree PUT, got %d", puts)
+	}
+	if ifMatch != "0" {
+		t.Errorf("If-Match = %q, want 0 (tree-get 404 tolerated as first-set)", ifMatch)
+	}
+	if sc.homePageID != "page_existing" {
+		t.Errorf("homePageID = %q, want reused page_existing", sc.homePageID)
+	}
+}
+
+// TestStepHomepage_UnknownCatalogTemplateErrorsNoHTTP: a homepage ref pointing at a
+// template id that is not in the vendored catalog fails LOUD (ExitUsage) before any
+// HTTP — the tree is resolved offline first, so a bad ref never creates a page.
+func TestStepHomepage_UnknownCatalogTemplateErrorsNoHTTP(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &hubtemplate.Template{
+		ID:       "community",
+		Homepage: &hubtemplate.HomepageRef{Template: "no-such-page-template"},
+	}
+	err := stepHomepage(sc, tmpl)
+	if err == nil {
+		t.Fatal("stepHomepage must ERROR on an unknown catalog template")
+	}
+	if errs.CodeOf(err) != errs.ExitUsage {
+		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
+	}
+	if *fired {
+		t.Error("an unknown homepage template must fail BEFORE any HTTP (tree resolved offline first)")
+	}
+}
+
+// ─── Task 19: stepPublish ─────────────────────────────────────────────────────
+
+// TestStepPublish_TruePatchesIsPrivateFalse: with publish intent set, the step
+// PATCHes the hub to is_private:false (via publishedStateAttrs) — "published" is
+// NOT a writable attribute, so it must never appear in the body.
+func TestStepPublish_TruePatchesIsPrivateFalse(t *testing.T) {
+	var method, path string
+	var body []byte
+	var patches int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if r.Method == http.MethodPatch {
+			patches++
+			method, path = r.Method, r.URL.Path
+			body, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"hub_1","type":"hubs","attributes":{"slug":"acme","is_private":false}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	sc.isPrivate = true
+	sc.publish = true
+	if err := stepPublish(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+		t.Fatalf("stepPublish: %v", err)
+	}
+	if patches != 1 {
+		t.Fatalf("want exactly 1 PATCH, got %d", patches)
+	}
+	if method != http.MethodPatch || !strings.HasSuffix(path, "/hubs/hub_1") {
+		t.Errorf("request = %s %s, want PATCH .../hubs/hub_1", method, path)
+	}
+	attrs := decodeHubAttrs(t, body)
+	if attrs["is_private"] != false {
+		t.Errorf("is_private = %v, want false (go public)", attrs["is_private"])
+	}
+	if _, present := attrs["published"]; present {
+		t.Errorf("body must NOT carry `published` (not a writable attr); attrs=%v", attrs)
+	}
+	if sc.isPrivate {
+		t.Errorf("context isPrivate = %v, want false after publish", sc.isPrivate)
+	}
+}
+
+// TestStepPublish_FalseSkipsNoRequest: without publish intent the step fires NO
+// request — the hub stays private.
+func TestStepPublish_FalseSkipsNoRequest(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	sc.publish = false
+	if err := stepPublish(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+		t.Fatalf("stepPublish skip: %v", err)
+	}
+	if *fired {
+		t.Error("publish=false must fire NO request (hub stays private)")
+	}
+}
+
+// TestStepPublish_FalseRecordsSkipNote: the dry-run plan detail for a private
+// scaffold names the skip and points at --publish.
+func TestStepPublish_FalseRecordsSkipNote(t *testing.T) {
+	sc, plan := newDryRunStepSC(client.New("http://unused", "k"))
+	sc.publish = false
+	if err := stepPublish(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+		t.Fatalf("stepPublish dry-run: %v", err)
+	}
+	if len(*plan) != 1 || (*plan)[0].step != "publish" {
+		t.Fatalf("plan = %v, want one `publish` entry", *plan)
+	}
+	if !strings.Contains((*plan)[0].detail, "--publish") {
+		t.Errorf("skip detail = %q, want a note pointing at --publish", (*plan)[0].detail)
+	}
+}
+
+// ─── Task 20: stepBackendGated ────────────────────────────────────────────────
+
+// TestStepBackendGated_FiresNoRequest: the backend-gated step (welcome post +
+// auto-admin) is not CLI-doable yet, so it must fire no request at all.
+func TestStepBackendGated_FiresNoRequest(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	if err := stepBackendGated(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+		t.Fatalf("stepBackendGated: %v", err)
+	}
+	if *fired {
+		t.Error("backend-gated step must fire NO request (no CLI endpoint exists yet)")
+	}
+}
+
+// TestStepBackendGated_RecordsSkipNoteWithTickets: the skip note names both
+// backend tickets (MIO-2262 welcome post, MIO-2540 auto-admin) so an operator
+// knows exactly what is deferred and why.
+func TestStepBackendGated_RecordsSkipNoteWithTickets(t *testing.T) {
+	sc, plan := newDryRunStepSC(client.New("http://unused", "k"))
+	if err := stepBackendGated(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+		t.Fatalf("stepBackendGated dry-run: %v", err)
+	}
+	if len(*plan) != 1 || (*plan)[0].step != "backend-gated" {
+		t.Fatalf("plan = %v, want one `backend-gated` entry", *plan)
+	}
+	detail := (*plan)[0].detail
+	if !strings.Contains(detail, "MIO-2262") || !strings.Contains(detail, "MIO-2540") {
+		t.Errorf("skip detail = %q, want it to name MIO-2262 and MIO-2540", detail)
+	}
+}
