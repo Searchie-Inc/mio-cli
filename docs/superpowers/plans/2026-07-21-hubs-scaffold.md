@@ -51,6 +51,10 @@
 - [ ] **Step 3: Decide item-level idempotency.** For the chosen key, confirm whether `media playlists items list` lets the step skip already-present `file_id`s on re-run (needed under (a)/(b) so resume doesn't duplicate items). Record: "items add pre-checks `items list` and skips existing file_ids" or "(c) skips the whole step".
 - [ ] **Step 4: Record the O1 decision** as a short subsection appended to this plan (chosen option + the exact match field + item-level behavior). Commit the plan edit.
 
+### O1 decision (resolved 2026-07-21)
+
+Backend `PlaylistCreateAttributes` accepts only `{title, description, visibility}` (mio-backend `app/media/schemas/__init__.py:943`) — no `meta`, no `slug`, so there is no clean hidden marker field (option (b) would abuse the user-visible `description`). **Chosen: option (c).** The playlist step is create-only and **gated on `media hub-playlists list --hub <hub>` being empty**: on a fresh hub it creates the template playlists + items + publishes them; on resume, if the hub already has ≥1 published playlist, the **entire playlist step is skipped**. Item-level idempotency is therefore N/A (the step runs at most once per hub). Documented tradeoff: a prior run that created a team playlist but failed before publishing could leave an orphan team playlist on re-run (team playlists are team-scoped, not hub-gated); acceptable for the fallback — an operator can delete the orphan, and a future first-class idempotency key (if playlists gain a slug/meta) supersedes this. Task 17 implements this gate.
+
 ### Task 0b: O2 is handled inline
 
 O2 (extraction blast radius) is not a separate task — **every extraction task in Phase 2 carries its own behavior-preserving regression test** (capture the original command's emitted attrs BEFORE extracting, assert identical AFTER). No code proceeds until each extraction's guard test is green on both the original command and the new builder.
