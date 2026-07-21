@@ -1,0 +1,61 @@
+{
+  "id": "community",
+  "branding": {
+    "favicon_url": "https://cdn.example.com/community/favicon.png",
+    "logo_url": "https://cdn.example.com/community/logo.png",
+    "colors": {
+      "primary": "#4f46e5"
+    }
+  },
+  "navigation": {
+    "header": {
+      "items": [
+        {
+          "type": "link",
+          "label": "Home",
+          "href": "/"
+        }
+      ]
+    }
+  },
+  "settings": {
+    "registration": {
+      "enabled": true
+    }
+  },
+  "spaces": [
+    {
+      "name": "General",
+      "slug": "general",
+      "description": "Community-wide discussion.",
+      "access_level": "public",
+      "posting_permission": "any_member"
+    }
+  ],
+  "onboarding": [
+    {
+      "name": "Company",
+      "slug": "company",
+      "field_type": "text",
+      "in_onboarding": true,
+      "required": false
+    }
+  ],
+  "policies": {
+    "terms": {
+      "required": true
+    }
+  },
+  "playlists": [
+    {
+      "title": "Welcome",
+      "key": "welcome",
+      "visibility": "public",
+      "file_ids": []
+    }
+  ],
+  "homepage": {
+    "template": "home-static-cards",
+    "variant": "default"
+  }
+}
