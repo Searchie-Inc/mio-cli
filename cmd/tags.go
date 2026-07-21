@@ -309,18 +309,35 @@ var tagsAssignBulkCmd = &cobra.Command{
 			return err
 		}
 
-		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "tag-ids")
-
-		if len(attrs) == 0 {
+		if !cmd.Flags().Changed("tag-ids") {
 			return errs.New(errs.ExitUsage, "nothing to assign: set --tag-ids")
 		}
+		rawIDs, _ := cmd.Flags().GetString("tag-ids")
+		// The backend BulkAssign schema expects tag_ids as a LIST[str], so split
+		// the comma-separated --tag-ids value into an array rather than sending
+		// the raw comma-joined string (the MIO-2552 body-shape bug).
+		ids := make([]string, 0)
+		for _, part := range strings.Split(rawIDs, ",") {
+			if id := strings.TrimSpace(part); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			return errs.New(errs.ExitUsage, "nothing to assign: --tag-ids must contain at least one tag id")
+		}
 
-		res, err := c.client.Create(c.ctx, contactTagsPath(teamID, args[0], "")+"/bulk", attrs)
+		// The bulk endpoint returns the refreshed contact tag list as a JSON:API
+		// COLLECTION (`data: [...]`), so it must be decoded with the collection
+		// decoder — decoding it as a single resource fails with "cannot unmarshal
+		// array into Go struct field singleDoc.data" (the same decode-error class
+		// as MIO-2495, fixed there for single assign). ActionCollection envelopes
+		// the body like Create (type "tag_assignments" derived from the path).
+		attrs := map[string]any{"tag_ids": ids}
+		col, err := c.client.ActionCollection(c.ctx, http.MethodPost, contactTagsPath(teamID, args[0], "")+"/bulk", attrs)
 		if err != nil {
 			return err
 		}
-		return c.render(cmd, res)
+		return c.render(cmd, col)
 	},
 }
 
