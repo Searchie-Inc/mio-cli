@@ -153,6 +153,62 @@ func caHubContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 // defs: create/list/retrieve/update/delete
 // ============================================================================
 
+// attrDefFieldTypes is the set of accepted --field-type values (the backend
+// AttributeType enum). Validated client-side so a typo exits ExitUsage rather
+// than a 422 round-trip — NEW client-side validation added with the pure-builder
+// extraction (MIO-2543); the flag itself is unchanged.
+var attrDefFieldTypes = map[string]bool{
+	"text":     true,
+	"number":   true,
+	"boolean":  true,
+	"date":     true,
+	"multiple": true,
+}
+
+// AttrDefInput carries the resolved attribute-definition create attributes,
+// decoupled from *cobra.Command so both `contact-attributes create` and the
+// scaffold (MIO-2543) can build the same POST body. Each pointer is nil when the
+// flag was unset. The required-flag ergonomics (name/slug/field-type must be set)
+// stay with the command; this builder validates the field-type VALUE.
+type AttrDefInput struct {
+	Name              *string
+	Slug              *string
+	FieldType         *string // → type (validated enum)
+	Description       *string
+	IsContactEditable *bool // → is_contact_editable
+	Position          *int
+}
+
+// buildAttrDefCreateAttrs assembles the attribute-definition create body from d.
+// --field-type maps to the backend field "type" (the domain attribute type, not
+// the JSON:API resource type) and is validated against attrDefFieldTypes. It is a
+// pure builder (takes data, not flags) so the scaffold gets the same validation.
+func buildAttrDefCreateAttrs(d AttrDefInput) (map[string]any, error) {
+	attrs := map[string]any{}
+	if d.Name != nil {
+		attrs["name"] = *d.Name
+	}
+	if d.Slug != nil {
+		attrs["slug"] = *d.Slug
+	}
+	if d.FieldType != nil {
+		if !attrDefFieldTypes[*d.FieldType] {
+			return nil, errs.New(errs.ExitUsage, "invalid --field-type %q: must be text, number, boolean, date, or multiple", *d.FieldType)
+		}
+		attrs["type"] = *d.FieldType
+	}
+	if d.Description != nil {
+		attrs["description"] = *d.Description
+	}
+	if d.IsContactEditable != nil {
+		attrs["is_contact_editable"] = *d.IsContactEditable
+	}
+	if d.Position != nil {
+		attrs["position"] = *d.Position
+	}
+	return attrs, nil
+}
+
 var contactAttributesCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a contact attribute definition.",
@@ -183,14 +239,17 @@ var contactAttributesCreateCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "missing required flags: %s", strings.Join(missing, ", "))
 		}
 
-		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "name")
-		setStringFlag(cmd, attrs, "slug")
-		// --field-type maps to backend field "type" (domain attribute type, not resource type)
-		setMappedString(cmd, attrs, "field-type", "type")
-		setStringFlag(cmd, attrs, "description")
-		setBoolFlag(cmd, attrs, "is-contact-editable")
-		setIntFlag(cmd, attrs, "position")
+		attrs, err := buildAttrDefCreateAttrs(AttrDefInput{
+			Name:              changedString(cmd, "name"),
+			Slug:              changedString(cmd, "slug"),
+			FieldType:         changedString(cmd, "field-type"),
+			Description:       changedString(cmd, "description"),
+			IsContactEditable: changedBool(cmd, "is-contact-editable"),
+			Position:          changedInt(cmd, "position"),
+		})
+		if err != nil {
+			return err
+		}
 
 		res, err := c.client.Create(c.ctx, contactAttributesDefsPath(teamID, ""), attrs)
 		if err != nil {
@@ -469,10 +528,16 @@ its display order and visibility.`,
 
 		// The definition id travels in the body, not the URL: create POSTs to
 		// the COLLECTION path .../contact-attributes. The /{definition_id}
-		// path only supports PATCH/DELETE, so a POST there 405s.
-		attrs := map[string]any{"definition_id": args[0]}
+		// path only supports PATCH/DELETE, so a POST there 405s. buildHubConfigAttrs
+		// owns the definition_id-in-body pattern (MIO-2502) + the bool flags.
+		attrs := buildHubConfigAttrs(args[0], HubConfigInput{
+			IsInProfile:    changedBool(cmd, "in-profile"),
+			IsInOnboarding: changedBool(cmd, "in-onboarding"),
+			IsRequired:     changedBool(cmd, "required"),
+			IsReadOnly:     changedBool(cmd, "read-only"),
+			IsSearchable:   changedBool(cmd, "searchable"),
+		})
 		setIntFlag(cmd, attrs, "position")
-		setHubConfigBoolFlags(cmd, attrs)
 
 		res, err := c.client.Create(c.ctx, contactAttributesHubConfigPath(teamID, hubID, ""), attrs)
 		if err != nil {
@@ -571,13 +636,51 @@ func init() {
 
 // setHubConfigBoolFlags maps the hub-config boolean flags onto their backend
 // attribute keys. Only flags the caller changed are sent, matching the
-// partial-update / upsert semantics of the backend schema.
+// partial-update / upsert semantics of the backend schema. Used by the hub-config
+// UPDATE command (the def id is in the URL there, so no definition_id in the body).
 func setHubConfigBoolFlags(cmd *cobra.Command, attrs map[string]any) {
 	setMappedBool(cmd, attrs, "in-profile", "is_in_profile")
 	setMappedBool(cmd, attrs, "in-onboarding", "is_in_onboarding")
 	setMappedBool(cmd, attrs, "required", "is_required")
 	setMappedBool(cmd, attrs, "read-only", "is_read_only")
 	setMappedBool(cmd, attrs, "searchable", "is_searchable")
+}
+
+// HubConfigInput carries the hub-config boolean flags, decoupled from
+// *cobra.Command. Each pointer is nil when the flag was unset (partial-update /
+// upsert semantics preserved).
+type HubConfigInput struct {
+	IsInProfile    *bool // → is_in_profile
+	IsInOnboarding *bool // → is_in_onboarding
+	IsRequired     *bool // → is_required
+	IsReadOnly     *bool // → is_read_only
+	IsSearchable   *bool // → is_searchable
+}
+
+// buildHubConfigAttrs assembles the hub-config CREATE body: the definition id in
+// the body (MIO-2502 — create POSTs to the collection path, so the def id cannot
+// travel in the URL) plus the bool flags the caller set. It is a pure builder so
+// the scaffold (MIO-2543) can enable an attribute on a hub without a
+// *cobra.Command. Position is added by the caller (setIntFlag), matching the
+// command's previous inline assembly.
+func buildHubConfigAttrs(defID string, d HubConfigInput) map[string]any {
+	attrs := map[string]any{"definition_id": defID}
+	if d.IsInProfile != nil {
+		attrs["is_in_profile"] = *d.IsInProfile
+	}
+	if d.IsInOnboarding != nil {
+		attrs["is_in_onboarding"] = *d.IsInOnboarding
+	}
+	if d.IsRequired != nil {
+		attrs["is_required"] = *d.IsRequired
+	}
+	if d.IsReadOnly != nil {
+		attrs["is_read_only"] = *d.IsReadOnly
+	}
+	if d.IsSearchable != nil {
+		attrs["is_searchable"] = *d.IsSearchable
+	}
+	return attrs
 }
 
 // ============================================================================

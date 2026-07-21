@@ -322,7 +322,7 @@ Scripts and agents can branch on these stable codes.
 | `teams` | `create`, `list`, `retrieve`, `update`, `delete`, `switch` (server-side switch + updates local context); `members list/add/remove` |
 | `users` | `me`, `list`, `retrieve`, `update` |
 | `roles` | `create`, `list`, `retrieve`, `update`, `delete`; `permissions list` |
-| `hubs` | `create`, `list`, `retrieve`, `update`, `delete`; `policies update` |
+| `hubs` | `create`, `list`, `retrieve`, `update`, `delete`; `policies update`; `scaffold` (one-command full-experience hub from a template), `templates` (list templates) |
 | `contacts` | `create`, `list`, `retrieve`, `update`, `delete`, `restore` |
 | `contact-attributes` | `create/list/retrieve/update/delete` defs; `options` sub-group; `hub-config` sub-group; `values get/set` |
 | `tags` | `create`, `list`, `retrieve`, `update`, `delete`, `assign`, `assign-bulk`, `remove` |

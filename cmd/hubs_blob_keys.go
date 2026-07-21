@@ -21,10 +21,9 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"sort"
 	"strings"
-
-	"github.com/spf13/cobra"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
@@ -142,11 +141,13 @@ type unknownBlobKey struct {
 // It follows validateNavigationBlob's shape: collect the violations, then in
 // strict mode return errs.ExitUsage naming the first offender (+ the accepted
 // set, + a hint that dropping --strict-keys allows it), else write a
-// "Warning: …" line to cmd.ErrOrStderr() so it never corrupts --output
-// json/yaml on stdout. Only the KEYS the caller passed are inspected — on
-// update this must be the incoming object, never the retrieved/merged blob, so
-// pre-existing keys on older hubs are not flagged.
-func validateBlobKeys(cmd *cobra.Command, blobName string, obj map[string]any, allow map[string]bool, nested map[string]map[string]bool, strict bool) error {
+// "Warning: …" line to warnW (the caller passes cmd.ErrOrStderr()) so it never
+// corrupts --output json/yaml on stdout. warnW rather than a *cobra.Command
+// keeps this callable from the cobra-free applyHubBlobs builder (MIO-2543).
+// Only the KEYS the caller passed are inspected — on update this must be the
+// incoming object, never the retrieved/merged blob, so pre-existing keys on
+// older hubs are not flagged.
+func validateBlobKeys(warnW io.Writer, blobName string, obj map[string]any, allow map[string]bool, nested map[string]map[string]bool, strict bool) error {
 	if obj == nil {
 		return nil
 	}
@@ -206,7 +207,7 @@ func validateBlobKeys(cmd *cobra.Command, blobName string, obj map[string]any, a
 			"%s. These blobs are stored verbatim by the API with no server-side validation, so a misspelled key silently has no effect. Fix the key, or drop --strict-keys to send unrecognized keys anyway (the hub frontend is the authoritative render schema).",
 			detail)
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(),
+	fmt.Fprintf(warnW,
 		"Warning: %s. It is stored verbatim (a typo silently has no effect); pass --strict-keys to make this an error. This allowlist is best-effort — the hub frontend is the authoritative render schema.\n",
 		detail)
 	return nil

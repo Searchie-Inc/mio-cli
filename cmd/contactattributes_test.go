@@ -128,6 +128,28 @@ func TestContactAttributesValuesGet_DecodesCollection(t *testing.T) {
 	}
 }
 
+// TestContactAttributesCreate_RejectsInvalidFieldType (MIO-2543) verifies the NEW
+// client-side --field-type enum validation added with the pure-builder extraction:
+// an out-of-enum field type now exits ExitUsage and fires NO request, instead of
+// round-tripping to a backend 422. (The valid-field-type body guards live in
+// jake_qa_drift_test.go and are unchanged.)
+func TestContactAttributesCreate_RejectsInvalidFieldType(t *testing.T) {
+	srv, fired := newNoRequestServer(t, minimalHubConfigBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "contact-attributes", "create",
+			"--name", "Company", "--slug", "company", "--field-type", "select",
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage for invalid --field-type); stderr=%q",
+			res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("an invalid --field-type must exit before any HTTP request")
+	}
+}
+
 // TestContactAttributesHubConfigCreate_CollectionPathAndBodyId (MIO-2502)
 // verifies create POSTs to the COLLECTION path (path ends with
 // /contact-attributes, no trailing definition id) and carries the definition id

@@ -206,40 +206,74 @@ func hubPlaylistsPath(teamID, hubID, playlistID string) string {
 	return base
 }
 
-// applyHubMediaOptions parses the optional hub_media publish flags
-// (--visibility, --published-at, --position) into attrs, validating each BEFORE
-// any HTTP request so a bad flag fires no request. Shared by the hub-playlists
+// buildHubMediaPublishAttrs builds the optional hub_media publish fields
+// (visibility, published_at, position) — NO id; the caller adds file_id/
+// playlist_id to the body. It is a pure builder (no *cobra.Command) so both the
+// publish commands and the scaffold (MIO-2543) share the visibility-enum and
+// position-range validation. Each argument is optional:
+//   - visibility "" is omitted; a non-empty value is validated against the enum.
+//   - a zero publishedAt is omitted; otherwise it is formatted RFC3339. (The
+//     scaffold sets it unconditionally; the command path only when the flag is
+//     given — see applyHubMediaOptions.)
+//   - a nil position is omitted; a non-nil value must be >= 0.
+func buildHubMediaPublishAttrs(visibility string, publishedAt time.Time, position *int) (map[string]any, error) {
+	attrs := map[string]any{}
+	if visibility != "" {
+		if !hubMediaVisibility[visibility] {
+			return nil, errs.New(errs.ExitUsage, "invalid --visibility %q: must be members, private, or public", visibility)
+		}
+		attrs["visibility"] = visibility
+	}
+	if !publishedAt.IsZero() {
+		attrs["published_at"] = publishedAt.Format(time.RFC3339)
+	}
+	if position != nil {
+		if *position < 0 {
+			return nil, errs.New(errs.ExitUsage, "invalid --position %d: must be >= 0", *position)
+		}
+		attrs["position"] = *position
+	}
+	return attrs, nil
+}
+
+// applyHubMediaOptions reads the optional hub_media publish flags (--visibility,
+// --published-at, --position) and merges the validated fields into attrs via
+// buildHubMediaPublishAttrs, all BEFORE any HTTP request so a bad flag fires no
+// request. It preserves the "only set when flag changed" semantics: an unchanged
+// flag is passed as the builder's "omit" sentinel. Shared by the hub-playlists
 // and hub-media (standalone file) publish commands.
 func applyHubMediaOptions(cmd *cobra.Command, attrs map[string]any) error {
-	if cmd.Flags().Changed("visibility") {
-		v, err := cmd.Flags().GetString("visibility")
-		if err != nil {
-			return errs.New(errs.ExitUsage, "--visibility: %s", err)
+	// Only-when-changed: an unchanged --visibility is passed as "" (omit). When the
+	// user DID change it (including to an explicit ""), validate here so the
+	// command path keeps its client-side guard — the builder's empty=omit sentinel
+	// is only correct for the scaffold caller, which never passes an empty value.
+	visibility := ""
+	if v := changedString(cmd, "visibility"); v != nil {
+		if !hubMediaVisibility[*v] {
+			return errs.New(errs.ExitUsage, "invalid --visibility %q: must be members, private, or public", *v)
 		}
-		if !hubMediaVisibility[v] {
-			return errs.New(errs.ExitUsage, "invalid --visibility %q: must be members, private, or public", v)
-		}
-		attrs["visibility"] = v
+		visibility = *v
 	}
+	// Only-when-changed: parse --published-at to a time.Time; an unchanged flag
+	// stays the zero time (omit). The RFC3339 validation error is preserved.
+	var publishedAt time.Time
 	if cmd.Flags().Changed("published-at") {
 		pa, err := cmd.Flags().GetString("published-at")
 		if err != nil {
 			return errs.New(errs.ExitUsage, "--published-at: %s", err)
 		}
-		if _, perr := time.Parse(time.RFC3339, pa); perr != nil {
+		t, perr := time.Parse(time.RFC3339, pa)
+		if perr != nil {
 			return errs.New(errs.ExitUsage, "invalid --published-at %q: must be RFC3339 (e.g. 2026-01-02T15:04:05Z)", pa)
 		}
-		attrs["published_at"] = pa
+		publishedAt = t
 	}
-	if cmd.Flags().Changed("position") {
-		pos, err := cmd.Flags().GetInt("position")
-		if err != nil {
-			return errs.New(errs.ExitUsage, "--position: %s", err)
-		}
-		if pos < 0 {
-			return errs.New(errs.ExitUsage, "invalid --position %d: must be >= 0", pos)
-		}
-		attrs["position"] = pos
+	built, err := buildHubMediaPublishAttrs(visibility, publishedAt, changedInt(cmd, "position"))
+	if err != nil {
+		return err
+	}
+	for k, v := range built {
+		attrs[k] = v
 	}
 	return nil
 }
@@ -824,6 +858,37 @@ var mediaPlaylistsListCmd = &cobra.Command{
 
 // ---- playlists create -------------------------------------------------------
 
+// PlaylistInput carries the resolved playlist create attributes, decoupled from
+// *cobra.Command so both `media playlists create` and the scaffold (MIO-2543) can
+// build the same POST body. Each pointer is nil when the flag was unset.
+// Playlists are create-only (no idempotency marker needed, per O1 decision c).
+type PlaylistInput struct {
+	Title       *string
+	Description *string
+	Visibility  *string
+	HubID       *string // → hub_id
+}
+
+// buildPlaylistCreateAttrs assembles the playlist create body from p (title,
+// description, visibility, hub_id). It is a plain pure builder — the "--title is
+// required" check stays with the command's flag ergonomics.
+func buildPlaylistCreateAttrs(p PlaylistInput) map[string]any {
+	attrs := map[string]any{}
+	if p.Title != nil {
+		attrs["title"] = *p.Title
+	}
+	if p.Description != nil {
+		attrs["description"] = *p.Description
+	}
+	if p.Visibility != nil {
+		attrs["visibility"] = *p.Visibility
+	}
+	if p.HubID != nil {
+		attrs["hub_id"] = *p.HubID
+	}
+	return attrs
+}
+
 var mediaPlaylistsCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a media playlist.",
@@ -837,11 +902,12 @@ var mediaPlaylistsCreateCmd = &cobra.Command{
 			return err
 		}
 
-		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "title")
-		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "visibility")
-		setStringFlag(cmd, attrs, "hub-id")
+		attrs := buildPlaylistCreateAttrs(PlaylistInput{
+			Title:       changedString(cmd, "title"),
+			Description: changedString(cmd, "description"),
+			Visibility:  changedString(cmd, "visibility"),
+			HubID:       changedString(cmd, "hub-id"),
+		})
 
 		if _, ok := attrs["title"]; !ok {
 			return errs.New(errs.ExitUsage, "--title is required to create a playlist")

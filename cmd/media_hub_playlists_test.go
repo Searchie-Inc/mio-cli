@@ -148,6 +148,50 @@ func TestMediaHubPlaylistsPublish_RejectsInvalidVisibility(t *testing.T) {
 	}
 }
 
+// TestMediaHubPublish_RejectsExplicitEmptyVisibility (MIO-2543) guards a
+// regression from the pure-builder extraction: --visibility defaults to "", so
+// cobra marks it Changed when a user passes --visibility "". The command path
+// must still reject that (empty is not a valid enum member) rather than silently
+// omitting it — the builder's empty=omit sentinel is only for the scaffold caller.
+// Covers BOTH publish commands (hub-media + hub-playlists) since both route
+// through applyHubMediaOptions.
+func TestMediaHubPublish_RejectsExplicitEmptyVisibility(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sub     string
+		idFlag  string
+		idValue string
+	}{
+		{"hub-media", "hub-media", "--file-id", "file_abc"},
+		{"hub-playlists", "hub-playlists", "--playlist-id", "pl_abc"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			fired := false
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fired = true
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(minimalHubBody))
+			}))
+			t.Cleanup(srv.Close)
+
+			res := runContract(t, baseEnv(srv.URL),
+				withTeam("t_team1", "--hub", "hub_123",
+					"media", tc.sub, "publish",
+					tc.idFlag, tc.idValue, "--visibility", "",
+				)...)
+
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage for explicit empty --visibility); stderr=%q",
+					res.Code, errs.ExitUsage, res.Stderr)
+			}
+			if fired {
+				t.Error("an explicit empty --visibility must exit before any HTTP request")
+			}
+		})
+	}
+}
+
 // TestMediaHubPlaylistsUnpublish_DeletesPath verifies unpublish sends a DELETE
 // to .../hubs/{hub}/playlists/{playlist_id} (with --yes to skip the prompt).
 func TestMediaHubPlaylistsUnpublish_DeletesPath(t *testing.T) {

@@ -128,8 +128,10 @@ Every implemented resource and its verbs.
 | `users` | `me` `list` `retrieve` `update` |
 | `roles` | `create` `list` `retrieve` `update` `delete` |
 | `roles permissions` | `list` |
-| `hubs` | `create` `list` `retrieve` `update` `delete` |
+| `hubs` | `create` `list` `retrieve` `update` `delete` `scaffold` `templates` |
 | `hubs policies` | `update` |
+| `hubs scaffold` | Build a full-experience hub in one idempotent command from a template (`--template community`): branding/favicon, menu, registration, discussion spaces, onboarding schema, playlists, homepage. `--dry-run` previews the plan; `--publish` (default off) goes live; `--name`/`--slug` create a new hub or `--hub <id>` targets/resumes an existing one; `--favicon-url`/`--logo-url`/`--registration-enabled` override the template. |
+| `hubs templates` | `list` the built-in scaffold templates |
 | `contacts` | `create` `list` `retrieve` `update` `delete` `restore` |
 | `contact-attributes` | `create` `list` `retrieve` `update` `delete` |
 | `contact-attributes options` | `create` `list` `update` `delete` |

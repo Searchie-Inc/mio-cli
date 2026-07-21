@@ -1,0 +1,61 @@
+{
+  "id": "community",
+  "branding": {
+    "logo_url": "https://placehold.co/200x60/4F46E5/FFFFFF?text=Community",
+    "favicon_url": "https://placehold.co/32x32/4F46E5/FFFFFF?text=C",
+    "social_image_url": "https://placehold.co/1200x630/4F46E5/FFFFFF?text=Community",
+    "primary": "#4F46E5",
+    "secondary": "#22C55E",
+    "background": "#FFFFFF",
+    "text": "#111827",
+    "header_color": "#4F46E5",
+    "header_accent": "#A5B4FC"
+  },
+  "navigation": {
+    "header": [
+      { "type": "url", "label": "Home", "href": "/", "position": 0, "icon": "home" },
+      { "type": "url", "label": "Content", "href": "/content", "position": 1, "icon": "content" },
+      { "type": "discussions", "label": "Discussions", "position": 2, "icon": "chat" },
+      { "type": "url", "label": "Members", "href": "/members", "position": 3, "icon": "users" }
+    ],
+    "footer": [
+      { "type": "url", "label": "Privacy Policy", "href": "/privacy", "position": 0 },
+      { "type": "url", "label": "Terms of Service", "href": "/terms", "position": 1 }
+    ]
+  },
+  "settings": {
+    "registration": { "enabled": true },
+    "header": { "visibility": "always", "menuLayout": "tabs" },
+    "menu": { "layout": "tabs" },
+    "policies": { "enabled": true, "show": true }
+  },
+  "spaces": [
+    {
+      "name": "General",
+      "slug": "general",
+      "description": "Community-wide discussion — introductions, questions, and conversation.",
+      "access_level": "public",
+      "posting_permission": "any_member"
+    },
+    {
+      "name": "Announcements",
+      "slug": "announcements",
+      "description": "Official updates from the team.",
+      "access_level": "public",
+      "posting_permission": "admins_only"
+    }
+  ],
+  "onboarding": [
+    { "name": "Company", "slug": "company", "field_type": "text", "in_onboarding": true, "required": false },
+    { "name": "Role", "slug": "role", "field_type": "text", "in_onboarding": true, "required": false }
+  ],
+  "policies": {
+    "terms": { "required": true }
+  },
+  "playlists": [
+    { "title": "Welcome", "key": "welcome", "visibility": "public", "file_ids": [] }
+  ],
+  "homepage": {
+    "template": "page-homepage"
+  }
+}
