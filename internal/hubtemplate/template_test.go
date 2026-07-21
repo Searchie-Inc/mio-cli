@@ -88,6 +88,7 @@ func TestValidate_Rejects(t *testing.T) {
 		{"duplicate onboarding slug", "duplicate slug", func(t *Template) {
 			t.Onboarding = append(t.Onboarding, AttrDef{Name: "Dup", Slug: t.Onboarding[0].Slug, FieldType: "text"})
 		}},
+		{"typoed policy field", "unknown field", func(t *Template) { t.Policies = map[string]any{"terms": map[string]any{"require_acceptence": true}} }},
 		{"non-object policy", "must be an object", func(t *Template) { t.Policies = map[string]any{"terms": "yes"} }},
 		{"playlist duplicate key", "duplicate playlist key", func(tm *Template) {
 			tm.Playlists = append(tm.Playlists, Playlist{Title: "Welcome Again", Key: "welcome"})

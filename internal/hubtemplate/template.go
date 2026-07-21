@@ -35,6 +35,7 @@ var (
 	pagePrivacyValues        = map[string]bool{"public": true, "members": true, "private": true}
 	hubMediaVisibilityValues = map[string]bool{"members": true, "private": true, "public": true}
 	attrFieldTypes           = map[string]bool{"text": true, "number": true, "boolean": true, "date": true, "multiple": true}
+	policyFieldKeys          = map[string]bool{"content": true, "require_acceptance": true, "required": true}
 )
 
 // Template is a declarative full-experience hub definition. The four map[string]any
@@ -179,12 +180,20 @@ func (t *Template) Validate() error {
 			return fmt.Errorf("template: onboarding[%d] invalid field_type %q", i, d.FieldType)
 		}
 	}
-	// Each policy value must be an OBJECT. A non-object (string/number/typo) would
-	// fall through the step's `raw.(map[string]any)` as an empty map and then send
-	// content:null — silently RESETTING the policy content instead of failing loud.
+	// Each policy value must be an OBJECT with only KNOWN fields. A non-object,
+	// or a typoed field (e.g. "require_acceptence"), would otherwise be ignored by
+	// the step and send content:null — silently RESETTING the policy content
+	// instead of failing loud. The step (templateHubPolicy) reads content +
+	// require_acceptance/required, so those are the only accepted fields.
 	for k, v := range t.Policies {
-		if _, ok := v.(map[string]any); !ok {
+		obj, ok := v.(map[string]any)
+		if !ok {
 			return fmt.Errorf("template: policies[%q] must be an object", k)
+		}
+		for f := range obj {
+			if !policyFieldKeys[f] {
+				return fmt.Errorf("template: policies[%q] unknown field %q (allowed: content, require_acceptance, required)", k, f)
+			}
 		}
 	}
 	// Keys must be UNIQUE across playlists: the scaffold records playlist ids by
