@@ -101,3 +101,90 @@ func TestApplyHubBlobs_UnsetRemovesKey(t *testing.T) {
 		t.Errorf("settings.header.menuLayout = %v, want preserved 'tabs'", header["menuLayout"])
 	}
 }
+
+// TestApplyHubBlobs_DoesNotMutateBase verifies the pure-builder contract the
+// scaffold caller relies on: applyHubBlobs never mutates the caller's Base map
+// (nor its nested maps), even when an --unset descends into a blob the caller
+// staged in Base. The removal is applied on a copy that goes to the PATCH.
+func TestApplyHubBlobs_DoesNotMutateBase(t *testing.T) {
+	const body = `{"data":{"id":"hub_abc123","type":"hubs","attributes":{"title":"H","slug":"h"}}}`
+	cl, patchBody := applyHubBlobsServer(t, body)
+
+	base := map[string]any{
+		"settings": map[string]any{
+			"header": map[string]any{"color": "#000", "menuLayout": "tabs"},
+		},
+	}
+	var warn bytes.Buffer
+	_, err := applyHubBlobs(context.Background(), cl, "t_team1", "hub_abc123", "",
+		blobPatches{
+			Base:  base,
+			Unset: []unsetPath{{blob: "settings", segments: []string{"header", "color"}, raw: "settings.header.color"}},
+		}, &warn)
+	if err != nil {
+		t.Fatalf("applyHubBlobs returned error: %v", err)
+	}
+
+	// The caller's Base and its nested maps must be byte-for-byte untouched.
+	s, _ := base["settings"].(map[string]any)
+	header, _ := s["header"].(map[string]any)
+	if header["color"] != "#000" {
+		t.Errorf("Base settings.header.color = %v, want original '#000' (Base must not be mutated)", header["color"])
+	}
+	if len(header) != 2 {
+		t.Errorf("Base settings.header = %v, want both original keys intact (Base must not be mutated)", header)
+	}
+
+	// ...while the PATCH (built on the copy) does reflect the removal.
+	attrs := decodeHubAttrs(t, *patchBody)
+	ps, _ := attrs["settings"].(map[string]any)
+	ph, ok := ps["header"].(map[string]any)
+	if !ok {
+		t.Fatalf("PATCH settings.header absent; settings=%v", ps)
+	}
+	if _, has := ph["color"]; has {
+		t.Errorf("PATCH settings.header.color must be removed; header=%v", ph)
+	}
+}
+
+// TestApplyHubBlobs_NavigationHrefScopedToLiveSlug exercises the hub-scoped href
+// validation that now lives inside applyHubBlobs: with the slug NOT known up
+// front (SlugKnown false), the hub is retrieved and every hub-relative type:"url"
+// href must start with "/{slug}". A scoped href passes and the nav is PATCHed; a
+// mismatched one errors and fires no PATCH.
+func TestApplyHubBlobs_NavigationHrefScopedToLiveSlug(t *testing.T) {
+	const body = `{"data":{"id":"hub_abc123","type":"hubs","attributes":{"title":"H","slug":"demo"}}}`
+
+	t.Run("scoped href passes and nav is sent", func(t *testing.T) {
+		cl, patchBody := applyHubBlobsServer(t, body)
+		var warn bytes.Buffer
+		nav := map[string]any{"header": []any{
+			map[string]any{"type": "url", "label": "About", "href": "/demo/about"},
+		}}
+		_, err := applyHubBlobs(context.Background(), cl, "t_team1", "hub_abc123", "",
+			blobPatches{Navigation: nav}, &warn)
+		if err != nil {
+			t.Fatalf("a hub-scoped href (/demo/about for slug demo) should pass; got: %v", err)
+		}
+		attrs := decodeHubAttrs(t, *patchBody)
+		if _, ok := attrs["navigation"].(map[string]any); !ok {
+			t.Fatalf("navigation must be sent in the PATCH; attrs=%v", attrs)
+		}
+	})
+
+	t.Run("mismatched href errors and fires no PATCH", func(t *testing.T) {
+		cl, patchBody := applyHubBlobsServer(t, body)
+		var warn bytes.Buffer
+		nav := map[string]any{"header": []any{
+			map[string]any{"type": "url", "label": "Escape", "href": "/other/about"},
+		}}
+		_, err := applyHubBlobs(context.Background(), cl, "t_team1", "hub_abc123", "",
+			blobPatches{Navigation: nav}, &warn)
+		if err == nil {
+			t.Fatal("a href not scoped to the hub slug (/other/about for slug demo) must error")
+		}
+		if len(*patchBody) != 0 {
+			t.Errorf("no PATCH must fire when href validation fails; patchBody=%q", *patchBody)
+		}
+	})
+}

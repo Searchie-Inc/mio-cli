@@ -393,16 +393,18 @@ var hubsUpdateCmd = &cobra.Command{
 		// (MIO-2255). The SHAPE check (typed items the mio-hub parser requires) runs
 		// pre-auth so a malformed menu fires NO HTTP request, not even a team-
 		// resolution GET. The hub-scoped href check (MIO-2270) needs the hub's final
-		// slug and is applied inside applyHubBlobs.
-		if err := setMappedJSONObjectFlag(cmd, attrs, "navigation-json", "navigation"); err != nil {
+		// slug and is applied inside applyHubBlobs, which also injects the validated
+		// navigation blob into the PATCH — so navigation is passed ONLY via
+		// blobPatches.Navigation and is never put in Base.
+		nav, err := parseJSONObjectFlag(cmd, "navigation-json")
+		if err != nil {
 			return err
 		}
-		nav, navSet := attrs["navigation"].(map[string]any)
 		// navSlug is the hub's FINAL slug when --slug is set in this same update
 		// (setStringFlag only populates attrs["slug"] when the flag changed); it is
 		// authoritative over the hub's current slug, so hrefs must scope to it.
-		navSlug, navSlugFromFlag := attrs["slug"].(string)
-		if navSet {
+		navSlug, navSlugKnown := attrs["slug"].(string)
+		if nav != nil {
 			if err := validateNavigationBlob(nav); err != nil {
 				return err
 			}
@@ -468,7 +470,9 @@ var hubsUpdateCmd = &cobra.Command{
 		rmw := branding != nil || settings != nil || meta != nil || logo != nil ||
 			favicon != nil || registration != nil || len(unsetPaths) > 0
 
-		if len(attrs) == 0 && !rmw {
+		// navigation is a whole-blob REPLACE carried by blobPatches.Navigation (no
+		// longer in attrs), so it counts as a change here too.
+		if len(attrs) == 0 && !rmw && nav == nil {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
@@ -483,7 +487,7 @@ var hubsUpdateCmd = &cobra.Command{
 			Settings:     settings,
 			Meta:         meta,
 			Navigation:   nav,
-			SlugFromFlag: navSlugFromFlag,
+			SlugKnown:    navSlugKnown,
 			Logo:         logo,
 			Favicon:      favicon,
 			Registration: registration,
@@ -510,9 +514,10 @@ var hubsUpdateCmd = &cobra.Command{
 // --slug value when it is changing, else the live slug from the retrieve).
 type blobPatches struct {
 	// Base is the typed-column attribute set the caller already built
-	// (title/slug/description/is_private/discussions_*/navigation). The merged
-	// blobs and --unset removals are layered onto a COPY of it, so the caller's
-	// map is never mutated.
+	// (title/slug/description/is_private/discussions_*). The merged blobs, the
+	// navigation REPLACE and the --unset removals are layered onto a COPY of it,
+	// so the caller's map is never mutated. Navigation is NOT carried here — set
+	// it via Navigation below so it is validated and injected as one unit.
 	Base map[string]any
 
 	// Branding/Settings/Meta are the parsed --*-json patches, deep-merged onto the
@@ -521,15 +526,16 @@ type blobPatches struct {
 	Settings map[string]any
 	Meta     map[string]any
 
-	// Navigation is the parsed --navigation-json (whole-blob REPLACE); nil = not
-	// given. It is ALSO present in Base under "navigation" (that is what ships in
-	// the PATCH); this field is the handle used for the hub-scoped href check.
+	// Navigation is the parsed navigation blob (whole-blob REPLACE); nil = not
+	// given. It is the SINGLE source of navigation: applyHubBlobs validates its
+	// hub-scoped hrefs and injects it into the PATCH body itself, so callers must
+	// NOT also place a "navigation" key in Base.
 	Navigation map[string]any
 
-	// SlugFromFlag reports that hubSlug (the applyHubBlobs param) came from --slug
-	// in this same update, so it is authoritative for href scoping and no retrieve
-	// is needed solely to learn the hub's slug.
-	SlugFromFlag bool
+	// SlugKnown reports that hubSlug (the applyHubBlobs param) is authoritative and
+	// known up front (on `hubs update` it came from --slug), so it is used directly
+	// for href scoping and no retrieve is needed solely to learn the hub's slug.
+	SlugKnown bool
 
 	// Logo/Favicon/Registration are the scalar convenience overrides, applied
 	// AFTER the --*-json deep-merge (a nil pointer means the flag was not given).
@@ -552,19 +558,19 @@ type blobPatches struct {
 // overrides, (3) --unset removals LAST — and PATCHes the merged object so
 // untouched siblings survive.
 //
-// hubSlug is the hub's FINAL slug when --slug is changing in this update
-// (p.SlugFromFlag true), else ""; when the slug is not known up front the
-// retrieved slug is used for href scoping. warnW receives the best-effort
-// blob-key warnings (the command path passes cmd.ErrOrStderr()).
+// hubSlug is the hub's FINAL slug when it is known up front (p.SlugKnown true —
+// on `hubs update` that is the --slug value), else ""; when the slug is not
+// known up front the retrieved slug is used for href scoping. warnW receives the
+// best-effort blob-key warnings (the command path passes cmd.ErrOrStderr()).
 //
 // It is a pure builder: it takes no *cobra.Command and does not mutate p.Base.
 func applyHubBlobs(ctx context.Context, cl *client.Client, teamID, hubID, hubSlug string, p blobPatches, warnW io.Writer) (*client.Resource, error) {
 	navSet := p.Navigation != nil
 
-	// Hub-scoped href check for the changing-slug case: the final slug is known
-	// from --slug, so validate now (no retrieve needed for the check, MIO-2270).
-	// The non-flag case is validated against the live slug after the retrieve.
-	if navSet && p.SlugFromFlag {
+	// Hub-scoped href check for the known-slug case: the final slug is authoritative
+	// (from --slug), so validate now (no retrieve needed for the check, MIO-2270).
+	// The unknown-slug case is validated against the live slug after the retrieve.
+	if navSet && p.SlugKnown {
 		if err := validateNavigationHrefs(p.Navigation, hubSlug); err != nil {
 			return nil, err
 		}
@@ -583,16 +589,21 @@ func applyHubBlobs(ctx context.Context, cl *client.Client, teamID, hubID, hubSlu
 		return nil, err
 	}
 
-	// Start the PATCH body from a COPY of the caller's base attrs (typed columns +
-	// navigation) so the merged blobs and unset removals never mutate p.Base.
-	attrs := make(map[string]any, len(p.Base))
+	// Start the PATCH body from a COPY of the caller's base attrs (typed columns)
+	// so the merged blobs and unset removals never mutate p.Base. Navigation is a
+	// whole-blob REPLACE: inject the validated blob here (the SINGLE source), so it
+	// always ships when set — regardless of whether the retrieve below runs.
+	attrs := make(map[string]any, len(p.Base)+1)
 	for k, v := range p.Base {
 		attrs[k] = v
+	}
+	if navSet {
+		attrs["navigation"] = p.Navigation
 	}
 
 	rmw := p.Branding != nil || p.Settings != nil || p.Meta != nil ||
 		p.Logo != nil || p.Favicon != nil || p.Registration != nil || len(p.Unset) > 0
-	navNeedsRetrieve := navSet && !p.SlugFromFlag
+	navNeedsRetrieve := navSet && !p.SlugKnown
 
 	// Retrieve the hub when we need its current whole-blob fields (RMW) or its slug
 	// (to validate hub-scoped navigation hrefs when --slug is NOT also changing) —
