@@ -25,7 +25,9 @@ package cmd
 // not exposed here (see MIO-2269 deferred items).
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -269,17 +271,17 @@ var hubsCreateCmd = &cobra.Command{
 		// hubsContext() so a strict rejection fires no HTTP request. (MIO-2515)
 		strictKeys, _ := cmd.Flags().GetBool("strict-keys")
 		if b, ok := attrs["branding"].(map[string]any); ok {
-			if err := validateBlobKeys(cmd, "branding", b, brandingKeys, nil, strictKeys); err != nil {
+			if err := validateBlobKeys(cmd.ErrOrStderr(), "branding", b, brandingKeys, nil, strictKeys); err != nil {
 				return err
 			}
 		}
 		if s, ok := attrs["settings"].(map[string]any); ok {
-			if err := validateBlobKeys(cmd, "settings", s, settingsKeys, settingsNestedKeys, strictKeys); err != nil {
+			if err := validateBlobKeys(cmd.ErrOrStderr(), "settings", s, settingsKeys, settingsNestedKeys, strictKeys); err != nil {
 				return err
 			}
 		}
 		if m, ok := attrs["meta"].(map[string]any); ok {
-			if err := validateBlobKeys(cmd, "meta", m, metaKeys, nil, strictKeys); err != nil {
+			if err := validateBlobKeys(cmd.ErrOrStderr(), "meta", m, metaKeys, nil, strictKeys); err != nil {
 				return err
 			}
 		}
@@ -376,7 +378,9 @@ var hubsUpdateCmd = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Build and validate attributes BEFORE resolving auth/team so a malformed
-		// flag exits with a usage error and fires no HTTP request.
+		// flag exits with a usage error and fires no HTTP request. The read-modify-
+		// write of the whole-blob JSONB fields (branding/settings/meta), the nav
+		// REPLACE and the --unset removals are handled by applyHubBlobs below.
 		attrs := map[string]any{}
 		setMappedString(cmd, attrs, "name", "title")
 		setStringFlag(cmd, attrs, "slug")
@@ -386,9 +390,10 @@ var hubsUpdateCmd = &cobra.Command{
 		setNullableMappedString(cmd, attrs, "discussions-default-description", "discussions_default_description")
 
 		// --navigation-json authors the header/footer menu — a whole-blob REPLACE
-		// (MIO-2255), validated for the typed shape the mio-hub parser requires.
-		// The hub-scoped href check (MIO-2270) needs the hub's slug, which is not
-		// known client-side, so it runs after the retrieve below.
+		// (MIO-2255). The SHAPE check (typed items the mio-hub parser requires) runs
+		// pre-auth so a malformed menu fires NO HTTP request, not even a team-
+		// resolution GET. The hub-scoped href check (MIO-2270) needs the hub's final
+		// slug and is applied inside applyHubBlobs.
 		if err := setMappedJSONObjectFlag(cmd, attrs, "navigation-json", "navigation"); err != nil {
 			return err
 		}
@@ -401,19 +406,12 @@ var hubsUpdateCmd = &cobra.Command{
 			if err := validateNavigationBlob(nav); err != nil {
 				return err
 			}
-			// When --slug is changing in this update, validate hrefs against the new
-			// slug now — no retrieve needed, so this fires no request (MIO-2270).
-			if navSlugFromFlag {
-				if err := validateNavigationHrefs(nav, navSlug); err != nil {
-					return err
-				}
-			}
 		}
 
 		// --branding-json / --settings-json / --meta-json are read-modify-write:
 		// these blobs are assigned WHOLESALE server-side, so a partial edit would
 		// clobber sibling keys. Parse now (fail fast on bad JSON); the deep-merge
-		// against the hub's current blobs happens after the retrieve below. (MIO-2256)
+		// against the hub's current blobs happens inside applyHubBlobs. (MIO-2256)
 		branding, err := parseJSONObjectFlag(cmd, "branding-json")
 		if err != nil {
 			return err
@@ -426,36 +424,37 @@ var hubsUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		logoChanged := cmd.Flags().Changed("logo-url")
-		var logo string
-		if logoChanged {
-			logo, err = cmd.Flags().GetString("logo-url")
-			if err != nil {
-				return errs.New(errs.ExitUsage, "--logo-url: %s", err)
+		// --logo-url / --favicon-url merge into branding (branding.logo_url /
+		// branding.favicon_url); a nil pointer means the flag was not given, so that
+		// override leaves the blob untouched. (MIO-901, MIO-2522)
+		var logo *string
+		if cmd.Flags().Changed("logo-url") {
+			v, ferr := cmd.Flags().GetString("logo-url")
+			if ferr != nil {
+				return errs.New(errs.ExitUsage, "--logo-url: %s", ferr)
 			}
+			logo = &v
 		}
-		// --favicon-url merges into branding (branding.favicon_url), mirroring
-		// --logo-url. (MIO-2522)
-		faviconChanged := cmd.Flags().Changed("favicon-url")
-		var favicon string
-		if faviconChanged {
-			favicon, err = cmd.Flags().GetString("favicon-url")
-			if err != nil {
-				return errs.New(errs.ExitUsage, "--favicon-url: %s", err)
+		var favicon *string
+		if cmd.Flags().Changed("favicon-url") {
+			v, ferr := cmd.Flags().GetString("favicon-url")
+			if ferr != nil {
+				return errs.New(errs.ExitUsage, "--favicon-url: %s", ferr)
 			}
+			favicon = &v
 		}
 		// --registration-enabled sets settings.registration.enabled. A bare bool
 		// cannot distinguish false-from-unset, so gate on Changed() (same pattern as
-		// the policies gate --enabled flag) and read the value only when set; the
-		// nested write below preserves sibling settings.* AND registration.* keys.
+		// the policies gate --enabled flag) and read the value only when set;
+		// applyHubBlobs preserves sibling settings.* AND registration.* keys.
 		// (MIO-2516)
-		registrationChanged := cmd.Flags().Changed("registration-enabled")
-		var regEnabled bool
-		if registrationChanged {
-			regEnabled, err = cmd.Flags().GetBool("registration-enabled")
-			if err != nil {
-				return errs.New(errs.ExitUsage, "--registration-enabled: %s", err)
+		var registration *bool
+		if cmd.Flags().Changed("registration-enabled") {
+			v, ferr := cmd.Flags().GetBool("registration-enabled")
+			if ferr != nil {
+				return errs.New(errs.ExitUsage, "--registration-enabled: %s", ferr)
 			}
+			registration = &v
 		}
 		// --unset deletes keys from the branding/settings/meta blobs by dotted path
 		// (read-modify-write). Parsed/validated pre-auth so a bad path exits
@@ -464,24 +463,10 @@ var hubsUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		rmw := branding != nil || settings != nil || meta != nil || logoChanged ||
-			faviconChanged || registrationChanged || len(unsetPaths) > 0
-
-		// Best-effort key validation on the INCOMING blob keys only (never the
-		// hub's retrieved/merged blob — older hubs legitimately carry unlisted
-		// keys the user did not touch). Warn by default (stderr); --strict-keys
-		// makes an unknown key a usage error. Runs BEFORE hubsContext()/retrieve
-		// so a strict rejection fires no HTTP request. (MIO-2515)
 		strictKeys, _ := cmd.Flags().GetBool("strict-keys")
-		if err := validateBlobKeys(cmd, "branding", branding, brandingKeys, nil, strictKeys); err != nil {
-			return err
-		}
-		if err := validateBlobKeys(cmd, "settings", settings, settingsKeys, settingsNestedKeys, strictKeys); err != nil {
-			return err
-		}
-		if err := validateBlobKeys(cmd, "meta", meta, metaKeys, nil, strictKeys); err != nil {
-			return err
-		}
+
+		rmw := branding != nil || settings != nil || meta != nil || logo != nil ||
+			favicon != nil || registration != nil || len(unsetPaths) > 0
 
 		if len(attrs) == 0 && !rmw {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -492,81 +477,187 @@ var hubsUpdateCmd = &cobra.Command{
 			return err
 		}
 
-		// Retrieve the hub when we need its current whole-blob fields (RMW) or its
-		// slug (to validate hub-scoped navigation hrefs when --slug is NOT also
-		// being changed, MIO-2270) — one GET serves both. Read-modify-write fetches
-		// the current branding/settings/meta, deep-merges the provided keys on top,
-		// and PATCHes the merged object so untouched siblings survive; --logo-url
-		// merges into branding here — this is what unblocks it on update (MIO-901).
-		navNeedsRetrieve := navSet && !navSlugFromFlag
-		if rmw || navNeedsRetrieve {
-			cur, rerr := c.client.Retrieve(c.ctx, hubsPath(teamID, args[0]))
-			if rerr != nil {
-				return rerr
-			}
-			// Validate hub-relative navigation hrefs against the hub's current slug
-			// before issuing the PATCH, so a bad link fails with ExitUsage and no
-			// write happens (MIO-2270). Skipped above when --slug is changing, which
-			// is validated pre-auth against the new slug.
-			if navNeedsRetrieve {
-				slug, _ := cur.Attributes["slug"].(string)
-				if err := validateNavigationHrefs(nav, slug); err != nil {
-					return err
-				}
-			}
-			// Deterministic apply ORDER per blob (documented): (1) --*-json deep-merge,
-			// (2) scalar convenience overrides (--logo-url/--favicon-url/
-			// --registration-enabled), (3) --unset removals LAST — so an explicit unset
-			// in the same command wins over a merge.
-			if branding != nil || logoChanged || faviconChanged {
-				b := attrMap(cur.Attributes["branding"])
-				if branding != nil {
-					b = deepMergeMap(b, branding)
-				}
-				if logoChanged {
-					b["logo_url"] = logo
-				}
-				if faviconChanged {
-					b["favicon_url"] = favicon
-				}
-				attrs["branding"] = b
-			}
-			if settings != nil || registrationChanged {
-				s := attrMap(cur.Attributes["settings"])
-				if settings != nil {
-					s = deepMergeMap(s, settings)
-				}
-				if registrationChanged {
-					// Preserve sibling registration.* keys: copy the current sub-object and
-					// set only enabled.
-					reg := attrMap(s["registration"])
-					reg["enabled"] = regEnabled
-					s["registration"] = reg
-				}
-				attrs["settings"] = s
-			}
-			if meta != nil {
-				attrs["meta"] = deepMergeMap(attrMap(cur.Attributes["meta"]), meta)
-			}
-			// --unset removals apply LAST on each staged blob. When a blob is touched
-			// ONLY by unset, seed it from the hub's current blob; deleteAtPath copies
-			// each node it descends so the retrieved resource is never mutated.
-			for _, u := range unsetPaths {
-				blob, ok := attrs[u.blob].(map[string]any)
-				if !ok {
-					blob = attrMap(cur.Attributes[u.blob])
-				}
-				attrs[u.blob] = deleteAtPath(blob, u.segments)
-			}
-		}
-
-		res, err := c.client.Update(c.ctx, hubsPath(teamID, args[0]), attrs)
+		res, err := applyHubBlobs(c.ctx, c.client, teamID, args[0], navSlug, blobPatches{
+			Base:         attrs,
+			Branding:     branding,
+			Settings:     settings,
+			Meta:         meta,
+			Navigation:   nav,
+			SlugFromFlag: navSlugFromFlag,
+			Logo:         logo,
+			Favicon:      favicon,
+			Registration: registration,
+			Unset:        unsetPaths,
+			Strict:       strictKeys,
+		}, cmd.ErrOrStderr())
 		if err != nil {
 			return err
 		}
 		injectHubDerivedState(res)
 		return c.render(cmd, res)
 	},
+}
+
+// blobPatches carries the parsed, pre-validated blob edits for a hub read-modify-
+// write update, decoupled from *cobra.Command so both `hubs update` and future
+// scaffold commands (MIO-2543) can drive the same retrieve → deep-merge → scalar
+// override → unset → PATCH.
+//
+// The CALLER owns the pre-auth input checks that must fire NO HTTP request (not
+// even a team-resolution GET): parsing each flag, and validating the navigation
+// SHAPE with validateNavigationBlob. applyHubBlobs owns the rest — the blob-key
+// check and the hub-scoped href check (which needs the hub's final slug: the
+// --slug value when it is changing, else the live slug from the retrieve).
+type blobPatches struct {
+	// Base is the typed-column attribute set the caller already built
+	// (title/slug/description/is_private/discussions_*/navigation). The merged
+	// blobs and --unset removals are layered onto a COPY of it, so the caller's
+	// map is never mutated.
+	Base map[string]any
+
+	// Branding/Settings/Meta are the parsed --*-json patches, deep-merged onto the
+	// hub's current blob (nil = flag not given, so that blob is untouched).
+	Branding map[string]any
+	Settings map[string]any
+	Meta     map[string]any
+
+	// Navigation is the parsed --navigation-json (whole-blob REPLACE); nil = not
+	// given. It is ALSO present in Base under "navigation" (that is what ships in
+	// the PATCH); this field is the handle used for the hub-scoped href check.
+	Navigation map[string]any
+
+	// SlugFromFlag reports that hubSlug (the applyHubBlobs param) came from --slug
+	// in this same update, so it is authoritative for href scoping and no retrieve
+	// is needed solely to learn the hub's slug.
+	SlugFromFlag bool
+
+	// Logo/Favicon/Registration are the scalar convenience overrides, applied
+	// AFTER the --*-json deep-merge (a nil pointer means the flag was not given).
+	Logo         *string // --logo-url → branding.logo_url
+	Favicon      *string // --favicon-url → branding.favicon_url
+	Registration *bool   // --registration-enabled → settings.registration.enabled
+
+	// Unset are the parsed --unset paths, applied LAST (after merges + overrides).
+	Unset []unsetPath
+
+	// Strict selects strict blob-key validation (an unknown key errors instead of
+	// warning). Only the INCOMING patch keys are inspected, never the merged blob.
+	Strict bool
+}
+
+// applyHubBlobs performs the hub read-modify-write: it validates the incoming
+// blob keys and hub-scoped navigation hrefs, retrieves the hub's current blobs
+// when a deep-merge/unset (or the live-slug href check) needs them, layers the
+// patches on in the documented order — (1) --*-json deep-merge, (2) scalar
+// overrides, (3) --unset removals LAST — and PATCHes the merged object so
+// untouched siblings survive.
+//
+// hubSlug is the hub's FINAL slug when --slug is changing in this update
+// (p.SlugFromFlag true), else ""; when the slug is not known up front the
+// retrieved slug is used for href scoping. warnW receives the best-effort
+// blob-key warnings (the command path passes cmd.ErrOrStderr()).
+//
+// It is a pure builder: it takes no *cobra.Command and does not mutate p.Base.
+func applyHubBlobs(ctx context.Context, cl *client.Client, teamID, hubID, hubSlug string, p blobPatches, warnW io.Writer) (*client.Resource, error) {
+	navSet := p.Navigation != nil
+
+	// Hub-scoped href check for the changing-slug case: the final slug is known
+	// from --slug, so validate now (no retrieve needed for the check, MIO-2270).
+	// The non-flag case is validated against the live slug after the retrieve.
+	if navSet && p.SlugFromFlag {
+		if err := validateNavigationHrefs(p.Navigation, hubSlug); err != nil {
+			return nil, err
+		}
+	}
+
+	// Best-effort key validation on the INCOMING patch keys only (never the merged
+	// blob — older hubs legitimately carry unlisted keys the caller did not touch).
+	// Runs BEFORE the retrieve so a strict rejection fires no PATCH/GET. (MIO-2515)
+	if err := validateBlobKeys(warnW, "branding", p.Branding, brandingKeys, nil, p.Strict); err != nil {
+		return nil, err
+	}
+	if err := validateBlobKeys(warnW, "settings", p.Settings, settingsKeys, settingsNestedKeys, p.Strict); err != nil {
+		return nil, err
+	}
+	if err := validateBlobKeys(warnW, "meta", p.Meta, metaKeys, nil, p.Strict); err != nil {
+		return nil, err
+	}
+
+	// Start the PATCH body from a COPY of the caller's base attrs (typed columns +
+	// navigation) so the merged blobs and unset removals never mutate p.Base.
+	attrs := make(map[string]any, len(p.Base))
+	for k, v := range p.Base {
+		attrs[k] = v
+	}
+
+	rmw := p.Branding != nil || p.Settings != nil || p.Meta != nil ||
+		p.Logo != nil || p.Favicon != nil || p.Registration != nil || len(p.Unset) > 0
+	navNeedsRetrieve := navSet && !p.SlugFromFlag
+
+	// Retrieve the hub when we need its current whole-blob fields (RMW) or its slug
+	// (to validate hub-scoped navigation hrefs when --slug is NOT also changing) —
+	// one GET serves both.
+	if rmw || navNeedsRetrieve {
+		cur, err := cl.Retrieve(ctx, hubsPath(teamID, hubID))
+		if err != nil {
+			return nil, err
+		}
+		// Validate hub-relative navigation hrefs against the hub's current slug
+		// before the PATCH, so a bad link fails with ExitUsage and no write happens
+		// (MIO-2270). The --slug-changing case was already validated above.
+		if navNeedsRetrieve {
+			slug, _ := cur.Attributes["slug"].(string)
+			if err := validateNavigationHrefs(p.Navigation, slug); err != nil {
+				return nil, err
+			}
+		}
+		// Deterministic apply ORDER per blob (documented): (1) --*-json deep-merge,
+		// (2) scalar convenience overrides (--logo-url/--favicon-url/
+		// --registration-enabled), (3) --unset removals LAST — so an explicit unset
+		// in the same command wins over a merge.
+		if p.Branding != nil || p.Logo != nil || p.Favicon != nil {
+			b := attrMap(cur.Attributes["branding"])
+			if p.Branding != nil {
+				b = deepMergeMap(b, p.Branding)
+			}
+			if p.Logo != nil {
+				b["logo_url"] = *p.Logo
+			}
+			if p.Favicon != nil {
+				b["favicon_url"] = *p.Favicon
+			}
+			attrs["branding"] = b
+		}
+		if p.Settings != nil || p.Registration != nil {
+			s := attrMap(cur.Attributes["settings"])
+			if p.Settings != nil {
+				s = deepMergeMap(s, p.Settings)
+			}
+			if p.Registration != nil {
+				// Preserve sibling registration.* keys: copy the current sub-object and
+				// set only enabled.
+				reg := attrMap(s["registration"])
+				reg["enabled"] = *p.Registration
+				s["registration"] = reg
+			}
+			attrs["settings"] = s
+		}
+		if p.Meta != nil {
+			attrs["meta"] = deepMergeMap(attrMap(cur.Attributes["meta"]), p.Meta)
+		}
+		// --unset removals apply LAST on each staged blob. When a blob is touched
+		// ONLY by unset, seed it from the hub's current blob; deleteAtPath copies
+		// each node it descends so the retrieved resource is never mutated.
+		for _, u := range p.Unset {
+			blob, ok := attrs[u.blob].(map[string]any)
+			if !ok {
+				blob = attrMap(cur.Attributes[u.blob])
+			}
+			attrs[u.blob] = deleteAtPath(blob, u.segments)
+		}
+	}
+
+	return cl.Update(ctx, hubsPath(teamID, hubID), attrs)
 }
 
 // ---- delete -----------------------------------------------------------------
