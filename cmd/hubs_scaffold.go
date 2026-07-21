@@ -688,7 +688,7 @@ const (
 	// The homepage is marked by is_homepage:true, not by its slug — and the
 	// backend RESERVES the slug "home" (rejects it, telling you to use the
 	// is_homepage flag). So the page carries a non-reserved slug.
-	homepageSlug  = "homepage"
+	homepageSlug = "homepage"
 )
 
 // stepHomepage builds the hub's homepage: it creates a "home" page (reusing an
