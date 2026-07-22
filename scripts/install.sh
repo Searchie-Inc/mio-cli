@@ -158,14 +158,28 @@ main() {
   # Install
   DEST="${PREFIX}/${DEST_NAME}"
 
-  if [ -w "$PREFIX" ]; then
-    cp "$SRC" "$DEST"
-  else
+  SUDO=""
+  if [ ! -w "$PREFIX" ]; then
     info "Destination ${PREFIX} requires elevated permissions — running sudo..."
-    sudo cp "$SRC" "$DEST"
+    SUDO="sudo"
   fi
+  $SUDO cp "$SRC" "$DEST"
+  $SUDO chmod +x "$DEST"
 
-  chmod +x "$DEST"
+  # macOS Gatekeeper mitigation (MIO-2603): the release binaries are not yet
+  # notarized, so a freshly downloaded copy trips Gatekeeper — `mio version` can
+  # hang on the syspolicy check and `spctl --assess` reports "rejected". As a
+  # best-effort local mitigation, drop the com.apple.quarantine attribute and
+  # ad-hoc codesign the binary so the CLI runs immediately. Both are best-effort
+  # (never fail the install); this is a stopgap, not a substitute for notarizing
+  # the release in the pipeline.
+  if [ "$OS" = "darwin" ]; then
+    $SUDO xattr -d com.apple.quarantine "$DEST" 2>/dev/null || true
+    if command -v codesign >/dev/null 2>&1; then
+      $SUDO codesign --force --sign - "$DEST" >/dev/null 2>&1 || true
+    fi
+    info "macOS: cleared quarantine + ad-hoc signed the binary. If mio ever hangs after an update, run: xattr -c \"$DEST\""
+  fi
 
   info "Installed: $(command -v "${BINARY}" 2>/dev/null || echo "${DEST}")"
   printf '\n'
