@@ -905,8 +905,8 @@ func newDryRunStepSC(cl *client.Client) (*scaffoldContext, *[]planEntry) {
 // the first-set If-Match: 0 header. The page id is captured into the context.
 func TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0(t *testing.T) {
 	var createBody, putBody []byte
-	var ifMatch, putPath string
-	var lists, creates, puts int
+	var ifMatch, putPath, publishIfMatch string
+	var lists, creates, puts, publishes int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		switch {
@@ -926,6 +926,11 @@ func TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0(t *testing.T) {
 			lists++
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":[]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/publish"): // publish the draft tree (MIO-2636)
+			publishes++
+			publishIfMatch = r.Header.Get("If-Match")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pp_1","type":"page-publishes","attributes":{"section_count":3}}}`))
 		default:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":[]}`))
@@ -941,8 +946,12 @@ func TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0(t *testing.T) {
 	if err := stepHomepage(sc, tmpl); err != nil {
 		t.Fatalf("stepHomepage: %v", err)
 	}
-	if lists != 1 || creates != 1 || puts != 1 {
-		t.Fatalf("want 1 list + 1 create + 1 tree PUT; got %d list, %d create, %d put", lists, creates, puts)
+	if lists != 1 || creates != 1 || puts != 1 || publishes != 1 {
+		t.Fatalf("want 1 list + 1 create + 1 tree PUT + 1 publish; got %d list, %d create, %d put, %d publish", lists, creates, puts, publishes)
+	}
+	// The publish uses the draft_version the tree PUT returned (1) as its OCC token.
+	if publishIfMatch != "1" {
+		t.Errorf("publish If-Match = %q, want 1 (the draft_version the tree PUT returned)", publishIfMatch)
 	}
 	// Create body carries the homepage identity — title/slug/is_homepage + privacy.
 	ca := decodeHubAttrs(t, createBody)
@@ -983,8 +992,8 @@ func TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0(t *testing.T) {
 // page list, then PUTs the tree with that draft_version as the If-Match token. The
 // list here deliberately omits draft_version to prove it is never sourced there.
 func TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion(t *testing.T) {
-	var ifMatch, putPath, treeGetQuery string
-	var creates, treeGets, puts int
+	var ifMatch, putPath, treeGetQuery, publishIfMatch string
+	var creates, treeGets, puts, publishes int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		switch {
@@ -999,6 +1008,11 @@ func TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion(t *testing
 			treeGetQuery = r.URL.RawQuery
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"pdt_2","type":"page_draft_trees","attributes":{"draft_version":3}}}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/publish"): // publish the reused draft (MIO-2636)
+			publishes++
+			publishIfMatch = r.Header.Get("If-Match")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pp_2","type":"page-publishes","attributes":{"section_count":3}}}`))
 		case r.Method == http.MethodPost:
 			creates++
 			w.WriteHeader(http.StatusCreated)
@@ -1042,6 +1056,12 @@ func TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion(t *testing
 	if sc.homePageID != "page_existing" {
 		t.Errorf("homePageID = %q, want reused page_existing", sc.homePageID)
 	}
+	if publishes != 1 {
+		t.Errorf("resume must still publish the tree exactly once, got %d", publishes)
+	}
+	if publishIfMatch != "4" {
+		t.Errorf("publish If-Match = %q, want 4 (the draft_version the tree PUT returned)", publishIfMatch)
+	}
 }
 
 // TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0: on resume, if the existing
@@ -1049,8 +1069,8 @@ func TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion(t *testing
 // draft_version 0 and PUTs the first tree with If-Match 0 (never propagating the
 // 404), so a resume onto a created-but-never-tree-set page still converges.
 func TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0(t *testing.T) {
-	var ifMatch string
-	var creates, puts int
+	var ifMatch, publishIfMatch string
+	var creates, puts, publishes int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		switch {
@@ -1062,6 +1082,11 @@ func TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0(t *testing.T) {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/tree"): // tree-get 404 — no draft yet
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"no draft for this page"}]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/publish"): // publish the first-set draft (MIO-2636)
+			publishes++
+			publishIfMatch = r.Header.Get("If-Match")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pp_3","type":"page-publishes","attributes":{"section_count":3}}}`))
 		case r.Method == http.MethodPost:
 			creates++
 			w.WriteHeader(http.StatusCreated)
@@ -1095,6 +1120,12 @@ func TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0(t *testing.T) {
 	}
 	if sc.homePageID != "page_existing" {
 		t.Errorf("homePageID = %q, want reused page_existing", sc.homePageID)
+	}
+	if publishes != 1 {
+		t.Errorf("resume (404 fallback) must still publish exactly once, got %d", publishes)
+	}
+	if publishIfMatch != "1" {
+		t.Errorf("publish If-Match = %q, want 1 (the draft_version the tree PUT returned)", publishIfMatch)
 	}
 }
 

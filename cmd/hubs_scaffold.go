@@ -75,10 +75,9 @@ type scaffoldContext struct {
 	spaceIDsBySlug, defIDsBySlug, playlistIDsByKey map[string]string
 
 	// homePageID + homeDraftVersion are minted/read by the homepage step
-	// (stepHomepage: pages create → tree set via draft_version). homeDraftVersion
-	// carries the draft_version the tree PUT returns; it is currently WRITE-ONLY —
-	// forward-looking state for a future page-publish/edit step that would need the
-	// fresh OCC token (no reader today, deliberately).
+	// (stepHomepage: pages create → tree set → publish). The tree PUT returns the
+	// fresh draft_version into homeDraftVersion, which the publish step then uses
+	// as its If-Match OCC token (MIO-2636).
 	homePageID       string
 	homeDraftVersion int
 
@@ -715,7 +714,7 @@ func stepHomepage(sc *scaffoldContext, t *hubtemplate.Template) error {
 		// a hand-built in-memory template so the step is a clean no-op, never a panic.
 		return sc.step("homepage", "no homepage in template", func() error { return nil })
 	}
-	detail := fmt.Sprintf("POST %s then PUT %s — create the %q page from catalog template %q (offline) and set its draft tree (If-Match 0 first set, else the existing draft_version)",
+	detail := fmt.Sprintf("POST %s then PUT %s then publish — create the %q page from catalog template %q (offline), set its draft tree (If-Match 0 first set, else the existing draft_version), and publish it so the homepage renders",
 		pagesPath(sc.teamID, sc.hubIDOrPlaceholder(), ""),
 		pagesTreePath(sc.teamID, sc.hubIDOrPlaceholder(), "<page_id>"),
 		homepageSlug, t.Homepage.Template)
@@ -769,13 +768,27 @@ func stepHomepage(sc *scaffoldContext, t *hubtemplate.Template) error {
 		if terr != nil {
 			return terr
 		}
-		// Capture the new draft_version the PUT returns (the OCC token a later
-		// publish/edit would use); default to the If-Match on a bodyless response.
+		// Capture the new draft_version the PUT returns (the OCC token the publish
+		// below uses); default to the If-Match on a bodyless response.
 		sc.homeDraftVersion = ifMatch
 		if res != nil {
 			if dv, ok := attrInt(res.Attributes["draft_version"]); ok {
 				sc.homeDraftVersion = dv
 			}
+		}
+
+		// 5. Publish the draft tree (MIO-2636). The backend serves NO resolved tree
+		//    until a draft is published, so without this the homepage renders empty
+		//    ("No content available") even though the PUT succeeded. POST …/publish
+		//    is guarded by If-Match = the draft_version the PUT just returned
+		//    (mirrors `mio pages publish`); no body.
+		if _, perr := sc.cl.ActionWithHeaders(
+			sc.ctx, client.StyleEnvelope, "POST",
+			pagesPath(sc.teamID, sc.hubID, sc.homePageID)+"/publish",
+			nil,
+			map[string]string{"If-Match": strconv.Itoa(sc.homeDraftVersion)},
+		); perr != nil {
+			return perr
 		}
 		return nil
 	})
