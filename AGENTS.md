@@ -75,12 +75,13 @@ Branch on these stable codes. Do not parse stderr for error detection.
 
 ## Destructive Operations
 
-Any `delete`, `cancel`, or `refund` command in a non-TTY shell will exit **5** unless `--yes` (or `-y`) is passed. (`restore` is the undo of a soft-delete, not destructive, so it does NOT require `--yes`.)
+Any `delete`, `cancel`, `refund`, or member-moderation command (`ban` / `unban` / `warn` / `soft-ban`, and `community moderation reports resolve`) in a non-TTY shell will exit **5** unless `--yes` (or `-y`) is passed. (`restore` is the undo of a soft-delete, not destructive, so it does NOT require `--yes`.)
 
 ```sh
 mio contacts delete <id> --yes
 mio checkout subscriptions cancel <id> --yes
 mio checkout payments refund <id> --yes
+mio community members ban <contact_id> --hub <hub> --yes
 ```
 
 Always include `--yes` in agent scripts for these commands.

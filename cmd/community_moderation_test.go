@@ -512,7 +512,7 @@ func TestModerationReportsResolve_Body(t *testing.T) {
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "moderation", "reports", "resolve", "rep_1",
-			"--resolution", "soft_banned", "--soft-ban-until", "2026-08-01T00:00:00Z", "--notes", "n")...)
+			"--resolution", "soft_banned", "--soft-ban-until", "2026-08-01T00:00:00Z", "--notes", "n", "--yes")...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want ExitOK; stderr=%q", res.Code, res.Stderr)
 	}
@@ -572,7 +572,7 @@ func TestMembersSoftBan_Body(t *testing.T) {
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
 			"community", "members", "soft-ban", "contact_9",
-			"--reason", "spamming", "--until", "2026-08-01T00:00:00Z", "--notes", "n")...)
+			"--reason", "spamming", "--until", "2026-08-01T00:00:00Z", "--notes", "n", "--yes")...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want ExitOK; stderr=%q", res.Code, res.Stderr)
 	}
@@ -608,5 +608,38 @@ func TestMembersSoftBan_RejectsBadReason(t *testing.T) {
 	}
 	if fired {
 		t.Error("an invalid --reason must exit before any HTTP request")
+	}
+}
+
+// TestModerationVerbsRequireYes (MIO-2595 / MIO-2599 scoped-B decision) verifies
+// every member-moderation verb is destructive-guarded: without --yes in a
+// non-interactive shell it exits ExitNeedsConfir and fires NO HTTP request (the
+// confirm runs after context resolution but before the write). This is the
+// prompt-injection brake for agent runs that act on member-supplied
+// moderation-queue content.
+func TestModerationVerbsRequireYes(t *testing.T) {
+	cases := [][]string{
+		{"community", "members", "ban", "contact_9"},
+		{"community", "members", "unban", "contact_9"},
+		{"community", "members", "warn", "contact_9"},
+		{"community", "members", "soft-ban", "contact_9"},
+		{"hub-memberships", "ban", "contact_9"},
+		{"hub-memberships", "unban", "contact_9"},
+		{"hub-memberships", "warn", "contact_9"},
+		{"community", "moderation", "reports", "resolve", "rep_1", "--resolution", "dismissed"},
+	}
+	for _, verb := range cases {
+		t.Run(strings.Join(verb, " "), func(t *testing.T) {
+			fired := false
+			srv := moderationFiredServer(t, &fired, http.StatusOK, minimalHubBody)
+			args := append([]string{"--hub", "hub_123"}, verb...)
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+			if res.Code != errs.ExitNeedsConfir {
+				t.Errorf("exit = %d, want %d (ExitNeedsConfir) without --yes; stderr=%q", res.Code, errs.ExitNeedsConfir, res.Stderr)
+			}
+			if fired {
+				t.Error("a moderation verb without --yes must fire NO HTTP request")
+			}
+		})
 	}
 }

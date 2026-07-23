@@ -231,7 +231,7 @@ func TestCommunityMembersBan_MethodAndPath(t *testing.T) {
 		withTeam("t_team1",
 			"--hub", "hub_abc123",
 			"community", "members", "ban", "contact_xyz",
-			"--notes", "Spam violation",
+			"--notes", "Spam violation", "--yes",
 		)...)
 
 	if res.Code != errs.ExitOK {
@@ -273,7 +273,7 @@ func TestCommunityMembersUnban_Path(t *testing.T) {
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_abc123",
-			"community", "members", "unban", "contact_xyz",
+			"community", "members", "unban", "contact_xyz", "--yes",
 		)...)
 
 	if res.Code != errs.ExitOK {
@@ -305,7 +305,7 @@ func TestHubMembershipsBan_PathAndFlatBody(t *testing.T) {
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_abc123",
-			"hub-memberships", "ban", "contact_xyz",
+			"hub-memberships", "ban", "contact_xyz", "--yes",
 		)...)
 
 	if res.Code != errs.ExitOK {
@@ -339,7 +339,7 @@ func TestHubMembershipsWarn_Path(t *testing.T) {
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_abc123",
-			"hub-memberships", "warn", "contact_xyz",
+			"hub-memberships", "warn", "contact_xyz", "--yes",
 		)...)
 
 	if res.Code != errs.ExitOK {

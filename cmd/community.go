@@ -81,7 +81,7 @@ All community admin operations are hub-scoped: both --team and --hub are require
 (or resolvable from context).`,
 	Example: `  mio community spaces list --hub hub_abc123
   mio community discussions list --hub hub_abc123
-  mio community members ban contact_xyz --hub hub_abc123`,
+  mio community members ban contact_xyz --hub hub_abc123 --yes`,
 }
 
 // communityContext is shared boilerplate: build context, require auth, resolve
@@ -483,8 +483,8 @@ var communityMembersBanCmd = &cobra.Command{
 
 <contact_id> is the GLOBAL contact id (the .attributes.contact_id from
 'mio contacts', NOT its .id).`,
-	Example: `  mio community members ban contact_xyz --hub hub_abc123
-  mio community members ban contact_xyz --hub hub_abc123 --notes "Spam policy violation"`,
+	Example: `  mio community members ban contact_xyz --hub hub_abc123 --yes
+  mio community members ban contact_xyz --hub hub_abc123 --notes "Spam policy violation" --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := communityContext(cmd)
@@ -494,6 +494,10 @@ var communityMembersBanCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "notes")
+
+		if err := confirmDestructive(cmd, fmt.Sprintf("Ban member %s?", args[0])); err != nil {
+			return err
+		}
 
 		path := memberActionPath(teamID, hubID, args[0], "ban")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
@@ -517,8 +521,8 @@ var communityMembersUnbanCmd = &cobra.Command{
 
 <contact_id> is the GLOBAL contact id (the .attributes.contact_id from
 'mio contacts', NOT its .id).`,
-	Example: `  mio community members unban contact_xyz --hub hub_abc123
-  mio community members unban contact_xyz --hub hub_abc123 --notes "Reviewed and cleared"`,
+	Example: `  mio community members unban contact_xyz --hub hub_abc123 --yes
+  mio community members unban contact_xyz --hub hub_abc123 --notes "Reviewed and cleared" --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := communityContext(cmd)
@@ -528,6 +532,10 @@ var communityMembersUnbanCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "notes")
+
+		if err := confirmDestructive(cmd, fmt.Sprintf("Unban member %s?", args[0])); err != nil {
+			return err
+		}
 
 		path := memberActionPath(teamID, hubID, args[0], "unban")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
@@ -551,8 +559,8 @@ var communityMembersWarnCmd = &cobra.Command{
 
 <contact_id> is the GLOBAL contact id (the .attributes.contact_id from
 'mio contacts', NOT its .id).`,
-	Example: `  mio community members warn contact_xyz --hub hub_abc123
-  mio community members warn contact_xyz --hub hub_abc123 --notes "First offense warning"`,
+	Example: `  mio community members warn contact_xyz --hub hub_abc123 --yes
+  mio community members warn contact_xyz --hub hub_abc123 --notes "First offense warning" --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := communityContext(cmd)
@@ -562,6 +570,10 @@ var communityMembersWarnCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "notes")
+
+		if err := confirmDestructive(cmd, fmt.Sprintf("Warn member %s?", args[0])); err != nil {
+			return err
+		}
 
 		path := memberActionPath(teamID, hubID, args[0], "warn")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)

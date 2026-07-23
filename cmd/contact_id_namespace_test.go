@@ -41,9 +41,9 @@ func TestContract_MemberVerb404_HintsGlobalContactID(t *testing.T) {
 	}{
 		{"hub-memberships add", []string{"--team", "t_team1", "--hub", "hub_1", "hub-memberships", "add", "contact_x"}},
 		{"hub-memberships set-role", []string{"--team", "t_team1", "--hub", "hub_1", "hub-memberships", "set-role", "contact_x", "--role", "admin"}},
-		{"hub-memberships ban", []string{"--team", "t_team1", "--hub", "hub_1", "hub-memberships", "ban", "contact_x"}},
+		{"hub-memberships ban", []string{"--team", "t_team1", "--hub", "hub_1", "hub-memberships", "ban", "contact_x", "--yes"}},
 		{"activity contact", []string{"--team", "t_team1", "--hub", "hub_1", "activity", "contact", "contact_x"}},
-		{"community members ban", []string{"--team", "t_team1", "--hub", "hub_1", "community", "members", "ban", "contact_x"}},
+		{"community members ban", []string{"--team", "t_team1", "--hub", "hub_1", "community", "members", "ban", "contact_x", "--yes"}},
 		{"email enrollments create", []string{"--team", "t_team1", "--hub", "hub_1", "email", "enrollments", "create", "dc_1", "--contact-id", "contact_x"}},
 		{"email enrollments list-by-contact", []string{"--team", "t_team1", "--hub", "hub_1", "email", "enrollments", "list-by-contact", "contact_x"}},
 		{"access-rules overrides create", []string{"--team", "t_team1", "--hub", "hub_1", "access-rules", "overrides", "create", "--contact-id", "contact_x", "--scope", "full"}},

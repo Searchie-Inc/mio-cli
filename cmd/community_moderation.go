@@ -604,8 +604,8 @@ var communityModerationReportsResolveCmd = &cobra.Command{
 	Long: `Resolve a pending moderation report. --resolution is required and must be one
 of: dismissed, deleted, warned, banned, soft_banned. For soft_banned you may
 pass --soft-ban-until (ISO 8601); --notes records an admin note.`,
-	Example: `  mio community moderation reports resolve rep_abc --hub hub_abc123 --resolution dismissed
-  mio community moderation reports resolve rep_abc --hub hub_abc123 --resolution soft_banned --soft-ban-until 2026-08-01T00:00:00Z`,
+	Example: `  mio community moderation reports resolve rep_abc --hub hub_abc123 --resolution dismissed --yes
+  mio community moderation reports resolve rep_abc --hub hub_abc123 --resolution soft_banned --soft-ban-until 2026-08-01T00:00:00Z --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !cmd.Flags().Changed("resolution") {
@@ -624,6 +624,9 @@ pass --soft-ban-until (ISO 8601); --notes records an admin note.`,
 
 		c, teamID, hubID, err := communityContext(cmd)
 		if err != nil {
+			return err
+		}
+		if err := confirmDestructive(cmd, fmt.Sprintf("Resolve report %s as %q?", args[0], resolution)); err != nil {
 			return err
 		}
 		// The resolve path (.../moderation/reports/{id}) is not a write collection,
@@ -650,8 +653,8 @@ var communityMembersSoftBanCmd = &cobra.Command{
 
 <contact_id> is the GLOBAL contact id (the .attributes.contact_id from
 'mio contacts', NOT its .id).`,
-	Example: `  mio community members soft-ban contact_xyz --hub hub_abc123
-  mio community members soft-ban contact_xyz --hub hub_abc123 --reason spamming --until 2026-08-01T00:00:00Z`,
+	Example: `  mio community members soft-ban contact_xyz --hub hub_abc123 --yes
+  mio community members soft-ban contact_xyz --hub hub_abc123 --reason spamming --until 2026-08-01T00:00:00Z --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		attrs := map[string]any{}
@@ -672,6 +675,9 @@ var communityMembersSoftBanCmd = &cobra.Command{
 
 		c, teamID, hubID, err := communityContext(cmd)
 		if err != nil {
+			return err
+		}
+		if err := confirmDestructive(cmd, fmt.Sprintf("Soft-ban member %s?", args[0])); err != nil {
 			return err
 		}
 		// POST .../members/{contact_id}/soft_ban expects a moderation_actions

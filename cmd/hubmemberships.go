@@ -99,9 +99,9 @@ team-contact id and these verbs will 404 on it).
 All commands require --hub (and optionally --team if not auto-defaulted) and a
 team-owner API key. Use 'mio community members' for the same actions within the
 community admin surface.`,
-	Example: `  mio hub-memberships ban contact_xyz --hub hub_abc123
-  mio hub-memberships unban contact_xyz --hub hub_abc123
-  mio hub-memberships warn contact_xyz --hub hub_abc123 --notes "Policy reminder"`,
+	Example: `  mio hub-memberships ban contact_xyz --hub hub_abc123 --yes
+  mio hub-memberships unban contact_xyz --hub hub_abc123 --yes
+  mio hub-memberships warn contact_xyz --hub hub_abc123 --notes "Policy reminder" --yes`,
 }
 
 // hubMembershipsContext builds context + resolves both team and hub ids.
@@ -142,8 +142,8 @@ var hubMembershipsBanCmd = &cobra.Command{
 
 <contact_id> is the GLOBAL contact id (the .attributes.contact_id from
 'mio contacts', NOT its .id).`,
-	Example: `  mio hub-memberships ban contact_xyz --hub hub_abc123
-  mio hub-memberships ban contact_xyz --hub hub_abc123 --notes "Repeated ToS violations"`,
+	Example: `  mio hub-memberships ban contact_xyz --hub hub_abc123 --yes
+  mio hub-memberships ban contact_xyz --hub hub_abc123 --notes "Repeated ToS violations" --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := hubMembershipsContext(cmd)
@@ -153,6 +153,10 @@ var hubMembershipsBanCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "notes")
+
+		if err := confirmDestructive(cmd, fmt.Sprintf("Ban member %s?", args[0])); err != nil {
+			return err
+		}
 
 		path := memberModerationPath(teamID, hubID, args[0], "ban")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
@@ -176,8 +180,8 @@ var hubMembershipsUnbanCmd = &cobra.Command{
 
 <contact_id> is the GLOBAL contact id (the .attributes.contact_id from
 'mio contacts', NOT its .id).`,
-	Example: `  mio hub-memberships unban contact_xyz --hub hub_abc123
-  mio hub-memberships unban contact_xyz --hub hub_abc123 --notes "Appealed, cleared"`,
+	Example: `  mio hub-memberships unban contact_xyz --hub hub_abc123 --yes
+  mio hub-memberships unban contact_xyz --hub hub_abc123 --notes "Appealed, cleared" --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := hubMembershipsContext(cmd)
@@ -187,6 +191,10 @@ var hubMembershipsUnbanCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "notes")
+
+		if err := confirmDestructive(cmd, fmt.Sprintf("Unban member %s?", args[0])); err != nil {
+			return err
+		}
 
 		path := memberModerationPath(teamID, hubID, args[0], "unban")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
@@ -210,8 +218,8 @@ var hubMembershipsWarnCmd = &cobra.Command{
 
 <contact_id> is the GLOBAL contact id (the .attributes.contact_id from
 'mio contacts', NOT its .id).`,
-	Example: `  mio hub-memberships warn contact_xyz --hub hub_abc123
-  mio hub-memberships warn contact_xyz --hub hub_abc123 --notes "First offense"`,
+	Example: `  mio hub-memberships warn contact_xyz --hub hub_abc123 --yes
+  mio hub-memberships warn contact_xyz --hub hub_abc123 --notes "First offense" --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := hubMembershipsContext(cmd)
@@ -221,6 +229,10 @@ var hubMembershipsWarnCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "notes")
+
+		if err := confirmDestructive(cmd, fmt.Sprintf("Warn member %s?", args[0])); err != nil {
+			return err
+		}
 
 		path := memberModerationPath(teamID, hubID, args[0], "warn")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
