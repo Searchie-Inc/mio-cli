@@ -110,6 +110,31 @@ func TestHubsUpdate_KnownKeysNoWarning(t *testing.T) {
 	}
 }
 
+// TestHubsUpdate_MetaDirectMessagesAccepted (MIO-2612) verifies `directMessages`
+// is an accepted --meta-json feature-guard key: it no longer warns "unknown key",
+// and it passes under --strict-keys (which rejects an unknown key with no request
+// before this fix). directMessages is a real portal flag (MIO-2579).
+func TestHubsUpdate_MetaDirectMessagesAccepted(t *testing.T) {
+	srv, patchBody := rmwServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"hubs", "update", "hub_abc123",
+			"--meta-json", `{"directMessages":{"enabled":true}}`,
+			"--strict-keys",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK) for a known meta key under --strict-keys; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if strings.Contains(res.Stderr, "Warning") {
+		t.Errorf("directMessages must not warn as an unknown key; stderr=%q", res.Stderr)
+	}
+	if len(*patchBody) == 0 {
+		t.Error("the PATCH must fire for a known meta key")
+	}
+}
+
 // TestHubsUpdate_UnknownNestedKeyStrictRejects verifies the ticket's own example:
 // a misspelled sub-key under a stable section (settings.registration.enabld) no
 // longer silently succeeds — under --strict-keys it is a usage error with no
