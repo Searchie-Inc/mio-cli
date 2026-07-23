@@ -75,10 +75,9 @@ type scaffoldContext struct {
 	spaceIDsBySlug, defIDsBySlug, playlistIDsByKey map[string]string
 
 	// homePageID + homeDraftVersion are minted/read by the homepage step
-	// (stepHomepage: pages create → tree set via draft_version). homeDraftVersion
-	// carries the draft_version the tree PUT returns; it is currently WRITE-ONLY —
-	// forward-looking state for a future page-publish/edit step that would need the
-	// fresh OCC token (no reader today, deliberately).
+	// (stepHomepage: pages create → tree set → publish). The tree PUT returns the
+	// fresh draft_version into homeDraftVersion, which the publish step then uses
+	// as its If-Match OCC token (MIO-2636).
 	homePageID       string
 	homeDraftVersion int
 
