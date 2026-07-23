@@ -483,8 +483,8 @@ var communityMembersBanCmd = &cobra.Command{
 
 <contact_id> is the GLOBAL contact id (the .attributes.contact_id from
 'mio contacts', NOT its .id).`,
-	Example: `  mio community members ban contact_xyz --hub hub_abc123
-  mio community members ban contact_xyz --hub hub_abc123 --notes "Spam policy violation"`,
+	Example: `  mio community members ban contact_xyz --hub hub_abc123 --yes
+  mio community members ban contact_xyz --hub hub_abc123 --notes "Spam policy violation" --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := communityContext(cmd)
@@ -521,8 +521,8 @@ var communityMembersUnbanCmd = &cobra.Command{
 
 <contact_id> is the GLOBAL contact id (the .attributes.contact_id from
 'mio contacts', NOT its .id).`,
-	Example: `  mio community members unban contact_xyz --hub hub_abc123
-  mio community members unban contact_xyz --hub hub_abc123 --notes "Reviewed and cleared"`,
+	Example: `  mio community members unban contact_xyz --hub hub_abc123 --yes
+  mio community members unban contact_xyz --hub hub_abc123 --notes "Reviewed and cleared" --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := communityContext(cmd)
@@ -559,8 +559,8 @@ var communityMembersWarnCmd = &cobra.Command{
 
 <contact_id> is the GLOBAL contact id (the .attributes.contact_id from
 'mio contacts', NOT its .id).`,
-	Example: `  mio community members warn contact_xyz --hub hub_abc123
-  mio community members warn contact_xyz --hub hub_abc123 --notes "First offense warning"`,
+	Example: `  mio community members warn contact_xyz --hub hub_abc123 --yes
+  mio community members warn contact_xyz --hub hub_abc123 --notes "First offense warning" --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := communityContext(cmd)
