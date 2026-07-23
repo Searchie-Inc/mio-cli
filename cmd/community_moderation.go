@@ -626,6 +626,9 @@ pass --soft-ban-until (ISO 8601); --notes records an admin note.`,
 		if err != nil {
 			return err
 		}
+		if err := confirmDestructive(cmd, fmt.Sprintf("Resolve report %s as %q?", args[0], resolution)); err != nil {
+			return err
+		}
 		// The resolve path (.../moderation/reports/{id}) is not a write collection,
 		// so send an explicit moderation_reports envelope verbatim.
 		body := rawDataEnvelope("moderation_reports", "", attrs)
@@ -672,6 +675,9 @@ var communityMembersSoftBanCmd = &cobra.Command{
 
 		c, teamID, hubID, err := communityContext(cmd)
 		if err != nil {
+			return err
+		}
+		if err := confirmDestructive(cmd, fmt.Sprintf("Soft-ban member %s?", args[0])); err != nil {
 			return err
 		}
 		// POST .../members/{contact_id}/soft_ban expects a moderation_actions

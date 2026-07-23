@@ -495,6 +495,10 @@ var communityMembersBanCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "notes")
 
+		if err := confirmDestructive(cmd, fmt.Sprintf("Ban member %s?", args[0])); err != nil {
+			return err
+		}
+
 		path := memberActionPath(teamID, hubID, args[0], "ban")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
 		if err != nil {
@@ -529,6 +533,10 @@ var communityMembersUnbanCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "notes")
 
+		if err := confirmDestructive(cmd, fmt.Sprintf("Unban member %s?", args[0])); err != nil {
+			return err
+		}
+
 		path := memberActionPath(teamID, hubID, args[0], "unban")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
 		if err != nil {
@@ -562,6 +570,10 @@ var communityMembersWarnCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "notes")
+
+		if err := confirmDestructive(cmd, fmt.Sprintf("Warn member %s?", args[0])); err != nil {
+			return err
+		}
 
 		path := memberActionPath(teamID, hubID, args[0], "warn")
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, attrs)
