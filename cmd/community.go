@@ -81,7 +81,7 @@ All community admin operations are hub-scoped: both --team and --hub are require
 (or resolvable from context).`,
 	Example: `  mio community spaces list --hub hub_abc123
   mio community discussions list --hub hub_abc123
-  mio community members ban contact_xyz --hub hub_abc123`,
+  mio community members ban contact_xyz --hub hub_abc123 --yes`,
 }
 
 // communityContext is shared boilerplate: build context, require auth, resolve

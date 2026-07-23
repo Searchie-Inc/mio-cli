@@ -371,7 +371,7 @@ Multiple named profiles are supported via `--profile`.
 |---------|--------------|-----|
 | Exit code **3** (`ExitAuth`) | No key, or the key is invalid/expired | Run `mio login`, or `export MIO_API_KEY=mio_sk_live_…`. Run `mio whoami` to confirm the resolved key and active team. |
 | Exit code **2** (`ExitUsage`) | Bad flag, missing argument, unknown subcommand, or rejected input | Check your flags against `mio <resource> <action> --help`. Flags are kebab-case (`--first-name`). |
-| Exit code **5** (`ExitNeedsConfir`) | A destructive op (`delete`, `cancel`, `refund`) in a non-interactive shell | Re-run with `--yes` / `-y`. |
+| Exit code **5** (`ExitNeedsConfir`) | A destructive op (`delete`, `cancel`, `refund`, or a member-moderation verb: `ban`/`unban`/`warn`/`soft-ban`, `moderation reports resolve`) in a non-interactive shell | Re-run with `--yes` / `-y`. |
 | Exit code **6** (`ExitRateLimited`) | Too many requests (HTTP 429) | Back off and retry. |
 | Exit code **7** (`ExitServer`) | Upstream 5xx | Transient — retry; if it persists, the backend is down. |
 | Calls fail against production | Wrong API base or stale/revoked key | Verify with `mio whoami`. Point at a different backend with `--api-base <url>` or `MIO_API_BASE_URL`. |
