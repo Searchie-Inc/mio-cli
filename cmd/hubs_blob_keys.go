@@ -91,6 +91,7 @@ var settingsKeys = map[string]bool{
 var metaKeys = map[string]bool{
 	"memberDirectory": true,
 	"discussions":     true,
+	"directMessages":  true,
 	"moderation":      true,
 }
 
