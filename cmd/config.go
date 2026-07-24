@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -26,12 +27,15 @@ func validateConfigValue(key, value string) error {
 	switch key {
 	case "api_base":
 		// The client builds request URLs by textual append (baseURL + "/api/v1/…"),
-		// so api_base must be a plain scheme://host[:port] base — a query or fragment
-		// would corrupt every request path. Reject them here rather than persist a
-		// base that silently misroutes later.
+		// so api_base must be a plain scheme://host[:port][/path] base. Any '?' or '#'
+		// — even a bare delimiter like "https://host?" (url.ForceQuery, empty RawQuery)
+		// or "https://host#" (empty Fragment) — would turn appended paths into
+		// query/fragment text, so reject those characters outright before parsing.
+		if strings.ContainsAny(value, "?#") {
+			return errs.New(errs.ExitUsage, "invalid api_base %q: must be a plain http(s) base URL (scheme://host[:port]), with no query or fragment", value)
+		}
 		u, err := url.Parse(value)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
-			u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Opaque != "" {
 			return errs.New(errs.ExitUsage, "invalid api_base %q: must be a plain http(s) base URL (scheme://host[:port]), with no query or fragment", value)
 		}
 	case "current_team", "current_hub":

@@ -29,6 +29,8 @@ func TestConfigSet_ValidatesValues(t *testing.T) {
 		{"api_base accepts port+path", []string{"config", "set", "api_base", "http://localhost:8000/proxy"}, false},
 		{"api_base rejects query", []string{"config", "set", "api_base", "https://api.membership.io?x=y"}, true},
 		{"api_base rejects fragment", []string{"config", "set", "api_base", "https://api.membership.io#frag"}, true},
+		{"api_base rejects empty query delimiter", []string{"config", "set", "api_base", "https://api.membership.io?"}, true},
+		{"api_base rejects empty fragment delimiter", []string{"config", "set", "api_base", "https://api.membership.io#"}, true},
 		{"current_team rejects non-uuid", []string{"config", "set", "current_team", "not-a-uuid"}, true},
 		{"current_team rejects prefixed id", []string{"config", "set", "current_team", "t_team1"}, true},
 		{"current_team accepts uuid", []string{"config", "set", "current_team", validUUID}, false},
