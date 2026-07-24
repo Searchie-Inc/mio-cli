@@ -773,7 +773,9 @@ var mediaFoldersUpdateCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "nothing to update: set at least --name")
 		}
 
-		res, err := c.client.Update(c.ctx, foldersPath(teamID, args[0]), attrs)
+		// FolderUpdateData requires data.id in the PATCH body (backend 400s
+		// "Field required (/data/id)" otherwise). MIO-2564; same class as MIO-2499.
+		res, err := c.client.UpdateWithID(c.ctx, foldersPath(teamID, args[0]), args[0], attrs)
 		if err != nil {
 			return err
 		}
@@ -977,7 +979,9 @@ var mediaPlaylistsUpdateCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
-		res, err := c.client.Update(c.ctx, playlistsPath(teamID, args[0]), attrs)
+		// PlaylistUpdateData requires data.id in the PATCH body (backend 400s
+		// "Field required (/data/id)" otherwise). MIO-2608; same class as MIO-2499.
+		res, err := c.client.UpdateWithID(c.ctx, playlistsPath(teamID, args[0]), args[0], attrs)
 		if err != nil {
 			return err
 		}
