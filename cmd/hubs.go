@@ -850,7 +850,7 @@ func init() {
 	// settings / meta are read-modify-write DEEP-MERGES (MIO-2256) so a partial
 	// edit does not clobber sibling keys, and --logo-url merges into branding.
 	hubsUpdateCmd.Flags().String("navigation-json",
-		"", "Hub navigation as a JSON object — header/footer menu items (each needs a \"type\"). Inline JSON or @file. Replaces the hub's navigation.")
+		"", "Hub navigation as a JSON object — header/footer menu items (each needs a \"type\"). Inline JSON or @file. Replaces the hub's navigation. For item-by-item edits use 'mio hubs navigation add/remove/reorder'.")
 	hubsUpdateCmd.Flags().String("branding-json",
 		"", "Hub branding keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted keys: "+brandingKeysHelp+". Unknown keys warn (error with --strict-keys).")
 	hubsUpdateCmd.Flags().String("settings-json",
