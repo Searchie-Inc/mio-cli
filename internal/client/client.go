@@ -83,6 +83,10 @@ func New(baseURL, apiKey string, opts ...Option) *Client {
 	return c
 }
 
+// BaseURL returns the client's API base origin, used to origin-scope the
+// on-disk catalog cache.
+func (c *Client) BaseURL() string { return c.baseURL }
+
 // BodyStyle selects how a write request body is shaped on the wire.
 //
 // The mio backend is NOT uniform: most resources accept (or require) a JSON:API
@@ -178,6 +182,11 @@ var typeOverrides = []struct {
 	{"pages/sections", "sections"},
 	// Page draft node-tree authoring: PUT .../pages/{id}/tree (MIO-2258).
 	{"pages/tree", "page_draft_trees"},
+	// W2b one-step template scaffold (MIO-2573 §5.1): POST
+	// .../hubs/{hub}/pages/scaffold-from-template binds a write schema whose
+	// data.type Literal is "template_scaffolds"; the bare "pages" collection
+	// would derive "pages" without this override.
+	{"pages/scaffold-from-template", "template_scaffolds"},
 	{"teams/members", "team_members"},
 	// Hub membership authoring (MIO-2261 add, MIO-2263 set-role): the members
 	// collection under a hub is the hub_memberships resource, not team_members.
@@ -314,7 +323,10 @@ var knownCollections = map[string]bool{
 	"tags": true, "contact-attributes": true, "options": true,
 	"reorder": true,
 	"pages":   true, "sections": true, "tree": true, "api-keys": true, "roles": true,
-	"users": true, "access-rules": true, "access-overrides": true,
+	// W2b one-step template scaffold op (MIO-2573 §5.1); maps to
+	// "template_scaffolds" via the pages/scaffold-from-template override.
+	"scaffold-from-template": true,
+	"users":                  true, "access-rules": true, "access-overrides": true,
 	"drip-campaigns": true, "steps": true, "email-templates": true,
 	"enrollments": true, "orders": true, "subscriptions": true,
 	"payments": true, "refund": true, "attributes": true,
