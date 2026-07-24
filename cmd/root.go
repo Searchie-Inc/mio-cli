@@ -144,7 +144,7 @@ func init() {
 	pf := rootCmd.PersistentFlags()
 	pf.StringVarP(&flags.output, "output", "o", "", "Output format: json|table|plain (default: json off a TTY, table on a TTY).")
 	pf.StringVar(&flags.apiKey, "api-key", "", "API key to authenticate with. Overrides MIO_API_KEY and the stored key.")
-	pf.BoolVar(&flags.anonymous, "anonymous", false, "Ignore MIO_API_KEY and the stored key; resolve as unauthenticated (for diagnostics).")
+	pf.BoolVar(&flags.anonymous, "anonymous", false, "Ignore MIO_API_KEY and the stored key; resolve as unauthenticated (for diagnostics). An explicit --api-key still wins.")
 	pf.StringVar(&flags.apiBase, "api-base", "", "API base URL. Overrides MIO_API_BASE_URL and config.")
 	pf.StringVar(&flags.team, "team", "", "Team id context for team-scoped resources. Overrides config.")
 	pf.StringVar(&flags.hub, "hub", "", "Hub id context for hub-scoped resources. Overrides config.")
@@ -265,7 +265,7 @@ func (c *cmdContext) requireTeam() (string, error) {
 	}
 
 	return "", errs.New(errs.ExitUsage,
-		"no team id in context: pass --team <id> or run `mio config set team <id>` "+
+		"no team id in context: pass --team <id> or run `mio config set current_team <id>` "+
 			"— run 'mio teams list' then 'mio teams switch <id>'")
 }
 
@@ -304,8 +304,8 @@ func (c *cmdContext) requireHub() (string, error) {
 	}
 
 	return "", errs.New(errs.ExitUsage,
-		"no hub id in context: pass --hub <id> or run `mio config set hub <id>` "+
-			"— run 'mio hubs list' then 'mio config set hub <id>'")
+		"no hub id in context: pass --hub <id> or run `mio config set current_hub <id>` "+
+			"— run 'mio hubs list' then 'mio config set current_hub <id>'")
 }
 
 // singleTeamDefault returns the id of the caller's sole team when EXACTLY one

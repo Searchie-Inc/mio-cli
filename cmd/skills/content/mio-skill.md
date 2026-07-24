@@ -15,8 +15,8 @@ renders.
 
 ```bash
 export MIO_API_KEY=mio_sk_live_xxxxx      # never run `mio login` in an agent (it prompts)
-mio config set team team_abc123           # drop the repeated --team; or pass --team per call
-# once the hub exists: mio config set hub hub_abc123
+mio config set current_team <team-uuid>   # a UUID (see 'mio teams list'); drop the repeated --team
+# once the hub exists: mio config set current_hub <hub-uuid>
 ```
 
 - **Auth resolution (first wins):** `--api-key` flag → `MIO_API_KEY` env → key stored by `mio login`. No key ⇒ exit `3`.

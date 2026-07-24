@@ -18,7 +18,7 @@ API keys are `mio_sk_live_…`. Resolution order (first wins):
 2. `MIO_API_KEY` environment variable
 3. Key stored in the OS keychain by `mio login`
 
-If no key is found the command exits with code **3** (`ExitAuth`). Always set `MIO_API_KEY` before running any resource command.
+If no key is found the command exits with code **3** (`ExitAuth`). Always set `MIO_API_KEY` before running any resource command. Pass `--anonymous` to deliberately run unauthenticated — it skips both `MIO_API_KEY` and the keychain (an explicit `--api-key` still takes effect).
 
 Key auth works against `https://api.member.dev` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL`.
 

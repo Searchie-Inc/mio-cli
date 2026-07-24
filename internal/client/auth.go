@@ -144,7 +144,7 @@ func (c *Client) Register(ctx context.Context, email, password, firstName, lastN
 // password→mint flow.
 func (c *Client) MintAPIKey(ctx context.Context, accessToken, teamID, name string) (*Resource, error) {
 	if teamID == "" {
-		return nil, errs.New(errs.ExitUsage, "cannot mint API key: no team id resolved (set --team or `mio config set team <id>`)")
+		return nil, errs.New(errs.ExitUsage, "cannot mint API key: no team id resolved (set --team or `mio config set current_team <id>`)")
 	}
 	tokenClient := New(c.baseURL, accessToken, WithHTTPClient(c.http), WithDebug(c.debug))
 	path := fmt.Sprintf("/api/teams/%s/api-keys", teamID)

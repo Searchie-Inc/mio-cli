@@ -35,7 +35,7 @@ const (
 	// EnvAPIBase overrides the API base URL.
 	EnvAPIBase = "MIO_API_BASE_URL"
 	// DefaultAPIBase is the fallback API base (production). Overridable via the
-	// MIO_API_BASE_URL env var, the --api-base flag, or `mio config set api-base`.
+	// MIO_API_BASE_URL env var, the --api-base flag, or `mio config set api_base`.
 	DefaultAPIBase = "https://api.member.dev"
 
 	// fileKeyName is the filename (inside the config dir) that holds the

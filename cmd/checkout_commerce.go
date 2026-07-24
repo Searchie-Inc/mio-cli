@@ -98,7 +98,7 @@ A hub_product_display row makes a product purchasable on a hub's checkout
 surface. Attaching a product also seeds a hub_price_display row for every active
 price on the product (manage those with 'mio checkout hub-prices').
 
-All commands require a hub context: pass --hub <id> or run 'mio config set hub <id>'.`,
+All commands require a hub context: pass --hub <id> or run 'mio config set current_hub <id>'.`,
 }
 
 var checkoutHubProductsListCmd = &cobra.Command{
@@ -244,7 +244,7 @@ hub_price_display rows are created automatically when a product is attached to a
 hub ('mio checkout hub-products attach'); they cannot be created or deleted
 directly. Only visibility and position are editable.
 
-All commands require a hub context: pass --hub <id> or run 'mio config set hub <id>'.`,
+All commands require a hub context: pass --hub <id> or run 'mio config set current_hub <id>'.`,
 }
 
 var checkoutHubPricesListCmd = &cobra.Command{

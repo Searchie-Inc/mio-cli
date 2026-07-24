@@ -25,9 +25,14 @@ var configUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F
 func validateConfigValue(key, value string) error {
 	switch key {
 	case "api_base":
+		// The client builds request URLs by textual append (baseURL + "/api/v1/…"),
+		// so api_base must be a plain scheme://host[:port] base — a query or fragment
+		// would corrupt every request path. Reject them here rather than persist a
+		// base that silently misroutes later.
 		u, err := url.Parse(value)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return errs.New(errs.ExitUsage, "invalid api_base %q: must be an http(s) URL (e.g. https://api.membership.io)", value)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+			u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
+			return errs.New(errs.ExitUsage, "invalid api_base %q: must be a plain http(s) base URL (scheme://host[:port]), with no query or fragment", value)
 		}
 	case "current_team", "current_hub":
 		if !configUUIDRe.MatchString(value) {

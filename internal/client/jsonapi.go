@@ -36,7 +36,9 @@ type Resource struct {
 // business value is the meaningful one, so it MUST survive flattening — clobbering
 // it with the transport discriminator hid it from default output (MIO-2647). The
 // envelope type only fills in when the resource has no `type` attribute of its
-// own; the document type is always available under --raw (.data.type).
+// own; the document type is always available under --raw (.data.type). A present
+// but null `type` attribute is preserved as null (the faithful business value),
+// not backfilled with the document type.
 func (r Resource) Flatten() map[string]any {
 	out := make(map[string]any, len(r.Attributes)+2)
 	for k, v := range r.Attributes {

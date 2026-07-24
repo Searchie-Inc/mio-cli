@@ -219,7 +219,7 @@ local CLI context: it writes the team as the current team in config and clears
 the current hub (hubs are team-scoped, so the old hub no longer applies).
 
 To set the local team context WITHOUT a server-side switch, use
-'mio config set team <id>'.`,
+'mio config set current_team <id>'.`,
 	Example: `  mio teams switch team_abc123`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -240,7 +240,7 @@ To set the local team context WITHOUT a server-side switch, use
 		// subsequent team-scoped commands target the new team. Clear the
 		// current hub because hubs are team-scoped: a hub from the old team is
 		// not valid under the new one. This is intentionally a separate concern
-		// from `mio config set team`, which is local-only and does not POST.
+		// from `mio config set current_team`, which is local-only and does not POST.
 		cfg, cerr := config.Load()
 		if cerr != nil {
 			return errs.Wrap(errs.ExitGeneric, cerr)

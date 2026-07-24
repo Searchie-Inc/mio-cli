@@ -3,7 +3,7 @@
 # Auth: export MIO_API_KEY=mio_sk_live_<key>  (exit 3 if missing/invalid)
 #       resolution order: --api-key flag > MIO_API_KEY env > OS-keychain key (mio login); --anonymous forces unauthenticated
 #       key auth works against https://api.member.dev; override with MIO_API_BASE_URL or --api-base
-# Config: TOML at ~/.config/mio/config.toml ($XDG_CONFIG_HOME/mio/config.toml); keys: team|hub|api-base
+# Config: TOML at ~/.config/mio/config.toml ($XDG_CONFIG_HOME/mio/config.toml); keys: current_team|current_hub|api_base
 # Output: JSON by default when piped; --output json|table|plain; --jq <expr>; --raw for envelope
 # Destructive ops (delete|cancel|refund|member-moderation: ban|unban|warn|soft-ban|community moderation reports resolve): require --yes/-y in non-interactive shells (exit 5 otherwise). restore is an undo, not destructive — no --yes needed.
 # Exit codes: 0=ok 1=error 2=bad-args(400/409/422) 3=auth(401/403) 4=not-found 5=needs-confirm 6=rate-limited(429) 7=server(5xx)
