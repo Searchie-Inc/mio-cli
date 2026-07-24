@@ -54,6 +54,8 @@ HUB_ID=$(mio hubs list --jq '.[0].id')
 
 Use `--raw` to get the unflattened JSON:API envelope if you need `meta`, `links`, or `included` fields.
 
+When a resource has a business-level `type` attribute (products: `course`/`membership`/`booking`; contact-attributes: `text`/`number`/…), the flattened `.type` is THAT value, not the JSON:API document type. The document type (e.g. `"products"`) is available under `--raw` as `.data.type`.
+
 ---
 
 ## Exit-Code Contract
@@ -92,11 +94,11 @@ Always include `--yes` in agent scripts for these commands.
 
 Most resources are team-scoped. Hub-scoped resources additionally need `--hub`.
 
-Set defaults once via config so individual commands are shorter. Config is written as TOML to `~/.config/mio/config.toml` (or `$XDG_CONFIG_HOME/mio/config.toml`); only `team`, `hub`, and `api-base` are writable, and the API key is never stored there.
+Set defaults once via config so individual commands are shorter. Config is written as TOML to `~/.config/mio/config.toml` (or `$XDG_CONFIG_HOME/mio/config.toml`); only `current_team`, `current_hub`, and `api_base` are writable, and the API key is never stored there. Values are validated (UUID / `http(s)` URL) at the setter.
 
 ```sh
-mio config set team <team-id>
-mio config set hub  <hub-id>
+mio config set current_team <team-id>
+mio config set current_hub  <hub-id>
 ```
 
 Or pass per-command:

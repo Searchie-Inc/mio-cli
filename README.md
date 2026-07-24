@@ -252,6 +252,7 @@ Every command inherits these flags.
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--api-key` | | env/keychain | API key. Overrides `MIO_API_KEY` and the stored key. |
+| `--anonymous` | | false | Ignore `MIO_API_KEY` and the stored key; resolve as unauthenticated (diagnostics). |
 | `--team` | | config | Team ID for team-scoped resources. |
 | `--hub` | | config | Hub ID for hub-scoped resources. |
 | `--output` | `-o` | json (piped) / table (TTY) | Output format: `json`, `table`, `plain`. |
@@ -351,13 +352,13 @@ Run `mio <resource> --help` or `mio <resource> <action> --help` for flag details
 
 `mio` stores its config as **TOML** at `~/.config/mio/config.toml` (or `$XDG_CONFIG_HOME/mio/config.toml` when `XDG_CONFIG_HOME` is set). It holds non-secret context only — current team/hub, API base, and named profiles. **Your API key is never written here**; it lives in the OS keychain (managed by `mio login` / `mio logout`).
 
-Manage it with the `config` command (writable keys: `team`, `hub`, `api-base`):
+Manage it with the `config` command (writable keys: `current_team`, `current_hub`, `api_base`). Values are validated at the setter — `current_team`/`current_hub` must be a UUID and `api_base` must be an `http(s)` URL, so a typo is rejected here (exit 2) instead of failing later on an unrelated command:
 
 ```sh
-mio config set team     <team-id>
-mio config set hub      <hub-id>
-mio config set api-base <url>
-mio config get team
+mio config set current_team <team-id>   # must be a UUID
+mio config set current_hub  <hub-id>    # must be a UUID
+mio config set api_base     <url>       # must be an http(s) URL
+mio config get current_team
 mio config list            # shows all values and the config file path
 ```
 

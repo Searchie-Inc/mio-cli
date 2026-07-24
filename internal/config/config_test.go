@@ -90,6 +90,34 @@ func TestResolve_APIKeyPrecedence_EnvBeatsConfig(t *testing.T) {
 	}
 }
 
+// MIO-2648 — Overrides.Anonymous forces an unauthenticated resolution, skipping
+// BOTH the MIO_API_KEY env var and the stored keychain key, so `--anonymous` can
+// deliberately run without credentials for diagnostics.
+func TestResolve_AnonymousSkipsEnvAndKeychain(t *testing.T) {
+	withXDG(t)
+	t.Setenv(EnvAPIKey, "env_key")
+
+	cfg, _ := Load()
+
+	// Baseline: without --anonymous, the env key resolves.
+	r, err := cfg.Resolve(Overrides{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.APIKey != "env_key" {
+		t.Fatalf("baseline APIKey = %q, want env_key", r.APIKey)
+	}
+
+	// With --anonymous, the env key (and keychain) are skipped → empty.
+	r, err = cfg.Resolve(Overrides{Anonymous: true})
+	if err != nil {
+		t.Fatalf("Resolve(anonymous): %v", err)
+	}
+	if r.APIKey != "" {
+		t.Errorf("APIKey = %q, want empty under --anonymous", r.APIKey)
+	}
+}
+
 func TestResolve_APIBaseDefault(t *testing.T) {
 	withXDG(t)
 	cfg, _ := Load()

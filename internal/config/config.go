@@ -477,11 +477,15 @@ func DeleteAPIKey() error {
 // Overrides carries the per-invocation flag values that take precedence over
 // env and config. Empty strings mean "not set on the command line".
 type Overrides struct {
-	APIKey  string
-	APIBase string
-	TeamID  string
-	HubID   string
-	Profile string
+	APIKey string
+	// Anonymous forces an unauthenticated resolution: the env var and keychain
+	// fallbacks are skipped so a request can deliberately run without credentials
+	// (MIO-2648). An explicit APIKey still takes effect.
+	Anonymous bool
+	APIBase   string
+	TeamID    string
+	HubID     string
+	Profile   string
 }
 
 // Resolve computes the effective {apiKey, apiBase, teamID, hubID} from the
@@ -497,12 +501,13 @@ type Overrides struct {
 func (c *Config) Resolve(o Overrides) (Resolved, error) {
 	prof := c.profile(o.Profile)
 
-	// API key: flag > env > keychain.
+	// API key: flag > env > keychain. --anonymous (o.Anonymous) skips the env and
+	// keychain fallbacks so a request can run explicitly unauthenticated (MIO-2648).
 	apiKey := o.APIKey
-	if apiKey == "" {
+	if apiKey == "" && !o.Anonymous {
 		apiKey = os.Getenv(EnvAPIKey)
 	}
-	if apiKey == "" {
+	if apiKey == "" && !o.Anonymous {
 		stored, err := GetAPIKey()
 		switch {
 		case err == nil:
