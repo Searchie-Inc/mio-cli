@@ -1,0 +1,196 @@
+package cmd
+
+// hubs_scaffold_publish_resolve_test.go — W0 (MIO-2666 / MIO-2667).
+//
+// Regression + contract tests proving a scaffolded hub's homepage is resolvable
+// and NON-NULL through the hub renderer's two-call read flow, and that an
+// absent-draft publish still resolves to a non-null (empty) tree (spec §6 W0,
+// §10.3).
+//
+// Context: mio-cli PR #66 (4896c13) made stepHomepage POST …/pages/{id}/publish
+// unconditionally (If-Match = homeDraftVersion), closing the "publish gap" that
+// left a scaffolded homepage rendering the null-tree "No content available"
+// fallback. W0 adds NO production code — the publish call already exists — it
+// adds the regression that fails loudly if that publish is ever dropped, plus a
+// contract test for the §10.3 absent-draft publish substitution.
+//
+// The read flow is two GETs, addressed through the same CLI client the scaffold
+// writes through:
+//   1. GET …/pages/home                 → page METADATA (yields the homepage slug)
+//   2. GET …/pages/{slug}?resolve=true  → the resolved PUBLISHED node tree
+// The /pages/home route is metadata-only; the resolved tree comes from the
+// second, slug-addressed call.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/Searchie-Inc/mio-cli/internal/client"
+	"github.com/Searchie-Inc/mio-cli/internal/hubtemplate"
+)
+
+// homepageBackend is a stateful in-memory stand-in for the hub-pages backend. It
+// models the ONE property the W0 regression guards: a page's PUBLISHED tree is
+// resolvable through the two-call read flow ONLY AFTER POST …/publish runs.
+// Before publish, publishedRoot is nil and the resolve read returns a JSON null
+// tree — exactly the "No content available" fallback PR #66 removed — so a
+// stepHomepage that stops publishing fails the regression.
+type homepageBackend struct {
+	mu            sync.Mutex
+	pageID        string         // id minted on create
+	slug          string         // slug recorded from the create body
+	draftRoot     map[string]any // tree.root captured on the draft PUT (nil until a PUT)
+	publishedRoot map[string]any // tree.root exposed by the resolve read (nil until publish)
+}
+
+// newHomepageBackend starts the stateful stub and returns its server plus the
+// backend it mutates. Routing is by HTTP method + path suffix/query, matching the
+// convention the existing stepHomepage tests use (the client rewrites /api/… to
+// /api/v1/…, so only suffixes are stable).
+func newHomepageBackend(t *testing.T) (*httptest.Server, *homepageBackend) {
+	t.Helper()
+	be := &homepageBackend{pageID: "page_home"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		be.mu.Lock()
+		defer be.mu.Unlock()
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		path := r.URL.Path
+		switch {
+		// (1) Resolve read: GET …/pages/{slug}?resolve=true → resolved published tree.
+		// Checked FIRST so the slug-addressed read never falls through to the list.
+		case r.Method == http.MethodGet && r.URL.Query().Get("resolve") == "true":
+			var tree any // JSON null until published
+			if be.publishedRoot != nil {
+				tree = map[string]any{"root": be.publishedRoot}
+			}
+			writePageWithTree(w, be.pageID, be.slug, tree)
+		// (2) Home metadata: GET …/pages/home → the homepage page's metadata (slug only).
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/pages/home"):
+			writePageMeta(w, be.pageID, be.slug)
+		// existingHomepage() list: GET …/pages → empty on a fresh hub (forces a create).
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/pages"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		// Draft tree PUT: capture tree.root, bump draft_version.
+		case r.Method == http.MethodPut && strings.Contains(path, "/tree"):
+			body, _ := io.ReadAll(r.Body)
+			if tree, ok := decodeHubAttrs(t, body)["tree"].(map[string]any); ok {
+				if root, ok := tree["root"].(map[string]any); ok {
+					be.draftRoot = root
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
+		// Publish: promote the draft into the published state (THE behaviour W0 guards).
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/publish"):
+			if be.draftRoot != nil {
+				be.publishedRoot = be.draftRoot
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pp_1","type":"page-publishes","attributes":{"section_count":1}}}`))
+		// Create: record the slug and mint the page id.
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			be.slug, _ = decodeHubAttrs(t, body)["slug"].(string)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"pages","attributes":{"slug":%q,"is_homepage":true}}}`, be.pageID, be.slug)
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, be
+}
+
+// writePageMeta writes the /pages/home metadata response (slug + is_homepage) —
+// metadata only, NO tree (the /pages/home route is metadata-only, §10.3).
+func writePageMeta(w http.ResponseWriter, id, slug string) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"pages","attributes":{"slug":%q,"is_homepage":true}}}`, id, slug)
+}
+
+// writePageWithTree writes the resolve-read response: the page plus its resolved
+// published `tree` attribute (JSON null when the page was never published).
+func writePageWithTree(w http.ResponseWriter, id, slug string, tree any) {
+	doc := map[string]any{
+		"data": map[string]any{
+			"id":   id,
+			"type": "pages",
+			"attributes": map[string]any{
+				"slug": slug,
+				"tree": tree,
+			},
+		},
+	}
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(doc)
+}
+
+// readResolvedHomepageTree runs the spec §6 W0 / §10.3 two-call read flow and
+// returns the resolved published tree (nil when the page was never published)
+// plus the homepage slug the metadata call yielded. It reads through the SAME
+// client type the scaffold writes through, so it observes exactly the state the
+// publish produced.
+func readResolvedHomepageTree(t *testing.T, cl *client.Client, teamID, hubID string) (tree map[string]any, slug string) {
+	t.Helper()
+	meta, err := cl.Retrieve(context.Background(), pagesBase(teamID, hubID)+"/home")
+	if err != nil {
+		t.Fatalf("read flow: GET /pages/home failed: %v", err)
+	}
+	slug, _ = meta.Attributes["slug"].(string)
+	if slug == "" {
+		t.Fatalf("read flow: /pages/home returned no slug; attrs=%v", meta.Attributes)
+	}
+	q := url.Values{}
+	q.Set("resolve", "true")
+	res, err := cl.RetrieveWithQuery(context.Background(), pagesBase(teamID, hubID)+"/"+slug, q)
+	if err != nil {
+		t.Fatalf("read flow: GET /pages/%s?resolve=true failed: %v", slug, err)
+	}
+	tree, _ = res.Attributes["tree"].(map[string]any)
+	return tree, slug
+}
+
+// TestStepHomepage_PublishedHomepageResolvesNonNull is the W0 regression (spec
+// §6 W0): after stepHomepage runs (create → set draft tree → publish), the hub
+// renderer's two-call read flow returns a NON-NULL resolved homepage tree WITH
+// content. If the publish call in stepHomepage is ever dropped, publishedRoot
+// stays nil, the resolve read returns a null tree ("No content available"), and
+// this test fails.
+func TestStepHomepage_PublishedHomepageResolvesNonNull(t *testing.T) {
+	srv, _ := newHomepageBackend(t)
+	cl := client.New(srv.URL, "k")
+
+	sc := newStepSC(cl, "hub_1", "acme")
+	tmpl := &hubtemplate.Template{
+		ID:       "community",
+		Homepage: &hubtemplate.HomepageRef{Template: "page-homepage", Privacy: "public"},
+	}
+	if err := stepHomepage(sc, tmpl); err != nil {
+		t.Fatalf("stepHomepage: %v", err)
+	}
+
+	tree, slug := readResolvedHomepageTree(t, cl, "t_team1", "hub_1")
+	if slug != homepageSlug {
+		t.Errorf("read flow slug = %q, want %q (the scaffolded homepage slug)", slug, homepageSlug)
+	}
+	if tree == nil {
+		t.Fatalf("resolve read returned a NULL tree — the published homepage is not resolvable (publish gap regressed)")
+	}
+	root, ok := tree["root"].(map[string]any)
+	if !ok {
+		t.Fatalf("resolved tree has no root object; tree=%v", tree)
+	}
+	if kids, ok := root["children"].([]any); !ok || len(kids) == 0 {
+		t.Errorf("resolved homepage root has no children — published tree is structurally empty; root=%v", root)
+	}
+}
