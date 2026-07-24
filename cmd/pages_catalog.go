@@ -225,10 +225,14 @@ func resolveCatalog(cmd *cobra.Command, c *cmdContext) (*catalog.Catalog, error)
 	offline := getBool(cmd, "offline")
 	override := strings.TrimSpace(getString(cmd, "catalog"))
 
+	origin := ""
+	if c != nil {
+		origin = c.client.BaseURL()
+	}
 	opts := catalog.ResolveOptions{
 		Offline:      offline,
 		OverrideFile: override,
-		CacheDir:     catalogCacheDir(),
+		CacheDir:     catalogCacheDirFor(origin),
 		Warnf: func(format string, a ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
 		},
@@ -252,6 +256,14 @@ func catalogCacheDir() string {
 		return d
 	}
 	return catalog.DefaultCacheDir()
+}
+
+// catalogCacheDirFor scopes the catalog cache directory to a backend origin
+// (host[:port]) so a cache populated from one backend is never validated or
+// read against another (MIO-2672). An empty origin keeps the legacy unscoped
+// layout; MIO_CATALOG_CACHE_DIR still overrides the base.
+func catalogCacheDirFor(origin string) string {
+	return catalog.CacheDirUnder(catalogCacheDir(), origin)
 }
 
 func templateRow(t catalog.Template) map[string]any {

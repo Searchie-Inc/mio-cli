@@ -24,9 +24,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
-	"github.com/Searchie-Inc/mio-cli/internal/hubtemplate"
 )
 
 // scaffoldStepNames is the ordered pipeline the dry-run plan must name, in order.
@@ -37,29 +37,21 @@ var scaffoldStepNames = []string{
 
 // mutationGuardServer starts a test server that flips *mutated to true on ANY
 // non-GET (mutating) request, so a dry-run can assert it created/changed
-// nothing. GETs (context resolution) are allowed and answered with a minimal
-// hub body.
+// nothing. GETs (context resolution + the live catalog fetch, answered with the
+// 2.1 artifact) are allowed; other GETs get a minimal hub body.
 func mutationGuardServer(t *testing.T) (*httptest.Server, *bool) {
 	t.Helper()
-	mutated := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			mutated = true
-		}
-		w.Header().Set("Content-Type", "application/vnd.api+json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"data":{"id":"hub_x","type":"hubs","attributes":{"slug":"x","is_private":true}}}`))
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &mutated
+	srv, _, mutated := liveCatalogScaffoldServer(t, catalog21Body(t))
+	return srv, mutated
 }
 
-// TestScaffold_DryRunEmitsPlanNoHTTP: `hubs scaffold --dry-run` prints the
-// ordered plan naming every step and fires no mutating HTTP.
-func TestScaffold_DryRunEmitsPlanNoHTTP(t *testing.T) {
+// TestScaffold_DryRunEmitsPlanNoMutatingHTTP: `hubs scaffold --dry-run` prints
+// the ordered plan naming every step and fires no MUTATING HTTP (the catalog
+// GET is allowed — the plan is built from the backend's live catalog).
+func TestScaffold_DryRunEmitsPlanNoMutatingHTTP(t *testing.T) {
 	srv, mutated := mutationGuardServer(t)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, scaffoldEnv(t, srv.URL),
 		withTeam("t_team1", "hubs", "scaffold",
 			"--template", "community", "--name", "X", "--slug", "x", "--dry-run")...)
 
@@ -92,9 +84,19 @@ func TestScaffold_DryRunEmitsPlanNoHTTP(t *testing.T) {
 // TestScaffold_ResumeGetsHubForSlug: resume mode (--hub) GETs the hub and
 // populates scaffoldContext.hubSlug from the response.
 func TestScaffold_ResumeGetsHubForSlug(t *testing.T) {
+	catBody := catalog21Body(t)
 	gotGet := false
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/page-builder/catalog") {
+			// The preflight's live catalog fetch — answered with the 2.1 artifact.
+			// It fires AFTER the resume-mode hub retrieve, so it never clobbers the
+			// first-GET recording below.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(catBody)
+			return
+		}
 		if r.Method == http.MethodGet && !gotGet {
 			// Record only the FIRST GET — the resume-mode hub retrieve. Now that the
 			// Phase-4 steps run for real (stepBlobs GETs the hub, stepSpaces lists
@@ -114,7 +116,7 @@ func TestScaffold_ResumeGetsHubForSlug(t *testing.T) {
 	scaffoldAfterResolve = func(sc *scaffoldContext) { gotSlug = sc.hubSlug }
 	defer func() { scaffoldAfterResolve = nil }()
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, scaffoldEnv(t, srv.URL),
 		withTeam("t_team1", "hubs", "scaffold", "--hub", "hub_1", "--template", "community")...)
 
 	if res.Code != errs.ExitOK {
@@ -144,10 +146,17 @@ func TestScaffold_CreateModeIgnoresConfiguredDefaultHub(t *testing.T) {
 	// touched — a GET to it would mean create silently became a resume. The server
 	// returns a NEW created-hub id so no legitimate step path can contain the
 	// configured id.
+	catBody := catalog21Body(t)
 	touchedConfigured := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "hub_configured") {
 			touchedConfigured = true
+		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/page-builder/catalog") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(catBody)
+			return
 		}
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		w.WriteHeader(http.StatusOK)
@@ -167,7 +176,7 @@ func TestScaffold_CreateModeIgnoresConfiguredDefaultHub(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	env := append(baseEnv(srv.URL), "XDG_CONFIG_HOME="+cfgHome)
+	env := append(scaffoldEnv(t, srv.URL), "XDG_CONFIG_HOME="+cfgHome)
 	res := runContract(t, env,
 		withTeam("t_team1", "hubs", "scaffold",
 			"--template", "community", "--name", "X", "--slug", "x")...)
@@ -180,28 +189,14 @@ func TestScaffold_CreateModeIgnoresConfiguredDefaultHub(t *testing.T) {
 	}
 }
 
-// TestScaffold_UnknownTemplate: an unknown --template is ExitUsage before any HTTP.
-func TestScaffold_UnknownTemplate(t *testing.T) {
-	srv, fired := firedGuardServer(t)
-
-	res := runContract(t, baseEnv(srv.URL),
-		withTeam("t_team1", "hubs", "scaffold", "--template", "nope")...)
-
-	if res.Code != errs.ExitUsage {
-		t.Errorf("unknown-template exit code = %d, want %d (ExitUsage); stderr=%q",
-			res.Code, errs.ExitUsage, res.Stderr)
-	}
-	if *fired {
-		t.Errorf("unknown template must fail BEFORE any HTTP request")
-	}
-}
-
 // ─── Phase 4 step tests (Tasks 12-14) ────────────────────────────────────────
 //
 // These drive the pipeline step functions DIRECTLY with an in-memory
-// *hubtemplate.Template and a scaffoldContext wired to an httptest server
-// (unit-style), per the Phase-4 plan — they do not depend on the community.json
-// content or the full CLI wiring.
+// catalog.HubTemplate and a scaffoldContext wired to an httptest server
+// (unit-style), per the Phase-4 plan — they do not depend on the full CLI
+// wiring. (TestScaffold_UnknownTemplate was superseded by
+// TestScaffold_UnknownTemplateListsAvailable: the template now comes from the
+// backend's live catalog, so its absence is detected after the catalog GET.)
 
 // newStepSC builds a non-dry-run scaffoldContext pointed at cl, for driving a
 // single step directly. A nil plan + dryRun:false means sc.step runs the real fn.
@@ -216,6 +211,27 @@ func newStepSC(cl *client.Client, hubID, hubSlug string) *scaffoldContext {
 		defIDsBySlug:     map[string]string{},
 		playlistIDsByKey: map[string]string{},
 	}
+}
+
+// scaffoldFixture parses the 2.1 catalog fixture and returns it, the community
+// hub template sourced from it, and the page plan built from it (instantiated-
+// once raw trees) — exactly the state scaffoldPreflight leaves on the context,
+// for driving steps directly.
+func scaffoldFixture(t *testing.T) (*catalog.Catalog, catalog.HubTemplate, *scaffoldPlan) {
+	t.Helper()
+	cat, err := catalog.Parse(catalog21Body(t))
+	if err != nil {
+		t.Fatalf("parse 2.1 catalog fixture: %v", err)
+	}
+	ht, ok := cat.HubTemplateByID("community")
+	if !ok {
+		t.Fatal("community hub template missing from the 2.1 fixture")
+	}
+	plan, err := buildScaffoldPlan(cat, ht)
+	if err != nil {
+		t.Fatalf("buildScaffoldPlan: %v", err)
+	}
+	return cat, ht, plan
 }
 
 // ─── Task 12: stepHub ─────────────────────────────────────────────────────────
@@ -241,7 +257,7 @@ func TestStepHub_CreateEmitsIdentityPostAndCapturesContext(t *testing.T) {
 	sc.slugOverride = "my-community"
 
 	// Branding present in the template MUST NOT leak into the create body.
-	tmpl := &hubtemplate.Template{ID: "community", Branding: map[string]any{"primary": "#111"}}
+	tmpl := &catalog.HubTemplate{ID: "community", Branding: map[string]any{"primary": "#111"}}
 	if err := stepHub(sc, tmpl); err != nil {
 		t.Fatalf("stepHub create: %v", err)
 	}
@@ -283,7 +299,7 @@ func TestStepHub_ResumeFiresNoCreate(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	if err := stepHub(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+	if err := stepHub(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
 		t.Fatalf("stepHub resume: %v", err)
 	}
 	if fired {
@@ -317,7 +333,7 @@ func TestStepBlobs_OneGetOnePatchSiblingsPreserved(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID:       "community",
 		Branding: map[string]any{"favicon_url": "f"},
 		Settings: map[string]any{"registration": map[string]any{"enabled": true}},
@@ -364,7 +380,7 @@ func TestStepBlobs_StrictRejectsUnknownSettingsKey(t *testing.T) {
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
 	// "registraton" is a typo of the accepted top-level key "registration".
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID:       "community",
 		Settings: map[string]any{"registraton": map[string]any{"enabled": true}},
 	}
@@ -400,7 +416,7 @@ func TestStepBlobs_RejectsMalformedNavShape(t *testing.T) {
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
 	// header as {items:[…]} instead of a bare array — the mio-hub parser drops it.
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID:         "community",
 		Navigation: map[string]any{"header": map[string]any{"items": []any{}}},
 	}
@@ -440,9 +456,9 @@ func TestStepSpaces_ExistingSlugSkippedNewCreated(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID: "community",
-		Spaces: []hubtemplate.Space{
+		Spaces: []catalog.TemplateSpace{
 			{Name: "General", Slug: "general", AccessLevel: "public", PostingPermission: "any_member"},
 			{Name: "Support", Slug: "support", AccessLevel: "public", PostingPermission: "any_member"},
 		},
@@ -487,9 +503,9 @@ func TestStepSpaces_ExhaustiveLookupFindsPage2(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID:     "community",
-		Spaces: []hubtemplate.Space{{Name: "General", Slug: "general", AccessLevel: "public", PostingPermission: "any_member"}},
+		Spaces: []catalog.TemplateSpace{{Name: "General", Slug: "general", AccessLevel: "public", PostingPermission: "any_member"}},
 	}
 	if err := stepSpaces(sc, tmpl); err != nil {
 		t.Fatalf("stepSpaces: %v", err)
@@ -536,9 +552,9 @@ func TestStepOnboarding_CreatesDefAndEnablesOnHubCollectionPath(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID: "community",
-		Onboarding: []hubtemplate.AttrDef{
+		Onboarding: []catalog.TemplateAttrDef{
 			{Name: "Company", Slug: "company", FieldType: "text", InOnboarding: true, Required: false},
 		},
 	}
@@ -598,9 +614,9 @@ func TestStepOnboarding_ExistingDefReusedNoDuplicateCreate(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID:         "community",
-		Onboarding: []hubtemplate.AttrDef{{Name: "Company", Slug: "company", FieldType: "text", InOnboarding: true}},
+		Onboarding: []catalog.TemplateAttrDef{{Name: "Company", Slug: "company", FieldType: "text", InOnboarding: true}},
 	}
 	if err := stepOnboarding(sc, tmpl); err != nil {
 		t.Fatalf("stepOnboarding: %v", err)
@@ -646,9 +662,9 @@ func TestStepOnboarding_ExhaustiveDefLookupFindsPage2(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID:         "community",
-		Onboarding: []hubtemplate.AttrDef{{Name: "Company", Slug: "company", FieldType: "text", InOnboarding: true}},
+		Onboarding: []catalog.TemplateAttrDef{{Name: "Company", Slug: "company", FieldType: "text", InOnboarding: true}},
 	}
 	if err := stepOnboarding(sc, tmpl); err != nil {
 		t.Fatalf("stepOnboarding: %v", err)
@@ -684,7 +700,7 @@ func TestStepPolicies_MapsKeysAndFieldsToPatches(t *testing.T) {
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
 	// "privacy" sorts before "terms"; both are friendly aliases for the enum types.
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID: "community",
 		Policies: map[string]any{
 			"terms":   map[string]any{"content": "TOS body", "required": true},
@@ -728,7 +744,7 @@ func TestStepPolicies_EmptyTemplateNoRequest(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	if err := stepPolicies(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+	if err := stepPolicies(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
 		t.Fatalf("stepPolicies empty: %v", err)
 	}
 	if fired {
@@ -751,7 +767,7 @@ func TestStepPolicies_UnknownKeyErrorsNoRequest(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{ID: "community", Policies: map[string]any{"bogus": map[string]any{}}}
+	tmpl := &catalog.HubTemplate{ID: "community", Policies: map[string]any{"bogus": map[string]any{}}}
 	err := stepPolicies(sc, tmpl)
 	if err == nil {
 		t.Fatal("unknown policy key must ERROR")
@@ -808,9 +824,9 @@ func TestStepPlaylists_EmptyHubCreatesItemsAndPublishes(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID: "community",
-		Playlists: []hubtemplate.Playlist{
+		Playlists: []catalog.TemplatePlaylist{
 			{Title: "Welcome", Key: "welcome", Visibility: "public", FileIDs: []string{"file_a", "file_b"}},
 		},
 	}
@@ -867,9 +883,9 @@ func TestStepPlaylists_NonEmptyHubSkipsWholeStep(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
+	tmpl := &catalog.HubTemplate{
 		ID: "community",
-		Playlists: []hubtemplate.Playlist{
+		Playlists: []catalog.TemplatePlaylist{
 			{Title: "Welcome", Key: "welcome", FileIDs: []string{"file_a"}},
 		},
 	}
@@ -899,10 +915,11 @@ func newDryRunStepSC(cl *client.Client) (*scaffoldContext, *[]planEntry) {
 }
 
 // TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0: on a hub with no homepage
-// yet, the step (1) creates the "home" page with identity from the template
-// homepage ref (title/slug/is_homepage + privacy), then (2) PUTs the draft tree —
-// instantiated OFFLINE from the vendored catalog and wrapped as {"root":…} — with
-// the first-set If-Match: 0 header. The page id is captured into the context.
+// yet, the step (1) creates the page with identity from the hub template's
+// homepage pages[] entry (title/slug/is_homepage + privacy), then (2) PUTs the
+// draft tree — the preflight-instantiated plan tree, interpolated with the final
+// hub vars and wrapped as {"root":…} — with the first-set If-Match: 0 header.
+// The page id is captured into the context.
 func TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0(t *testing.T) {
 	var createBody, putBody []byte
 	var ifMatch, putPath, publishIfMatch string
@@ -939,11 +956,9 @@ func TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
-		ID:       "community",
-		Homepage: &hubtemplate.HomepageRef{Template: "page-homepage", Privacy: "public"},
-	}
-	if err := stepHomepage(sc, tmpl); err != nil {
+	_, ht, plan := scaffoldFixture(t)
+	sc.hubTmpl, sc.plan2, sc.hubName = ht, plan, "Acme"
+	if err := stepHomepage(sc, &sc.hubTmpl); err != nil {
 		t.Fatalf("stepHomepage: %v", err)
 	}
 	if lists != 1 || creates != 1 || puts != 1 || publishes != 1 {
@@ -978,7 +993,7 @@ func TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0(t *testing.T) {
 		t.Errorf("root node missing an instantiated id; root=%v", root)
 	}
 	if kids, ok := root["children"].([]any); !ok || len(kids) == 0 {
-		t.Errorf("root node has no children (page-homepage instantiates 3); root=%v", root)
+		t.Errorf("root node has no children (page-homepage-community instantiates a populated stack); root=%v", root)
 	}
 	if sc.homePageID != "page_home" {
 		t.Errorf("homePageID = %q, want page_home", sc.homePageID)
@@ -1028,11 +1043,9 @@ func TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion(t *testing
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
-		ID:       "community",
-		Homepage: &hubtemplate.HomepageRef{Template: "page-homepage"},
-	}
-	if err := stepHomepage(sc, tmpl); err != nil {
+	_, ht, plan := scaffoldFixture(t)
+	sc.hubTmpl, sc.plan2, sc.hubName = ht, plan, "Acme"
+	if err := stepHomepage(sc, &sc.hubTmpl); err != nil {
 		t.Fatalf("stepHomepage resume: %v", err)
 	}
 	if creates != 0 {
@@ -1102,11 +1115,9 @@ func TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
-		ID:       "community",
-		Homepage: &hubtemplate.HomepageRef{Template: "page-homepage"},
-	}
-	if err := stepHomepage(sc, tmpl); err != nil {
+	_, ht, plan := scaffoldFixture(t)
+	sc.hubTmpl, sc.plan2, sc.hubName = ht, plan, "Acme"
+	if err := stepHomepage(sc, &sc.hubTmpl); err != nil {
 		t.Fatalf("stepHomepage resume (404 tree-get): %v", err)
 	}
 	if creates != 0 {
@@ -1129,25 +1140,31 @@ func TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0(t *testing.T) {
 	}
 }
 
-// TestStepHomepage_UnknownCatalogTemplateErrorsNoHTTP: a homepage ref pointing at a
-// template id that is not in the vendored catalog fails LOUD (ExitUsage) before any
-// HTTP — the tree is resolved offline first, so a bad ref never creates a page.
-func TestStepHomepage_UnknownCatalogTemplateErrorsNoHTTP(t *testing.T) {
-	srv, fired := firedGuardServer(t)
-	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
-		ID:       "community",
-		Homepage: &hubtemplate.HomepageRef{Template: "no-such-page-template"},
-	}
-	err := stepHomepage(sc, tmpl)
+// TestBuildScaffoldPlan_UnknownPageTemplateErrors: a pages[] ref whose
+// pageTemplate is missing from the catalog is ExitUsage from buildScaffoldPlan
+// itself — defense-in-depth under HubTemplate.Validate, and trivially before
+// any HTTP: the plan is built by the WRITE-FREE preflight from pure inputs.
+// (Supersedes TestStepHomepage_UnknownCatalogTemplateErrorsNoHTTP: the bad-ref
+// check moved from the step into the preflight.)
+func TestBuildScaffoldPlan_UnknownPageTemplateErrors(t *testing.T) {
+	cat, ht, _ := scaffoldFixture(t)
+	ht.Pages[0].PageTemplate = "no-such-page-template"
+	_, err := buildScaffoldPlan(cat, ht)
 	if err == nil {
-		t.Fatal("stepHomepage must ERROR on an unknown catalog template")
+		t.Fatal("buildScaffoldPlan must ERROR on a pages[] ref to a missing pageTemplate")
 	}
 	if errs.CodeOf(err) != errs.ExitUsage {
 		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
 	}
-	if *fired {
-		t.Error("an unknown homepage template must fail BEFORE any HTTP (tree resolved offline first)")
+	// A ref to a SECTION template (not a whole-page root) is equally rejected.
+	cat2, ht2, _ := scaffoldFixture(t)
+	ht2.Pages[0].PageTemplate = "hero"
+	_, err = buildScaffoldPlan(cat2, ht2)
+	if err == nil {
+		t.Fatal("buildScaffoldPlan must ERROR on a pages[] ref to a section template")
+	}
+	if errs.CodeOf(err) != errs.ExitUsage {
+		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
 	}
 }
 
@@ -1175,7 +1192,7 @@ func TestStepPublish_TruePatchesIsPrivateFalse(t *testing.T) {
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
 	sc.isPrivate = true
 	sc.publish = true
-	if err := stepPublish(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+	if err := stepPublish(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
 		t.Fatalf("stepPublish: %v", err)
 	}
 	if patches != 1 {
@@ -1202,7 +1219,7 @@ func TestStepPublish_FalseSkipsNoRequest(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
 	sc.publish = false
-	if err := stepPublish(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+	if err := stepPublish(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
 		t.Fatalf("stepPublish skip: %v", err)
 	}
 	if *fired {
@@ -1215,7 +1232,7 @@ func TestStepPublish_FalseSkipsNoRequest(t *testing.T) {
 func TestStepPublish_FalseRecordsSkipNote(t *testing.T) {
 	sc, plan := newDryRunStepSC(client.New("http://unused", "k"))
 	sc.publish = false
-	if err := stepPublish(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+	if err := stepPublish(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
 		t.Fatalf("stepPublish dry-run: %v", err)
 	}
 	if len(*plan) != 1 || (*plan)[0].step != "publish" {
@@ -1233,7 +1250,7 @@ func TestStepPublish_FalseRecordsSkipNote(t *testing.T) {
 func TestStepBackendGated_FiresNoRequest(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	if err := stepBackendGated(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+	if err := stepBackendGated(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
 		t.Fatalf("stepBackendGated: %v", err)
 	}
 	if *fired {
@@ -1246,7 +1263,7 @@ func TestStepBackendGated_FiresNoRequest(t *testing.T) {
 // knows exactly what is deferred and why.
 func TestStepBackendGated_RecordsSkipNoteWithTickets(t *testing.T) {
 	sc, plan := newDryRunStepSC(client.New("http://unused", "k"))
-	if err := stepBackendGated(sc, &hubtemplate.Template{ID: "community"}); err != nil {
+	if err := stepBackendGated(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
 		t.Fatalf("stepBackendGated dry-run: %v", err)
 	}
 	if len(*plan) != 1 || (*plan)[0].step != "backend-gated" {
@@ -1289,6 +1306,7 @@ func fullScaffoldServer(t *testing.T) (*httptest.Server, *scaffoldCapture) {
 func fullScaffoldServerFor(t *testing.T, hubID string, isPrivate bool) (*httptest.Server, *scaffoldCapture) {
 	t.Helper()
 	rec := &scaffoldCapture{hubID: hubID}
+	catBody := catalog21Body(t)
 	// Match the hub itself by SUFFIX: the client emits paths under /api/v1/... , so
 	// an exact "/api/teams/…/hubs/<id>" compare would never match. The hub's own
 	// sub-collections all carry a further segment (/spaces, /pages, …), so only the
@@ -1298,6 +1316,10 @@ func fullScaffoldServerFor(t *testing.T, hubID string, isPrivate bool) (*httptes
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		path := r.URL.Path
 		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/page-builder/catalog"): // preflight live catalog fetch
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(catBody)
 		case r.Method == http.MethodPatch && strings.HasSuffix(path, hubSuffix): // blobs OR publish PATCH
 			body, _ := io.ReadAll(r.Body)
 			rec.hubPatchBodies = append(rec.hubPatchBodies, body)
@@ -1330,17 +1352,9 @@ func fullScaffoldServerFor(t *testing.T, hubID string, isPrivate bool) (*httptes
 	return srv, rec
 }
 
-// TestHubsTemplates_ListsCommunity: `hubs templates` lists the built-in templates,
-// including `community`, and needs no credentials (embedded, offline).
-func TestHubsTemplates_ListsCommunity(t *testing.T) {
-	res := runContract(t, offlineEnv(), "hubs", "templates")
-	if res.Code != errs.ExitOK {
-		t.Fatalf("hubs templates exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
-	}
-	if !strings.Contains(res.Stdout, "community") {
-		t.Errorf("hubs templates output must include 'community'; stdout=%q", res.Stdout)
-	}
-}
+// (TestHubsTemplates_ListsCommunity — the offline, embedded listing — was
+// superseded by TestHubsTemplates_ListsFromLiveCatalog: `hubs templates` now
+// lists the TARGET BACKEND's catalog, so it needs credentials + a server.)
 
 // TestScaffold_PublishFlagReachesStep8: with --publish, the pipeline reaches step
 // 8 and fires a hub PATCH carrying is_private:false (never `published`), and the
@@ -1348,7 +1362,7 @@ func TestHubsTemplates_ListsCommunity(t *testing.T) {
 func TestScaffold_PublishFlagReachesStep8(t *testing.T) {
 	srv, rec := fullScaffoldServer(t)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, scaffoldEnv(t, srv.URL),
 		withTeam("t_team1", "hubs", "scaffold",
 			"--template", "community", "--name", "X", "--slug", "x", "--publish")...)
 	if res.Code != errs.ExitOK {
@@ -1383,7 +1397,7 @@ func TestScaffold_PublishFlagReachesStep8(t *testing.T) {
 func TestScaffold_NoPublishStaysPrivate(t *testing.T) {
 	srv, rec := fullScaffoldServer(t)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, scaffoldEnv(t, srv.URL),
 		withTeam("t_team1", "hubs", "scaffold",
 			"--template", "community", "--name", "X", "--slug", "x")...)
 	if res.Code != errs.ExitOK {
@@ -1412,7 +1426,7 @@ func TestScaffold_NoPublishStaysPrivate(t *testing.T) {
 func TestScaffold_ResumePublishedHubSummaryLive(t *testing.T) {
 	srv, _ := fullScaffoldServerFor(t, "hub_pub", false) // already public
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, scaffoldEnv(t, srv.URL),
 		withTeam("t_team1", "hubs", "scaffold", "--hub", "hub_pub", "--template", "community")...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("resume scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
@@ -1434,7 +1448,7 @@ func TestScaffold_ResumePublishedHubSummaryLive(t *testing.T) {
 func TestScaffold_OverridesReachBlobsPatch(t *testing.T) {
 	srv, rec := fullScaffoldServer(t)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, scaffoldEnv(t, srv.URL),
 		withTeam("t_team1", "hubs", "scaffold",
 			"--template", "community", "--name", "X", "--slug", "x",
 			"--favicon-url", "https://override.example/fav.png",
@@ -1478,7 +1492,7 @@ func TestScaffold_OverridesReachBlobsPatch(t *testing.T) {
 func TestScaffold_RealRunPrintsSummaryWithSlugAndID(t *testing.T) {
 	srv, _ := fullScaffoldServer(t)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, scaffoldEnv(t, srv.URL),
 		withTeam("t_team1", "hubs", "scaffold",
 			"--template", "community", "--name", "X", "--slug", "x")...)
 	if res.Code != errs.ExitOK {
@@ -1499,7 +1513,7 @@ func TestScaffold_RealRunPrintsSummaryWithSlugAndID(t *testing.T) {
 func TestScaffold_DryRunPrintsPlanNotSummary(t *testing.T) {
 	srv, _ := mutationGuardServer(t)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, scaffoldEnv(t, srv.URL),
 		withTeam("t_team1", "hubs", "scaffold",
 			"--template", "community", "--name", "X", "--slug", "x", "--dry-run")...)
 	if res.Code != errs.ExitOK {
@@ -1567,4 +1581,193 @@ func TestPrintScaffoldRecovery_PreservesIntent(t *testing.T) {
 			t.Errorf("recovery output missing %q; got:\n%s", want, out)
 		}
 	}
+}
+
+// ─── MIO-2672: live-catalog preflight (spec §0 — the CLI holds no templates) ───
+
+// catalog21Body reads the 2.1 catalog artifact fixture (the byte-copy of
+// mio-page-catalog@rev7, hubTemplates present — see internal/catalog).
+func catalog21Body(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile("../internal/catalog/testdata/catalog-2.1.json")
+	if err != nil {
+		t.Fatalf("read 2.1 catalog fixture: %v", err)
+	}
+	return b
+}
+
+// catalogRoute is a newMockServer handler serving the raw catalog body on
+// GET /api/v1/page-builder/catalog (the canonical path the client emits).
+func catalogRoute(body []byte) mockHandler {
+	return mockHandler{Method: http.MethodGet, PathPfx: "/api/v1/page-builder/catalog", Status: 200, Body: string(body)}
+}
+
+// scaffoldEnv is baseEnv plus an isolated per-test catalog cache dir, so
+// scaffold/hubs-templates tests never share catalog-cache state with each
+// other or with the developer's real machine cache.
+func scaffoldEnv(t *testing.T, srvURL string) []string {
+	t.Helper()
+	return append(baseEnv(srvURL), "MIO_CATALOG_CACHE_DIR="+t.TempDir())
+}
+
+// liveCatalogScaffoldServer serves catalogBody on the catalog route and a
+// minimal hub body on every other GET. It reports whether the catalog route was
+// hit and whether any mutating (non-GET) request fired.
+func liveCatalogScaffoldServer(t *testing.T, catalogBody []byte) (*httptest.Server, *bool, *bool) {
+	t.Helper()
+	catalogHit, mutated := false, false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			mutated = true
+		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/page-builder/catalog") {
+			catalogHit = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(catalogBody)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"hub_x","type":"hubs","attributes":{"slug":"x","is_private":true}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &catalogHit, &mutated
+}
+
+// TestScaffold_FetchesCatalogFromTargetBackend: the scaffold resolves its hub
+// template from the LIVE catalog of the very backend it is scaffolding against
+// (spec §0) — a dry-run therefore GETs the catalog, prints the full plan, and
+// fires zero mutating HTTP.
+func TestScaffold_FetchesCatalogFromTargetBackend(t *testing.T) {
+	srv, catalogHit, mutated := liveCatalogScaffoldServer(t, catalog21Body(t))
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--dry-run")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*catalogHit {
+		t.Errorf("the scaffold must GET the page-builder catalog from the target backend")
+	}
+	if *mutated {
+		t.Errorf("dry-run must fire NO mutating (non-GET) request")
+	}
+	for _, step := range scaffoldStepNames {
+		if !strings.Contains(res.Stdout, step) {
+			t.Errorf("dry-run plan missing step %q; stdout=%q", step, res.Stdout)
+		}
+	}
+}
+
+// TestScaffold_UnknownTemplateListsAvailable: a --template id absent from the
+// backend's catalog is ExitUsage, the error names the AVAILABLE hub templates,
+// and nothing is written (only the catalog GET fired).
+func TestScaffold_UnknownTemplateListsAvailable(t *testing.T) {
+	srv, _, mutated := liveCatalogScaffoldServer(t, catalog21Body(t))
+
+	err := executeCLI(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "nope", "--name", "X", "--slug", "x")...)
+
+	if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); err=%v", got, errs.ExitUsage, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "community") {
+		t.Errorf("error must list the available hub templates (community); err=%v", err)
+	}
+	if *mutated {
+		t.Errorf("an unknown template must fail BEFORE any mutating HTTP")
+	}
+}
+
+// TestScaffold_BackendWithoutHubTemplatesExplains: a backend whose catalog
+// predates 2.1 (no hubTemplates[] — e.g. the old 0.3.1 artifact) yields a
+// pin-hint explanation (MIO-2666/W2a), ExitUsage, and zero mutating HTTP.
+func TestScaffold_BackendWithoutHubTemplatesExplains(t *testing.T) {
+	oldBody, rerr := os.ReadFile("../internal/catalog/catalog.json") // 0.3.1: no hubTemplates
+	if rerr != nil {
+		t.Fatalf("read old vendored catalog: %v", rerr)
+	}
+	srv, _, mutated := liveCatalogScaffoldServer(t, oldBody)
+
+	err := executeCLI(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x")...)
+
+	if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); err=%v", got, errs.ExitUsage, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "contains no hub templates") {
+		t.Errorf("error must explain the backend catalog has no hub templates; err=%v", err)
+	}
+	if *mutated {
+		t.Errorf("a hub-template-less backend must fail BEFORE any mutating HTTP")
+	}
+}
+
+// TestScaffold_NameBound255: a --name over the 255-code-point hub title bound
+// (VARCHAR(255)) is ExitUsage BEFORE any HTTP at all — the very first preflight
+// check, ahead of even the catalog fetch.
+func TestScaffold_NameBound255(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", strings.Repeat("x", 256), "--slug", "x")...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Errorf("an over-long --name must fail BEFORE any HTTP request")
+	}
+}
+
+// TestScaffold_CatalogOverrideFile: --catalog <file> is the only escape hatch —
+// the scaffold uses that (digest-verified) artifact exclusively, so a dry-run
+// against a backend with NO catalog route succeeds with zero HTTP (no catalog
+// GET, no anything).
+func TestScaffold_CatalogOverrideFile(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x",
+			"--catalog", "../internal/catalog/testdata/catalog-2.1.json", "--dry-run")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if *fired {
+		t.Errorf("--catalog dry-run must fire NO HTTP (no catalog GET)")
+	}
+}
+
+// TestHubsTemplates_ListsFromLiveCatalog: `hubs templates` lists the hub
+// templates from the TARGET BACKEND's catalog — and explains itself when the
+// backend (and every fallback) yields a catalog without hubTemplates[].
+func TestHubsTemplates_ListsFromLiveCatalog(t *testing.T) {
+	t.Run("lists from the backend catalog", func(t *testing.T) {
+		srv := newMockServer(t, []mockHandler{catalogRoute(catalog21Body(t))})
+		res := runContract(t, scaffoldEnv(t, srv.URL), "hubs", "templates")
+		if res.Code != errs.ExitOK {
+			t.Fatalf("exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+		}
+		if !strings.Contains(res.Stdout, "community") {
+			t.Errorf("output must include the backend's 'community' hub template; stdout=%q", res.Stdout)
+		}
+	})
+	t.Run("backend without hub templates errors actionably", func(t *testing.T) {
+		srv := newMockServer(t, nil) // no catalog route → 404 → fallback yields no hubTemplates
+		err := executeCLI(t, scaffoldEnv(t, srv.URL), "hubs", "templates")
+		if err == nil {
+			t.Fatal("hubs templates must error when no catalog carries hub templates")
+		}
+		if !strings.Contains(err.Error(), "no hub templates") {
+			t.Errorf("error must be actionable about the missing hub templates; err=%v", err)
+		}
+	})
 }

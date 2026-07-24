@@ -34,7 +34,6 @@ import (
 	"testing"
 
 	"github.com/Searchie-Inc/mio-cli/internal/client"
-	"github.com/Searchie-Inc/mio-cli/internal/hubtemplate"
 )
 
 // homepageBackend is a stateful in-memory stand-in for the hub-pages backend. It
@@ -187,17 +186,15 @@ func TestStepHomepage_PublishedHomepageResolvesNonNull(t *testing.T) {
 	cl := client.New(srv.URL, "k")
 
 	sc := newStepSC(cl, "hub_1", "acme")
-	tmpl := &hubtemplate.Template{
-		ID:       "community",
-		Homepage: &hubtemplate.HomepageRef{Template: "page-homepage", Privacy: "public"},
-	}
-	if err := stepHomepage(sc, tmpl); err != nil {
+	_, ht, plan := scaffoldFixture(t)
+	sc.hubTmpl, sc.plan2, sc.hubName = ht, plan, "Acme"
+	if err := stepHomepage(sc, &sc.hubTmpl); err != nil {
 		t.Fatalf("stepHomepage: %v", err)
 	}
 
 	tree, slug := readResolvedHomepageTree(t, cl, "t_team1", "hub_1")
-	if slug != homepageSlug {
-		t.Errorf("read flow slug = %q, want %q (the scaffolded homepage slug)", slug, homepageSlug)
+	if slug != "homepage" {
+		t.Errorf("read flow slug = %q, want %q (the scaffolded homepage slug from the catalog PageRef)", slug, "homepage")
 	}
 	if tree == nil {
 		t.Fatalf("resolve read returned a NULL tree — the published homepage is not resolvable (publish gap regressed)")
@@ -224,7 +221,7 @@ func TestPublishAbsentDraft_ResolvesEmptyStackNonNull(t *testing.T) {
 
 	// Create a page but set NO draft tree (absent-draft), then publish it.
 	page, err := cl.Create(ctx, pagesPath("t_team1", "hub_1", ""), map[string]any{
-		"title": "Home", "slug": homepageSlug, "is_homepage": true,
+		"title": "Home", "slug": "homepage", "is_homepage": true,
 	})
 	if err != nil {
 		t.Fatalf("create page: %v", err)
