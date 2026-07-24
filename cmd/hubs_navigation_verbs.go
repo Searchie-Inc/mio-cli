@@ -89,7 +89,15 @@ func fetchHubNav(c *cmdContext, teamID, hubID string) (map[string]any, string, e
 	}
 	slug, _ := res.Attributes["slug"].(string)
 	nav := map[string]any{}
-	if cur, ok := res.Attributes["navigation"].(map[string]any); ok {
+	// An absent or null navigation is a fresh menu (empty map). But a present,
+	// non-object navigation is malformed data — treating it as {} would let the
+	// next write REPLACE (destroy) it, so reject instead (MIO-2633, Codex R1).
+	if raw, ok := res.Attributes["navigation"]; ok && raw != nil {
+		cur, ok := raw.(map[string]any)
+		if !ok {
+			return nil, "", errs.New(errs.ExitUsage,
+				"the hub's stored navigation is not a JSON object (got %T); repair it with 'hubs update --navigation-json' before editing item-by-item", raw)
+		}
 		for k, v := range cur {
 			nav[k] = v
 		}
@@ -132,12 +140,16 @@ func indexedBucket(nav map[string]any, bucket string) []any {
 	items, _ := bucketItems(nav, bucket)
 	out := make([]any, len(items))
 	for i, it := range items {
-		row := map[string]any{"index": i}
+		row := map[string]any{}
 		if m, ok := it.(map[string]any); ok {
 			for k, v := range m {
 				row[k] = v
 			}
 		}
+		// Assign the generated index LAST so an item that happens to carry its own
+		// "index" field can't shadow the real position (which addresses remove/
+		// reorder) — Codex R1.
+		row["index"] = i
 		out[i] = row
 	}
 	return out
@@ -184,21 +196,33 @@ var hubsNavListCmd = &cobra.Command{
 
 // buildNavItem constructs the item to insert from either --item-json (any
 // bucket/type) or the url convenience flags. The two are mutually exclusive; one
-// is required. Runs before any HTTP so a bad invocation exits 2 with no request.
-func buildNavItem(cmd *cobra.Command) (map[string]any, error) {
+// is required. The url convenience builds a {type,href,label} item, which is the
+// header/footer shape — the mobile bucket uses {id,label,route,icon}, so mobile
+// items MUST come via --item-json. Runs before any HTTP so a bad invocation exits
+// 2 with no request.
+func buildNavItem(cmd *cobra.Command, bucket string) (map[string]any, error) {
 	item, err := parseJSONObjectFlag(cmd, "item-json")
 	if err != nil {
 		return nil, err
 	}
-	convenience := cmd.Flags().Changed("type") || cmd.Flags().Changed("href") || cmd.Flags().Changed("label")
+	typeSet := cmd.Flags().Changed("type")
+	convenience := typeSet || cmd.Flags().Changed("href") || cmd.Flags().Changed("label")
+
 	if item != nil {
 		if convenience {
 			return nil, errs.New(errs.ExitUsage, "--item-json cannot be combined with --type/--href/--label")
 		}
 		return item, nil
 	}
-	if !cmd.Flags().Changed("type") {
+	// url-convenience path (no --item-json).
+	if bucket == "mobile" {
+		return nil, errs.New(errs.ExitUsage, "mobile items must be given as --item-json (the {id,label,route,icon} shape); the --type/--href/--label convenience flags build a header/footer url item")
+	}
+	if !convenience {
 		return nil, errs.New(errs.ExitUsage, "provide --item-json '<obj>' or the url convenience flags --type url --href <h> --label <l>")
+	}
+	if !typeSet {
+		return nil, errs.New(errs.ExitUsage, "--type url is required alongside --href/--label")
 	}
 	typ, _ := cmd.Flags().GetString("type")
 	if typ != "url" {
@@ -233,7 +257,7 @@ Hub-relative header/footer hrefs must stay within the hub (start with /{slug}).`
 		if err := requireNavBucket(bucket); err != nil {
 			return err
 		}
-		item, err := buildNavItem(cmd)
+		item, err := buildNavItem(cmd, bucket)
 		if err != nil {
 			return err
 		}

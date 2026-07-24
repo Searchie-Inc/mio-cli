@@ -300,3 +300,101 @@ func TestNavList_JqTraversable(t *testing.T) {
 		t.Errorf("--jq .header[1].index = %q want 1", strings.TrimSpace(res.Stdout))
 	}
 }
+
+// Codex R1: a present-but-non-object stored navigation is malformed data — the
+// verb must reject it (with no PATCH) rather than silently replace/destroy it.
+func TestNav_MalformedStoredNavigation_NoPatch(t *testing.T) {
+	srv, _, patches := navMockServer(t, "my-hub", `"not-an-object"`)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--type", "url", "--href", "/my-hub/x", "--label", "X")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *patches != 0 {
+		t.Error("a malformed stored navigation must not be overwritten")
+	}
+}
+
+// Codex R1: an item carrying its own "index" field must NOT shadow the generated
+// position, or 'list' would advertise the wrong index for remove/reorder.
+func TestNavList_GeneratedIndexWins(t *testing.T) {
+	const withBogusIndex = `{"header":[{"type":"url","href":"/my-hub/a","index":"BOGUS"},{"type":"url","href":"/my-hub/b","index":99}]}`
+	srv, _, _ := navMockServer(t, "my-hub", withBogusIndex)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "list", "hub_x", "header", "--jq", ".header[1].index")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	if strings.TrimSpace(res.Stdout) != "1" {
+		t.Errorf("generated index = %q want 1 (item's own index must not win)", strings.TrimSpace(res.Stdout))
+	}
+}
+
+// Codex R1 / Opus: the url convenience flags build a header/footer-shaped item;
+// they must be rejected for the mobile bucket (which uses {id,label,route,icon}),
+// before any HTTP request.
+func TestNavAdd_MobileRejectsUrlFlags_NoRequest(t *testing.T) {
+	for _, args := range [][]string{
+		{"hubs", "navigation", "add", "hub_x", "mobile", "--type", "url", "--href", "/my-hub/x", "--label", "X"},
+		{"hubs", "navigation", "add", "hub_x", "mobile"}, // no source at all → also steered to --item-json
+	} {
+		srv, fired := firedGuardServer(t)
+		res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+		if res.Code != errs.ExitUsage {
+			t.Errorf("args=%v exit=%d want ExitUsage; stderr=%q", args, res.Code, res.Stderr)
+		}
+		if *fired {
+			t.Errorf("args=%v: must fire no HTTP request", args)
+		}
+	}
+}
+
+// A mobile item supplied via --item-json is accepted and PATCHed as-is.
+func TestNavAdd_MobileItemJSON(t *testing.T) {
+	srv, body, patches := navMockServer(t, "my-hub", `{"mobile":[]}`)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "mobile",
+			"--item-json", `{"id":"m1","label":"Home","route":"/","icon":"home"}`)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	if *patches != 1 {
+		t.Fatalf("PATCH count=%d want 1", *patches)
+	}
+	items := patchNavBucket(t, *body, "mobile")
+	if len(items) != 1 || navItemStr(t, items[0], "route") != "/" {
+		t.Errorf("mobile item not appended: %v", items)
+	}
+}
+
+// A footer add via --item-json PATCHes the footer bucket (not header).
+func TestNavAdd_FooterItemJSON(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", `{"footer":[{"type":"url","href":"/my-hub/legal","label":"Legal"}]}`)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "footer",
+			"--item-json", `{"type":"url","href":"/my-hub/tos","label":"Terms"}`)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "footer")
+	if len(items) != 2 || navItemStr(t, items[1], "href") != "/my-hub/tos" {
+		t.Errorf("footer item not appended: %v", items)
+	}
+}
+
+// --position out of range is a post-fetch data error: it fires the GET but no PATCH.
+func TestNavAdd_PositionOutOfRange_NoPatch(t *testing.T) {
+	for _, pos := range []string{"99", "-1"} {
+		srv, _, patches := navMockServer(t, "my-hub", twoHeaderItems)
+		res := runContract(t, baseEnv(srv.URL),
+			withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+				"--type", "url", "--href", "/my-hub/x", "--label", "X", "--position", pos)...)
+		if res.Code != errs.ExitUsage {
+			t.Errorf("--position %s exit=%d want ExitUsage; stderr=%q", pos, res.Code, res.Stderr)
+		}
+		if *patches != 0 {
+			t.Errorf("--position %s must not PATCH", pos)
+		}
+	}
+}
