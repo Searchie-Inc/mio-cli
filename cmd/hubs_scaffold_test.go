@@ -12,7 +12,9 @@ package cmd
 //   - an unknown --template is a usage error BEFORE any HTTP.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,7 +23,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
@@ -32,7 +36,7 @@ import (
 // scaffoldStepNames is the ordered pipeline the dry-run plan must name, in order.
 var scaffoldStepNames = []string{
 	"hub", "blobs", "spaces", "onboarding", "policies",
-	"playlists", "homepage", "publish", "backend-gated",
+	"playlists", "pages", "publish", "backend-gated",
 }
 
 // mutationGuardServer starts a test server that flips *mutated to true on ANY
@@ -72,12 +76,29 @@ func TestScaffold_DryRunEmitsPlanNoMutatingHTTP(t *testing.T) {
 	// strings.Index scan imposed.
 	stepLineRE := regexp.MustCompile(`(?m)^\s*\d+\.\s+(\S+)`)
 	var gotSteps []string
+	pagesLines := 0
 	for _, m := range stepLineRE.FindAllStringSubmatch(res.Stdout, -1) {
+		if m[1] == "pages" {
+			pagesLines++
+		}
+		// The pages step records one plan entry PER PAGE (MIO-2672 Task 7), so
+		// collapse CONSECUTIVE repeats of the same step name only. Out-of-order
+		// repeats (a step name reappearing later, after a different step) still
+		// survive into gotSteps and fail the DeepEqual — the order assertion is
+		// not weakened.
+		if n := len(gotSteps); n > 0 && gotSteps[n-1] == m[1] {
+			continue
+		}
 		gotSteps = append(gotSteps, m[1])
 	}
 	if !reflect.DeepEqual(gotSteps, scaffoldStepNames) {
 		t.Errorf("dry-run plan steps = %v, want %v (every step, in order); stdout:\n%s",
 			gotSteps, scaffoldStepNames, res.Stdout)
+	}
+	// One plan entry per page: the community template has 3 pages[] entries.
+	if pagesLines != 3 {
+		t.Errorf("dry-run plan must record one `pages` entry per page (community has 3), got %d; stdout:\n%s",
+			pagesLines, res.Stdout)
 	}
 }
 
@@ -88,13 +109,10 @@ func TestScaffold_ResumeGetsHubForSlug(t *testing.T) {
 	gotGet := false
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/page-builder/catalog") {
-			// The preflight's live catalog fetch — answered with the 2.1 artifact.
-			// It fires AFTER the resume-mode hub retrieve, so it never clobbers the
-			// first-GET recording below.
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(catBody)
+		// The preflight's live catalog fetch — answered with the 2.1 artifact.
+		// It fires AFTER the resume-mode hub retrieve, so it never clobbers the
+		// first-GET recording below.
+		if serveCatalogGET(w, r, catBody) {
 			return
 		}
 		if r.Method == http.MethodGet && !gotGet {
@@ -152,10 +170,7 @@ func TestScaffold_CreateModeIgnoresConfiguredDefaultHub(t *testing.T) {
 		if strings.Contains(r.URL.Path, "hub_configured") {
 			touchedConfigured = true
 		}
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/page-builder/catalog") {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(catBody)
+		if serveCatalogGET(w, r, catBody) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/vnd.api+json")
@@ -932,7 +947,7 @@ func TestStepPlaylists_NonEmptyHubSkipsWholeStep(t *testing.T) {
 	}
 }
 
-// ─── Task 18: stepHomepage ────────────────────────────────────────────────────
+// ─── MIO-2672 Task 7: stepPages (general pages[] apply, replaces stepHomepage) ─
 
 // newDryRunStepSC builds a dry-run scaffoldContext (fn is NOT executed; steps
 // only record their plan detail) for asserting a step's skip-with-note without
@@ -946,231 +961,342 @@ func newDryRunStepSC(cl *client.Client) (*scaffoldContext, *[]planEntry) {
 	return sc, &plan
 }
 
-// TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0: on a hub with no homepage
-// yet, the step (1) creates the page with identity from the hub template's
-// homepage pages[] entry (title/slug/is_homepage + privacy), then (2) PUTs the
-// draft tree — the preflight-instantiated plan tree, interpolated with the final
-// hub vars and wrapped as {"root":…} — with the first-set If-Match: 0 header.
-// The page id is captured into the context.
-func TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0(t *testing.T) {
-	var createBody, putBody []byte
-	var ifMatch, putPath, publishIfMatch string
-	var lists, creates, puts, publishes int
+// TestStepPages_AppliesAllPagesWithProvenance: stepPages applies EVERY plan
+// page IN PLAN ORDER, each as: exhaustive slug check → create carrying the
+// §5.1 provenance marker ("pending", and NOTHING else in meta) → tree PUT
+// (If-Match 0, FINAL interpolation, no residual tokens) → publish (If-Match =
+// that page's PUT-returned draft_version — dv varies per page to prove
+// per-page threading) → marker PATCH ("applied" + that page's draft_version +
+// the digest of the EXACT tree body PUT, recomputed here from the captured
+// wire bytes). The homepage entry additionally lands its id + draft version in
+// the context (summary + W0 guard compatibility).
+func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
+	type pagesReq struct {
+		method, path, ifMatch string
+		body                  []byte
+	}
+	var mu sync.Mutex
+	var reqs []pagesReq
+	putCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		reqs = append(reqs, pagesReq{r.Method, r.URL.Path, r.Header.Get("If-Match"), body})
+		putNo := putCount
+		if r.Method == http.MethodPut {
+			putCount++
+			putNo = putCount
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pages"): // existingPageBySlug — none
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pages"): // create — id minted from the slug
+			slug, _ := decodeHubAttrs(t, body)["slug"].(string)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprintf(w, `{"data":{"id":"pg_%s","type":"pages","attributes":{"slug":%q}}}`, slug, slug)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/tree"): // dv varies PER PAGE: 1, 2, 3
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"data":{"id":"pdt_%d","type":"page_draft_trees","attributes":{"draft_version":%d}}}`, putNo, putNo)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/publish"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pp_1","type":"page-publishes","attributes":{}}}`))
+		case r.Method == http.MethodPatch: // provenance marker PATCH
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pg_x","type":"pages","attributes":{}}}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	cat, ht, plan := scaffoldFixture(t)
+	sc.cat, sc.hubTmpl, sc.pagePlan, sc.hubName = cat, ht, plan, "Acme Community"
+	if err := stepPages(sc, &sc.hubTmpl); err != nil {
+		t.Fatalf("stepPages: %v", err)
+	}
+
+	if len(plan.pages) != 3 {
+		t.Fatalf("fixture community plan has %d page(s), want 3 (homepage/about/faq)", len(plan.pages))
+	}
+	if len(reqs) != 5*len(plan.pages) {
+		t.Fatalf("got %d requests, want %d (list+create+PUT+publish+PATCH per page, in plan order)",
+			len(reqs), 5*len(plan.pages))
+	}
+	wantApp := catalog.ApplicationID("hub_1", "community")
+	// Literal title spot-checks (beyond the ref-derived compare below): the
+	// homepage entry is titled "Home", the about entry exactly "About".
+	wantTitles := map[string]string{"homepage": "Home", "about": "About"}
+	for i := range plan.pages {
+		pp := plan.pages[i]
+		pageID := "pg_" + pp.ref.Slug
+		list, create, put, publish, patch := reqs[i*5], reqs[i*5+1], reqs[i*5+2], reqs[i*5+3], reqs[i*5+4]
+		wantDV := i + 1
+
+		// (0) Existence check first — the exhaustive page list.
+		if list.method != http.MethodGet || !strings.HasSuffix(list.path, "/hubs/hub_1/pages") {
+			t.Errorf("page %q req 1 = %s %s, want GET .../hubs/hub_1/pages", pp.ref.Slug, list.method, list.path)
+		}
+
+		// (1) Create: identity from the ref + interpolated title + ONLY the marker in meta.
+		if create.method != http.MethodPost || !strings.HasSuffix(create.path, "/hubs/hub_1/pages") {
+			t.Fatalf("page %q req 2 = %s %s, want POST .../hubs/hub_1/pages", pp.ref.Slug, create.method, create.path)
+		}
+		attrs := decodeHubAttrs(t, create.body)
+		if attrs["title"] != pp.ref.Title {
+			t.Errorf("page %q title = %v, want %q (interpolated ref title)", pp.ref.Slug, attrs["title"], pp.ref.Title)
+		}
+		if want, pinned := wantTitles[pp.ref.Slug]; pinned && attrs["title"] != want {
+			t.Errorf("page %q title = %v, want exactly %q", pp.ref.Slug, attrs["title"], want)
+		}
+		if attrs["slug"] != pp.ref.Slug || attrs["privacy"] != pp.ref.Privacy {
+			t.Errorf("page %q create attrs = %v, want slug=%q privacy=%q", pp.ref.Slug, attrs, pp.ref.Slug, pp.ref.Privacy)
+		}
+		if isHome, present := attrs["is_homepage"]; pp.ref.IsHomepage {
+			if isHome != true {
+				t.Errorf("homepage create must send is_homepage:true, got %v", isHome)
+			}
+		} else if present {
+			t.Errorf("page %q must NOT send is_homepage (only the homepage entry does), got %v", pp.ref.Slug, isHome)
+		}
+		meta, _ := attrs["meta"].(map[string]any)
+		if len(meta) != 1 {
+			t.Fatalf("page %q create meta must carry ONLY template_provenance, got %v", pp.ref.Slug, meta)
+		}
+		tp, _ := meta["template_provenance"].(map[string]any)
+		if len(tp) != 5 {
+			t.Errorf("page %q pending marker must carry exactly its 5 §5.1 keys, got %v", pp.ref.Slug, tp)
+		}
+		if tp["applicationId"] != wantApp || tp["hubTemplateId"] != "community" ||
+			tp["pageTemplateId"] != pp.ref.PageTemplate || tp["provenanceState"] != "pending" {
+			t.Errorf("page %q pending marker = %v, want applicationId=%s hubTemplateId=community pageTemplateId=%s provenanceState=pending",
+				pp.ref.Slug, tp, wantApp, pp.ref.PageTemplate)
+		}
+		if rev, ok := attrInt(tp["catalogRevision"]); !ok || rev != 7 {
+			t.Errorf("page %q marker catalogRevision = %v, want 7", pp.ref.Slug, tp["catalogRevision"])
+		}
+
+		// (2) Tree PUT: fresh-create OCC sentinel + FINAL interpolation (no residual tokens).
+		if put.method != http.MethodPut || !strings.HasSuffix(put.path, "/pages/"+pageID+"/tree") {
+			t.Fatalf("page %q req 3 = %s %s, want PUT .../pages/%s/tree", pp.ref.Slug, put.method, put.path, pageID)
+		}
+		if put.ifMatch != "0" {
+			t.Errorf("page %q tree PUT If-Match = %q, want 0 (fresh create)", pp.ref.Slug, put.ifMatch)
+		}
+		if strings.Contains(string(put.body), "{{") {
+			t.Errorf("page %q PUT body carries a residual token: %s", pp.ref.Slug, put.body)
+		}
+		if pp.ref.IsHomepage && !strings.Contains(string(put.body), "Welcome to Acme Community") {
+			t.Errorf("homepage PUT body must carry the interpolated hero headline (\"Welcome to Acme Community\"); body=%s", put.body)
+		}
+
+		// (3) Publish: If-Match threads THIS page's PUT-returned draft_version.
+		if publish.method != http.MethodPost || !strings.HasSuffix(publish.path, "/pages/"+pageID+"/publish") {
+			t.Fatalf("page %q req 4 = %s %s, want POST .../pages/%s/publish", pp.ref.Slug, publish.method, publish.path, pageID)
+		}
+		if publish.ifMatch != strconv.Itoa(wantDV) {
+			t.Errorf("page %q publish If-Match = %q, want %d (per-page draft_version, not a shared counter)",
+				pp.ref.Slug, publish.ifMatch, wantDV)
+		}
+
+		// (4) Marker PATCH: applied + this page's dv + the digest of the EXACT tree body PUT.
+		if patch.method != http.MethodPatch || !strings.HasSuffix(patch.path, "/pages/"+pageID) {
+			t.Fatalf("page %q req 5 = %s %s, want PATCH .../pages/%s", pp.ref.Slug, patch.method, patch.path, pageID)
+		}
+		pmeta, _ := decodeHubAttrs(t, patch.body)["meta"].(map[string]any)
+		ptp, _ := pmeta["template_provenance"].(map[string]any)
+		if ptp["provenanceState"] != "applied" {
+			t.Errorf("page %q PATCH provenanceState = %v, want applied", pp.ref.Slug, ptp["provenanceState"])
+		}
+		if dv, ok := attrInt(ptp["appliedDraftVersion"]); !ok || dv != wantDV {
+			t.Errorf("page %q appliedDraftVersion = %v, want %d", pp.ref.Slug, ptp["appliedDraftVersion"], wantDV)
+		}
+		// Recompute the digest from the CAPTURED wire bytes (UseNumber decode →
+		// TreeDigest) — pins byte-level digest fidelity against what was sent.
+		var putDoc struct {
+			Data struct {
+				Attributes struct {
+					Tree map[string]any `json:"tree"`
+				} `json:"attributes"`
+			} `json:"data"`
+		}
+		dec := json.NewDecoder(bytes.NewReader(put.body))
+		dec.UseNumber()
+		if err := dec.Decode(&putDoc); err != nil {
+			t.Fatalf("page %q: decode captured PUT body: %v", pp.ref.Slug, err)
+		}
+		wantDigest, derr := catalog.TreeDigest(putDoc.Data.Attributes.Tree)
+		if derr != nil {
+			t.Fatalf("page %q: recompute TreeDigest: %v", pp.ref.Slug, derr)
+		}
+		if ptp["appliedTreeDigest"] != wantDigest {
+			t.Errorf("page %q appliedTreeDigest = %v, want %s (digest of the exact PUT tree body)",
+				pp.ref.Slug, ptp["appliedTreeDigest"], wantDigest)
+		}
+
+		if pp.ref.IsHomepage && (sc.homePageID != pageID || sc.homeDraftVersion != wantDV) {
+			t.Errorf("context homepage = {%q %d}, want {%q %d} (set from the homepage entry)",
+				sc.homePageID, sc.homeDraftVersion, pageID, wantDV)
+		}
+	}
+}
+
+// TestStepPages_ExistingSlugConflicts: Task 7 is fail-safe — a page already
+// at a manifest slug ERRORS (ExitUsage, naming the slug) and ABORTS the loop:
+// nothing is created/PUT/published/PATCHed for the conflicting page, and no
+// request at all fires after the error. The homepage precedes "about" in the
+// community plan, so its full apply is expected; "faq" (after the conflict) is
+// never even looked up. Task 8 replaces this error with the decideRecovery
+// dispatch.
+func TestStepPages_ExistingSlugConflicts(t *testing.T) {
+	var mu sync.Mutex
+	var createdSlugs []string
+	var lists, puts, publishes, patches int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		switch {
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/tree"):
-			puts++
-			ifMatch = r.Header.Get("If-Match")
-			putPath = r.URL.Path
-			putBody, _ = io.ReadAll(r.Body)
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pages"):
-			creates++
-			createBody, _ = io.ReadAll(r.Body)
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"data":{"id":"page_home","type":"pages","attributes":{"slug":"home","is_homepage":true}}}`))
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pages"): // existingHomepage — none
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pages"): // "about" already exists on the hub
+			mu.Lock()
 			lists++
+			mu.Unlock()
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[]}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/publish"): // publish the draft tree (MIO-2636)
-			publishes++
-			publishIfMatch = r.Header.Get("If-Match")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"id":"pp_1","type":"page-publishes","attributes":{"section_count":3}}}`))
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[]}`))
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	_, ht, plan := scaffoldFixture(t)
-	sc.hubTmpl, sc.plan2, sc.hubName = ht, plan, "Acme"
-	if err := stepHomepage(sc, &sc.hubTmpl); err != nil {
-		t.Fatalf("stepHomepage: %v", err)
-	}
-	if lists != 1 || creates != 1 || puts != 1 || publishes != 1 {
-		t.Fatalf("want 1 list + 1 create + 1 tree PUT + 1 publish; got %d list, %d create, %d put, %d publish", lists, creates, puts, publishes)
-	}
-	// The publish uses the draft_version the tree PUT returned (1) as its OCC token.
-	if publishIfMatch != "1" {
-		t.Errorf("publish If-Match = %q, want 1 (the draft_version the tree PUT returned)", publishIfMatch)
-	}
-	// Create body carries the homepage identity — title/slug/is_homepage + privacy.
-	ca := decodeHubAttrs(t, createBody)
-	if ca["title"] != "Home" || ca["slug"] != "homepage" || ca["is_homepage"] != true || ca["privacy"] != "public" {
-		t.Errorf("create attrs = %v, want title=Home slug=homepage is_homepage=true privacy=public", ca)
-	}
-	// The tree PUT uses the first-set OCC sentinel (If-Match 0) and the settable
-	// {"root":…} envelope with instantiated nodes (fresh ids + the page children).
-	if ifMatch != "0" {
-		t.Errorf("If-Match = %q, want 0 (first set on a fresh page)", ifMatch)
-	}
-	if !strings.HasSuffix(putPath, "/pages/page_home/tree") {
-		t.Errorf("tree PUT path = %q, want .../pages/page_home/tree", putPath)
-	}
-	tree, ok := decodeHubAttrs(t, putBody)["tree"].(map[string]any)
-	if !ok {
-		t.Fatalf("PUT body has no `tree` attribute; body=%s", putBody)
-	}
-	root, ok := tree["root"].(map[string]any)
-	if !ok {
-		t.Fatalf("tree not wrapped as {\"root\":…}; tree=%v", tree)
-	}
-	if _, ok := root["id"].(string); !ok {
-		t.Errorf("root node missing an instantiated id; root=%v", root)
-	}
-	if kids, ok := root["children"].([]any); !ok || len(kids) == 0 {
-		t.Errorf("root node has no children (page-homepage-community instantiates a populated stack); root=%v", root)
-	}
-	if sc.homePageID != "page_home" {
-		t.Errorf("homePageID = %q, want page_home", sc.homePageID)
-	}
-}
-
-// TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion: when a
-// homepage already exists (found by is_homepage in the exhaustive page list), the
-// step does NOT create a duplicate — it reuses that page id and reads the OCC
-// draft_version via a TREE-GET (RetrieveWithQuery on the author draft), NOT off the
-// page list, then PUTs the tree with that draft_version as the If-Match token. The
-// list here deliberately omits draft_version to prove it is never sourced there.
-func TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion(t *testing.T) {
-	var ifMatch, putPath, treeGetQuery, publishIfMatch string
-	var creates, treeGets, puts, publishes int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/vnd.api+json")
-		switch {
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/tree"):
-			puts++
-			ifMatch = r.Header.Get("If-Match")
-			putPath = r.URL.Path
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"id":"pdt_2","type":"page_draft_trees","attributes":{"draft_version":4}}}`))
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/tree"): // tree-get for draft_version
-			treeGets++
-			treeGetQuery = r.URL.RawQuery
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"id":"pdt_2","type":"page_draft_trees","attributes":{"draft_version":3}}}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/publish"): // publish the reused draft (MIO-2636)
-			publishes++
-			publishIfMatch = r.Header.Get("If-Match")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"id":"pp_2","type":"page-publishes","attributes":{"section_count":3}}}`))
-		case r.Method == http.MethodPost:
-			creates++
+			_, _ = w.Write([]byte(`{"data":[{"id":"pg_conflict","type":"pages","attributes":{"slug":"about"}}]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			slug, _ := decodeHubAttrs(t, body)["slug"].(string)
+			mu.Lock()
+			createdSlugs = append(createdSlugs, slug)
+			mu.Unlock()
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"data":{"id":"page_dupe","type":"pages","attributes":{}}}`))
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pages"): // homepage exists (no draft_version on the list)
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[{"id":"page_existing","type":"pages","attributes":{"slug":"home","is_homepage":true}}]}`))
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[]}`))
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	_, ht, plan := scaffoldFixture(t)
-	sc.hubTmpl, sc.plan2, sc.hubName = ht, plan, "Acme"
-	if err := stepHomepage(sc, &sc.hubTmpl); err != nil {
-		t.Fatalf("stepHomepage resume: %v", err)
-	}
-	if creates != 0 {
-		t.Errorf("existing homepage must be reused — want 0 page creates, got %d", creates)
-	}
-	if treeGets != 1 {
-		t.Fatalf("resume must TREE-GET the draft_version exactly once, got %d", treeGets)
-	}
-	if !strings.Contains(treeGetQuery, "audience=author") {
-		t.Errorf("tree-get query = %q, want the author-draft query (audience=author)", treeGetQuery)
-	}
-	if puts != 1 {
-		t.Fatalf("want exactly 1 tree PUT, got %d", puts)
-	}
-	if ifMatch != "3" {
-		t.Errorf("If-Match = %q, want 3 (the draft_version from the tree-get, not the list)", ifMatch)
-	}
-	if !strings.HasSuffix(putPath, "/pages/page_existing/tree") {
-		t.Errorf("tree PUT path = %q, want .../pages/page_existing/tree (reused id)", putPath)
-	}
-	if sc.homePageID != "page_existing" {
-		t.Errorf("homePageID = %q, want reused page_existing", sc.homePageID)
-	}
-	if publishes != 1 {
-		t.Errorf("resume must still publish the tree exactly once, got %d", publishes)
-	}
-	if publishIfMatch != "4" {
-		t.Errorf("publish If-Match = %q, want 4 (the draft_version the tree PUT returned)", publishIfMatch)
-	}
-}
-
-// TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0: on resume, if the existing
-// homepage has never had a draft, the tree-get 404s — the step TOLERATES that as
-// draft_version 0 and PUTs the first tree with If-Match 0 (never propagating the
-// 404), so a resume onto a created-but-never-tree-set page still converges.
-func TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0(t *testing.T) {
-	var ifMatch, publishIfMatch string
-	var creates, puts, publishes int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/vnd.api+json")
-		switch {
+			_, _ = fmt.Fprintf(w, `{"data":{"id":"pg_%s","type":"pages","attributes":{"slug":%q}}}`, slug, slug)
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/tree"):
+			mu.Lock()
 			puts++
-			ifMatch = r.Header.Get("If-Match")
+			mu.Unlock()
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/tree"): // tree-get 404 — no draft yet
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/publish"):
+			mu.Lock()
+			publishes++
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pp_1","type":"page-publishes","attributes":{}}}`))
+		case r.Method == http.MethodPatch:
+			mu.Lock()
+			patches++
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pg_x","type":"pages","attributes":{}}}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	cat, ht, plan := scaffoldFixture(t)
+	sc.cat, sc.hubTmpl, sc.pagePlan, sc.hubName = cat, ht, plan, "Acme"
+
+	err := stepPages(sc, &sc.hubTmpl)
+	if err == nil {
+		t.Fatal("stepPages must ERROR when a manifest slug already exists on the hub (Task 7 is fail-safe)")
+	}
+	if errs.CodeOf(err) != errs.ExitUsage {
+		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
+	}
+	if !strings.Contains(err.Error(), `"about"`) {
+		t.Errorf("conflict error must name the conflicting slug; err=%v", err)
+	}
+	// The homepage (before "about" in plan order) applied fully; NOTHING was
+	// written for "about", and the loop aborted before "faq" was even listed.
+	if len(createdSlugs) != 1 || createdSlugs[0] != "homepage" {
+		t.Errorf("created slugs = %v, want only [homepage] (fail-fast: no create for about/faq)", createdSlugs)
+	}
+	if puts != 1 || publishes != 1 || patches != 1 {
+		t.Errorf("got %d PUT / %d publish / %d PATCH, want 1/1/1 (homepage only — no writes after the conflict)",
+			puts, publishes, patches)
+	}
+	if lists != 2 {
+		t.Errorf("got %d page-list GETs, want 2 (homepage + about; the error aborts before faq)", lists)
+	}
+}
+
+// TestStepPages_InterpolationCapAtApply: the FINAL interpolation (post-create
+// vars) enforces the §4.3 post-substitution caps — a leaf value pushed over
+// 5000 code points by the substituted hub name is ExitUsage BEFORE any HTTP
+// for that page (mutation-guard style). Hand-rolled plan: the real fixture
+// cannot trigger this (a hub name is capped at 255 cp).
+func TestStepPages_InterpolationCapAtApply(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	sc.hubName = strings.Repeat("n", 200)
+	sc.pagePlan = &scaffoldPlan{pages: []plannedPage{{
+		ref: catalog.PageRef{PageTemplate: "page-x", Slug: "long", Title: "Long"},
+		// 4900 + 200 substituted = 5100 cp > the 5000-cp leaf cap.
+		rawTree: map[string]any{"id": "n1", "kind": "text", "value": strings.Repeat("a", 4900) + "{{hub_name}}"},
+	}}}
+
+	err := stepPages(sc, &catalog.HubTemplate{ID: "community"})
+	if err == nil {
+		t.Fatal("stepPages must ERROR when final interpolation exceeds a post-substitution cap")
+	}
+	if errs.CodeOf(err) != errs.ExitUsage {
+		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
+	}
+	if *fired {
+		t.Error("the interpolation cap must fail BEFORE any HTTP for the page")
+	}
+}
+
+// TestHomepageDraftVersion_404IsFirstSetSentinel pins the Task-8-bound
+// tree-get helper (homepageDraftVersion): a draft-less page's tree-get 404 is
+// tolerated as draft_version 0 (the first-set sentinel) and a real
+// draft_version is read off the author-draft query. (The resume-mode
+// stepHomepage tests that exercised this end-to-end were superseded — resume
+// semantics return with decideRecovery in Task 8, which reuses this helper.)
+func TestHomepageDraftVersion_404IsFirstSetSentinel(t *testing.T) {
+	var query string
+	noDraft := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		query = r.URL.RawQuery
+		if noDraft {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"no draft for this page"}]}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/publish"): // publish the first-set draft (MIO-2636)
-			publishes++
-			publishIfMatch = r.Header.Get("If-Match")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"id":"pp_3","type":"page-publishes","attributes":{"section_count":3}}}`))
-		case r.Method == http.MethodPost:
-			creates++
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"data":{"id":"page_dupe","type":"pages","attributes":{}}}`))
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pages"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[{"id":"page_existing","type":"pages","attributes":{"slug":"home","is_homepage":true}}]}`))
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[]}`))
+			return
 		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":3}}}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	_, ht, plan := scaffoldFixture(t)
-	sc.hubTmpl, sc.plan2, sc.hubName = ht, plan, "Acme"
-	if err := stepHomepage(sc, &sc.hubTmpl); err != nil {
-		t.Fatalf("stepHomepage resume (404 tree-get): %v", err)
+	dv, err := sc.homepageDraftVersion("page_x")
+	if err != nil || dv != 0 {
+		t.Errorf("404 tree-get: got (%d, %v), want (0, nil) — the first-set sentinel", dv, err)
 	}
-	if creates != 0 {
-		t.Errorf("existing homepage must be reused — want 0 creates, got %d", creates)
+	if !strings.Contains(query, "audience=author") {
+		t.Errorf("tree-get query = %q, want the author-draft query (audience=author)", query)
 	}
-	if puts != 1 {
-		t.Fatalf("want exactly 1 tree PUT, got %d", puts)
-	}
-	if ifMatch != "0" {
-		t.Errorf("If-Match = %q, want 0 (tree-get 404 tolerated as first-set)", ifMatch)
-	}
-	if sc.homePageID != "page_existing" {
-		t.Errorf("homePageID = %q, want reused page_existing", sc.homePageID)
-	}
-	if publishes != 1 {
-		t.Errorf("resume (404 fallback) must still publish exactly once, got %d", publishes)
-	}
-	if publishIfMatch != "1" {
-		t.Errorf("publish If-Match = %q, want 1 (the draft_version the tree PUT returned)", publishIfMatch)
+	noDraft = false
+	if dv, err = sc.homepageDraftVersion("page_x"); err != nil || dv != 3 {
+		t.Errorf("existing draft: got (%d, %v), want (3, nil)", dv, err)
 	}
 }
+
+// (TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0 was superseded by
+// TestStepPages_AppliesAllPagesWithProvenance — the same create → tree PUT →
+// publish contract, now pinned per page with provenance markers.
+// TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion and
+// TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0 were DELETED with
+// stepHomepage: resume semantics return with decideRecovery in Task 8, whose
+// tests must re-add the equivalent reuse/OCC coverage.)
 
 // TestBuildScaffoldPlan_UnknownPageTemplateErrors: a pages[] ref whose
 // pageTemplate is missing from the catalog is ExitUsage from buildScaffoldPlan
@@ -1345,13 +1471,12 @@ func fullScaffoldServerFor(t *testing.T, hubID string, isPrivate bool) (*httptes
 	// hub resource and its PATCHes end in "/hubs/<id>".
 	hubSuffix := "/hubs/" + hubID
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalogGET(w, r, catBody) { // preflight live catalog fetch
+			return
+		}
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		path := r.URL.Path
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/page-builder/catalog"): // preflight live catalog fetch
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(catBody)
 		case r.Method == http.MethodPatch && strings.HasSuffix(path, hubSuffix): // blobs OR publish PATCH
 			body, _ := io.ReadAll(r.Body)
 			rec.hubPatchBodies = append(rec.hubPatchBodies, body)
@@ -1634,6 +1759,20 @@ func catalogRoute(body []byte) mockHandler {
 	return mockHandler{Method: http.MethodGet, PathPfx: "/api/v1/page-builder/catalog", Status: 200, Body: string(body)}
 }
 
+// serveCatalogGET answers the preflight's live-catalog fetch
+// (GET …/page-builder/catalog) with body and reports whether it handled the
+// request — the shared route branch every hand-rolled scaffold test server
+// starts with, extracted so the catalog wire shape cannot drift between them.
+func serveCatalogGET(w http.ResponseWriter, r *http.Request, body []byte) bool {
+	if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/page-builder/catalog") {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+	return true
+}
+
 // scaffoldEnv is baseEnv plus an isolated per-test catalog cache dir, so
 // scaffold/hubs-templates tests never share catalog-cache state with each
 // other or with the developer's real machine cache.
@@ -1652,11 +1791,8 @@ func liveCatalogScaffoldServer(t *testing.T, catalogBody []byte) (*httptest.Serv
 		if r.Method != http.MethodGet {
 			mutated = true
 		}
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/page-builder/catalog") {
+		if serveCatalogGET(w, r, catalogBody) {
 			catalogHit = true
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(catalogBody)
 			return
 		}
 		w.Header().Set("Content-Type", "application/vnd.api+json")

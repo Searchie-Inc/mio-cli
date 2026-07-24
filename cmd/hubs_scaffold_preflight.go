@@ -30,7 +30,7 @@ type plannedPage struct {
 }
 
 // scaffoldPlan is the instantiated page plan the preflight leaves on the
-// context for the apply steps (today the homepage shim; Task 7's pages[] loop).
+// context (sc.pagePlan) for stepPages' pages[] apply loop.
 type scaffoldPlan struct {
 	pages []plannedPage
 }
@@ -113,7 +113,7 @@ func errNoHubTemplates(cat *catalog.Catalog, src catalog.Source, catalogFlagHint
 //  5. the instantiated page plan + a preliminary interpolation of the whole
 //     plan.
 //
-// On success it leaves sc.cat / sc.catalogSource / sc.hubTmpl / sc.plan2
+// On success it leaves sc.cat / sc.catalogSource / sc.hubTmpl / sc.pagePlan
 // populated for the apply pipeline.
 func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID string) error {
 	// 1. Name bound (VARCHAR(255) on the hub title column): fail before any HTTP.
@@ -167,10 +167,10 @@ func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID strin
 	if perr != nil {
 		return perr
 	}
-	sc.plan2 = plan
+	sc.pagePlan = plan
 	prelimName, prelimSlug := sc.nameOverride, sc.slugOverride
 	if sc.hubID != "" {
 		prelimName, prelimSlug = sc.hubName, sc.hubSlug
 	}
-	return validatePlanInterpolation(ht, sc.plan2, prelimName, prelimSlug)
+	return validatePlanInterpolation(ht, sc.pagePlan, prelimName, prelimSlug)
 }

@@ -28,7 +28,6 @@ import (
 	"io"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -81,10 +80,11 @@ type scaffoldContext struct {
 
 	spaceIDsBySlug, defIDsBySlug, playlistIDsByKey map[string]string
 
-	// homePageID + homeDraftVersion are minted/read by the homepage step
-	// (stepHomepage: pages create → tree set → publish). The tree PUT returns the
-	// fresh draft_version into homeDraftVersion, which the publish step then uses
-	// as its If-Match OCC token (MIO-2636).
+	// homePageID + homeDraftVersion are minted by the pages step (stepPages,
+	// hubs_scaffold_pages.go) for the pages[] entry marked isHomepage: the tree
+	// PUT returns the fresh draft_version into homeDraftVersion (the If-Match
+	// OCC token its publish uses, MIO-2636), and the summary + W0 publish guard
+	// read both after the run.
 	homePageID       string
 	homeDraftVersion int
 
@@ -100,7 +100,7 @@ type scaffoldContext struct {
 	cat             *catalog.Catalog
 	catalogSource   catalog.Source
 	hubTmpl         catalog.HubTemplate
-	plan2           *scaffoldPlan
+	pagePlan        *scaffoldPlan
 	catalogOverride string
 
 	dryRun bool
@@ -154,7 +154,7 @@ var scaffoldPipeline = []scaffoldStep{
 	{"onboarding", stepOnboarding},
 	{"policies", stepPolicies},
 	{"playlists", stepPlaylists},
-	{"homepage", stepHomepage},
+	{"pages", stepPages},
 	{"publish", stepPublish},
 	{"backend-gated", stepBackendGated},
 }
@@ -166,7 +166,7 @@ var scaffoldPipeline = []scaffoldStep{
 // step 1; the create/blobs split is documented on stepBlobs). On create it
 // captures the server-assigned id + slug + title + is_private into the
 // context, which every later step consumes (MIO-2543 Task 12; the title is the
-// FINAL {{hub_name}} interpolation value the blobs/homepage steps use).
+// FINAL {{hub_name}} interpolation value the blobs/pages steps use).
 func stepHub(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	// Resume mode: the runner already resolved --hub and GET-populated hubID/
 	// hubSlug/isPrivate, so there is nothing to create. Record the reuse and skip.
@@ -710,196 +710,6 @@ func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	})
 }
 
-// stepHomepage builds the hub's homepage from the hub template's pages[] entry
-// marked isHomepage: it creates the page (reusing an existing one on resume) and
-// PUTs its draft node-tree — instantiated ONCE by the write-free preflight
-// (sc.plan2) and interpolated HERE, at apply time, with the FINAL post-create
-// hub name/slug (token-contract locations (a) leaf values + (b) page title;
-// MIO-2573 §4.3). INTERIM SHIM (MIO-2672): Task 7 replaces this single-page
-// step with a pages[] loop over the whole plan.
-//
-// IDEMPOTENCY / If-Match: the homepage is looked up by page slug (is_homepage /
-// slug) with an EXHAUSTIVE page list. On a fresh hub no home page exists, so the
-// step creates it and PUTs the first tree with If-Match 0 (the first-set OCC
-// sentinel the backend accepts only while a page has never had a draft). On resume
-// the existing home page is reused (no duplicate) and its current draft_version is
-// the If-Match token. The tree PUT can never SILENTLY clobber an existing draft:
-// if the detected draft_version is stale the backend rejects the PUT as a loud
-// conflict (pages_tree.go's OCC contract), so a resume mismatch surfaces as an
-// error to re-run, not a silent overwrite.
-func stepHomepage(sc *scaffoldContext, _ *catalog.HubTemplate) error {
-	hp := sc.hubTmpl.HomepagePage()
-	if hp == nil {
-		// scaffoldPreflight guarantees a homepage on any RESOLVED template
-		// (Validate: exactly one isHomepage); this guards a hand-built in-memory
-		// context so the step is a clean no-op, never a panic.
-		return sc.step("homepage", "no homepage in template", func() error { return nil })
-	}
-	detail := fmt.Sprintf("POST %s then PUT %s then publish — create the %q page from catalog template %q, set its draft tree (If-Match 0 first set, else the existing draft_version), and publish it so the homepage renders",
-		pagesPath(sc.teamID, sc.hubIDOrPlaceholder(), ""),
-		pagesTreePath(sc.teamID, sc.hubIDOrPlaceholder(), "<page_id>"),
-		hp.Slug, hp.PageTemplate)
-	return sc.step("homepage", detail, func() error {
-		// 1. Interpolate the title + tree from the preflight plan FIRST, so a bad
-		//    token/cap with the final vars fails LOUD before any HTTP (never
-		//    creating an orphan page). The tree is interpolated on a CLONE of the
-		//    plan's instantiated-once rawTree, so the plan stays pristine.
-		if sc.plan2 == nil {
-			return errs.New(errs.ExitGeneric, "scaffold: no page plan for homepage %q (preflight did not run)", hp.Slug)
-		}
-		var pp *plannedPage
-		for i := range sc.plan2.pages {
-			if sc.plan2.pages[i].ref.Slug == hp.Slug {
-				pp = &sc.plan2.pages[i]
-				break
-			}
-		}
-		if pp == nil {
-			return errs.New(errs.ExitGeneric, "scaffold: plan has no entry for homepage slug %q", hp.Slug)
-		}
-		title, terr := catalog.InterpolateTitle(hp.Title, sc.hubName, sc.hubSlug)
-		if terr != nil {
-			return errs.Wrap(errs.ExitUsage, terr)
-		}
-		tree := catalog.CloneNode(pp.rawTree)
-		if ierr := catalog.InterpolateTreeValues(tree, sc.hubName, sc.hubSlug); ierr != nil {
-			return errs.Wrap(errs.ExitUsage, ierr)
-		}
-		treeObj := map[string]any{"root": tree}
-
-		// 2. Resume detection: reuse an existing home page rather than creating a
-		//    duplicate. Its draft_version (the tree PUT's If-Match OCC token) is read
-		//    via a tree-get, NOT the page list — the list does not surface it.
-		existingID, found, lerr := sc.existingHomepage()
-		if lerr != nil {
-			return lerr
-		}
-		ifMatch := 0
-		if found {
-			sc.homePageID = existingID
-			dv, derr := sc.homepageDraftVersion(existingID)
-			if derr != nil {
-				return derr
-			}
-			ifMatch = dv
-		} else {
-			// 3. Create the page with the homepage identity from the catalog PageRef
-			//    (interpolated title, slug, privacy) + is_homepage:true. buildPageAttrs
-			//    is the shared `pages create` builder, so the scaffold gets the same
-			//    privacy-enum validation.
-			slug, isHome := hp.Slug, true
-			in := PageInput{Title: &title, Slug: &slug, IsHome: &isHome}
-			if hp.Privacy != "" {
-				priv := hp.Privacy
-				in.Privacy = &priv
-			}
-			attrs, berr := buildPageAttrs(in)
-			if berr != nil {
-				return berr
-			}
-			res, cerr := sc.cl.Create(sc.ctx, pagesPath(sc.teamID, sc.hubID, ""), attrs)
-			if cerr != nil {
-				return cerr
-			}
-			sc.homePageID = res.ID
-		}
-
-		// 4. Set the draft tree with the If-Match OCC header (mirrors `pages tree
-		//    set`). The tree PUT derives the page_draft_trees JSON:API type from the
-		//    path via the client's type override.
-		res, terr := sc.cl.ActionWithHeaders(
-			sc.ctx, client.StyleEnvelope, "PUT",
-			pagesTreePath(sc.teamID, sc.hubID, sc.homePageID),
-			map[string]any{"tree": treeObj},
-			map[string]string{"If-Match": strconv.Itoa(ifMatch)},
-		)
-		if terr != nil {
-			return terr
-		}
-		// Capture the new draft_version the PUT returns (the OCC token the publish
-		// below uses); default to the If-Match on a bodyless response.
-		sc.homeDraftVersion = ifMatch
-		if res != nil {
-			if dv, ok := attrInt(res.Attributes["draft_version"]); ok {
-				sc.homeDraftVersion = dv
-			}
-		}
-
-		// 5. Publish the draft tree (MIO-2636). The backend serves NO resolved tree
-		//    until a draft is published, so without this the homepage renders empty
-		//    ("No content available") even though the PUT succeeded. POST …/publish
-		//    is guarded by If-Match = the draft_version the PUT just returned
-		//    (mirrors `mio pages publish`); no body.
-		if _, perr := sc.cl.ActionWithHeaders(
-			sc.ctx, client.StyleEnvelope, "POST",
-			pagesPath(sc.teamID, sc.hubID, sc.homePageID)+"/publish",
-			nil,
-			map[string]string{"If-Match": strconv.Itoa(sc.homeDraftVersion)},
-		); perr != nil {
-			return perr
-		}
-		return nil
-	})
-}
-
-// existingHomepage finds the hub's homepage page with an EXHAUSTIVE page list
-// (same cursor convention + stall guard as the other steps' lookups) so a resume
-// reuses it instead of creating a duplicate. It matches ONLY is_homepage:true —
-// the authoritative "this is the homepage" signal — so it never hijacks an
-// unrelated page that merely shares the conventional "home" slug. It returns just
-// the page id; the caller reads draft_version separately via a tree-get, because
-// the page list does not surface draft_version.
-func (sc *scaffoldContext) existingHomepage() (id string, found bool, err error) {
-	query := url.Values{}
-	seen := map[string]bool{}
-	const maxPages = 1000 // hard ceiling; a hub never has this many pages
-	for page := 0; page < maxPages; page++ {
-		col, lerr := sc.cl.List(sc.ctx, pagesPath(sc.teamID, sc.hubID, ""), query)
-		if lerr != nil {
-			return "", false, lerr
-		}
-		for _, r := range col.Data {
-			if isHome, _ := r.Attributes["is_homepage"].(bool); isHome {
-				return r.ID, true, nil
-			}
-		}
-		next := nextPageCursor(col)
-		if next == "" || seen[next] {
-			break
-		}
-		seen[next] = true
-		query = url.Values{}
-		query.Set("page[after]", next)
-	}
-	return "", false, nil
-}
-
-// homepageDraftVersion reads an existing page's current draft_version via a
-// tree-get (RetrieveWithQuery on the author draft, mirroring `pages tree get`) —
-// the authoritative OCC source the rest of the codebase uses (pages tree get /
-// pages publish), since the page LIST does not surface draft_version. A page that
-// has never had a draft 404s on tree-get; that is TOLERATED as draft_version 0
-// (the first-set sentinel), so a resume onto a created-but-never-tree-set page
-// still sets the first tree. Any other error propagates.
-func (sc *scaffoldContext) homepageDraftVersion(pageID string) (int, error) {
-	q := url.Values{}
-	q.Set("audience", "author")
-	q.Set("resolve", "true")
-	res, err := sc.cl.RetrieveWithQuery(sc.ctx, pagesTreePath(sc.teamID, sc.hubID, pageID), q)
-	if err != nil {
-		if errs.CodeOf(err) == errs.ExitNotFound {
-			return 0, nil // no draft yet → first-set sentinel
-		}
-		return 0, err
-	}
-	if res != nil {
-		if dv, ok := attrInt(res.Attributes["draft_version"]); ok {
-			return dv, nil
-		}
-	}
-	return 0, nil
-}
-
 // attrInt coerces a JSON:API attribute to an int. JSON numbers decode as float64
 // through the client's standard resource decode; int is accepted for
 // hand-built values. A non-numeric/absent value reports ok=false.
@@ -1176,8 +986,18 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 	if len(t.Policies) > 0 {
 		parts = append(parts, fmt.Sprintf("%d policy(ies)", len(t.Policies)))
 	}
-	if t.HomepagePage() != nil {
-		parts = append(parts, "homepage set")
+	// Every template page the pages step applies, slug by slug, with the
+	// homepage entry marked (MIO-2672 Task 7: the recap covers ALL pages[]
+	// entries, not just the homepage).
+	if len(t.Pages) > 0 {
+		names := make([]string, len(t.Pages))
+		for i, p := range t.Pages {
+			names[i] = p.Slug
+			if p.IsHomepage {
+				names[i] += " (homepage)"
+			}
+		}
+		parts = append(parts, "page(s): "+strings.Join(names, ", "))
 	}
 	fmt.Fprintf(w, "  Includes: %s.\n", strings.Join(parts, ", "))
 
