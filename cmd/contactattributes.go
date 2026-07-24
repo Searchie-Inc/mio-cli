@@ -394,7 +394,7 @@ var contactAttributesOptionsCreateCmd = &cobra.Command{
 	Use:     "create <def_id>",
 	Short:   "Create an option for a contact attribute definition.",
 	Long:    "Add a new predefined option value to a select or multi-select contact attribute definition.",
-	Example: `  mio contact-attributes options create attr_abc123 --label="Enterprise" --value="enterprise"`,
+	Example: `  mio contact-attributes options create attr_abc123 --label="Enterprise" --slug="enterprise"`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := caContext(cmd)
@@ -404,11 +404,11 @@ var contactAttributesOptionsCreateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "label")
-		setStringFlag(cmd, attrs, "value")
+		setStringFlag(cmd, attrs, "slug")
 		setIntFlag(cmd, attrs, "position")
 
 		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --label and --value")
+			return errs.New(errs.ExitUsage, "nothing to create: set at least --label and --slug")
 		}
 
 		res, err := c.client.Create(c.ctx, contactAttributesOptionsPath(teamID, args[0], ""), attrs)
@@ -445,7 +445,7 @@ var contactAttributesOptionsListCmd = &cobra.Command{
 var contactAttributesOptionsUpdateCmd = &cobra.Command{
 	Use:     "update <def_id> <option_id>",
 	Short:   "Update an option on a contact attribute definition.",
-	Long:    "Update the label, value, or position of a predefined option on a contact attribute definition.",
+	Long:    "Update the label, slug, or position of a predefined option on a contact attribute definition.",
 	Example: `  mio contact-attributes options update attr_abc123 opt_xyz --label="Enterprise Tier"`,
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -456,7 +456,7 @@ var contactAttributesOptionsUpdateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "label")
-		setStringFlag(cmd, attrs, "value")
+		setStringFlag(cmd, attrs, "slug")
 		setIntFlag(cmd, attrs, "position")
 
 		if len(attrs) == 0 {
@@ -498,7 +498,7 @@ var contactAttributesOptionsDeleteCmd = &cobra.Command{
 func init() {
 	for _, cmd := range []*cobra.Command{contactAttributesOptionsCreateCmd, contactAttributesOptionsUpdateCmd} {
 		cmd.Flags().String("label", "", "Human-readable label for the option.")
-		cmd.Flags().String("value", "", "Machine-readable value stored when this option is selected.")
+		cmd.Flags().String("slug", "", "Machine-readable slug for the option (the backend OptionCreate/Update field). Required on create.")
 		cmd.Flags().Int("position", 0, "Display order position (lower numbers appear first).")
 	}
 	addPaginationFlags(contactAttributesOptionsListCmd)

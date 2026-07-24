@@ -416,7 +416,7 @@ func TestMintAPIKey_SendsFlatBodyWithBearer(t *testing.T) {
 // TestClient_FlatStyleSendsNoEnvelope verifies that a StyleFlat write sends the
 // attributes map as the top-level JSON object with NO `data` wrapper and NO
 // injected `type` — the shape the flat-schema backend endpoints (users, roles,
-// api-keys, email-config, stripe-sync) require.
+// api-keys, stripe-sync) require.
 func TestClient_FlatStyleSendsNoEnvelope(t *testing.T) {
 	var raw map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

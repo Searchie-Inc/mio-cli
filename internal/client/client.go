@@ -88,7 +88,7 @@ func New(baseURL, apiKey string, opts ...Option) *Client {
 // The mio backend is NOT uniform: most resources accept (or require) a JSON:API
 // envelope {"data":{"type","attributes":{…}}}, but a handful of endpoints bind a
 // FLAT pydantic model with the fields at the top level and no `data` wrapper
-// (users, roles, api-keys, email-config, the checkout stripe-sync admin actions).
+// (users, roles, api-keys, the checkout stripe-sync admin actions).
 // Sending an envelope to a flat endpoint 422s (the required fields land under
 // `data`, never reaching the model), and sending a flat body to an envelope
 // endpoint 422s (missing `data`). The style is therefore a per-resource fact the
@@ -432,7 +432,7 @@ func (c *Client) RetrieveWithQuery(ctx context.Context, path string, query url.V
 // Create performs a POST with the attributes wrapped in a JSON:API envelope.
 // The resource `type` is derived from the path (resourceTypeFromPath). Use
 // CreateWith(StyleFlat, …) for the handful of endpoints whose backend schema is
-// a flat pydantic model (users/roles/api-keys/email-config/stripe-sync).
+// a flat pydantic model (users/roles/api-keys/stripe-sync).
 func (c *Client) Create(ctx context.Context, path string, attrs map[string]any) (*Resource, error) {
 	return c.CreateWith(ctx, StyleEnvelope, path, attrs)
 }
@@ -538,8 +538,9 @@ func (c *Client) Action(ctx context.Context, method, path string, body map[strin
 }
 
 // ActionWith is Action with an explicit BodyStyle for the request payload. Flat
-// action endpoints (email-config PUT, checkout stripe-sync import/adopt) pass
+// action endpoints (the checkout stripe-sync import/adopt admin actions) pass
 // StyleFlat so their fields are sent at the top level without an envelope.
+// (email-config PUT is a JSON:API envelope endpoint — StyleEnvelope, MIO-2640.)
 func (c *Client) ActionWith(ctx context.Context, style BodyStyle, method, path string, body map[string]any) (*Resource, error) {
 	payload := buildWriteBody(style, path, body)
 	raw, err := c.do(ctx, method, path, nil, payload, contentTypeJSONAPI)

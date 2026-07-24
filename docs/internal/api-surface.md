@@ -23,7 +23,7 @@ plain JSON.
   - `users update`, `roles create/update`, `api-keys create` (incl. the
     `mio login` password→mint flow via `MintAPIKey`, which posts a flat body
     with the JWT bearer token)
-  - `email config set` (PUT email-config; flat `mail_*` fields)
+  - `email config set` (PUT email-config; JSON:API envelope, `mail_*` attributes — backend reads `data.attributes`, MIO-2640)
   - `checkout stripe-sync import` (flat `{hub_id}`) and `adopt-product`
     (flat `{stripe_product_id, hub_id}`)
   Sending the wrong shape 422s either way, so the style is declared per command.
@@ -265,7 +265,7 @@ plain JSON.
 - drip-campaigns: `create/list/retrieve/update/delete`; `activate`/`pause` POST `…/{id}/activate|pause`
 - steps:          `list/create/update/delete` `…/drip-campaigns/{id}/steps[/{sid}]`
 - templates:      `create/list/retrieve/update/delete` `…/email-templates[/{id}]`; `preview` POST `…/email-templates/{id}/preview` (no body)
-- config:         `set` PUT `…/email-config` (flat `mail_*`); `get` GET; `delete` DELETE; `test` POST `…/email-config/test` (no body — mails the authenticated user)
+- config:         `set` PUT `…/email-config` (JSON:API envelope, `mail_*` attributes); `get` GET; `delete` DELETE; `test` POST `…/email-config/test` (no body — mails the authenticated user)
 - enrollments:    `list` GET `…/drip-campaigns/{id}/enrollments`; `exit` DELETE `…/{id}/enrollments/{eid}`
 - stats:          `get` GET `…/email-stats`
 - suppressions:   `list` GET `…/email-suppressions`; `create` POST `…/email-suppressions` (envelope `email_suppressions` {email_address}; reason forced `admin_block`); `lift` DELETE `…/email-suppressions/{id}` (destructive). NOTE: hub routes require platform_admin (API keys → 403)

@@ -706,8 +706,9 @@ var emailConfigSetCmd = &cobra.Command{
 			return err
 		}
 
-		// Flat body with the backend EmailConfigRequest field names (mail_*),
-		// NOT a JSON:API envelope. The route binds a flat pydantic model.
+		// JSON:API envelope with the backend EmailConfigRequest field names
+		// (mail_*). put_email_config reads raw["data"]["attributes"], so a flat
+		// body lands as {} and 400s "Field required" on every field (MIO-2640).
 		attrs := map[string]any{}
 		setMappedString(cmd, attrs, "mail-host", "mail_host")
 		setMappedInt(cmd, attrs, "mail-port", "mail_port")
@@ -722,7 +723,7 @@ var emailConfigSetCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "nothing to set: supply at least one configuration flag")
 		}
 
-		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "PUT", configPath(hubID), attrs)
+		res, err := c.client.ActionWith(c.ctx, client.StyleEnvelope, "PUT", configPath(hubID), attrs)
 		if err != nil {
 			return err
 		}
