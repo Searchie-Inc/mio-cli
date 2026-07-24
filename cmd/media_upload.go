@@ -83,7 +83,14 @@ var mediaFilesUploadCmd = &cobra.Command{
 the returned presigned URL, and finalize. For video, finalize auto-triggers
 transcoding; pass --wait to block until processing reaches READY.
 
-Single-part upload only (multipart for very large files is a follow-on).`,
+Single-part upload only (multipart for very large files is a follow-on).
+
+New files default to visibility: private — make one public later with
+'mio media files update <id> --visibility public'. For a member or visitor to
+actually open the content, every layer in its path must also be non-private: the
+file, the enclosing playlist (if any), and the hub publication
+('mio media hub-playlists publish --visibility', which itself defaults to
+members). See the media-workflow guide's visibility section.`,
 	Example: `  mio media files upload ./intro.mp4 --title "Intro"
   mio media files upload ./report.pdf --folder-id folder_abc --wait`,
 	Args: cobra.ExactArgs(1),
