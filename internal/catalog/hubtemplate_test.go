@@ -71,6 +71,12 @@ func TestHubTemplateByID_Community(t *testing.T) {
 	if hp.PageTemplate != "page-homepage-community" || hp.Slug != "homepage" || !hp.IsHomepage {
 		t.Errorf("HomepagePage() = %+v, want page-homepage-community/homepage/isHomepage", *hp)
 	}
+	if hp.Title == "" {
+		t.Errorf("HomepagePage().Title = %q, want a non-empty page title", hp.Title)
+	}
+	if hp.Role != "homepage" {
+		t.Errorf("HomepagePage().Role = %q, want %q", hp.Role, "homepage")
+	}
 	if len(h.Spaces) != 2 {
 		t.Fatalf("spaces = %d, want 2", len(h.Spaces))
 	}

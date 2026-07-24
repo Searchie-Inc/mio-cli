@@ -219,7 +219,7 @@ func (h HubTemplate) Validate(c *Catalog) error {
 			return fmt.Errorf("hub template %q: playlists[%d] missing key", h.ID, i)
 		}
 		if seenPlaylistKeys[p.Key] {
-			return fmt.Errorf("hub template %q: playlists[%d] duplicate playlist key %q", h.ID, i, p.Key)
+			return fmt.Errorf("hub template %q: playlists[%d] duplicate key %q", h.ID, i, p.Key)
 		}
 		seenPlaylistKeys[p.Key] = true
 		if p.Visibility != "" && !hubPlaylistVisibilityValues[p.Visibility] {
