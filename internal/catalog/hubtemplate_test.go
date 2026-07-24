@@ -241,6 +241,13 @@ func TestTreeDigest_StableAndPrefixed(t *testing.T) {
 }
 
 func TestCloneNode_DeepCopies(t *testing.T) {
+	// nil in → nil out: Node is a map alias, so without an explicit guard a
+	// typed nil map would deep-clone into an allocated EMPTY map and break
+	// callers' "was there a blob at all?" nil checks (the stepBlobs
+	// navigation-wipe regression).
+	if CloneNode(nil) != nil {
+		t.Error("CloneNode(nil) must be nil, not an allocated empty map")
+	}
 	orig := Node{
 		"kind": "stack",
 		"settings": map[string]any{

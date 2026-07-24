@@ -10,7 +10,6 @@ package cmd
 // runs here, before stepHub creates anything.
 
 import (
-	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -85,19 +84,22 @@ func validatePlanInterpolation(ht catalog.HubTemplate, plan *scaffoldPlan, hubNa
 }
 
 // errNoHubTemplates is the shared pin-hint error for a catalog with no
-// hubTemplates[] — the backend predates the 2.1 artifact (MIO-2666/W2a). Used
+// hubTemplates[] — the catalog predates the 2.1 artifact (MIO-2666/W2a). Used
 // by both scaffoldPreflight and `hubs templates` so the explanation cannot
-// drift between the two surfaces. catalogFlagHint appends the --catalog
-// escape-hatch pointer — the scaffold sets it; `hubs templates` has no such
-// flag, so its message must not advertise one.
-func errNoHubTemplates(cat *catalog.Catalog, catalogFlagHint bool) error {
+// drift between the two surfaces. src attributes the catalog correctly: the
+// hubs-templates read-only resolve can degrade to the cached/vendored copy,
+// and the message must not blame "the backend's catalog" for a local fallback.
+// catalogFlagHint appends the --catalog escape-hatch pointer — the scaffold
+// sets it; `hubs templates` has no such flag, so its message must not
+// advertise one.
+func errNoHubTemplates(cat *catalog.Catalog, src catalog.Source, catalogFlagHint bool) error {
 	hint := ""
 	if catalogFlagHint {
 		hint = "; pass --catalog <file> to test against a local artifact"
 	}
 	return errs.New(errs.ExitUsage,
-		"the backend's catalog (version %s, revision %d) contains no hub templates — it predates the 2.1 catalog (MIO-2666/W2a pin)%s",
-		cat.Meta.CatalogVersion, cat.Meta.Revision, hint)
+		"the %s catalog (version %s, revision %d) contains no hub templates — it predates the 2.1 catalog (MIO-2666/W2a pin)%s",
+		src, cat.Meta.CatalogVersion, cat.Meta.Revision, hint)
 }
 
 // scaffoldPreflight runs every write-free check, in cheapest-first order:
@@ -127,9 +129,7 @@ func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID strin
 		OverrideFile: sc.catalogOverride,
 		Mutating:     true,
 		CacheDir:     catalogCacheDirFor(sc.cl.BaseURL()),
-		Warnf: func(format string, a ...any) {
-			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
-		},
+		Warnf:        catalogWarnf(cmd),
 	}
 	if sc.catalogOverride == "" {
 		opts.Fetcher = catalogFetcher{c: sc.cl}
@@ -138,14 +138,14 @@ func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID strin
 	if err != nil {
 		return errs.Wrap(errs.ExitGeneric, err)
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "catalog: %s (version %s)\n", src, cat.Meta.CatalogVersion)
+	printCatalogProvenance(cmd, src, cat)
 	sc.cat, sc.catalogSource = cat, src
 
 	// 3. Hub-template existence.
 	ht, ok := cat.HubTemplateByID(templateID)
 	if !ok {
 		if len(cat.HubTemplates) == 0 {
-			return errNoHubTemplates(cat, true)
+			return errNoHubTemplates(cat, src, true)
 		}
 		return errs.New(errs.ExitUsage,
 			"hub template %q is not in the catalog — available: %s", templateID, strings.Join(cat.HubTemplateIDs(), ", "))

@@ -217,6 +217,22 @@ func (f catalogFetcher) FetchCatalog(ctx context.Context, ifNoneMatch string) (c
 	return catalog.FetchResult{Body: r.Body, ETag: r.ETag, NotModified: r.NotModified}, nil
 }
 
+// catalogWarnf returns the Warnf sink every catalog resolve site shares:
+// non-fatal resolver diagnostics go to stderr — never stdout, so piped output
+// stays pure data.
+func catalogWarnf(cmd *cobra.Command) func(string, ...any) {
+	return func(format string, a ...any) {
+		fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
+	}
+}
+
+// printCatalogProvenance reports which catalog a resolve ended up using —
+// source + version, one stderr line, identical across every resolve site
+// (resolveCatalog, scaffoldPreflight, hubs templates).
+func printCatalogProvenance(cmd *cobra.Command, src catalog.Source, cat *catalog.Catalog) {
+	fmt.Fprintf(cmd.ErrOrStderr(), "catalog: %s (version %s)\n", src, cat.Meta.CatalogVersion)
+}
+
 // resolveCatalog loads the active catalog per --offline/--catalog and the
 // live→cache→vendored precedence, wiring the client as the live fetcher and
 // reporting provenance to stderr (never stdout, so piped scaffold output stays
@@ -233,9 +249,7 @@ func resolveCatalog(cmd *cobra.Command, c *cmdContext) (*catalog.Catalog, error)
 		Offline:      offline,
 		OverrideFile: override,
 		CacheDir:     catalogCacheDirFor(origin),
-		Warnf: func(format string, a ...any) {
-			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
-		},
+		Warnf:        catalogWarnf(cmd),
 	}
 	if !offline && override == "" && c != nil {
 		opts.Fetcher = catalogFetcher{c: c.client}
@@ -245,7 +259,7 @@ func resolveCatalog(cmd *cobra.Command, c *cmdContext) (*catalog.Catalog, error)
 	if err != nil {
 		return nil, errs.Wrap(errs.ExitGeneric, err)
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "catalog: %s (version %s)\n", src, cat.Meta.CatalogVersion)
+	printCatalogProvenance(cmd, src, cat)
 	return cat, nil
 }
 

@@ -363,6 +363,38 @@ func TestStepBlobs_OneGetOnePatchSiblingsPreserved(t *testing.T) {
 	}
 }
 
+// TestStepBlobs_NoNavigationInTemplateOmitsNavFromPatch: a hub template WITHOUT
+// navigation must not put a navigation key in the PATCH at all — navigation is
+// a whole-blob REPLACE, so an empty {} would WIPE a hub's existing menu
+// (destructive on resume). Regression: CloneNode(nil) once returned a NON-nil
+// empty map (a typed nil map matches deepClone's map case), which made
+// stepBlobs's nil guard always-true.
+func TestStepBlobs_NoNavigationInTemplateOmitsNavFromPatch(t *testing.T) {
+	var patchBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patchBody, _ = io.ReadAll(r.Body)
+		}
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"hub_1","type":"hubs","attributes":{"slug":"acme","navigation":{"header":[{"type":"url","label":"Keep","href":"/acme/keep"}]}}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &catalog.HubTemplate{ID: "community", Branding: map[string]any{"favicon_url": "f"}}
+	if err := stepBlobs(sc, tmpl); err != nil {
+		t.Fatalf("stepBlobs: %v", err)
+	}
+	attrs := decodeHubAttrs(t, patchBody)
+	if _, has := attrs["navigation"]; has {
+		t.Errorf("PATCH must NOT carry navigation when the template has none (whole-blob REPLACE would wipe the hub's existing menu); attrs=%v", attrs)
+	}
+	if _, has := attrs["branding"]; !has {
+		t.Errorf("branding must still be PATCHed; attrs=%v", attrs)
+	}
+}
+
 // TestStepBlobs_StrictRejectsUnknownSettingsKey: an unknown template settings key
 // ERRORS under strict mode (ExitUsage) and fires NO PATCH — the whole point of
 // the feature is that a malformed template is caught, not silently dropped.
@@ -1703,6 +1735,9 @@ func TestScaffold_BackendWithoutHubTemplatesExplains(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "contains no hub templates") {
 		t.Errorf("error must explain the backend catalog has no hub templates; err=%v", err)
 	}
+	if err == nil || !strings.Contains(err.Error(), "the live catalog") {
+		t.Errorf("the message must attribute the hub-template-less catalog to its SOURCE (live — it came from the backend); err=%v", err)
+	}
 	if err == nil || !strings.Contains(err.Error(), "--catalog") {
 		t.Errorf("the SCAFFOLD's message must point at its --catalog escape hatch; err=%v", err)
 	}
@@ -1771,6 +1806,9 @@ func TestHubsTemplates_ListsFromLiveCatalog(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "no hub templates") {
 			t.Errorf("error must be actionable about the missing hub templates; err=%v", err)
+		}
+		if !strings.Contains(err.Error(), "the vendored catalog") {
+			t.Errorf("the message must attribute the hub-template-less catalog to its SOURCE (the read-only resolve degraded to the vendored copy — not the backend's catalog); err=%v", err)
 		}
 		if strings.Contains(err.Error(), "--catalog") {
 			t.Errorf("hubs templates has no --catalog flag, so its message must not advertise one; err=%v", err)

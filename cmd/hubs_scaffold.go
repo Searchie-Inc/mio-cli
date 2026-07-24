@@ -3,14 +3,15 @@ package cmd
 // hubs_scaffold.go — `mio hubs scaffold`, the template-driven full-experience
 // hub seeder (MIO-2543). See docs/superpowers/specs/2026-07-21-hubs-scaffold-design.md.
 //
-// This file is the ORCHESTRATOR SKELETON: the command shell, the mutable
+// This file is the ORCHESTRATOR: the command shell, the mutable
 // scaffoldContext threaded through every step, the ordered pipeline runner, and
-// the --dry-run plan. The per-step BODIES are no-ops here — Phase 4 fills each
-// step (hub/blobs/spaces/…) with the extracted attribute-builders + client
-// calls the individual `mio hubs`/`community`/`media`/`pages` commands use, so
-// the scaffold stays strictly CLI-only and never re-invokes a command's RunE.
+// the --dry-run plan. Each step body (hub/blobs/spaces/…) is fully implemented
+// from the extracted attribute-builders + client calls the individual
+// `mio hubs`/`community`/`media`/`pages` commands use, so the scaffold stays
+// strictly CLI-only and never re-invokes a command's RunE; in --dry-run a step
+// records its plan entry instead of firing HTTP (see sc.step).
 //
-// Design invariants pinned by this skeleton (hubs_scaffold_test.go):
+// Design invariants pinned here (hubs_scaffold_test.go):
 //   - the CLI holds NO templates (MIO-2672, spec §0): the hub template comes
 //     from the LIVE catalog of the target backend, resolved + validated +
 //     preliminarily interpolated by the WRITE-FREE preflight
@@ -106,9 +107,9 @@ type scaffoldContext struct {
 	plan   *[]planEntry // collected when dryRun
 }
 
-// planEntry is one line of the --dry-run plan: the step name and an optional
-// human detail (Phase 4 fills detail with the target path + static attrs +
-// placeholder ids for resources not yet created).
+// planEntry is one line of the --dry-run plan: the step name and a human
+// detail (the target path + static attrs, with placeholder ids for resources
+// not yet created).
 type planEntry struct {
 	step   string
 	detail string
@@ -125,8 +126,8 @@ func (sc *scaffoldContext) recordPlan(step, detail string) {
 // step runs one pipeline stage: in dry-run it records the stage in the plan and
 // fires NO HTTP; otherwise it runs fn. The dry-run branch lives HERE (per stage)
 // — not in the runner — so a step self-annotates its own plan detail (target
-// path + static attrs + placeholder ids), which only the step body knows. Phase
-// 4 enriches the detail arg and fills fn; the runner needs no change.
+// path + static attrs + placeholder ids), which only the step body knows; the
+// runner just dispatches.
 func (sc *scaffoldContext) step(name, detail string, fn func() error) error {
 	if sc.dryRun {
 		sc.recordPlan(name, detail)
@@ -137,16 +138,15 @@ func (sc *scaffoldContext) step(name, detail string, fn func() error) error {
 
 // ---- step model + ordered pipeline ------------------------------------------
 
-// scaffoldStep is one named stage of the apply pipeline. Phase 4 fills each run
-// body; today they are no-ops so the runner + dry-run plan can be exercised.
+// scaffoldStep is one named stage of the apply pipeline: a fully-implemented
+// run body that fires real HTTP (or, in dry-run, records its plan entry).
 type scaffoldStep struct {
 	name string
 	run  func(sc *scaffoldContext, t *catalog.HubTemplate) error
 }
 
 // scaffoldPipeline is the ordered apply pipeline (design §Apply pipeline). The
-// names + order are a contract the dry-run plan surfaces; the bodies are no-ops
-// until Phase 4.
+// names + order are a contract the dry-run plan surfaces.
 var scaffoldPipeline = []scaffoldStep{
 	{"hub", stepHub},
 	{"blobs", stepBlobs},
@@ -1225,16 +1225,14 @@ scaffold against that backend would see.`,
 		cat, src, rerr := catalog.Resolve(c.ctx, catalog.ResolveOptions{
 			CacheDir: catalogCacheDirFor(c.client.BaseURL()),
 			Fetcher:  catalogFetcher{c: c.client},
-			Warnf: func(format string, a ...any) {
-				fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
-			},
+			Warnf:    catalogWarnf(cmd),
 		})
 		if rerr != nil {
 			return errs.Wrap(errs.ExitGeneric, rerr)
 		}
-		fmt.Fprintf(cmd.ErrOrStderr(), "catalog: %s (version %s)\n", src, cat.Meta.CatalogVersion)
+		printCatalogProvenance(cmd, src, cat)
 		if len(cat.HubTemplates) == 0 {
-			return errNoHubTemplates(cat, false) // this command has no --catalog flag to point at
+			return errNoHubTemplates(cat, src, false) // this command has no --catalog flag to point at
 		}
 		rows := make([]any, 0, len(cat.HubTemplates))
 		for _, ht := range cat.HubTemplates {

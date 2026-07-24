@@ -306,5 +306,15 @@ func TreeDigest(tree map[string]any) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// CloneNode returns a deep copy of a node tree (maps/slices/scalars).
-func CloneNode(n Node) Node { c, _ := deepClone(n).(Node); return c }
+// CloneNode returns a deep copy of a node tree (maps/slices/scalars). A nil
+// input stays nil — Node is a map alias, so without the guard a typed nil map
+// would match deepClone's map case and come back as an allocated EMPTY map,
+// turning callers' "was there a blob at all?" nil checks always-true (the
+// scaffold once PATCHed navigation:{} — a whole-blob wipe — because of this).
+func CloneNode(n Node) Node {
+	if n == nil {
+		return nil
+	}
+	c, _ := deepClone(n).(Node)
+	return c
+}
