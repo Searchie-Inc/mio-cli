@@ -36,15 +36,20 @@ func TestInterpolateTitle_ReplacesBothTokensAllOccurrences(t *testing.T) {
 }
 
 func TestInterpolate_UnknownWhitespacedDanglingAreErrors(t *testing.T) {
-	cases := []string{
-		"hi {{hub_id}}",        // unknown token name
-		"{{ hub_name }}",       // inner whitespace is not tolerated
-		"Join {{hub_name today", // dangling open brace, never closed
-		"stray }} close",       // dangling close brace, never opened
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{name: "unknown token name", in: "hi {{hub_id}}"},
+		{name: "inner whitespace is not tolerated", in: "{{ hub_name }}"},
+		{name: "dangling open brace never closed", in: "Join {{hub_name today"},
+		{name: "dangling close brace never opened", in: "stray }} close"},
 	}
-	for _, s := range cases {
-		_, err := InterpolateTitle(s, "Acme", "acme")
-		wantCode(t, err, CodeUnknownToken)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := InterpolateTitle(tc.in, "Acme", "acme")
+			wantCode(t, err, CodeUnknownToken)
+		})
 	}
 }
 

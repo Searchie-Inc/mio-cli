@@ -23,7 +23,9 @@ import (
 )
 
 // Post-substitution caps in Unicode code points (§4.3), plus the --name
-// preflight bound for a hub name itself.
+// preflight bound for a hub name itself: the hub title DB column is
+// VARCHAR(255), so the CLI preflights MaxHubNameCP and a bad --name fails
+// before any write.
 const (
 	CapLeafValue = 5000
 	CapPageTitle = 200
@@ -82,7 +84,8 @@ func interpolateString(s, hubName, hubSlug string, capCP int, code string) (stri
 	if len(bad) > 0 {
 		return "", &InterpolationError{
 			Code: CodeUnknownToken,
-			msg:  fmt.Sprintf("unknown/dangling interpolation token(s): %s", strings.Join(bad, ", ")),
+			msg: fmt.Sprintf("interpolate: unknown or malformed token(s) %v in %q (only {{hub_name}} and {{hub_slug}} are allowed)",
+				bad, truncateForError(s)),
 		}
 	}
 	// ReplaceAllStringFunc inserts the returned string literally — no
@@ -96,10 +99,21 @@ func interpolateString(s, hubName, hubSlug string, capCP int, code string) (stri
 	if n := utf8.RuneCountInString(out); n > capCP {
 		return "", &InterpolationError{
 			Code: code,
-			msg:  fmt.Sprintf("interpolated string is %d code points (cap %d)", n, capCP),
+			msg:  fmt.Sprintf("interpolate: %s: %d code points after substitution (max %d)", code, n, capCP),
 		}
 	}
 	return out, nil
+}
+
+// truncateForError bounds an offending input quoted in an error message to
+// its first 120 code points so a pathological string stays readable.
+func truncateForError(s string) string {
+	const max = 120
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:max]) + "…"
 }
 
 // InterpolateTitle interpolates a page title (§4.3 allowed location (b)),
@@ -141,9 +155,6 @@ func InterpolateNavigation(nav map[string]any, hubName, hubSlug string) error {
 // (§4.3 allowed location (a)), capped at CapLeafValue code points. No other
 // node field is scanned — not settings, href, icon, or slug.
 func InterpolateTreeValues(node Node, hubName, hubSlug string) error {
-	if node == nil {
-		return nil
-	}
 	if kind, _ := node["kind"].(string); scannedLeafKinds[kind] {
 		if value, ok := node["value"].(string); ok {
 			out, err := interpolateString(value, hubName, hubSlug, CapLeafValue, CodeValueTooLong)
