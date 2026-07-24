@@ -119,7 +119,7 @@ var checkoutCmd = &cobra.Command{
 	Long: `Read and act on checkout data for the active team.
 
 Hub-scoped resources (orders, subscriptions, payments, payment-webhooks) require
-a hub context: pass --hub <id> or run 'mio config set hub <id>'.
+a hub context: pass --hub <id> or run 'mio config set current_hub <id>'.
 
 Team-scoped resources (payment-accounts, stripe-sync) need only a team context.`,
 }

@@ -513,7 +513,7 @@ var contactAttributesHubConfigCmd = &cobra.Command{
 	Short: "Manage per-hub contact attribute configuration.",
 	Long: `Configure which contact attributes are active (and in what order) for a specific hub.
 
-Requires --hub to be set (or configured via 'mio config set hub <id>').`,
+Requires --hub to be set (or configured via 'mio config set current_hub <id>').`,
 }
 
 var contactAttributesHubConfigCreateCmd = &cobra.Command{

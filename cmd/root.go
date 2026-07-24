@@ -28,16 +28,17 @@ import (
 // globalFlags holds the parsed values of the persistent root flags. A single
 // package-level instance is bound by cobra and read by cmdContext.
 type globalFlags struct {
-	output  string
-	apiKey  string
-	apiBase string
-	team    string
-	hub     string
-	yes     bool
-	jq      string
-	raw     bool
-	profile string
-	debug   bool
+	output    string
+	apiKey    string
+	anonymous bool
+	apiBase   string
+	team      string
+	hub       string
+	yes       bool
+	jq        string
+	raw       bool
+	profile   string
+	debug     bool
 }
 
 var flags globalFlags
@@ -143,6 +144,7 @@ func init() {
 	pf := rootCmd.PersistentFlags()
 	pf.StringVarP(&flags.output, "output", "o", "", "Output format: json|table|plain (default: json off a TTY, table on a TTY).")
 	pf.StringVar(&flags.apiKey, "api-key", "", "API key to authenticate with. Overrides MIO_API_KEY and the stored key.")
+	pf.BoolVar(&flags.anonymous, "anonymous", false, "Ignore MIO_API_KEY and the stored key; resolve as unauthenticated (for diagnostics). An explicit --api-key still wins.")
 	pf.StringVar(&flags.apiBase, "api-base", "", "API base URL. Overrides MIO_API_BASE_URL and config.")
 	pf.StringVar(&flags.team, "team", "", "Team id context for team-scoped resources. Overrides config.")
 	pf.StringVar(&flags.hub, "hub", "", "Hub id context for hub-scoped resources. Overrides config.")
@@ -188,11 +190,12 @@ func newContext(cmd *cobra.Command) (*cmdContext, error) {
 	}
 
 	resolved, err := cfg.Resolve(config.Overrides{
-		APIKey:  flags.apiKey,
-		APIBase: flags.apiBase,
-		TeamID:  flags.team,
-		HubID:   flags.hub,
-		Profile: flags.profile,
+		APIKey:    flags.apiKey,
+		Anonymous: flags.anonymous,
+		APIBase:   flags.apiBase,
+		TeamID:    flags.team,
+		HubID:     flags.hub,
+		Profile:   flags.profile,
 	})
 	if err != nil {
 		// Legacy encrypted credentials → exit 3 (same as missing/invalid auth)
@@ -262,7 +265,7 @@ func (c *cmdContext) requireTeam() (string, error) {
 	}
 
 	return "", errs.New(errs.ExitUsage,
-		"no team id in context: pass --team <id> or run `mio config set team <id>` "+
+		"no team id in context: pass --team <id> or run `mio config set current_team <id>` "+
 			"— run 'mio teams list' then 'mio teams switch <id>'")
 }
 
@@ -301,8 +304,8 @@ func (c *cmdContext) requireHub() (string, error) {
 	}
 
 	return "", errs.New(errs.ExitUsage,
-		"no hub id in context: pass --hub <id> or run `mio config set hub <id>` "+
-			"— run 'mio hubs list' then 'mio config set hub <id>'")
+		"no hub id in context: pass --hub <id> or run `mio config set current_hub <id>` "+
+			"— run 'mio hubs list' then 'mio config set current_hub <id>'")
 }
 
 // singleTeamDefault returns the id of the caller's sole team when EXACTLY one

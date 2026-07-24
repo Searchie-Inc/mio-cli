@@ -61,19 +61,45 @@ func TestResourceFlatten(t *testing.T) {
 	}
 }
 
-func TestResourceFlatten_IDTypeWinOverAttributes(t *testing.T) {
-	// id/type in attributes must never override the real id/type.
+func TestResourceFlatten_IDWinsOverAttributes(t *testing.T) {
+	// The envelope id is the resource identity — it always wins over a same-named
+	// attribute (JSON:API forbids `id` in attributes anyway).
 	r := Resource{
 		ID:         "real_id",
-		Type:       "real_type",
-		Attributes: map[string]any{"id": "bogus", "type": "bogus", "x": 1},
+		Type:       "products",
+		Attributes: map[string]any{"id": "bogus", "x": 1},
 	}
 	got := r.Flatten()
 	if got["id"] != "real_id" {
 		t.Errorf("id = %v, want real_id", got["id"])
 	}
-	if got["type"] != "real_type" {
-		t.Errorf("type = %v, want real_type", got["type"])
+}
+
+func TestResourceFlatten_BusinessTypeSurvives(t *testing.T) {
+	// MIO-2647: a business-level `type` attribute (products.type=course,
+	// contact-attributes.type=text) must survive flattening and win over the
+	// JSON:API document type ("products"), which is only a transport discriminator.
+	r := Resource{
+		ID:         "prod_1",
+		Type:       "products",
+		Attributes: map[string]any{"type": "course", "name": "X"},
+	}
+	got := r.Flatten()
+	if got["type"] != "course" {
+		t.Errorf("type = %v, want course (business type must survive — MIO-2647)", got["type"])
+	}
+}
+
+func TestResourceFlatten_EnvelopeTypeWhenNoAttributeType(t *testing.T) {
+	// When the schema has no business `type`, the JSON:API document type fills in.
+	r := Resource{
+		ID:         "con_1",
+		Type:       "team_contacts",
+		Attributes: map[string]any{"email": "a@example.com"},
+	}
+	got := r.Flatten()
+	if got["type"] != "team_contacts" {
+		t.Errorf("type = %v, want team_contacts (envelope type fills in)", got["type"])
 	}
 }
 

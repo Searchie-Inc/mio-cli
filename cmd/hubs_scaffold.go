@@ -1031,7 +1031,7 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 	// 3. Resume/target mode: an EXPLICIT --hub applies onto an existing hub. The
 	//    discriminator MUST be the explicit flag (flags.hub, set only by --hub),
 	//    NOT c.resolved.HubID — the latter merges a config/profile default hub
-	//    (`mio config set hub`), so gating on it would silently turn the headline
+	//    (`mio config set current_hub`), so gating on it would silently turn the headline
 	//    CREATE invocation into a RESUME for any user with a default hub. ResolveHub
 	//    short-circuits an id-shaped value (no lookup), so a bare id leaves hubSlug
 	//    empty — GET the hub to populate hubSlug + isPrivate, which the navigation

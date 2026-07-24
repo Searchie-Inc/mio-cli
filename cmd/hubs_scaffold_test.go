@@ -132,7 +132,7 @@ func TestScaffold_ResumeGetsHubForSlug(t *testing.T) {
 }
 
 // TestScaffold_CreateModeIgnoresConfiguredDefaultHub: a configured default hub
-// (`mio config set hub`) must NOT turn a create-mode invocation into a resume.
+// (`mio config set current_hub`) must NOT turn a create-mode invocation into a resume.
 // Resume keys on the EXPLICIT --hub flag only — gating on the merged
 // resolved.HubID would silently resume onto a user's default hub, so no hub GET
 // may fire for a create-mode (--name/--slug, no --hub) invocation here.

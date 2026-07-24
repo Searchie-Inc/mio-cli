@@ -29,8 +29,16 @@ type Resource struct {
 // Flatten merges id, type and every attribute into a single flat map suitable
 // for clean agent-facing JSON, table rows, and plain key=value output.
 //
-// "id" and "type" always win over a same-named attribute (the spec forbids
-// id/type inside attributes, but we guard anyway so output is deterministic).
+// The envelope "id" is the resource identity and always wins over a same-named
+// attribute. "type" is different: several mio schemas carry a business-level
+// `type` attribute (products: course/membership/booking; contact-attributes:
+// text/number/select) alongside the JSON:API document type ("products"). That
+// business value is the meaningful one, so it MUST survive flattening — clobbering
+// it with the transport discriminator hid it from default output (MIO-2647). The
+// envelope type only fills in when the resource has no `type` attribute of its
+// own; the document type is always available under --raw (.data.type). A present
+// but null `type` attribute is preserved as null (the faithful business value),
+// not backfilled with the document type.
 func (r Resource) Flatten() map[string]any {
 	out := make(map[string]any, len(r.Attributes)+2)
 	for k, v := range r.Attributes {
@@ -39,7 +47,7 @@ func (r Resource) Flatten() map[string]any {
 	if r.ID != "" {
 		out["id"] = r.ID
 	}
-	if r.Type != "" {
+	if _, hasAttrType := r.Attributes["type"]; !hasAttrType && r.Type != "" {
 		out["type"] = r.Type
 	}
 	return out

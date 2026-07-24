@@ -90,6 +90,64 @@ func TestResolve_APIKeyPrecedence_EnvBeatsConfig(t *testing.T) {
 	}
 }
 
+// MIO-2648 — Overrides.Anonymous forces an unauthenticated resolution, skipping
+// BOTH the MIO_API_KEY env var and the stored keychain key, so `--anonymous` can
+// deliberately run without credentials for diagnostics. An explicit --api-key
+// still wins over --anonymous.
+func TestResolve_AnonymousSkipsEnvAndKeychain(t *testing.T) {
+	withXDG(t)             // clears EnvAPIKey to ""
+	withFileBackendOnly(t) // deterministic keyring
+	if err := SetAPIKey("keychain_key"); err != nil {
+		t.Fatalf("SetAPIKey: %v", err)
+	}
+
+	cfg, _ := Load()
+
+	// Baseline (no env): the keychain key resolves.
+	r, err := cfg.Resolve(Overrides{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.APIKey != "keychain_key" {
+		t.Fatalf("baseline APIKey = %q, want keychain_key", r.APIKey)
+	}
+
+	// --anonymous skips the keychain → empty.
+	r, err = cfg.Resolve(Overrides{Anonymous: true})
+	if err != nil {
+		t.Fatalf("Resolve(anonymous): %v", err)
+	}
+	if r.APIKey != "" {
+		t.Errorf("APIKey = %q, want empty under --anonymous (keychain skipped)", r.APIKey)
+	}
+
+	// --anonymous also skips the env var.
+	t.Setenv(EnvAPIKey, "env_key")
+	r, err = cfg.Resolve(Overrides{})
+	if err != nil {
+		t.Fatalf("Resolve(env): %v", err)
+	}
+	if r.APIKey != "env_key" {
+		t.Fatalf("env APIKey = %q, want env_key", r.APIKey)
+	}
+	r, err = cfg.Resolve(Overrides{Anonymous: true})
+	if err != nil {
+		t.Fatalf("Resolve(anonymous+env): %v", err)
+	}
+	if r.APIKey != "" {
+		t.Errorf("APIKey = %q, want empty under --anonymous (env skipped)", r.APIKey)
+	}
+
+	// An explicit --api-key still wins over --anonymous (per the flag contract).
+	r, err = cfg.Resolve(Overrides{Anonymous: true, APIKey: "explicit_key"})
+	if err != nil {
+		t.Fatalf("Resolve(anonymous+key): %v", err)
+	}
+	if r.APIKey != "explicit_key" {
+		t.Errorf("APIKey = %q, want explicit_key (explicit --api-key wins over --anonymous)", r.APIKey)
+	}
+}
+
 func TestResolve_APIBaseDefault(t *testing.T) {
 	withXDG(t)
 	cfg, _ := Load()

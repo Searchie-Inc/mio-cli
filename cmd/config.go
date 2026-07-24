@@ -2,13 +2,49 @@ package cmd
 
 import (
 	"fmt"
+	"net/url"
+	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Searchie-Inc/mio-cli/internal/config"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
+
+// configUUIDRe matches a canonical UUID (any version, e.g. the UUIDv7 ids the
+// backend issues). current_team / current_hub must be a UUID; a slug or prefixed
+// test id (t_team1) is rejected at the setter.
+var configUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// validateConfigValue checks the value shape for a known config key so a bogus
+// value is rejected here (exit 2) instead of persisting verbatim and failing far
+// away with a cryptic error on a later command (MIO-2646). Unknown keys pass
+// through (the caller's switch rejects them). This guards the CLI's OWN local
+// state — the --team/--hub flags stay faithful conduits the API validates.
+func validateConfigValue(key, value string) error {
+	switch key {
+	case "api_base":
+		// The client builds request URLs by textual append (baseURL + "/api/v1/…"),
+		// so api_base must be a plain scheme://host[:port][/path] base. Any '?' or '#'
+		// — even a bare delimiter like "https://host?" (url.ForceQuery, empty RawQuery)
+		// or "https://host#" (empty Fragment) — would turn appended paths into
+		// query/fragment text, so reject those characters outright before parsing.
+		if strings.ContainsAny(value, "?#") {
+			return errs.New(errs.ExitUsage, "invalid api_base %q: must be a plain http(s) base URL (scheme://host[:port]), with no query or fragment", value)
+		}
+		u, err := url.Parse(value)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Opaque != "" {
+			return errs.New(errs.ExitUsage, "invalid api_base %q: must be a plain http(s) base URL (scheme://host[:port]), with no query or fragment", value)
+		}
+	case "current_team", "current_hub":
+		if !configUUIDRe.MatchString(value) {
+			return errs.New(errs.ExitUsage, "invalid %s %q: must be a UUID (e.g. 019e204f-9ea0-7601-ac0f-ab522eece374)", key, value)
+		}
+	}
+	return nil
+}
 
 // configKeys are the writable config keys exposed via `mio config set/get`.
 // They match the TOML field names in config.Config exactly so that scripting
@@ -37,6 +73,9 @@ var configSetCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		key, value := args[0], args[1]
+		if err := validateConfigValue(key, value); err != nil {
+			return err
+		}
 		cfg, err := config.Load()
 		if err != nil {
 			return errs.Wrap(errs.ExitGeneric, err)
