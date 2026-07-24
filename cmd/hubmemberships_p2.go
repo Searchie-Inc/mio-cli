@@ -67,31 +67,44 @@ on it).`,
 var hubMembershipsSetRoleCmd = &cobra.Command{
 	Use:   "set-role <contact_id>",
 	Short: "Set a hub member's role.",
-	Long: `Set an active member's role to admin or moderator. The member must already be active (add them with 'hub-memberships add' first).
+	Long: `Set an active member's role to admin or moderator, or demote an elevated member
+back to a plain member with --role member. The member must already be active
+(add them with 'hub-memberships add' first).
 
 <contact_id> is the GLOBAL contact id — the .attributes.contact_id field from
 'mio contacts', NOT its .id (the team-contact id).`,
-	Example: `  mio hub-memberships set-role contact_xyz --hub hub_abc123 --role moderator`,
-	Args:    cobra.ExactArgs(1),
+	Example: `  mio hub-memberships set-role contact_xyz --hub hub_abc123 --role moderator
+  mio hub-memberships set-role contact_xyz --hub hub_abc123 --role member    # demote to plain member`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !cmd.Flags().Changed("role") {
-			return errs.New(errs.ExitUsage, "--role is required: admin or moderator")
+			return errs.New(errs.ExitUsage, "--role is required: admin, moderator, or member (demote)")
 		}
 		role, err := cmd.Flags().GetString("role")
 		if err != nil {
 			return errs.New(errs.ExitUsage, "--role: %s", err)
 		}
-		if !hubMemberRoles[role] {
-			return errs.New(errs.ExitUsage, "invalid --role %q: must be admin or moderator", role)
+		// admin/moderator elevate; member demotes to a plain member — the backend
+		// clears the role when it receives an explicit null (HubMembershipRoleUpdate
+		// role is Literal["admin","moderator"] | None, where None = regular member).
+		var roleValue any
+		switch role {
+		case "admin", "moderator":
+			roleValue = role
+		case "member":
+			roleValue = nil
+		default:
+			return errs.New(errs.ExitUsage, "invalid --role %q: must be admin, moderator, or member (demote to plain member)", role)
 		}
 
 		c, teamID, hubID, err := hubMembershipsContext(cmd)
 		if err != nil {
 			return err
 		}
-		// PATCH .../members/{contact_id}/role with {data:{type:hub_memberships,attributes:{role}}}.
+		// PATCH .../members/{contact_id}/role with {data:{type:hub_memberships,attributes:{role}}};
+		// role is null to demote to a plain member.
 		res, err := c.client.ActionWith(c.ctx, client.StyleEnvelope, "PATCH",
-			hubMembersPath(teamID, hubID, args[0])+"/role", map[string]any{"role": role})
+			hubMembersPath(teamID, hubID, args[0])+"/role", map[string]any{"role": roleValue})
 		if err != nil {
 			return hintGlobalContactID(err)
 		}
@@ -103,5 +116,5 @@ func init() {
 	hubMembershipsCmd.AddCommand(hubMembershipsAddCmd, hubMembershipsSetRoleCmd)
 
 	hubMembershipsAddCmd.Flags().String("role", "", "Optional elevated role: admin or moderator (omit for a plain member).")
-	hubMembershipsSetRoleCmd.Flags().String("role", "", "New role: admin or moderator. Required.")
+	hubMembershipsSetRoleCmd.Flags().String("role", "", "New role: admin, moderator, or member (demote to plain member). Required.")
 }

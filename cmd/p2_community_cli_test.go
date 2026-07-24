@@ -106,6 +106,68 @@ func TestHubMembershipsSetRole_PatchRole(t *testing.T) {
 	}
 }
 
+// MIO-2598 — set-role --role member demotes an elevated member back to a plain
+// member by sending an explicit null role, which the backend
+// HubMembershipRoleUpdateAttributes (role: Literal["admin","moderator"] | None,
+// extra=forbid, no default) treats as "regular member".
+func TestHubMembershipsSetRole_DemoteSendsNullRole(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(minimalHubBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"hub-memberships", "set-role", "contact_x", "--role", "member",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Errorf("method=%q want PATCH", gotMethod)
+	}
+	if !strings.HasSuffix(gotPath, "/members/contact_x/role") {
+		t.Errorf("path %q does not end with /members/contact_x/role", gotPath)
+	}
+	typ, attrs := decodeDataTypeAttrs(t, gotBody)
+	if typ != "hub_memberships" {
+		t.Errorf("data.type=%q want hub_memberships", typ)
+	}
+	// Demote must send an explicit null role (present key, nil value) — NOT omit
+	// it, and NOT send the literal string "member".
+	if v, ok := attrs["role"]; !ok || v != nil {
+		t.Errorf("role=%v (present=%v), want explicit null for demote", v, ok)
+	}
+}
+
+func TestHubMembershipsSetRole_RejectsBadRole(t *testing.T) {
+	fired := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fired = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(minimalHubBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"hub-memberships", "set-role", "contact_x", "--role", "superuser",
+		)...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if fired {
+		t.Error("invalid --role must exit before any HTTP request")
+	}
+}
+
 func TestHubMembershipsSetRole_RequiresRole(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
