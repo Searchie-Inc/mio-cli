@@ -68,8 +68,8 @@ var hubMembershipsSetRoleCmd = &cobra.Command{
 	Use:   "set-role <contact_id>",
 	Short: "Set a hub member's role.",
 	Long: `Set an active member's role to admin or moderator, or demote an elevated member
-back to a plain member with --role member (or --role none). The member must
-already be active (add them with 'hub-memberships add' first).
+back to a plain member with --role member. The member must already be active
+(add them with 'hub-memberships add' first).
 
 <contact_id> is the GLOBAL contact id — the .attributes.contact_id field from
 'mio contacts', NOT its .id (the team-contact id).`,
@@ -84,14 +84,14 @@ already be active (add them with 'hub-memberships add' first).
 		if err != nil {
 			return errs.New(errs.ExitUsage, "--role: %s", err)
 		}
-		// admin/moderator elevate; member/none demote to a plain member — the backend
+		// admin/moderator elevate; member demotes to a plain member — the backend
 		// clears the role when it receives an explicit null (HubMembershipRoleUpdate
 		// role is Literal["admin","moderator"] | None, where None = regular member).
 		var roleValue any
 		switch role {
 		case "admin", "moderator":
 			roleValue = role
-		case "member", "none":
+		case "member":
 			roleValue = nil
 		default:
 			return errs.New(errs.ExitUsage, "invalid --role %q: must be admin, moderator, or member (demote to plain member)", role)
@@ -116,5 +116,5 @@ func init() {
 	hubMembershipsCmd.AddCommand(hubMembershipsAddCmd, hubMembershipsSetRoleCmd)
 
 	hubMembershipsAddCmd.Flags().String("role", "", "Optional elevated role: admin or moderator (omit for a plain member).")
-	hubMembershipsSetRoleCmd.Flags().String("role", "", "New role: admin, moderator, or member/none (demote to plain member). Required.")
+	hubMembershipsSetRoleCmd.Flags().String("role", "", "New role: admin, moderator, or member (demote to plain member). Required.")
 }
