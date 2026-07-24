@@ -168,3 +168,67 @@ func TestBatchA_OptionsCreate_SendsSlugNotValue(t *testing.T) {
 		t.Errorf("attributes.label=%v want Vegetable", attrs["label"])
 	}
 }
+
+// MIO-2581 (sibling verb) — options update shares the renamed --slug flag and
+// must likewise send `slug`, never `value`. Pinned separately so a regression to
+// `value` on the update path alone cannot slip past (options update is a plain
+// envelope PATCH — OptionUpdateData has no id, so no UpdateWithID here).
+func TestBatchA_OptionsUpdate_SendsSlugNotValue(t *testing.T) {
+	const resp = `{"data":{"id":"opt_1","type":"contact_attribute_options","attributes":{"slug":"veggies","label":"Veggies"}}}`
+	srv, method, path, _, body := captureAdminReq(t, http.StatusOK, resp)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "contact-attributes", "options", "update", "def_x", "opt_1",
+			"--label", "Veggies", "--slug", "veggies")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	if *method != http.MethodPatch {
+		t.Errorf("method=%q want PATCH", *method)
+	}
+	if want := "/api/v1/teams/t_team1/contact-attributes/def_x/options/opt_1"; *path != want {
+		t.Errorf("path=%q want %q", *path, want)
+	}
+	_, typ, attrs := decodeDataIDTypeAttrs(t, *body)
+	if typ != "contact_attribute_options" {
+		t.Errorf("data.type=%q want contact_attribute_options", typ)
+	}
+	if attrs["slug"] != "veggies" {
+		t.Errorf("attributes.slug=%v want veggies (MIO-2581: update must send slug, not value)", attrs["slug"])
+	}
+	if _, ok := attrs["value"]; ok {
+		t.Errorf("attributes must NOT include 'value' (backend extra=forbid rejects it): %v", attrs)
+	}
+	if attrs["label"] != "Veggies" {
+		t.Errorf("attributes.label=%v want Veggies", attrs["label"])
+	}
+}
+
+// The pre-existing len(attrs)==0 usage guards on the batch's write commands must
+// fire ExitUsage (exit 2) BEFORE any HTTP request (repo convention: error paths
+// assert no request fired). Pinned so the serializer changes above cannot silently
+// drop a guard and start firing empty writes.
+func TestBatchA_UsageGuards_NoRequestOnEmptyWrite(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"folders update no flags", []string{"media", "folders", "update", "folder_x"}},
+		{"playlists update no flags", []string{"media", "playlists", "update", "pl_x"}},
+		{"options create no flags", []string{"contact-attributes", "options", "create", "def_x"}},
+		{"options update no flags", []string{"contact-attributes", "options", "update", "def_x", "opt_1"}},
+		{"email config set no flags", []string{"--hub", "hub_x", "email", "config", "set"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, fired := firedGuardServer(t)
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", tc.args...)...)
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+			}
+			if *fired {
+				t.Error("a no-op write must exit before any HTTP request")
+			}
+		})
+	}
+}
