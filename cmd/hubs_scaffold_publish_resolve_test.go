@@ -93,6 +93,8 @@ func newHomepageBackend(t *testing.T) (*httptest.Server, *homepageBackend) {
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/publish"):
 			if be.draftRoot != nil {
 				be.publishedRoot = be.draftRoot
+			} else {
+				be.publishedRoot = emptyStackRoot() // §10.3: absent-draft substitution
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"pp_1","type":"page-publishes","attributes":{"section_count":1}}}`))
@@ -109,6 +111,14 @@ func newHomepageBackend(t *testing.T) (*httptest.Server, *homepageBackend) {
 	}))
 	t.Cleanup(srv.Close)
 	return srv, be
+}
+
+// emptyStackRoot is the spec §10.3 absent-draft substitution: the tree.root of
+// {"root":{"children":[]}} — a non-null, structurally-empty stack. (Option A: the
+// id-less/kind-less fallback the backend substitutes today; see the plan's
+// §10.3 decision callout for the canonical-stack alternative.)
+func emptyStackRoot() map[string]any {
+	return map[string]any{"children": []any{}}
 }
 
 // writePageMeta writes the /pages/home metadata response (slug + is_homepage) —
@@ -192,5 +202,46 @@ func TestStepHomepage_PublishedHomepageResolvesNonNull(t *testing.T) {
 	}
 	if kids, ok := root["children"].([]any); !ok || len(kids) == 0 {
 		t.Errorf("resolved homepage root has no children — published tree is structurally empty; root=%v", root)
+	}
+}
+
+// TestPublishAbsentDraft_ResolvesEmptyStackNonNull pins spec §10.3 (CLOSED):
+// publishing a page that has NO draft is supported — the backend substitutes the
+// canonical empty tree {"root":{"children":[]}} — so the two-call read flow
+// resolves to a NON-NULL, structurally-EMPTY tree, never the null "No content
+// available" fallback. This is the contract W0's empty-tree-publish capability
+// (spec §2.2) depends on; it exercises create → publish (no draft) → resolve.
+func TestPublishAbsentDraft_ResolvesEmptyStackNonNull(t *testing.T) {
+	srv, _ := newHomepageBackend(t)
+	cl := client.New(srv.URL, "k")
+	ctx := context.Background()
+
+	// Create a page but set NO draft tree (absent-draft), then publish it.
+	page, err := cl.Create(ctx, pagesPath("t_team1", "hub_1", ""), map[string]any{
+		"title": "Home", "slug": homepageSlug, "is_homepage": true,
+	})
+	if err != nil {
+		t.Fatalf("create page: %v", err)
+	}
+	if _, err := cl.ActionWithHeaders(ctx, client.StyleEnvelope, "POST",
+		pagesPath("t_team1", "hub_1", page.ID)+"/publish", nil,
+		map[string]string{"If-Match": "0"}); err != nil {
+		t.Fatalf("absent-draft publish: %v", err)
+	}
+
+	tree, _ := readResolvedHomepageTree(t, cl, "t_team1", "hub_1")
+	if tree == nil {
+		t.Fatalf("absent-draft publish must resolve to a NON-NULL empty tree, got null (§10.3)")
+	}
+	root, ok := tree["root"].(map[string]any)
+	if !ok {
+		t.Fatalf("resolved tree has no root object; tree=%v", tree)
+	}
+	kids, ok := root["children"].([]any)
+	if !ok {
+		t.Fatalf("substituted empty tree must carry a children array; root=%v", root)
+	}
+	if len(kids) != 0 {
+		t.Errorf("absent-draft substitution must be EMPTY {\"root\":{\"children\":[]}}, got %d child(ren); root=%v", len(kids), root)
 	}
 }
