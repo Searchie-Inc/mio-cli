@@ -40,7 +40,33 @@ func (e apiError) message() string {
 			msg += " (parameter: " + e.Source.Parameter + ")"
 		}
 	}
+	// Surface diagnostic reference arrays carried in the error's meta so an
+	// otherwise-generic failure is self-diagnosable — e.g. a segment-search 422
+	// "One or more condition references failed to compile." returns the exact
+	// unresolved tag slugs / hub ids in meta.missing_slugs / meta.cross_team_refs
+	// (MIO-2590). Without this they were silently dropped from the rendered error.
+	for _, key := range []string{"missing_slugs", "cross_team_refs"} {
+		if refs := metaStrings(e.Meta[key]); len(refs) > 0 {
+			msg += " (" + key + ": " + strings.Join(refs, ", ") + ")"
+		}
+	}
 	return msg
+}
+
+// metaStrings returns the non-empty string elements of a JSON:API meta value
+// that decodes as an array ([]any); it returns nil for any other shape.
+func metaStrings(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, el := range arr {
+		if s, ok := el.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // apiErrorList is the error type returned when a response body carries a
