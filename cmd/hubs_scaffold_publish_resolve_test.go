@@ -65,8 +65,11 @@ func newHomepageBackend(t *testing.T) (*httptest.Server, *homepageBackend) {
 		path := r.URL.Path
 		switch {
 		// (1) Resolve read: GET …/pages/{slug}?resolve=true → resolved published tree.
-		// Checked FIRST so the slug-addressed read never falls through to the list.
-		case r.Method == http.MethodGet && r.URL.Query().Get("resolve") == "true":
+		// Slug-addressed and checked FIRST: only the documented second call of the
+		// read flow matches; a resolve read against any other path (wrong slug,
+		// draft-tree route) falls through and fails the test loudly.
+		case r.Method == http.MethodGet && r.URL.Query().Get("resolve") == "true" &&
+			be.slug != "" && strings.HasSuffix(path, "/pages/"+be.slug):
 			var tree any // JSON null until published
 			if be.publishedRoot != nil {
 				tree = map[string]any{"root": be.publishedRoot}
@@ -89,8 +92,11 @@ func newHomepageBackend(t *testing.T) (*httptest.Server, *homepageBackend) {
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
-		// Publish: promote the draft into the published state (THE behaviour W0 guards).
-		case r.Method == http.MethodPost && strings.HasSuffix(path, "/publish"):
+		// Publish: promote the draft into the published state (THE behaviour W0
+		// guards). Addressed to the created page — POST …/pages/{id}/publish — so
+		// publishing a wrong/stale/empty page id promotes nothing and the resolve
+		// read stays null.
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/pages/"+be.pageID+"/publish"):
 			if be.draftRoot != nil {
 				be.publishedRoot = be.draftRoot
 			} else {
