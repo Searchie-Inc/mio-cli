@@ -23,6 +23,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -104,11 +105,11 @@ func CacheDirForOrigin(origin string) string {
 }
 
 // sanitizeCacheSegment reduces an origin (URL or bare host) to a single
-// filesystem-safe path segment: the host[:port] with anything outside
-// [A-Za-z0-9._-] replaced by '_'.
+// filesystem-safe path segment: the host[:port] — lowercased, hosts being
+// case-insensitive — with anything outside [A-Za-z0-9._-] replaced by '_'.
 func sanitizeCacheSegment(s string) string {
 	if u, err := url.Parse(strings.TrimSpace(s)); err == nil && u.Host != "" {
-		s = u.Host
+		s = strings.ToLower(u.Host)
 	}
 	var b strings.Builder
 	for _, r := range s {
@@ -174,7 +175,7 @@ func Resolve(ctx context.Context, opts ResolveOptions) (*Catalog, Source, error)
 		switch {
 		case err != nil:
 			if opts.Mutating {
-				return nil, "", fmt.Errorf("catalog: live fetch failed and a mutating command cannot fall back to a stale copy: %w", err)
+				return nil, "", mutatingFetchFailed(err)
 			}
 			warn("catalog: live fetch failed (%v); falling back to cached/vendored copy", err)
 		case res.NotModified:
@@ -187,13 +188,23 @@ func Resolve(ctx context.Context, opts ResolveOptions) (*Catalog, Source, error)
 			// missing/corrupt. Re-fetch unconditionally to recover the live catalog
 			// rather than silently dropping to a (possibly stale) vendored copy.
 			warn("catalog: 304 with an unavailable local cache; re-fetching unconditionally")
-			if fresh, ferr := opts.Fetcher.FetchCatalog(ctx, ""); ferr == nil && !fresh.NotModified {
+			fresh, ferr := opts.Fetcher.FetchCatalog(ctx, "")
+			switch {
+			case ferr != nil:
+				if opts.Mutating {
+					return nil, "", mutatingFetchFailed(ferr)
+				}
+			case fresh.NotModified:
+				if opts.Mutating {
+					return nil, "", mutatingFetchFailed(errors.New("the backend answered 304 twice with no usable local cache"))
+				}
+			default:
 				cat, aerr := adopt(fresh.Body)
 				if aerr == nil {
 					return cat, SourceLive, nil
 				}
 				if opts.Mutating {
-					return nil, "", fmt.Errorf("catalog: live fetch failed and a mutating command cannot fall back to a stale copy: %w", aerr)
+					return nil, "", mutatingRejected(aerr)
 				}
 				warn("catalog: rejecting fetched catalog (%v); falling back to cached/vendored copy", aerr)
 			}
@@ -203,7 +214,7 @@ func Resolve(ctx context.Context, opts ResolveOptions) (*Catalog, Source, error)
 				return cat, SourceLive, nil
 			}
 			if opts.Mutating {
-				return nil, "", fmt.Errorf("catalog: live fetch failed and a mutating command cannot fall back to a stale copy: %w", aerr)
+				return nil, "", mutatingRejected(aerr)
 			}
 			warn("catalog: rejecting fetched catalog (%v); falling back to cached/vendored copy", aerr)
 		}
@@ -226,6 +237,18 @@ func Resolve(ctx context.Context, opts ResolveOptions) (*Catalog, Source, error)
 		return nil, "", err
 	}
 	return cat, SourceVendored, nil
+}
+
+// mutatingFetchFailed and mutatingRejected are the Mutating fail-closed
+// errors, centralized so the call sites cannot drift. The first covers a fetch
+// that failed outright (or a 304 recovery that yielded nothing usable); the
+// second a fetched body that failed digest verification.
+func mutatingFetchFailed(err error) error {
+	return fmt.Errorf("catalog: live fetch failed and a mutating command cannot fall back to a stale copy: %w", err)
+}
+
+func mutatingRejected(err error) error {
+	return fmt.Errorf("catalog: fetched catalog rejected and a mutating command cannot fall back to a stale copy: %w", err)
 }
 
 // parseAndVerify parses a catalog body and rejects it unless meta.digest matches

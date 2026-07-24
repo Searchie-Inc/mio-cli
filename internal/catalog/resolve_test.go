@@ -58,9 +58,7 @@ func TestResolve_Live200_Valid_AdoptsAndCaches(t *testing.T) {
 
 func TestResolve_Live200_DigestMismatch_FallsBackToVendored(t *testing.T) {
 	dir := t.TempDir()
-	// Parses fine, but meta.digest disagrees with the recomputed digest.
-	bad := []byte(`{"meta":{"digest":"sha256:wrong"},"templates":[],"pageTemplates":[],"sectionTypes":[],"pageTypes":[]}`)
-	f := &fakeFetcher{res: FetchResult{Body: bad, ETag: `"sha256:wrong"`}}
+	f := &fakeFetcher{res: FetchResult{Body: badDigestBody(), ETag: `"sha256:wrong"`}}
 	var warned bool
 	cat, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Warnf: func(string, ...any) { warned = true }})
 	if err != nil {
@@ -316,6 +314,42 @@ func TestResolve_Mutating_304CacheBodyMissing_Refetches(t *testing.T) {
 	}
 }
 
+// failRefetchFetcher answers 304 to a conditional request and errors on the
+// unconditional refetch — a fetch failure inside the 304-recovery path.
+type failRefetchFetcher struct{ calls int }
+
+func (f *failRefetchFetcher) FetchCatalog(_ context.Context, ifNoneMatch string) (FetchResult, error) {
+	f.calls++
+	if ifNoneMatch != "" {
+		return FetchResult{NotModified: true}, nil
+	}
+	return FetchResult{}, errors.New("refetch: connection reset")
+}
+
+func TestResolve_Mutating_304RefetchError_SurfacesCause(t *testing.T) {
+	dir := t.TempDir()
+	// ETag only, no body: the 304 validates a cache we cannot read back, and the
+	// recovery refetch then fails. The error must carry the real fetch failure,
+	// not the generic no-fetcher message.
+	if err := os.WriteFile(filepath.Join(dir, cacheETagFile), []byte(`"stale"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &failRefetchFetcher{}
+	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Mutating: true, Warnf: func(string, ...any) {}})
+	if err == nil {
+		t.Fatalf("mutating resolve used %q after a failed 304 recovery; want an error", src)
+	}
+	if !strings.Contains(err.Error(), "connection reset") {
+		t.Errorf("error = %q, want the underlying refetch failure surfaced", err)
+	}
+	if strings.Contains(err.Error(), "requires a live catalog fetch or --catalog override") {
+		t.Errorf("error = %q; the generic no-fetcher message must not swallow the real cause", err)
+	}
+	if f.calls != 2 {
+		t.Errorf("expected 2 fetches (conditional 304 + failed unconditional refetch); got %d", f.calls)
+	}
+}
+
 func TestResolve_Mutating_NoFetcherNoOverrideFails(t *testing.T) {
 	_, src, err := Resolve(context.Background(), ResolveOptions{CacheDir: t.TempDir(), Mutating: true})
 	if err == nil {
@@ -339,6 +373,9 @@ func TestCacheDirUnder_SeparatesOrigins(t *testing.T) {
 	}
 	if got, want := CacheDirUnder(base, "http://localhost:8000"), filepath.Join(base, "localhost_8000"); got != want {
 		t.Errorf("CacheDirUnder = %q, want %q (port separator sanitized)", got, want)
+	}
+	if got, want := CacheDirUnder(base, "https://API.Member.DEV"), filepath.Join(base, "api.member.dev"); got != want {
+		t.Errorf("CacheDirUnder = %q, want %q (hosts are case-insensitive; segment lowercased)", got, want)
 	}
 	if got, want := CacheDirUnder(base, "wéird stuff"), filepath.Join(base, "w_ird_stuff"); got != want {
 		t.Errorf("CacheDirUnder = %q, want %q (weird chars sanitized to _)", got, want)
