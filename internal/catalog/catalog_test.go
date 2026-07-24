@@ -1,7 +1,7 @@
 package catalog
 
 // catalog_test.go — loader + accessor invariants over the vendored catalog
-// (mio-page-catalog@f75ddf4). These accessors are what the CLI commands consume
+// (mio-page-catalog@5ffdfaf, catalogVersion 0.8.0). These accessors are what the CLI commands consume
 // instead of hardcoded lists: the writable section-type allow-list (imperative
 // door), template-id validation (tree door), and recommended templates per page
 // type.
@@ -45,8 +45,8 @@ func TestLoad_Counts(t *testing.T) {
 	if got := len(c.Templates); got != 8 {
 		t.Errorf("section templates = %d, want 8", got)
 	}
-	if got := len(c.PageTemplates); got != 11 {
-		t.Errorf("page templates = %d, want 11", got)
+	if got := len(c.PageTemplates); got != 13 {
+		t.Errorf("page templates = %d, want 13", got)
 	}
 	if got := len(c.SectionTypes); got != 12 {
 		t.Errorf("section types = %d, want 12", got)
@@ -137,7 +137,10 @@ func TestValidVariants(t *testing.T) {
 	if !ok {
 		t.Fatal("no row template")
 	}
-	want := map[string]bool{"1col": true, "2eq": true, "2left": true, "2right": true, "3eq": true, "4eq": true}
+	want := map[string]bool{
+		"1col": true, "2eq": true, "2left": true, "2right": true, "3eq": true, "4eq": true,
+		"faq": true, "cta-band": true, "bound-cards": true,
+	}
 	if len(tmpl.Variants) != len(want) {
 		t.Fatalf("row variants = %d, want %d", len(tmpl.Variants), len(want))
 	}
