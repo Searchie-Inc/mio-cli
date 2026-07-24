@@ -1703,6 +1703,9 @@ func TestScaffold_BackendWithoutHubTemplatesExplains(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "contains no hub templates") {
 		t.Errorf("error must explain the backend catalog has no hub templates; err=%v", err)
 	}
+	if err == nil || !strings.Contains(err.Error(), "--catalog") {
+		t.Errorf("the SCAFFOLD's message must point at its --catalog escape hatch; err=%v", err)
+	}
 	if *mutated {
 		t.Errorf("a hub-template-less backend must fail BEFORE any mutating HTTP")
 	}
@@ -1768,6 +1771,9 @@ func TestHubsTemplates_ListsFromLiveCatalog(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "no hub templates") {
 			t.Errorf("error must be actionable about the missing hub templates; err=%v", err)
+		}
+		if strings.Contains(err.Error(), "--catalog") {
+			t.Errorf("hubs templates has no --catalog flag, so its message must not advertise one; err=%v", err)
 		}
 	})
 }

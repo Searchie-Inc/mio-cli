@@ -87,11 +87,17 @@ func validatePlanInterpolation(ht catalog.HubTemplate, plan *scaffoldPlan, hubNa
 // errNoHubTemplates is the shared pin-hint error for a catalog with no
 // hubTemplates[] — the backend predates the 2.1 artifact (MIO-2666/W2a). Used
 // by both scaffoldPreflight and `hubs templates` so the explanation cannot
-// drift between the two surfaces.
-func errNoHubTemplates(cat *catalog.Catalog) error {
+// drift between the two surfaces. catalogFlagHint appends the --catalog
+// escape-hatch pointer — the scaffold sets it; `hubs templates` has no such
+// flag, so its message must not advertise one.
+func errNoHubTemplates(cat *catalog.Catalog, catalogFlagHint bool) error {
+	hint := ""
+	if catalogFlagHint {
+		hint = "; pass --catalog <file> to test against a local artifact"
+	}
 	return errs.New(errs.ExitUsage,
-		"the backend's catalog (version %s, revision %d) contains no hub templates — it predates the 2.1 catalog (MIO-2666/W2a pin); pass --catalog <file> to test against a local artifact",
-		cat.Meta.CatalogVersion, cat.Meta.Revision)
+		"the backend's catalog (version %s, revision %d) contains no hub templates — it predates the 2.1 catalog (MIO-2666/W2a pin)%s",
+		cat.Meta.CatalogVersion, cat.Meta.Revision, hint)
 }
 
 // scaffoldPreflight runs every write-free check, in cheapest-first order:
@@ -139,7 +145,7 @@ func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID strin
 	ht, ok := cat.HubTemplateByID(templateID)
 	if !ok {
 		if len(cat.HubTemplates) == 0 {
-			return errNoHubTemplates(cat)
+			return errNoHubTemplates(cat, true)
 		}
 		return errs.New(errs.ExitUsage,
 			"hub template %q is not in the catalog — available: %s", templateID, strings.Join(cat.HubTemplateIDs(), ", "))

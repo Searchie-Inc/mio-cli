@@ -33,6 +33,15 @@ var (
 	hubPagePrivacyValues        = map[string]bool{"public": true, "members": true, "private": true}
 	hubPlaylistVisibilityValues = map[string]bool{"members": true, "private": true, "public": true}
 	hubAttrFieldTypes           = map[string]bool{"text": true, "number": true, "boolean": true, "date": true, "multiple": true}
+	// hubPolicyFieldKeys is the accepted field set for each policies value: the
+	// fields the scaffold's policy step reads (content + require_acceptance and
+	// its friendly alias required — cmd templateHubPolicy) plus "enabled", which
+	// the ratified 2.1 artifact carries (the pre-2.1 allow-list would have
+	// rejected it). An unknown field — e.g. a typoed "require_acceptence" in a
+	// hand-crafted --catalog artifact — must fail preflight, because the step
+	// would otherwise ignore it and send content:null, silently RESETTING the
+	// policy instead of failing loud.
+	hubPolicyFieldKeys = map[string]bool{"content": true, "require_acceptance": true, "required": true, "enabled": true}
 )
 
 // PageRef is one hubTemplate pages[] entry: a page to instantiate from a page
@@ -146,10 +155,13 @@ func parseHubTemplate(n Node) HubTemplate {
 // depend on: pages non-empty with unique non-empty slugs (the backend reserves
 // "home"), a valid privacy on every page, every pageTemplate resolving to a
 // page template in c, and exactly one homepage; space/onboarding slugs unique
-// and non-empty with enum-valid attributes; playlist keys unique and non-empty
-// with enum-valid visibility. Slug/key uniqueness matters because each pipeline
-// step snapshots existing server slugs ONCE and skip-if-exists against that
-// snapshot — a duplicate would issue a duplicate create mid-pipeline.
+// and non-empty with enum-valid attributes; every policies value an object
+// whose fields are within hubPolicyFieldKeys (a typo must fail preflight, not
+// silently reset policy content); playlist titles non-empty and keys unique
+// and non-empty with enum-valid visibility. Slug/key uniqueness matters
+// because each pipeline step snapshots existing server slugs ONCE and
+// skip-if-exists against that snapshot — a duplicate would issue a duplicate
+// create mid-pipeline.
 func (h HubTemplate) Validate(c *Catalog) error {
 	if len(h.Pages) == 0 {
 		return fmt.Errorf("hub template %q: pages must not be empty", h.ID)
@@ -213,8 +225,22 @@ func (h HubTemplate) Validate(c *Catalog) error {
 			return fmt.Errorf("hub template %q: onboarding[%d] invalid field_type %q", h.ID, i, d.FieldType)
 		}
 	}
+	for k, v := range h.Policies {
+		obj, ok := v.(map[string]any)
+		if !ok {
+			return fmt.Errorf("hub template %q: policies[%q] must be an object", h.ID, k)
+		}
+		for f := range obj {
+			if !hubPolicyFieldKeys[f] {
+				return fmt.Errorf("hub template %q: policies[%q] unknown field %q (allowed: content, require_acceptance, required, enabled)", h.ID, k, f)
+			}
+		}
+	}
 	seenPlaylistKeys := map[string]bool{}
 	for i, p := range h.Playlists {
+		if p.Title == "" {
+			return fmt.Errorf("hub template %q: playlists[%d] missing title", h.ID, i)
+		}
 		if p.Key == "" {
 			return fmt.Errorf("hub template %q: playlists[%d] missing key", h.ID, i)
 		}

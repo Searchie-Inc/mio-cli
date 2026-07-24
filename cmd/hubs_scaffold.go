@@ -755,7 +755,7 @@ func stepHomepage(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 			}
 		}
 		if pp == nil {
-			return errs.New(errs.ExitGeneric, "scaffold: no page plan for homepage %q (preflight did not run)", hp.Slug)
+			return errs.New(errs.ExitGeneric, "scaffold: plan has no entry for homepage slug %q", hp.Slug)
 		}
 		title, terr := catalog.InterpolateTitle(hp.Title, sc.hubName, sc.hubSlug)
 		if terr != nil {
@@ -1234,7 +1234,7 @@ scaffold against that backend would see.`,
 		}
 		fmt.Fprintf(cmd.ErrOrStderr(), "catalog: %s (version %s)\n", src, cat.Meta.CatalogVersion)
 		if len(cat.HubTemplates) == 0 {
-			return errNoHubTemplates(cat)
+			return errNoHubTemplates(cat, false) // this command has no --catalog flag to point at
 		}
 		rows := make([]any, 0, len(cat.HubTemplates))
 		for _, ht := range cat.HubTemplates {

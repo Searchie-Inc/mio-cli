@@ -100,6 +100,14 @@ func TestHubTemplateByID_Community(t *testing.T) {
 	if err := h.Validate(c); err != nil {
 		t.Errorf("Validate(community) = %v, want nil", err)
 	}
+	// The ratified 2.1 policies carry the "enabled" field, which the pre-2.1
+	// allow-list would have rejected — Validate must accept it. Pin that the
+	// fixture actually exercises it, so the positive case can never go vacuous.
+	if terms, _ := h.Policies["terms"].(map[string]any); terms == nil {
+		t.Error("community policies.terms is not an object — policy allow-list positive case is vacuous")
+	} else if _, ok := terms["enabled"]; !ok {
+		t.Error("fixture drift: community policies.terms no longer carries \"enabled\" — policy allow-list positive case is vacuous")
+	}
 	if ids := c.HubTemplateIDs(); !reflect.DeepEqual(ids, []string{"community"}) {
 		t.Errorf("HubTemplateIDs() = %v, want [community]", ids)
 	}
@@ -127,7 +135,18 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 		{"bad onboarding field_type", func(h *HubTemplate) { h.Onboarding[0].FieldType = "email" }},
 		{"empty onboarding slug", func(h *HubTemplate) { h.Onboarding[0].Slug = "" }},
 		{"duplicate onboarding slug", func(h *HubTemplate) { h.Onboarding[1].Slug = h.Onboarding[0].Slug }},
+		{"non-object policy value", func(h *HubTemplate) {
+			h.Policies["terms"] = "yes"
+		}},
+		{"unknown policy field", func(h *HubTemplate) {
+			// A typo (require_acceptence) must fail preflight, not degrade to a
+			// silent content:null reset PATCH.
+			h.Policies["terms"] = map[string]any{"require_acceptence": true}
+		}},
 		// community ships no playlists — construct them in the mutation.
+		{"missing playlist title", func(h *HubTemplate) {
+			h.Playlists = []TemplatePlaylist{{Title: "", Key: "welcome", Visibility: "public"}}
+		}},
 		{"empty playlist key", func(h *HubTemplate) {
 			h.Playlists = []TemplatePlaylist{{Title: "Welcome", Key: "", Visibility: "public"}}
 		}},
