@@ -132,6 +132,7 @@ Every implemented resource and its verbs.
 | `roles` | `create` `list` `retrieve` `update` `delete` |
 | `roles permissions` | `list` |
 | `hubs` | `create` `list` `retrieve` `update` `delete` `scaffold` `templates` |
+| `hubs navigation` | `list` `add` `remove` `reorder` — edit the menu item-by-item (RMW the `navigation` blob; header/footer/mobile buckets; items addressed by zero-based index). `add` takes `--item-json` (any bucket/type) or the url convenience `--type url --href --label` (header/footer only — mobile items use `--item-json`, `{id,label,route,icon}`); `remove --index`; `reorder --order 2,0,1` |
 | `hubs policies` | `update` |
 | `hubs scaffold` | Build a full-experience hub in one idempotent command from a template (`--template community`): branding/favicon, menu, registration, discussion spaces, onboarding schema, playlists, homepage. `--dry-run` previews the plan; `--publish` (default off) goes live; `--name`/`--slug` create a new hub or `--hub <id>` targets/resumes an existing one; `--favicon-url`/`--logo-url`/`--registration-enabled` override the template. |
 | `hubs templates` | `list` the built-in scaffold templates |
