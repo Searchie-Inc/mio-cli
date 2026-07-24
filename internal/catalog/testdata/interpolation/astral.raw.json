@@ -1,0 +1,9 @@
+{
+  "vars": { "hub_name": "𝕏 Rocket 🚀 Club", "hub_slug": "rocket" },
+  "input": {
+    "pages": [{ "title": "About {{hub_name}}" }],
+    "trees": [
+      { "kind": "stack", "children": [{ "kind": "headline", "value": "Welcome to {{hub_name}}" }] }
+    ]
+  }
+}

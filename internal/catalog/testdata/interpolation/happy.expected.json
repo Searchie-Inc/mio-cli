@@ -1,0 +1,22 @@
+{
+  "output": {
+    "pages": [
+      { "title": "Welcome to Acme Club", "slug": "{{hub_name}}", "pageTemplate": "page-homepage-community" }
+    ],
+    "navigation": {
+      "header": [{ "type": "url", "label": "Acme Club Home", "href": "/{{hub_name}}" }],
+      "footer": [{ "type": "url", "label": "About Acme Club", "href": "/about" }]
+    },
+    "trees": [
+      {
+        "kind": "stack",
+        "children": [
+          { "kind": "headline", "value": "Hello Acme Club & Acme Club" },
+          { "kind": "text", "value": "Slug is acme-club." },
+          { "kind": "button", "value": "Join Acme Club", "settings": { "action": { "type": "url", "value": "/{{hub_slug}}" } } },
+          { "kind": "icon", "value": "{{hub_name}}" }
+        ]
+      }
+    ]
+  }
+}

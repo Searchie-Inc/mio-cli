@@ -1,0 +1,14 @@
+{
+  "vars": {
+    "hub_name": "Acme",
+    "hub_slug": "acme"
+  },
+  "input": {
+    "trees": [
+      {
+        "kind": "headline",
+        "value": "Join {{hub_name today"
+      }
+    ]
+  }
+}

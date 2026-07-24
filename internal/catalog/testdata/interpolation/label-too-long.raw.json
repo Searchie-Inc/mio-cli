@@ -1,0 +1,6 @@
+{
+  "vars": { "hub_name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "hub_slug": "a" },
+  "input": {
+    "navigation": { "header": [{ "type": "url", "label": "{{hub_name}}" }] }
+  }
+}
