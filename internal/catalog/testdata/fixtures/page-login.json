@@ -27,17 +27,11 @@
     },
     {
       "id": "#4",
-      "kind": "login-form",
-      "system": true,
-      "settings": {}
-    },
-    {
-      "id": "#5",
       "kind": "stack",
       "settings": {},
       "children": [
         {
-          "id": "#6",
+          "id": "#5",
           "kind": "button",
           "settings": {}
         }

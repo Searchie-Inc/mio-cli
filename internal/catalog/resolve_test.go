@@ -38,7 +38,7 @@ func vendoredBytes(t *testing.T) []byte {
 
 func TestResolve_Live200_Valid_AdoptsAndCaches(t *testing.T) {
 	dir := t.TempDir()
-	f := &fakeFetcher{res: FetchResult{Body: vendoredBytes(t), ETag: `"sha256:faae8f12a9236644b9868b75ef1d245002736228b51f2f8eefa1a43ddd7bd392"`}}
+	f := &fakeFetcher{res: FetchResult{Body: vendoredBytes(t), ETag: `"` + pinnedDigest + `"`}}
 	cat, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -46,7 +46,7 @@ func TestResolve_Live200_Valid_AdoptsAndCaches(t *testing.T) {
 	if src != SourceLive {
 		t.Errorf("source = %q, want live", src)
 	}
-	if cat.Meta.CatalogVersion != "0.3.1" {
+	if cat.Meta.CatalogVersion != "0.8.0" {
 		t.Errorf("catalogVersion = %q", cat.Meta.CatalogVersion)
 	}
 	// Cache must be written for the next invocation.
@@ -79,7 +79,7 @@ func TestResolve_Live200_DigestMismatch_FallsBackToVendored(t *testing.T) {
 func TestResolve_Live304_UsesCache(t *testing.T) {
 	dir := t.TempDir()
 	// Seed the cache with a valid (vendored) body + etag.
-	seedCache(t, dir, vendoredBytes(t), `"sha256:faae8f12a9236644b9868b75ef1d245002736228b51f2f8eefa1a43ddd7bd392"`)
+	seedCache(t, dir, vendoredBytes(t), `"`+pinnedDigest+`"`)
 	f := &fakeFetcher{res: FetchResult{NotModified: true}}
 	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir})
 	if err != nil {
@@ -95,7 +95,7 @@ func TestResolve_Live304_UsesCache(t *testing.T) {
 
 func TestResolve_FetchError_WithCache_UsesCache(t *testing.T) {
 	dir := t.TempDir()
-	seedCache(t, dir, vendoredBytes(t), `"sha256:faae8f12a9236644b9868b75ef1d245002736228b51f2f8eefa1a43ddd7bd392"`)
+	seedCache(t, dir, vendoredBytes(t), `"`+pinnedDigest+`"`)
 	f := &fakeFetcher{err: errors.New("network down")}
 	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Warnf: func(string, ...any) {}})
 	if err != nil {

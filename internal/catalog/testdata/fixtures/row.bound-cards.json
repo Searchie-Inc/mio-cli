@@ -1,0 +1,208 @@
+{
+  "id": "#0",
+  "kind": "container",
+  "template": "row",
+  "settings": {
+    "maxWidth": "content",
+    "padding": 0,
+    "surface": {
+      "padding": "section"
+    }
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "row",
+      "settings": {
+        "responsive": true,
+        "wrap": true,
+        "gap": 6,
+        "mobileGap": 3,
+        "align": "stretch"
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "stack",
+          "settings": {
+            "width": "1/3",
+            "gap": 2.5,
+            "align": "start",
+            "surface": {
+              "background": {
+                "type": "tint"
+              },
+              "borderRadius": "hub-m",
+              "padding": "md"
+            }
+          },
+          "children": [
+            {
+              "id": "#3",
+              "kind": "content-card",
+              "settings": {
+                "actionFromScope": "action"
+              },
+              "dataSource": {
+                "type": "file",
+                "id": ""
+              },
+              "children": [
+                {
+                  "id": "#4",
+                  "kind": "media-slot",
+                  "settings": {
+                    "name": "cover",
+                    "aspectRatio": "16:9",
+                    "radius": "m",
+                    "outline": true
+                  }
+                },
+                {
+                  "id": "#5",
+                  "kind": "field",
+                  "settings": {
+                    "name": "title",
+                    "role": "title",
+                    "size": "body",
+                    "weight": 700
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "#6",
+          "kind": "stack",
+          "settings": {
+            "width": "1/3",
+            "gap": 2.5,
+            "align": "start",
+            "surface": {
+              "background": {
+                "type": "tint"
+              },
+              "borderRadius": "hub-m",
+              "padding": "md"
+            }
+          },
+          "children": [
+            {
+              "id": "#7",
+              "kind": "content-card",
+              "settings": {
+                "actionFromScope": "action"
+              },
+              "dataSource": {
+                "type": "playlist",
+                "id": ""
+              },
+              "children": [
+                {
+                  "id": "#8",
+                  "kind": "media-slot",
+                  "settings": {
+                    "name": "cover",
+                    "aspectRatio": "16:9",
+                    "radius": "m",
+                    "outline": true
+                  }
+                },
+                {
+                  "id": "#9",
+                  "kind": "field",
+                  "settings": {
+                    "name": "title",
+                    "role": "title",
+                    "size": "body",
+                    "weight": 700
+                  }
+                },
+                {
+                  "id": "#10",
+                  "kind": "row",
+                  "settings": {
+                    "gap": 2.5,
+                    "align": "center"
+                  },
+                  "children": [
+                    {
+                      "id": "#11",
+                      "kind": "field",
+                      "settings": {
+                        "name": "contentCountLabel",
+                        "role": "meta",
+                        "icon": "content"
+                      }
+                    },
+                    {
+                      "id": "#12",
+                      "kind": "field",
+                      "settings": {
+                        "name": "duration",
+                        "role": "meta",
+                        "icon": "clock"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "#13",
+          "kind": "stack",
+          "settings": {
+            "width": "1/3",
+            "gap": 2.5,
+            "align": "start",
+            "surface": {
+              "background": {
+                "type": "tint"
+              },
+              "borderRadius": "hub-m",
+              "padding": "md"
+            }
+          },
+          "children": [
+            {
+              "id": "#14",
+              "kind": "headline",
+              "settings": {
+                "level": 5,
+                "weight": 700
+              },
+              "value": "Keep exploring"
+            },
+            {
+              "id": "#15",
+              "kind": "text",
+              "settings": {
+                "muted": true,
+                "marginBottom": 0
+              },
+              "value": "Pick up right where you left off."
+            },
+            {
+              "id": "#16",
+              "kind": "button",
+              "settings": {
+                "variant": "primary",
+                "size": "md",
+                "labelFrom": "title",
+                "actionFromScope": "action"
+              },
+              "dataSource": {
+                "type": "playlist",
+                "id": ""
+              },
+              "value": "Continue"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

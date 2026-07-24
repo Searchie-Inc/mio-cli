@@ -1,0 +1,56 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-faq",
+  "settings": {
+    "gap": 6
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "row",
+      "template": "row",
+      "settings": {},
+      "children": [
+        {
+          "id": "#2",
+          "kind": "headline",
+          "settings": {
+            "level": 1
+          },
+          "value": "Frequently asked questions"
+        },
+        {
+          "id": "#3",
+          "kind": "accordion",
+          "settings": {
+            "expansion": "single",
+            "defaultExpanded": [
+              "faq-q1"
+            ]
+          },
+          "children": [
+            {
+              "id": "#4",
+              "kind": "text",
+              "settings": {
+                "tab_label": "How do I join?",
+                "muted": true
+              },
+              "value": "Click Join and create an account."
+            },
+            {
+              "id": "#5",
+              "kind": "text",
+              "settings": {
+                "tab_label": "Is it free?",
+                "muted": true
+              },
+              "value": "Yes — membership is free to start."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

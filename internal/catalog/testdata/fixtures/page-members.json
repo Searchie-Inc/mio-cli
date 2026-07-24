@@ -19,12 +19,6 @@
           }
         }
       ]
-    },
-    {
-      "id": "#3",
-      "kind": "member-directory-list",
-      "system": true,
-      "settings": {}
     }
   ]
 }

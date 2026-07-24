@@ -1,0 +1,32 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-about",
+  "settings": {
+    "gap": 6
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "row",
+      "template": "row",
+      "settings": {},
+      "children": [
+        {
+          "id": "#2",
+          "kind": "headline",
+          "settings": {
+            "level": 1
+          },
+          "value": "About {{hub_name}}"
+        },
+        {
+          "id": "#3",
+          "kind": "text",
+          "settings": {},
+          "value": "Tell your members who you are, what you do, and why this community exists."
+        }
+      ]
+    }
+  ]
+}
