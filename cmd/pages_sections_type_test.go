@@ -2,10 +2,11 @@ package cmd
 
 // pages_sections_type_test.go — the imperative-door `--type` validation
 // (MIO-2340): `pages sections create --type` is validated against the catalog.
-// It is read-tolerant — a KNOWN non-writable type (e.g. compact) is rejected
-// fast (ExitUsage) before any HTTP, but an UNKNOWN type is deferred to the
-// backend (so a newly-added writable type the vendored catalog predates is not
-// blocked client-side).
+// It is read-tolerant — a KNOWN non-writable type (e.g. testimonials) is
+// rejected fast (ExitUsage) before any HTTP, but an UNKNOWN type is deferred to
+// the backend (so a newly-added writable type the vendored catalog predates is
+// not blocked client-side). compact flipped to writable:true in 0.10.0
+// (MIO-2681) — see TestSectionsCreate_CompactNowWritable_Proceeds below.
 
 import (
 	"io"
@@ -18,8 +19,8 @@ import (
 )
 
 func TestSectionsCreate_KnownNonWritableType_ExitUsageBeforeHTTP(t *testing.T) {
-	// `compact` is a real section type but writable=false — reject it on the
-	// imperative door, before any HTTP.
+	// `testimonials` is a real section type but writable=false — reject it on
+	// the imperative door, before any HTTP.
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fired = true
@@ -29,7 +30,7 @@ func TestSectionsCreate_KnownNonWritableType_ExitUsageBeforeHTTP(t *testing.T) {
 
 	err := executeCLI(t, baseEnv(srv.URL),
 		"--team", "t_team1", "--hub", "hub_123",
-		"pages", "sections", "create", "page_x", "--type", "compact",
+		"pages", "sections", "create", "page_x", "--type", "testimonials",
 	)
 	if codeForExecuteErr(err) != errs.ExitUsage {
 		t.Fatalf("exit = %d, want %d (ExitUsage); err=%v", codeForExecuteErr(err), errs.ExitUsage, err)
@@ -98,5 +99,35 @@ func TestSectionsCreate_WritableType_Proceeds(t *testing.T) {
 	}
 	if gotType != "text" {
 		t.Errorf("a writable --type must reach the create POST; gotType=%q", gotType)
+	}
+}
+
+func TestSectionsCreate_CompactNowWritable_Proceeds(t *testing.T) {
+	// compact flipped writable=false -> true in catalogVersion 0.10.0
+	// (MIO-2681, imperative-door parity with grid) — it must now pass
+	// client-side validation and reach the backend like any other writable
+	// type.
+	var gotType string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"type":"compact"`) {
+			gotType = "compact"
+		}
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"id":"sec_1","type":"sections","attributes":{"type":"compact"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"pages", "sections", "create", "page_x", "--type", "compact", "--title", "Scroll",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+	}
+	if gotType != "compact" {
+		t.Errorf("the now-writable compact --type must reach the create POST; gotType=%q", gotType)
 	}
 }

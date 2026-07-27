@@ -1,9 +1,9 @@
 {
   "meta": {
     "schemaVersion": "2.1.0",
-    "catalogVersion": "0.8.0",
-    "revision": 8,
-    "digest": "sha256:48148927acbc624be6d7d4743a29534bca9856f25de16c0a53638cb64a345d20",
+    "catalogVersion": "0.10.0",
+    "revision": 11,
+    "digest": "sha256:aced7764cb44a58bc89650a63ffccb60ee2d0ffcef15a211a6ed16f77697ba43",
     "createdAt": "2026-07-14T00:00:00Z"
   },
   "nodeKinds": {
@@ -169,7 +169,7 @@
       "id": "compact",
       "lifecycle": "active",
       "anonSafe": false,
-      "writable": false,
+      "writable": true,
       "compiledFrom": [
         "compact"
       ]
@@ -2069,7 +2069,7 @@
     },
     {
       "id": "compact",
-      "label": "Compact",
+      "label": "Scroll",
       "category": "section",
       "lifecycle": "active",
       "rootKind": "container",
@@ -3056,11 +3056,6 @@
       "id": "community",
       "label": "Community",
       "lifecycle": "active",
-      "requires": {
-        "template": [
-          "hub-blobs.v1"
-        ]
-      },
       "branding": {
         "logo_url": "https://assets.searchie.io/hub-templates/community/logo.png",
         "favicon_url": "https://assets.searchie.io/hub-templates/community/favicon.png",

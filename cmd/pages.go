@@ -609,7 +609,7 @@ var writableSectionTypesHelp = func() string {
 }()
 
 // validateSectionType rejects a --type that the catalog KNOWS is not writable on
-// the imperative door (e.g. compact/testimonials/calendar). It is deliberately
+// the imperative door (e.g. testimonials/calendar). It is deliberately
 // read-tolerant (charter §6.3: write-strict at the BACKEND, tolerant clients):
 // an UNKNOWN type is passed through to the backend rather than rejected, because
 // the embedded vendored catalog may simply predate a newly-added writable type —

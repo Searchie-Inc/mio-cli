@@ -1,7 +1,7 @@
 package catalog
 
 // catalog_test.go — loader + accessor invariants over the vendored catalog
-// (mio-page-catalog@5ffdfaf, catalogVersion 0.8.0). These accessors are what the CLI commands consume
+// (mio-page-catalog@45258a1, catalogVersion 0.10.0). These accessors are what the CLI commands consume
 // instead of hardcoded lists: the writable section-type allow-list (imperative
 // door), template-id validation (tree door), and recommended templates per page
 // type.
@@ -29,8 +29,10 @@ func TestParse_RejectsTrailingContent(t *testing.T) {
 
 func TestSectionType_KnownVsUnknown(t *testing.T) {
 	c := loadForTest(t)
-	if st, ok := c.SectionType("compact"); !ok || st.Writable {
-		t.Errorf("SectionType(compact) = %+v, %v; want known + not writable", st, ok)
+	// compact flipped writable false -> true in 0.10.0 (MIO-2681,
+	// imperative-door parity with grid).
+	if st, ok := c.SectionType("compact"); !ok || !st.Writable {
+		t.Errorf("SectionType(compact) = %+v, %v; want known + writable", st, ok)
 	}
 	if st, ok := c.SectionType("grid"); !ok || !st.Writable {
 		t.Errorf("SectionType(grid) = %+v, %v; want known + writable", st, ok)
@@ -58,9 +60,10 @@ func TestLoad_Counts(t *testing.T) {
 
 func TestWritableSectionTypes_MatchesCatalog(t *testing.T) {
 	c := loadForTest(t)
-	// The 9 writable=true section types (the imperative `sections create --type`
-	// allow-list), sorted for a stable help string.
-	want := []string{"carousel", "content-grid", "cta", "feature", "grid", "row", "search", "text", "video"}
+	// The 10 writable=true section types (the imperative `sections create --type`
+	// allow-list), sorted for a stable help string. compact joined the set in
+	// 0.10.0 (MIO-2681).
+	want := []string{"carousel", "compact", "content-grid", "cta", "feature", "grid", "row", "search", "text", "video"}
 	got := c.WritableSectionTypes()
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("WritableSectionTypes() = %v, want %v", got, want)
@@ -73,7 +76,7 @@ func TestIsWritableSectionType(t *testing.T) {
 		"grid":    true,
 		"video":   true,
 		"feature": true,
-		"compact": false, // writable=false
+		"compact": true, // writable=true as of 0.10.0 (MIO-2681)
 		"unknown": false,
 	}
 	for id, want := range cases {
@@ -93,6 +96,46 @@ func TestTemplateByID_SectionAndPage(t *testing.T) {
 	}
 	if _, ok := c.TemplateByID("does-not-exist"); ok {
 		t.Error("TemplateByID(does-not-exist) should return ok=false")
+	}
+}
+
+// TestTemplateByID_ScrollAlias covers the MIO-2681 CLI-side discoverability
+// alias: "scroll" resolves to the "compact" template (id is a stored contract,
+// unchanged since the picker-label rename at 0.9.1), a near-miss of the alias
+// still fails lookup like any other unknown id, and the alias itself never
+// leaks into TemplateIDs()/listings — only the real id does.
+func TestTemplateByID_ScrollAlias(t *testing.T) {
+	c := loadForTest(t)
+
+	tmpl, ok := c.TemplateByID("scroll")
+	if !ok || tmpl.ID != "compact" {
+		t.Errorf("TemplateByID(scroll) = %+v, %v; want the compact template", tmpl, ok)
+	}
+	want, wantOK := c.TemplateByID("compact")
+	if !reflect.DeepEqual(tmpl, want) || ok != wantOK {
+		t.Errorf("TemplateByID(scroll) = %+v, %v; want identical to TemplateByID(compact) = %+v, %v", tmpl, ok, want, wantOK)
+	}
+
+	if _, ok := c.TemplateByID("scrol"); ok {
+		t.Error("TemplateByID(scrol) (typo of the alias) should still be unknown")
+	}
+	if _, ok := c.TemplateByID("scroll-bar"); ok {
+		t.Error("TemplateByID(scroll-bar) should still be unknown — not a fuzzy alias match")
+	}
+
+	for _, id := range c.TemplateIDs() {
+		if id == "scroll" {
+			t.Error(`TemplateIDs() must not include the CLI-side alias "scroll" — only the real catalog id "compact"`)
+		}
+	}
+	found := false
+	for _, id := range c.TemplateIDs() {
+		if id == "compact" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error(`TemplateIDs() should still include the real id "compact"`)
 	}
 }
 

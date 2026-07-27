@@ -21,9 +21,9 @@ import (
 )
 
 // pinnedDigest is the catalog digest at the vendored revision (mio-page-catalog
-// @ 5ffdfaf, catalogVersion 0.8.0, revision 8). If the vendored catalog.json
+// @ 45258a1, catalogVersion 0.10.0, revision 11). If the vendored catalog.json
 // changes, this pin (and the fixtures) must be refreshed together.
-const pinnedDigest = "sha256:48148927acbc624be6d7d4743a29534bca9856f25de16c0a53638cb64a345d20"
+const pinnedDigest = "sha256:aced7764cb44a58bc89650a63ffccb60ee2d0ffcef15a211a6ed16f77697ba43"
 
 func fixtureName(id, variant string) string {
 	if variant != "" {
