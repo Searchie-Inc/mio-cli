@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -122,7 +123,7 @@ func TestStepPages_Op404FallsBackToClientSide(t *testing.T) {
 	if be.opPosts != 1 {
 		t.Errorf("op POSTs = %d, want exactly 1 (the probe cost)", be.opPosts)
 	}
-	if want := []string{"homepage", "about", "faq"}; !equalStrings(be.createdSlugs, want) {
+	if want := []string{"homepage", "about", "faq"}; !slices.Equal(be.createdSlugs, want) {
 		t.Errorf("created slugs = %v, want %v (full client-side apply)", be.createdSlugs, want)
 	}
 	if be.mutations != 12 {
@@ -170,7 +171,7 @@ func TestStepPages_Op409RefetchesOnceAndRetries(t *testing.T) {
 	if be.catalogGETs < 1 {
 		t.Errorf("catalog GETs = %d, want ≥1 (the refetch after the 409)", be.catalogGETs)
 	}
-	if want := []string{"op", "catalog", "op"}; !equalStrings(be.events, want) {
+	if want := []string{"op", "catalog", "op"}; !slices.Equal(be.events, want) {
 		t.Errorf("event order = %v, want %v (refetch strictly between the two POSTs)", be.events, want)
 	}
 	if got := be.opBodies[1]["catalog_digest"]; got != newDigest {
@@ -262,7 +263,7 @@ func TestStepPages_CatalogOverrideSkipsOp(t *testing.T) {
 	if be.opPosts != 0 {
 		t.Errorf("op POSTs = %d, want 0 — a --catalog override must never probe the op", be.opPosts)
 	}
-	if want := []string{"homepage", "about", "faq"}; !equalStrings(be.createdSlugs, want) {
+	if want := []string{"homepage", "about", "faq"}; !slices.Equal(be.createdSlugs, want) {
 		t.Errorf("created slugs = %v, want %v (client-side apply)", be.createdSlugs, want)
 	}
 }
@@ -292,17 +293,4 @@ func TestStepPages_OpEmptyPagesResponseTolerated(t *testing.T) {
 	if notes := stepNotes(sc); !strings.Contains(notes, "no page listing") {
 		t.Errorf("empty pages must emit a warning note about the missing listing; notes=%q", notes)
 	}
-}
-
-// equalStrings is reflect-free slice equality for short assertion slices.
-func equalStrings(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
 }

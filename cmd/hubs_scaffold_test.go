@@ -122,6 +122,13 @@ func TestScaffold_ResumeGetsHubForSlug(t *testing.T) {
 		if serveCatalogGET(w, r, catBody) {
 			return
 		}
+		// W2b op probe (Task 9): absent here — this test pins the resume-mode
+		// hub retrieve + client-side pipeline, so the probe 404s deterministically
+		// instead of riding the empty-Pages tolerance of a catch-all 200.
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/scaffold-from-template") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if r.Method == http.MethodGet && !gotGet {
 			// Record only the FIRST GET — the resume-mode hub retrieve. Now that the
 			// Phase-4 steps run for real (stepBlobs GETs the hub, stepSpaces lists
@@ -178,6 +185,13 @@ func TestScaffold_CreateModeIgnoresConfiguredDefaultHub(t *testing.T) {
 			touchedConfigured = true
 		}
 		if serveCatalogGET(w, r, catBody) {
+			return
+		}
+		// W2b op probe (Task 9): absent here — the create-vs-resume invariant is
+		// about the CLIENT-SIDE pipeline's requests, so the probe 404s
+		// deterministically instead of riding empty-Pages op tolerance.
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/scaffold-from-template") {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/vnd.api+json")

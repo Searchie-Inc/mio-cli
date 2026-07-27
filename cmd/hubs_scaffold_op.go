@@ -16,6 +16,10 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
+// opAbsentNote is the operator note both probe misses share — the initial 404
+// and the freak retry-404 (op disappeared between the two POSTs).
+const opAbsentNote = "scaffold-from-template op not available — applying client-side"
+
 // applyViaServerOp tries the backend op for the WHOLE pages[] plan. Returns
 // (true, nil) when the op handled it (stepPages is done), (false, nil) when
 // the op is absent — the 404 probe signal; the caller runs the client-side
@@ -45,7 +49,7 @@ func applyViaServerOp(sc *scaffoldContext) (bool, error) {
 		recordServerOpResult(sc, res)
 		return true, nil
 	case errs.CodeOf(err) == errs.ExitNotFound:
-		sc.notef("scaffold-from-template op not available — applying client-side")
+		sc.notef(opAbsentNote)
 		return false, nil
 	case errs.CodeOf(err) == errs.ExitUsage:
 		return retryServerOpAfterRefetch(sc, req, err)
@@ -60,9 +64,11 @@ func applyViaServerOp(sc *scaffoldContext) (bool, error) {
 // rebuild the plan from the fresh catalog (the shared preflight tail, with the
 // FINAL hub vars — they are known post-create) and retry the op exactly once
 // with the new digest. An unchanged digest, a failed refetch, or a second op
-// rejection all surface the ORIGINAL error with guidance; the retry's own 404
-// (freak case: the op disappeared between the two POSTs) falls back
-// client-side like any other probe miss.
+// rejection all surface the ORIGINAL error with guidance; a plan-rebuild
+// failure against the fresh catalog surfaces the REBUILD error instead (it is
+// the more actionable one: the new catalog is what the retry cannot proceed
+// against); the retry's own 404 (freak case: the op disappeared between the
+// two POSTs) falls back client-side like any other probe miss.
 func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTemplateRequest, opErr error) (bool, error) {
 	rejected := func() error {
 		return errs.Wrap(errs.CodeOf(opErr), fmt.Errorf(
@@ -79,16 +85,18 @@ func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTempl
 		return false, rejected()
 	}
 
-	// The pin moved under us: adopt the fresh catalog and re-run the preflight
-	// tail (existence + invariants + plan + interpolation) against it, so a
-	// retry never sends a digest for a catalog the plan was not built from —
-	// and so the client-side loop, if the retry 404s, applies the NEW plan.
+	// The pin moved under us: re-run the preflight tail (existence + invariants
+	// + plan + interpolation) against the fresh catalog, so a retry never sends
+	// a digest for a catalog the plan was not built from — and so the
+	// client-side loop, if the retry 404s, applies the NEW plan. The context
+	// adopts the fresh catalog only AFTER the rebuild succeeds (no half-updated
+	// context on a rebuild failure).
 	sc.notef("backend catalog pin moved (revision %d → %d) — retrying the op with the fresh digest",
 		sc.cat.Meta.Revision, cat.Meta.Revision)
-	sc.cat, sc.catalogSource = cat, src
-	if perr := scaffoldPlanFromCatalog(sc, cat, src, req.HubTemplateID, sc.hubName, sc.hubSlug); perr != nil {
+	if perr := rebuildScaffoldPlan(sc, cat, src, req.HubTemplateID, sc.hubName, sc.hubSlug); perr != nil {
 		return false, perr
 	}
+	sc.cat, sc.catalogSource = cat, src
 
 	req.CatalogDigest = cat.Meta.Digest
 	res, err := sc.cl.ScaffoldFromTemplate(sc.ctx, sc.teamID, sc.hubID, req)
@@ -97,7 +105,7 @@ func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTempl
 		recordServerOpResult(sc, res)
 		return true, nil
 	case errs.CodeOf(err) == errs.ExitNotFound:
-		sc.notef("scaffold-from-template op not available — applying client-side")
+		sc.notef(opAbsentNote)
 		return false, nil
 	default:
 		// ONE retry ever. A second rejection (any kind) surfaces the ORIGINAL

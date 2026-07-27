@@ -122,15 +122,15 @@ func scaffoldResolveOptions(sc *scaffoldContext, warnf func(string, ...any)) cat
 	return opts
 }
 
-// scaffoldPlanFromCatalog is the preflight TAIL (steps 3-5 below): source
-// templateID from cat — existence with the available ids, or the
+// rebuildScaffoldPlan is the preflight TAIL (steps 3-5 below), and it MUTATES
+// sc: source templateID from cat — existence with the available ids, or the
 // no-hubTemplates pin hint — check its invariants against the SAME catalog,
 // instantiate the page plan, and validate its interpolation with (hubName,
 // hubSlug). On success sc.hubTmpl + sc.pagePlan are updated. Shared by
 // scaffoldPreflight (PRELIMINARY vars) and the 409-refetch retry in
 // applyViaServerOp (FINAL vars, known post-create) so the re-resolve reruns
 // exactly the preflight's checks — one call, never a copy.
-func scaffoldPlanFromCatalog(sc *scaffoldContext, cat *catalog.Catalog, src catalog.Source, templateID, hubName, hubSlug string) error {
+func rebuildScaffoldPlan(sc *scaffoldContext, cat *catalog.Catalog, src catalog.Source, templateID, hubName, hubSlug string) error {
 	ht, ok := cat.HubTemplateByID(templateID)
 	if !ok {
 		if len(cat.HubTemplates) == 0 {
@@ -190,5 +190,5 @@ func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID strin
 	if sc.hubID != "" {
 		prelimName, prelimSlug = sc.hubName, sc.hubSlug
 	}
-	return scaffoldPlanFromCatalog(sc, cat, src, templateID, prelimName, prelimSlug)
+	return rebuildScaffoldPlan(sc, cat, src, templateID, prelimName, prelimSlug)
 }
