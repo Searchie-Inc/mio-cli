@@ -1726,6 +1726,39 @@ func catalog21Body(t *testing.T) []byte {
 	return b
 }
 
+// noHubTemplatesCatalogBody synthesizes a digest-valid catalog WITHOUT a
+// hubTemplates[] key — the "backend predates the hub-template catalog" shape
+// the pin-hint tests need. Derived from the checked-in 2.1 fixture rather
+// than the production embed (internal/catalog/catalog.json), because the
+// embed's contents move with main (it was re-pinned to a hubTemplates-bearing
+// artifact by MIO-2589/MIO-2681, which broke the CI merge-ref run of tests
+// that had assumed it stayed pre-2.1 forever).
+func noHubTemplatesCatalogBody(t *testing.T) []byte {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(catalog21Body(t)))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("parse 2.1 catalog fixture: %v", err)
+	}
+	delete(doc, "hubTemplates")
+	meta, ok := doc["meta"].(map[string]any)
+	if !ok {
+		t.Fatal("2.1 catalog fixture has no meta object")
+	}
+	delete(meta, "digest")
+	digest, err := catalog.Digest(doc)
+	if err != nil {
+		t.Fatalf("recompute no-hubTemplates catalog digest: %v", err)
+	}
+	meta["digest"] = digest
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal no-hubTemplates catalog: %v", err)
+	}
+	return out
+}
+
 // catalogRoute is a newMockServer handler serving the raw catalog body on
 // GET /api/v1/page-builder/catalog (the canonical path the client emits).
 func catalogRoute(body []byte) mockHandler {
@@ -1828,11 +1861,7 @@ func TestScaffold_UnknownTemplateListsAvailable(t *testing.T) {
 // predates 2.1 (no hubTemplates[] — e.g. the old 0.3.1 artifact) yields a
 // pin-hint explanation (MIO-2666/W2a), ExitUsage, and zero mutating HTTP.
 func TestScaffold_BackendWithoutHubTemplatesExplains(t *testing.T) {
-	oldBody, rerr := os.ReadFile("../internal/catalog/catalog.json") // 0.3.1: no hubTemplates
-	if rerr != nil {
-		t.Fatalf("read old vendored catalog: %v", rerr)
-	}
-	srv, _, mutated := liveCatalogScaffoldServer(t, oldBody)
+	srv, _, mutated := liveCatalogScaffoldServer(t, noHubTemplatesCatalogBody(t))
 
 	err := executeCLI(t, scaffoldEnv(t, srv.URL),
 		withTeam("t_team1", "hubs", "scaffold",
@@ -1939,11 +1968,7 @@ func TestHubsTemplates_ListsFromLiveCatalog(t *testing.T) {
 		}
 	})
 	t.Run("backend serving a pre-2.1 catalog gets the pin hint", func(t *testing.T) {
-		oldBody, rerr := os.ReadFile("../internal/catalog/catalog.json") // 0.3.1: no hubTemplates
-		if rerr != nil {
-			t.Fatalf("read old vendored catalog: %v", rerr)
-		}
-		srv := newMockServer(t, []mockHandler{catalogRoute(oldBody)})
+		srv := newMockServer(t, []mockHandler{catalogRoute(noHubTemplatesCatalogBody(t))})
 		err := executeCLI(t, scaffoldEnv(t, srv.URL), "hubs", "templates")
 		if err == nil || !strings.Contains(err.Error(), "contains no hub templates") {
 			t.Errorf("a SERVED catalog without hubTemplates[] must get the pin-hint explanation; err=%v", err)
