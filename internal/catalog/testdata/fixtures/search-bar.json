@@ -58,7 +58,9 @@
               "id": "#6",
               "kind": "search-bar",
               "system": true,
-              "settings": {}
+              "settings": {
+                "placeholder": "Search"
+              }
             }
           ]
         }

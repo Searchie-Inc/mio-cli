@@ -1,0 +1,198 @@
+{
+  "id": "#0",
+  "kind": "container",
+  "template": "row",
+  "settings": {
+    "maxWidth": "content",
+    "padding": 0,
+    "surface": {
+      "padding": "section"
+    }
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "row",
+      "settings": {
+        "responsive": true,
+        "wrap": true,
+        "gap": 6,
+        "mobileGap": 3,
+        "align": "stretch"
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "stack",
+          "settings": {
+            "width": "1/3",
+            "gap": 2.5,
+            "align": "start",
+            "surface": {
+              "background": {
+                "type": "tint"
+              },
+              "borderRadius": "hub-m",
+              "padding": "md"
+            }
+          },
+          "children": [
+            {
+              "id": "#3",
+              "kind": "stack",
+              "settings": {
+                "gap": 1,
+                "align": "start",
+                "grow": true
+              },
+              "children": [
+                {
+                  "id": "#4",
+                  "kind": "headline",
+                  "settings": {
+                    "level": 5,
+                    "weight": 700
+                  },
+                  "value": "Card one"
+                },
+                {
+                  "id": "#5",
+                  "kind": "text",
+                  "settings": {
+                    "muted": true,
+                    "marginBottom": 0
+                  },
+                  "value": "A short description of this card."
+                }
+              ]
+            },
+            {
+              "id": "#6",
+              "kind": "button",
+              "settings": {
+                "variant": "primary",
+                "size": "md",
+                "iconRight": "arrow-right"
+              },
+              "value": "Learn more"
+            }
+          ]
+        },
+        {
+          "id": "#7",
+          "kind": "stack",
+          "settings": {
+            "width": "1/3",
+            "gap": 2.5,
+            "align": "start",
+            "surface": {
+              "background": {
+                "type": "tint"
+              },
+              "borderRadius": "hub-m",
+              "padding": "md"
+            }
+          },
+          "children": [
+            {
+              "id": "#8",
+              "kind": "stack",
+              "settings": {
+                "gap": 1,
+                "align": "start",
+                "grow": true
+              },
+              "children": [
+                {
+                  "id": "#9",
+                  "kind": "headline",
+                  "settings": {
+                    "level": 5,
+                    "weight": 700
+                  },
+                  "value": "Card two"
+                },
+                {
+                  "id": "#10",
+                  "kind": "text",
+                  "settings": {
+                    "muted": true,
+                    "marginBottom": 0
+                  },
+                  "value": "A short description of this card."
+                }
+              ]
+            },
+            {
+              "id": "#11",
+              "kind": "button",
+              "settings": {
+                "variant": "primary",
+                "size": "md",
+                "iconRight": "arrow-right"
+              },
+              "value": "Learn more"
+            }
+          ]
+        },
+        {
+          "id": "#12",
+          "kind": "stack",
+          "settings": {
+            "width": "1/3",
+            "gap": 2.5,
+            "align": "start",
+            "surface": {
+              "background": {
+                "type": "tint"
+              },
+              "borderRadius": "hub-m",
+              "padding": "md"
+            }
+          },
+          "children": [
+            {
+              "id": "#13",
+              "kind": "stack",
+              "settings": {
+                "gap": 1,
+                "align": "start",
+                "grow": true
+              },
+              "children": [
+                {
+                  "id": "#14",
+                  "kind": "headline",
+                  "settings": {
+                    "level": 5,
+                    "weight": 700
+                  },
+                  "value": "Card three"
+                },
+                {
+                  "id": "#15",
+                  "kind": "text",
+                  "settings": {
+                    "muted": true,
+                    "marginBottom": 0
+                  },
+                  "value": "A short description of this card."
+                }
+              ]
+            },
+            {
+              "id": "#16",
+              "kind": "button",
+              "settings": {
+                "variant": "primary",
+                "size": "md",
+                "iconRight": "arrow-right"
+              },
+              "value": "Learn more"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

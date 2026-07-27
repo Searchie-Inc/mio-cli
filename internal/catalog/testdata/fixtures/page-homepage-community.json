@@ -1,0 +1,66 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-homepage-community",
+  "settings": {
+    "gap": 6
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "row",
+      "template": "hero",
+      "settings": {},
+      "children": [
+        {
+          "id": "#2",
+          "kind": "headline",
+          "settings": {
+            "level": 1
+          },
+          "value": "Welcome to {{hub_name}}"
+        },
+        {
+          "id": "#3",
+          "kind": "text",
+          "settings": {},
+          "value": "A place for our community to learn, share, and connect."
+        },
+        {
+          "id": "#4",
+          "kind": "button",
+          "settings": {
+            "variant": "primary",
+            "action": {
+              "type": "url",
+              "value": "/register"
+            }
+          },
+          "value": "Join the community"
+        }
+      ]
+    },
+    {
+      "id": "#5",
+      "kind": "row",
+      "template": "row",
+      "settings": {},
+      "children": [
+        {
+          "id": "#6",
+          "kind": "headline",
+          "settings": {
+            "level": 2
+          },
+          "value": "What you'll find here"
+        },
+        {
+          "id": "#7",
+          "kind": "text",
+          "settings": {},
+          "value": "Discussions, resources, and events curated for members."
+        }
+      ]
+    }
+  ]
+}

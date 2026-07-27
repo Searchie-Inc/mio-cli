@@ -19,12 +19,6 @@
           }
         }
       ]
-    },
-    {
-      "id": "#3",
-      "kind": "discussion-list",
-      "system": true,
-      "settings": {}
     }
   ]
 }

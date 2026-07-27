@@ -28,8 +28,8 @@ import (
 )
 
 // vendoredCatalogJSON is the digest-pinned copy of mio-page-catalog/catalog.json
-// at revision f75ddf4 (catalogVersion 0.3.1, meta.digest
-// sha256:faae8f12…). It is byte-identical to upstream so its embedded digest
+// at commit 45258a1 (catalogVersion 0.10.0, revision 11, meta.digest
+// sha256:aced7764…). It is byte-identical to upstream so its embedded digest
 // verifies (see parity_test.go). Refresh it and the golden fixtures together
 // when bumping the pinned catalog.
 //
@@ -192,10 +192,28 @@ func (c *Catalog) Raw() Node { return c.raw }
 // DigestPinned returns the vendored catalog's declared meta.digest.
 func (c *Catalog) DigestPinned() string { return c.Meta.Digest }
 
+// templateIDAliases is a small CLI-side discoverability map (MIO-2681): a
+// friendlier name authors reach for that resolves to the catalog's real,
+// contract-stable template id. The catalog id remains the source of truth —
+// aliases are UX sugar resolved here only. They never appear in TemplateIDs()
+// or any listing, and unaliased typos still fail lookup normally.
+//
+//   - "scroll" -> "compact": the compact section template's picker LABEL was
+//     renamed "Compact" -> "Scroll" at catalogVersion 0.9.1, but its id is a
+//     stored contract (recipes, saved page trees) and stays "compact".
+var templateIDAliases = map[string]string{
+	"scroll": "compact",
+}
+
 // TemplateByID looks a template up by id across BOTH registries — section
 // templates (tree/section vocabulary) and page templates. Page templates win
 // ties only in theory; ids are unique across both per the catalog invariants.
+// Resolves templateIDAliases first, so a caller may pass either the real id or
+// a known alias.
 func (c *Catalog) TemplateByID(id string) (Template, bool) {
+	if real, ok := templateIDAliases[id]; ok {
+		id = real
+	}
 	for _, t := range c.Templates {
 		if t.ID == id {
 			return t, true

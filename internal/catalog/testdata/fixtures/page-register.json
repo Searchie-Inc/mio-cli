@@ -22,17 +22,11 @@
     },
     {
       "id": "#3",
-      "kind": "register-form",
-      "system": true,
-      "settings": {}
-    },
-    {
-      "id": "#4",
       "kind": "stack",
       "settings": {},
       "children": [
         {
-          "id": "#5",
+          "id": "#4",
           "kind": "button",
           "settings": {}
         }

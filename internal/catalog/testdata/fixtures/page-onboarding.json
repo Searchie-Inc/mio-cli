@@ -19,12 +19,6 @@
           }
         }
       ]
-    },
-    {
-      "id": "#3",
-      "kind": "onboarding-form",
-      "system": true,
-      "settings": {}
     }
   ]
 }
