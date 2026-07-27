@@ -968,7 +968,8 @@ func newDryRunStepSC(cl *client.Client) (*scaffoldContext, *[]planEntry) {
 // that page's PUT-returned draft_version — dv varies per page to prove
 // per-page threading) → marker PATCH ("applied" + that page's draft_version +
 // the digest of the EXACT tree body PUT, recomputed here from the captured
-// wire bytes). The homepage entry additionally lands its id + draft version in
+// wire bytes). The homepage entry additionally runs the §5.1 foreign-homepage
+// pre-check (one extra page-list walk) and lands its id + draft version in
 // the context (summary + W0 guard compatibility).
 func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
 	type pagesReq struct {
@@ -1023,9 +1024,24 @@ func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
 	if len(plan.pages) != 3 {
 		t.Fatalf("fixture community plan has %d page(s), want 3 (homepage/about/faq)", len(plan.pages))
 	}
-	if len(reqs) != 5*len(plan.pages) {
-		t.Fatalf("got %d requests, want %d (list+create+PUT+publish+PATCH per page, in plan order)",
-			len(reqs), 5*len(plan.pages))
+	// Split the wire log: page-list GETs (the recovery slug walks + the
+	// homepage entry's §5.1 foreign-homepage pre-check) vs the MUTATION
+	// sequence, whose per-page order create→PUT→publish→PATCH is the contract.
+	var lists, muts []pagesReq
+	for _, rq := range reqs {
+		if rq.method == http.MethodGet && strings.HasSuffix(rq.path, "/hubs/hub_1/pages") {
+			lists = append(lists, rq)
+			continue
+		}
+		muts = append(muts, rq)
+	}
+	if len(lists) != len(plan.pages)+1 {
+		t.Errorf("got %d page-list GETs, want %d (one recovery slug walk per page + the homepage pre-check)",
+			len(lists), len(plan.pages)+1)
+	}
+	if len(muts) != 4*len(plan.pages) {
+		t.Fatalf("got %d mutating requests, want %d (create+PUT+publish+PATCH per page, in plan order)",
+			len(muts), 4*len(plan.pages))
 	}
 	wantApp := catalog.ApplicationID("hub_1", "community")
 	// Literal title spot-checks (beyond the ref-derived compare below): the
@@ -1034,13 +1050,8 @@ func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
 	for i := range plan.pages {
 		pp := plan.pages[i]
 		pageID := "pg_" + pp.ref.Slug
-		list, create, put, publish, patch := reqs[i*5], reqs[i*5+1], reqs[i*5+2], reqs[i*5+3], reqs[i*5+4]
+		create, put, publish, patch := muts[i*4], muts[i*4+1], muts[i*4+2], muts[i*4+3]
 		wantDV := i + 1
-
-		// (0) Existence check first — the exhaustive page list.
-		if list.method != http.MethodGet || !strings.HasSuffix(list.path, "/hubs/hub_1/pages") {
-			t.Errorf("page %q req 1 = %s %s, want GET .../hubs/hub_1/pages", pp.ref.Slug, list.method, list.path)
-		}
 
 		// (1) Create: identity from the ref + interpolated title + ONLY the marker in meta.
 		if create.method != http.MethodPost || !strings.HasSuffix(create.path, "/hubs/hub_1/pages") {
@@ -1049,6 +1060,9 @@ func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
 		attrs := decodeHubAttrs(t, create.body)
 		if attrs["title"] != pp.ref.Title {
 			t.Errorf("page %q title = %v, want %q (interpolated ref title)", pp.ref.Slug, attrs["title"], pp.ref.Title)
+		}
+		if title, _ := attrs["title"].(string); strings.Contains(title, "{{") {
+			t.Errorf("page %q created title %q carries a residual token — titles must be interpolated at create", pp.ref.Slug, title)
 		}
 		if want, pinned := wantTitles[pp.ref.Slug]; pinned && attrs["title"] != want {
 			t.Errorf("page %q title = %v, want exactly %q", pp.ref.Slug, attrs["title"], want)
@@ -1145,86 +1159,12 @@ func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
 	}
 }
 
-// TestStepPages_ExistingSlugConflicts: Task 7 is fail-safe — a page already
-// at a manifest slug ERRORS (ExitUsage, naming the slug) and ABORTS the loop:
-// nothing is created/PUT/published/PATCHed for the conflicting page, and no
-// request at all fires after the error. The homepage precedes "about" in the
-// community plan, so its full apply is expected; "faq" (after the conflict) is
-// never even looked up. Task 8 replaces this error with the decideRecovery
-// dispatch.
-func TestStepPages_ExistingSlugConflicts(t *testing.T) {
-	var mu sync.Mutex
-	var createdSlugs []string
-	var lists, puts, publishes, patches int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/vnd.api+json")
-		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pages"): // "about" already exists on the hub
-			mu.Lock()
-			lists++
-			mu.Unlock()
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[{"id":"pg_conflict","type":"pages","attributes":{"slug":"about"}}]}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pages"):
-			body, _ := io.ReadAll(r.Body)
-			slug, _ := decodeHubAttrs(t, body)["slug"].(string)
-			mu.Lock()
-			createdSlugs = append(createdSlugs, slug)
-			mu.Unlock()
-			w.WriteHeader(http.StatusCreated)
-			_, _ = fmt.Fprintf(w, `{"data":{"id":"pg_%s","type":"pages","attributes":{"slug":%q}}}`, slug, slug)
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/tree"):
-			mu.Lock()
-			puts++
-			mu.Unlock()
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/publish"):
-			mu.Lock()
-			publishes++
-			mu.Unlock()
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"id":"pp_1","type":"page-publishes","attributes":{}}}`))
-		case r.Method == http.MethodPatch:
-			mu.Lock()
-			patches++
-			mu.Unlock()
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"id":"pg_x","type":"pages","attributes":{}}}`))
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[]}`))
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	cat, ht, plan := scaffoldFixture(t)
-	sc.cat, sc.hubTmpl, sc.pagePlan, sc.hubName = cat, ht, plan, "Acme"
-
-	err := stepPages(sc, &sc.hubTmpl)
-	if err == nil {
-		t.Fatal("stepPages must ERROR when a manifest slug already exists on the hub (Task 7 is fail-safe)")
-	}
-	if errs.CodeOf(err) != errs.ExitUsage {
-		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
-	}
-	if !strings.Contains(err.Error(), `"about"`) {
-		t.Errorf("conflict error must name the conflicting slug; err=%v", err)
-	}
-	// The homepage (before "about" in plan order) applied fully; NOTHING was
-	// written for "about", and the loop aborted before "faq" was even listed.
-	if len(createdSlugs) != 1 || createdSlugs[0] != "homepage" {
-		t.Errorf("created slugs = %v, want only [homepage] (fail-fast: no create for about/faq)", createdSlugs)
-	}
-	if puts != 1 || publishes != 1 || patches != 1 {
-		t.Errorf("got %d PUT / %d publish / %d PATCH, want 1/1/1 (homepage only — no writes after the conflict)",
-			puts, publishes, patches)
-	}
-	if lists != 2 {
-		t.Errorf("got %d page-list GETs, want 2 (homepage + about; the error aborts before faq)", lists)
-	}
-}
+// (TestStepPages_ExistingSlugConflicts — Task 7's fail-safe "any existing page
+// at a manifest slug is a conflict" — was superseded by the §5.1 recovery
+// dispatch (MIO-2672 Task 8): an unmarked page at a slug is now the
+// foreign-page row of decideRecovery, pinned by
+// TestStepPages_ForeignSlugConflict in hubs_scaffold_pages_test.go alongside
+// the other per-boundary rows.)
 
 // TestStepPages_InterpolationCapAtApply: the FINAL interpolation (post-create
 // vars) enforces the §4.3 post-substitution caps — a leaf value pushed over
@@ -1254,13 +1194,13 @@ func TestStepPages_InterpolationCapAtApply(t *testing.T) {
 	}
 }
 
-// TestHomepageDraftVersion_404IsFirstSetSentinel pins the Task-8-bound
-// tree-get helper (homepageDraftVersion): a draft-less page's tree-get 404 is
+// TestPageDraftVersion_404IsFirstSetSentinel pins the recovery-snapshot
+// tree-get helper (pageDraftVersion): a draft-less page's tree-get 404 is
 // tolerated as draft_version 0 (the first-set sentinel) and a real
-// draft_version is read off the author-draft query. (The resume-mode
-// stepHomepage tests that exercised this end-to-end were superseded — resume
-// semantics return with decideRecovery in Task 8, which reuses this helper.)
-func TestHomepageDraftVersion_404IsFirstSetSentinel(t *testing.T) {
+// draft_version is read off the author-draft query. The §5.1 recovery
+// decision (decideRecovery, MIO-2672 Task 8) keys resumeFull-vs-conflict on
+// exactly this value.
+func TestPageDraftVersion_404IsFirstSetSentinel(t *testing.T) {
 	var query string
 	noDraft := true
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1277,7 +1217,7 @@ func TestHomepageDraftVersion_404IsFirstSetSentinel(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	dv, err := sc.homepageDraftVersion("page_x")
+	dv, err := sc.pageDraftVersion("page_x")
 	if err != nil || dv != 0 {
 		t.Errorf("404 tree-get: got (%d, %v), want (0, nil) — the first-set sentinel", dv, err)
 	}
@@ -1285,18 +1225,19 @@ func TestHomepageDraftVersion_404IsFirstSetSentinel(t *testing.T) {
 		t.Errorf("tree-get query = %q, want the author-draft query (audience=author)", query)
 	}
 	noDraft = false
-	if dv, err = sc.homepageDraftVersion("page_x"); err != nil || dv != 3 {
+	if dv, err = sc.pageDraftVersion("page_x"); err != nil || dv != 3 {
 		t.Errorf("existing draft: got (%d, %v), want (3, nil)", dv, err)
 	}
 }
 
 // (TestStepHomepage_CreatesPageThenSetsTreeWithIfMatch0 was superseded by
 // TestStepPages_AppliesAllPagesWithProvenance — the same create → tree PUT →
-// publish contract, now pinned per page with provenance markers.
-// TestStepHomepage_ResumeReusesExistingPageAndTreeGetsDraftVersion and
-// TestStepHomepage_ResumeTreeGet404FallsBackToIfMatch0 were DELETED with
-// stepHomepage: resume semantics return with decideRecovery in Task 8, whose
-// tests must re-add the equivalent reuse/OCC coverage.)
+// publish contract, now pinned per page with provenance markers. The
+// resume/OCC coverage the deleted TestStepHomepage_Resume* tests held lives in
+// the Task-8 §5.1 recovery tests (hubs_scaffold_pages_test.go):
+// TestStepPages_ResumeAfterCreateBeforeDraft pins page reuse + the If-Match 0
+// first-set sentinel, and the TestStepPages_Conflict*/Noop* boundary tests pin
+// every other recovery row.)
 
 // TestBuildScaffoldPlan_UnknownPageTemplateErrors: a pages[] ref whose
 // pageTemplate is missing from the catalog is ExitUsage from buildScaffoldPlan

@@ -105,6 +105,21 @@ type scaffoldContext struct {
 
 	dryRun bool
 	plan   *[]planEntry // collected when dryRun
+
+	// noteW receives operator-facing progress notes from a REAL run (the §5.1
+	// recovery skips: resume-onto-existing, already-applied no-op). Dry-run
+	// decisions never reach it — recovery is decided at apply time, so the plan
+	// cannot know them. runHubsScaffold points it at the command's stderr; a
+	// nil noteW (unit-driven contexts) discards.
+	noteW io.Writer
+}
+
+// notef writes one operator-facing note line (no-op when noteW is unset).
+func (sc *scaffoldContext) notef(format string, args ...any) {
+	if sc.noteW == nil {
+		return
+	}
+	fmt.Fprintf(sc.noteW, format+"\n", args...)
 }
 
 // planEntry is one line of the --dry-run plan: the step name and a human
@@ -844,6 +859,7 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 		catalogOverride:      strings.TrimSpace(catalogOverride),
 		dryRun:               dryRun,
 		plan:                 &plan,
+		noteW:                cmd.ErrOrStderr(),
 	}
 
 	// 3. Resume/target mode: an EXPLICIT --hub applies onto an existing hub. The
