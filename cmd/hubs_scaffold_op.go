@@ -96,7 +96,7 @@ func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTempl
 	if perr := rebuildScaffoldPlan(sc, cat, src, req.HubTemplateID, sc.hubName, sc.hubSlug); perr != nil {
 		return false, perr
 	}
-	sc.cat, sc.catalogSource = cat, src
+	sc.cat = cat
 
 	req.CatalogDigest = cat.Meta.Digest
 	res, err := sc.cl.ScaffoldFromTemplate(sc.ctx, sc.teamID, sc.hubID, req)

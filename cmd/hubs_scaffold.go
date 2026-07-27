@@ -98,7 +98,6 @@ type scaffoldContext struct {
 	// instantiated (not-yet-interpolated) page plan. catalogOverride carries the
 	// --catalog escape-hatch path ("" = resolve live from the target backend).
 	cat             *catalog.Catalog
-	catalogSource   catalog.Source
 	hubTmpl         catalog.HubTemplate
 	pagePlan        *scaffoldPlan
 	catalogOverride string

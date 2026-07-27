@@ -122,9 +122,9 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	//   - a --catalog override skips the probe: an override catalog can never
 	//     match the backend's pin digest, so the op would always 409 — the
 	//     escape hatch is inherently client-side;
-	//   - a hand-built context without a resolved catalog (sc.cat nil) has no
-	//     digest to send, so it applies client-side (same defense as the
-	//     empty-plan guard above; scaffoldPreflight always sets sc.cat).
+	//   - the sc.cat nil-check keeps hand-built step-test contexts (which have
+	//     no digest to send) out of the probe; production always has sc.cat —
+	//     scaffoldPreflight sets it, and the client-side markers require it.
 	if !sc.dryRun && sc.catalogOverride == "" && sc.cat != nil {
 		done, err := applyViaServerOp(sc)
 		if err != nil {

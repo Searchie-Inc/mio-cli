@@ -163,7 +163,7 @@ func rebuildScaffoldPlan(sc *scaffoldContext, cat *catalog.Catalog, src catalog.
 //  5. the instantiated page plan + a preliminary interpolation of the whole
 //     plan.
 //
-// On success it leaves sc.cat / sc.catalogSource / sc.hubTmpl / sc.pagePlan
+// On success it leaves sc.cat / sc.hubTmpl / sc.pagePlan
 // populated for the apply pipeline.
 func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID string) error {
 	// 1. Name bound (VARCHAR(255) on the hub title column): fail before any HTTP.
@@ -179,7 +179,7 @@ func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID strin
 		return errs.Wrap(errs.ExitGeneric, err)
 	}
 	printCatalogProvenance(cmd, src, cat)
-	sc.cat, sc.catalogSource = cat, src
+	sc.cat = cat
 
 	// 3-5. Template existence + invariants + page plan + a PRELIMINARY
 	// interpolation of the whole plan. Preliminary vars: resume mode already
