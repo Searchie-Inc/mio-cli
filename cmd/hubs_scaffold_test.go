@@ -100,10 +100,12 @@ func TestScaffold_DryRunEmitsPlanNoMutatingHTTP(t *testing.T) {
 		t.Errorf("dry-run plan must record one `pages` entry per page (community has 3), got %d; stdout:\n%s",
 			pagesLines, res.Stdout)
 	}
-	// The per-page detail names the FULL mutation set (Task-8 review item: the
-	// old "create page" wording under-reported the tree PUT/publish/marker).
-	if !strings.Contains(res.Stdout, "create + set tree + publish + mark applied") {
-		t.Errorf("pages plan detail must name the full per-page mutation set; stdout:\n%s", res.Stdout)
+	// The per-page detail hedges the apply method (Task 9: the op probe is
+	// decided at APPLY time, so the plan cannot promise either branch) and
+	// names the full client-side mutation set + the §5.1 re-run caveat.
+	if !strings.Contains(res.Stdout,
+		"apply via backend op if available, else create + set tree + publish + mark applied; re-runs follow §5.1 recovery") {
+		t.Errorf("pages plan detail must hedge the apply method and name the recovery caveat; stdout:\n%s", res.Stdout)
 	}
 }
 
@@ -985,6 +987,13 @@ func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
 	var reqs []pagesReq
 	putCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The W2b op probe (Task 9) is answered 404 BEFORE recording: this test
+		// pins the CLIENT-SIDE mutation sequence, and the probe is not part of it
+		// (the op-path wire contract lives in hubs_scaffold_op_test.go).
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/scaffold-from-template") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		reqs = append(reqs, pagesReq{r.Method, r.URL.Path, r.Header.Get("If-Match"), body})
@@ -1440,6 +1449,10 @@ func fullScaffoldServerFor(t *testing.T, hubID string, isPrivate bool) (*httptes
 		case r.Method == http.MethodGet: // any other GET is a collection list — empty on a fresh hub
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":[]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/scaffold-from-template"):
+			// W2b op probe (Task 9): absent on this backend — the full-run tests
+			// pin the CLIENT-SIDE pipeline, so the probe 404s and falls back.
+			w.WriteHeader(http.StatusNotFound)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/hubs"): // hub create
 			w.WriteHeader(http.StatusCreated)
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"hubs","attributes":{"slug":"my-community","is_private":true}}}`, hubID)

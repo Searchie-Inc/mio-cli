@@ -67,6 +67,10 @@ func newHomepageBackend(t *testing.T) (*httptest.Server, *homepageBackend) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		path := r.URL.Path
 		switch {
+		// W2b op probe (MIO-2672 Task 9): absent here — W0 guards the
+		// CLIENT-SIDE publish behaviour, so the probe 404s and falls back.
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/scaffold-from-template"):
+			w.WriteHeader(http.StatusNotFound)
 		// (1) Resolve read: GET …/pages/{slug}?resolve=true → resolved published tree.
 		// Slug-addressed and checked FIRST: only the documented second call of the
 		// read flow matches; a resolve read against any other path (wrong slug,

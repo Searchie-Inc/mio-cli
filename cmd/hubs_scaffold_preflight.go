@@ -102,6 +102,56 @@ func errNoHubTemplates(cat *catalog.Catalog, src catalog.Source, catalogFlagHint
 		src, cat.Meta.CatalogVersion, cat.Meta.Revision, hint)
 }
 
+// scaffoldResolveOptions builds the ResolveOptions EVERY mutating scaffold
+// resolve shares — the preflight and the 409-refetch in applyViaServerOp
+// (hubs_scaffold_op.go) construct them from THIS one place, so the two shapes
+// cannot drift: same Mutating fail-closed semantics, same origin-scoped cache
+// dir, same override/fetcher exclusivity (--catalog is exclusive, so no
+// catalog GET may fire beside it). warnf is the only per-site input (the
+// preflight has a cobra stderr; the op retry only has sc.notef).
+func scaffoldResolveOptions(sc *scaffoldContext, warnf func(string, ...any)) catalog.ResolveOptions {
+	opts := catalog.ResolveOptions{
+		OverrideFile: sc.catalogOverride,
+		Mutating:     true,
+		CacheDir:     catalogCacheDirFor(sc.cl.BaseURL()),
+		Warnf:        warnf,
+	}
+	if sc.catalogOverride == "" {
+		opts.Fetcher = catalogFetcher{c: sc.cl}
+	}
+	return opts
+}
+
+// scaffoldPlanFromCatalog is the preflight TAIL (steps 3-5 below): source
+// templateID from cat — existence with the available ids, or the
+// no-hubTemplates pin hint — check its invariants against the SAME catalog,
+// instantiate the page plan, and validate its interpolation with (hubName,
+// hubSlug). On success sc.hubTmpl + sc.pagePlan are updated. Shared by
+// scaffoldPreflight (PRELIMINARY vars) and the 409-refetch retry in
+// applyViaServerOp (FINAL vars, known post-create) so the re-resolve reruns
+// exactly the preflight's checks — one call, never a copy.
+func scaffoldPlanFromCatalog(sc *scaffoldContext, cat *catalog.Catalog, src catalog.Source, templateID, hubName, hubSlug string) error {
+	ht, ok := cat.HubTemplateByID(templateID)
+	if !ok {
+		if len(cat.HubTemplates) == 0 {
+			return errNoHubTemplates(cat, src, true)
+		}
+		return errs.New(errs.ExitUsage,
+			"hub template %q is not in the catalog — available: %s", templateID, strings.Join(cat.HubTemplateIDs(), ", "))
+	}
+	if verr := ht.Validate(cat); verr != nil {
+		return errs.Wrap(errs.ExitUsage, verr)
+	}
+	sc.hubTmpl = ht
+
+	plan, perr := buildScaffoldPlan(cat, ht)
+	if perr != nil {
+		return perr
+	}
+	sc.pagePlan = plan
+	return validatePlanInterpolation(ht, plan, hubName, hubSlug)
+}
+
 // scaffoldPreflight runs every write-free check, in cheapest-first order:
 //
 //  1. the --name 255-code-point bound (no HTTP before this);
@@ -123,54 +173,22 @@ func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID strin
 
 	// 2. Resolve the catalog. Mutating: this resolve drives writes, so it fails
 	// closed — no stale-cache or vendored fallback — and a digest-mismatched
-	// --catalog override is rejected. The Fetcher is wired ONLY when no override
-	// is given: --catalog is exclusive, so no catalog GET may fire beside it.
-	opts := catalog.ResolveOptions{
-		OverrideFile: sc.catalogOverride,
-		Mutating:     true,
-		CacheDir:     catalogCacheDirFor(sc.cl.BaseURL()),
-		Warnf:        catalogWarnf(cmd),
-	}
-	if sc.catalogOverride == "" {
-		opts.Fetcher = catalogFetcher{c: sc.cl}
-	}
-	cat, src, err := catalog.Resolve(sc.ctx, opts)
+	// --catalog override is rejected (see scaffoldResolveOptions).
+	cat, src, err := catalog.Resolve(sc.ctx, scaffoldResolveOptions(sc, catalogWarnf(cmd)))
 	if err != nil {
 		return errs.Wrap(errs.ExitGeneric, err)
 	}
 	printCatalogProvenance(cmd, src, cat)
 	sc.cat, sc.catalogSource = cat, src
 
-	// 3. Hub-template existence.
-	ht, ok := cat.HubTemplateByID(templateID)
-	if !ok {
-		if len(cat.HubTemplates) == 0 {
-			return errNoHubTemplates(cat, src, true)
-		}
-		return errs.New(errs.ExitUsage,
-			"hub template %q is not in the catalog — available: %s", templateID, strings.Join(cat.HubTemplateIDs(), ", "))
-	}
-
-	// 4. Hub-template invariants, against the SAME catalog the pages will be
-	// instantiated from.
-	if verr := ht.Validate(cat); verr != nil {
-		return errs.Wrap(errs.ExitUsage, verr)
-	}
-	sc.hubTmpl = ht
-
-	// 5. Instantiate the page plan once, then preliminarily interpolate the whole
-	// plan. Preliminary vars: resume mode already holds the hub's ACTUAL
-	// name/slug (fetched during resolution); create mode uses the --name/--slug
-	// intent. These results are validation-only — the pages stage re-interpolates
-	// with the FINAL post-create values.
-	plan, perr := buildScaffoldPlan(cat, ht)
-	if perr != nil {
-		return perr
-	}
-	sc.pagePlan = plan
+	// 3-5. Template existence + invariants + page plan + a PRELIMINARY
+	// interpolation of the whole plan. Preliminary vars: resume mode already
+	// holds the hub's ACTUAL name/slug (fetched during resolution); create mode
+	// uses the --name/--slug intent. These results are validation-only — the
+	// pages stage re-interpolates with the FINAL post-create values.
 	prelimName, prelimSlug := sc.nameOverride, sc.slugOverride
 	if sc.hubID != "" {
 		prelimName, prelimSlug = sc.hubName, sc.hubSlug
 	}
-	return validatePlanInterpolation(ht, sc.pagePlan, prelimName, prelimSlug)
+	return scaffoldPlanFromCatalog(sc, cat, src, templateID, prelimName, prelimSlug)
 }

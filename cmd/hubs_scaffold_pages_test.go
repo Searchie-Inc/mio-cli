@@ -11,6 +11,7 @@ package cmd
 // the supersession note in hubs_scaffold_test.go).
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -87,6 +88,14 @@ func TestProvenanceMarkerFields_TolerantGarbage(t *testing.T) {
 // draftVers 404s = no draft ever written). Every mutating request is recorded
 // so a test can assert exactly which pages were written — the §2.2
 // never-overwrite guarantee is a claim about ABSENT requests.
+//
+// The W2b op probe (MIO-2672 Task 9) is scripted separately: op POSTs are
+// answered by opHandler (nil → 404, the op-absent default every pre-Task-9
+// boundary test relies on to exercise the client-side path) and recorded in
+// opPosts/opBodies/opIdemKeys — NOT in mutations, which stays a count of
+// page-level writes only. Catalog GETs (the 409-refetch) serve catalogBody
+// (nil → 404, failing a Mutating resolve loudly). events logs the op/catalog
+// interleaving so a test can assert refetch-then-retry ordering.
 type recoveryBackend struct {
 	mu        sync.Mutex
 	pages     []map[string]any
@@ -99,7 +108,16 @@ type recoveryBackend struct {
 	putSeq       int                       // draft_version minted per PUT: 1, 2, 3…
 	pubIfMatch   map[string]string         // pageID → publish If-Match
 	patched      map[string]map[string]any // pageID → PATCH body attrs
-	mutations    int                       // every POST/PUT/PATCH
+	mutations    int                       // every page-level POST/PUT/PATCH (op probes excluded)
+
+	// W2b op-probe scripting + recording (Task 9). Configure before driving.
+	opHandler   func(w http.ResponseWriter, n int) // nth (1-based) op POST; nil → 404
+	opPosts     int
+	opBodies    []map[string]any // per-POST decoded data.attributes
+	opIdemKeys  []string         // per-POST Idempotency-Key header
+	catalogBody []byte           // served on GET …/page-builder/catalog; nil → 404
+	catalogGETs int
+	events      []string // ordered "op" / "catalog" log
 }
 
 // pathPageID returns the {id} segment of …/pages/{id}[/tree|/publish].
@@ -129,6 +147,31 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		path := r.URL.Path
 		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/scaffold-from-template"): // W2b op probe
+			be.opPosts++
+			be.events = append(be.events, "op")
+			body, _ := io.ReadAll(r.Body)
+			be.opBodies = append(be.opBodies, decodeHubAttrs(t, body))
+			be.opIdemKeys = append(be.opIdemKeys, r.Header.Get("Idempotency-Key"))
+			if be.opHandler == nil {
+				// Default: the op is ABSENT (dormant flag / older backend) — the
+				// probe 404s and stepPages falls back to the client-side loop the
+				// boundary tests exercise.
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"Not Found"}]}`))
+				return
+			}
+			be.opHandler(w, be.opPosts)
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/page-builder/catalog"): // 409-refetch resolve
+			be.catalogGETs++
+			be.events = append(be.events, "catalog")
+			if be.catalogBody == nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(be.catalogBody)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/pages"): // recovery slug walk / homepage pre-check
 			be.listCalls++
 			w.WriteHeader(http.StatusOK)
@@ -205,12 +248,33 @@ func ourMarker(state string) map[string]any {
 
 // driveStepPages runs stepPages over the full community fixture plan against
 // srvURL and returns the context (for homepage id/dv assertions) + the error.
+// sc.noteW is a *bytes.Buffer so tests can pin the operator notes (read it
+// back via stepNotes).
 func driveStepPages(t *testing.T, srvURL string) (*scaffoldContext, error) {
+	return driveStepPagesCfg(t, srvURL, nil)
+}
+
+// driveStepPagesCfg is driveStepPages with a pre-run context hook (op tests
+// set catalogOverride etc. before the step fires).
+func driveStepPagesCfg(t *testing.T, srvURL string, cfg func(*scaffoldContext)) (*scaffoldContext, error) {
 	t.Helper()
 	sc := newStepSC(client.New(srvURL, "k"), "hub_1", "acme")
 	cat, ht, plan := scaffoldFixture(t)
 	sc.cat, sc.hubTmpl, sc.pagePlan, sc.hubName = cat, ht, plan, "Acme"
+	sc.noteW = &bytes.Buffer{}
+	if cfg != nil {
+		cfg(sc)
+	}
 	return sc, stepPages(sc, &sc.hubTmpl)
+}
+
+// stepNotes returns the operator notes a driveStepPages run wrote.
+func stepNotes(sc *scaffoldContext) string {
+	b, _ := sc.noteW.(*bytes.Buffer)
+	if b == nil {
+		return ""
+	}
+	return b.String()
 }
 
 // ─── per-boundary rows ────────────────────────────────────────────────────────
@@ -250,6 +314,11 @@ func TestStepPages_ResumeAfterCreateBeforeDraft(t *testing.T) {
 	}
 	if sc.homePageID != "pg_half" || sc.homeDraftVersion != 1 {
 		t.Errorf("context homepage = {%q %d}, want {pg_half 1} (the reused page)", sc.homePageID, sc.homeDraftVersion)
+	}
+	// Task-8 review minor: the resume is an OPERATOR-FACING note, pinned here so
+	// dropping the notef silently is a test failure, not a UX regression.
+	if notes := stepNotes(sc); !strings.Contains(notes, "resuming") {
+		t.Errorf("resume must emit an operator note containing %q; notes=%q", "resuming", notes)
 	}
 }
 
@@ -293,12 +362,16 @@ func TestStepPages_NoopWhenAppliedUntouched(t *testing.T) {
 		[]map[string]any{seededPage("pg_done", "homepage", true, marker)},
 		map[string]int{"pg_done": 3})
 
-	_, err := driveStepPages(t, srv.URL)
+	sc, err := driveStepPages(t, srv.URL)
 	if err != nil {
 		t.Fatalf("an applied+untouched page must be a clean no-op: %v", err)
 	}
 	if !reflect.DeepEqual(be.createdSlugs, []string{"about", "faq"}) {
 		t.Errorf("created slugs = %v, want [about faq] — the loop must CONTINUE past the no-op page", be.createdSlugs)
+	}
+	// Task-8 review minor: the skip is an OPERATOR-FACING note, pinned here.
+	if notes := stepNotes(sc); !strings.Contains(notes, "already applied") {
+		t.Errorf("no-op must emit an operator note containing %q; notes=%q", "already applied", notes)
 	}
 	if _, put := be.putIfMatch["pg_done"]; put {
 		t.Errorf("no tree PUT may touch the untouched applied page pg_done")

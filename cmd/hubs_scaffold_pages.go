@@ -5,8 +5,9 @@ package cmd
 // of the hub template is applied CLIENT-SIDE: created with a §5.1 provenance
 // marker ("pending"), its finally-interpolated draft tree PUT + published, and
 // the marker flipped to "applied" (with the applied tree digest + draft
-// version). This is the client-side FALLBACK path's core — the W2b backend-op
-// probe (Task 9) will prefer the server-side op where it exists.
+// version). This is the client-side FALLBACK branch — stepPages first probes
+// the W2b backend op (Task 9, hubs_scaffold_op.go) and runs this loop when
+// the op is absent (404) or a --catalog override is in play.
 //
 // Crash RECOVERY (MIO-2672 Task 8, spec §5.1): a re-run onto a half-applied
 // hub reads back the provenance snapshot of any existing page at a manifest
@@ -112,13 +113,36 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 		// so the step is a clean no-op, never a panic.
 		return sc.step("pages", "no pages in template", func() error { return nil })
 	}
+
+	// The ONLY runtime branch (spec §0): try the backend's one-step
+	// scaffold-from-template op; 404 → apply client-side. BOTH branches produce
+	// a real hub — there is no "backend behind" error for a missing op. Guards:
+	//   - dry-run never probes (the op POST is MUTATING; the plan detail below
+	//     hedges the apply method instead);
+	//   - a --catalog override skips the probe: an override catalog can never
+	//     match the backend's pin digest, so the op would always 409 — the
+	//     escape hatch is inherently client-side;
+	//   - a hand-built context without a resolved catalog (sc.cat nil) has no
+	//     digest to send, so it applies client-side (same defense as the
+	//     empty-plan guard above; scaffoldPreflight always sets sc.cat).
+	if !sc.dryRun && sc.catalogOverride == "" && sc.cat != nil {
+		done, err := applyViaServerOp(sc)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+		// Fall through: op absent (404) — client-side apply.
+	}
+
 	for i := range sc.pagePlan.pages {
 		pp := sc.pagePlan.pages[i]
 		home := ""
 		if pp.ref.IsHomepage {
 			home = ", homepage"
 		}
-		detail := fmt.Sprintf("page %q: create + set tree + publish + mark applied (template %s%s)",
+		detail := fmt.Sprintf("page %q: apply via backend op if available, else create + set tree + publish + mark applied; re-runs follow §5.1 recovery (template %s%s)",
 			pp.ref.Slug, pp.ref.PageTemplate, home)
 		if err := sc.step("pages", detail, func() error { return applyPageClientSide(sc, pp) }); err != nil {
 			// Every per-page failure names its page EXACTLY ONCE: the messages
