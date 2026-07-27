@@ -184,11 +184,15 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 	case actionCreate:
 		// §5.1 homepage hazard: create_page(is_homepage=true) CLEARS any
 		// existing homepage server-side, so before creating the IsHomepage
-		// entry check the WHOLE hub for an is_homepage page. A foreign one
-		// (no/other marker) is a conflict BEFORE the create — never risk
-		// clearing it. One carrying OUR marker is governed by the slug row
-		// above (our homepage lives at the manifest slug by construction), so
-		// it never reaches this create path.
+		// entry check the WHOLE hub for an is_homepage page. ANY homepage
+		// found here is a conflict, unconditionally: the ours-at-manifest-slug
+		// case is handled by the slug row above (resume/noop/conflict) and
+		// never reaches this create arm, so whatever the pre-check finds is
+		// either foreign or ours at an UNEXPECTED slug (a user slug rename or
+		// a catalog-revision slug change — ApplicationID is hub+template only,
+		// so a marker match does not prove the page is where this run expects
+		// it). Creating would clear it and mint a duplicate; the marker is
+		// read only to enrich the reason.
 		if pp.ref.IsHomepage {
 			hres, hfound, herr := sc.findHubPage(func(r client.Resource) bool {
 				isHome, _ := r.Attributes["is_homepage"].(bool)
@@ -198,11 +202,13 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 				return herr
 			}
 			if hfound {
-				if hApp, _, _ := provenanceMarkerFields(hres.Attributes); hApp != ourApp {
-					return errs.New(errs.ExitUsage,
-						"existing homepage %s is not ours; refusing to create a new homepage (the create would clear it server-side) — inspect it or re-run with --hub %s after resolving",
-						hres.ID, sc.hubID)
+				reason := fmt.Sprintf("existing homepage %s is not ours", hres.ID)
+				if hApp, _, _ := provenanceMarkerFields(hres.Attributes); hApp == ourApp {
+					reason = fmt.Sprintf("existing homepage %s carries our marker at an unexpected slug (a crashed run or a slug rename)", hres.ID)
 				}
+				return errs.New(errs.ExitUsage,
+					"%s; refusing to create a new homepage (the create would clear it server-side) — inspect it or re-run with --hub %s after resolving",
+					reason, sc.hubID)
 			}
 		}
 

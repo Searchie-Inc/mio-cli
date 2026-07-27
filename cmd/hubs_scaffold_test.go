@@ -100,6 +100,11 @@ func TestScaffold_DryRunEmitsPlanNoMutatingHTTP(t *testing.T) {
 		t.Errorf("dry-run plan must record one `pages` entry per page (community has 3), got %d; stdout:\n%s",
 			pagesLines, res.Stdout)
 	}
+	// The per-page detail names the FULL mutation set (Task-8 review item: the
+	// old "create page" wording under-reported the tree PUT/publish/marker).
+	if !strings.Contains(res.Stdout, "create + set tree + publish + mark applied") {
+		t.Errorf("pages plan detail must name the full per-page mutation set; stdout:\n%s", res.Stdout)
+	}
 }
 
 // TestScaffold_ResumeGetsHubForSlug: resume mode (--hub) GETs the hub and

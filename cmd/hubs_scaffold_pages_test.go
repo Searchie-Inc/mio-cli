@@ -245,6 +245,9 @@ func TestStepPages_ResumeAfterCreateBeforeDraft(t *testing.T) {
 	if tp["provenanceState"] != "applied" {
 		t.Errorf("resumed marker PATCH provenanceState = %v, want applied; patch=%v", tp["provenanceState"], be.patched["pg_half"])
 	}
+	if dv, ok := attrInt(tp["appliedDraftVersion"]); !ok || dv != 1 {
+		t.Errorf("resumed marker PATCH appliedDraftVersion = %v, want 1 (the PUT-returned draft_version)", tp["appliedDraftVersion"])
+	}
 	if sc.homePageID != "pg_half" || sc.homeDraftVersion != 1 {
 		t.Errorf("context homepage = {%q %d}, want {pg_half 1} (the reused page)", sc.homePageID, sc.homeDraftVersion)
 	}
@@ -367,27 +370,46 @@ func TestStepPages_ForeignSlugConflict(t *testing.T) {
 }
 
 // TestStepPages_ForeignHomepageBlocksCreate: the manifest homepage slug is
-// FREE, but the hub already has a homepage at another slug without our marker.
-// create_page(is_homepage=true) would CLEAR that homepage server-side, so the
-// §5.1 pre-check conflicts BEFORE any create fires, naming the existing
-// homepage's id.
+// FREE, but the hub already has an is_homepage page at ANOTHER slug —
+// create_page(is_homepage=true) would CLEAR it server-side, so the §5.1
+// pre-check conflicts BEFORE any create fires, naming the existing homepage's
+// id. This holds UNCONDITIONALLY: a foreign/unmarked homepage, and equally one
+// carrying OUR marker at an unexpected slug (reachable via a user slug rename
+// or a catalog-revision slug change — ApplicationID is hub+template only, so a
+// marker match does not prove the page is where this run expects it).
 func TestStepPages_ForeignHomepageBlocksCreate(t *testing.T) {
-	srv, be := newRecoveryBackend(t,
-		[]map[string]any{seededPage("pg_legacy", "legacy-home", true, nil)}, // foreign homepage
-		nil)
+	cases := []struct {
+		name       string
+		id, slug   string
+		marker     map[string]any
+		wantReason string
+	}{
+		{"foreign (unmarked) homepage", "pg_legacy", "legacy-home", nil, "is not ours"},
+		{"our marker at an unexpected slug", "pg_renamed", "renamed-home", ourMarker("applied"), "unexpected slug"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, be := newRecoveryBackend(t,
+				[]map[string]any{seededPage(tc.id, tc.slug, true, tc.marker)},
+				nil)
 
-	_, err := driveStepPages(t, srv.URL)
-	if err == nil {
-		t.Fatal("stepPages must CONFLICT before creating a homepage while a foreign homepage exists")
-	}
-	if errs.CodeOf(err) != errs.ExitUsage {
-		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
-	}
-	if !strings.Contains(err.Error(), "pg_legacy") {
-		t.Errorf("error must name the existing homepage's id (pg_legacy); err=%v", err)
-	}
-	if be.mutations != 0 {
-		t.Errorf("got %d mutating request(s), want 0 — the pre-check blocks BEFORE the create", be.mutations)
+			_, err := driveStepPages(t, srv.URL)
+			if err == nil {
+				t.Fatal("stepPages must CONFLICT before creating a homepage while ANY other homepage exists")
+			}
+			if errs.CodeOf(err) != errs.ExitUsage {
+				t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
+			}
+			if !strings.Contains(err.Error(), tc.id) {
+				t.Errorf("error must name the existing homepage's id (%s); err=%v", tc.id, err)
+			}
+			if !strings.Contains(err.Error(), tc.wantReason) {
+				t.Errorf("error must carry the per-case reason %q; err=%v", tc.wantReason, err)
+			}
+			if be.mutations != 0 {
+				t.Errorf("got %d mutating request(s), want 0 — the pre-check blocks BEFORE the create", be.mutations)
+			}
+		})
 	}
 }
 
