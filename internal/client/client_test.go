@@ -264,6 +264,10 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/tags", "tags"},
 		{"/api/teams/t1/hubs/h1/pages", "pages"},
 		{"/api/teams/t1/hubs/h1/pages/pg1/sections", "sections"},
+		// W2b one-step template scaffold op (MIO-2573 §5.1): the action segment
+		// maps to "template_scaffolds" via the pages/scaffold-from-template
+		// override, not the bare "pages" collection.
+		{"/api/teams/t1/hubs/h1/pages/scaffold-from-template", "template_scaffolds"},
 		// Overrides: backend type != URL segment.
 		// All type values are snake_case per MIO-636 (backend cutover 2026-06-04).
 		{"/api/teams/t1/segments", "segment"},

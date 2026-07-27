@@ -1,0 +1,8 @@
+{
+  "output": {
+    "pages": [{ "title": "About 𝕏 Rocket 🚀 Club" }],
+    "trees": [
+      { "kind": "stack", "children": [{ "kind": "headline", "value": "Welcome to 𝕏 Rocket 🚀 Club" }] }
+    ]
+  }
+}

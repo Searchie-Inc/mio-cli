@@ -1,0 +1,13 @@
+{
+  "vars": {
+    "hub_name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "hub_slug": "a"
+  },
+  "input": {
+    "pages": [
+      {
+        "title": "{{hub_name}}"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "vars": {
+    "hub_name": "{{hub_slug}} & $1 $& \\1 ${x} \\g<0>",
+    "hub_slug": "acme"
+  },
+  "input": {
+    "trees": [
+      {
+        "kind": "text",
+        "value": "{{hub_name}}"
+      }
+    ]
+  }
+}

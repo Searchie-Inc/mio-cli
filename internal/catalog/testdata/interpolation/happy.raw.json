@@ -1,0 +1,23 @@
+{
+  "vars": { "hub_name": "Acme Club", "hub_slug": "acme-club" },
+  "input": {
+    "pages": [
+      { "title": "Welcome to {{hub_name}}", "slug": "{{hub_name}}", "pageTemplate": "page-homepage-community" }
+    ],
+    "navigation": {
+      "header": [{ "type": "url", "label": "{{hub_name}} Home", "href": "/{{hub_name}}" }],
+      "footer": [{ "type": "url", "label": "About {{hub_name}}", "href": "/about" }]
+    },
+    "trees": [
+      {
+        "kind": "stack",
+        "children": [
+          { "kind": "headline", "value": "Hello {{hub_name}} & {{hub_name}}" },
+          { "kind": "text", "value": "Slug is {{hub_slug}}." },
+          { "kind": "button", "value": "Join {{hub_name}}", "settings": { "action": { "type": "url", "value": "/{{hub_slug}}" } } },
+          { "kind": "icon", "value": "{{hub_name}}" }
+        ]
+      }
+    ]
+  }
+}

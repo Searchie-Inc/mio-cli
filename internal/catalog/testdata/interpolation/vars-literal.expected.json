@@ -1,0 +1,10 @@
+{
+  "output": {
+    "trees": [
+      {
+        "kind": "text",
+        "value": "{{hub_slug}} & $1 $& \\1 ${x} \\g<0>"
+      }
+    ]
+  }
+}

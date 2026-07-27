@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -57,9 +58,7 @@ func TestResolve_Live200_Valid_AdoptsAndCaches(t *testing.T) {
 
 func TestResolve_Live200_DigestMismatch_FallsBackToVendored(t *testing.T) {
 	dir := t.TempDir()
-	// Parses fine, but meta.digest disagrees with the recomputed digest.
-	bad := []byte(`{"meta":{"digest":"sha256:wrong"},"templates":[],"pageTemplates":[],"sectionTypes":[],"pageTypes":[]}`)
-	f := &fakeFetcher{res: FetchResult{Body: bad, ETag: `"sha256:wrong"`}}
+	f := &fakeFetcher{res: FetchResult{Body: badDigestBody(), ETag: `"sha256:wrong"`}}
 	var warned bool
 	cat, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Warnf: func(string, ...any) { warned = true }})
 	if err != nil {
@@ -217,6 +216,178 @@ func TestResolve_Live200_CachesDigestDerivedETag(t *testing.T) {
 	want := `"` + pinnedDigest + `"`
 	if string(got) != want {
 		t.Errorf("cached etag = %q, want digest-derived %q (not the server's header)", got, want)
+	}
+}
+
+// badDigestBody parses fine, but its meta.digest disagrees with the recomputed
+// digest, so digest verification must reject it.
+func badDigestBody() []byte {
+	return []byte(`{"meta":{"digest":"sha256:wrong"},"templates":[],"pageTemplates":[],"sectionTypes":[],"pageTypes":[]}`)
+}
+
+func TestResolve_Mutating_OverrideDigestMismatchFailsClosed(t *testing.T) {
+	fp := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(fp, badDigestBody(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := Resolve(context.Background(), ResolveOptions{OverrideFile: fp, Mutating: true})
+	if err == nil {
+		t.Fatal("mutating resolve accepted a digest-mismatched --catalog override")
+	}
+	if !strings.Contains(err.Error(), "a mutating command refuses a digest-mismatched catalog") {
+		t.Errorf("error = %q, want the mutating refusal message", err)
+	}
+
+	// Non-mutating keeps the existing warn-and-use behavior.
+	var warned bool
+	_, src, err := Resolve(context.Background(), ResolveOptions{OverrideFile: fp, Warnf: func(string, ...any) { warned = true }})
+	if err != nil {
+		t.Fatalf("non-mutating Resolve: %v", err)
+	}
+	if src != SourceOverride {
+		t.Errorf("source = %q, want override", src)
+	}
+	if !warned {
+		t.Error("non-mutating digest mismatch should warn")
+	}
+}
+
+func TestResolve_Mutating_LiveFetchErrorFailsNoFallback(t *testing.T) {
+	dir := t.TempDir()
+	// Warm cache: the test must prove the fallback is REFUSED, not just absent.
+	seedCache(t, dir, vendoredBytes(t), `"sha256:faae8f12a9236644b9868b75ef1d245002736228b51f2f8eefa1a43ddd7bd392"`)
+	f := &fakeFetcher{err: errors.New("network down")}
+	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Mutating: true, Warnf: func(string, ...any) {}})
+	if err == nil {
+		t.Fatalf("mutating resolve fell back to %q after a fetch error; want an error", src)
+	}
+	if !strings.Contains(err.Error(), "cannot fall back to a stale copy") {
+		t.Errorf("error = %q, want the no-stale-fallback message", err)
+	}
+}
+
+func TestResolve_Mutating_BadLiveDigestFailsNoFallback(t *testing.T) {
+	dir := t.TempDir()
+	// Warm cache: a rejected live body must NOT continue to cache/vendored.
+	seedCache(t, dir, vendoredBytes(t), `"sha256:faae8f12a9236644b9868b75ef1d245002736228b51f2f8eefa1a43ddd7bd392"`)
+	f := &fakeFetcher{res: FetchResult{Body: badDigestBody(), ETag: `"sha256:wrong"`}}
+	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Mutating: true, Warnf: func(string, ...any) {}})
+	if err == nil {
+		t.Fatalf("mutating resolve fell back to %q after a digest-rejected live body; want an error", src)
+	}
+	if !strings.Contains(err.Error(), "cannot fall back to a stale copy") {
+		t.Errorf("error = %q, want the no-stale-fallback message", err)
+	}
+}
+
+func TestResolve_Mutating_304UsesValidatedCache(t *testing.T) {
+	dir := t.TempDir()
+	seedCache(t, dir, vendoredBytes(t), `"sha256:faae8f12a9236644b9868b75ef1d245002736228b51f2f8eefa1a43ddd7bd392"`)
+	f := &fakeFetcher{res: FetchResult{NotModified: true}}
+	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Mutating: true})
+	if err != nil {
+		t.Fatalf("Resolve: %v (a 304-validated cache read is allowed under Mutating)", err)
+	}
+	if src != SourceCache {
+		t.Errorf("source = %q, want cache", src)
+	}
+}
+
+func TestResolve_Mutating_304CacheBodyMissing_Refetches(t *testing.T) {
+	dir := t.TempDir()
+	// ETag only, no body: 304 validates a cache we cannot read back, so the
+	// resolver must recover via an unconditional refetch — under Mutating too.
+	if err := os.WriteFile(filepath.Join(dir, cacheETagFile), []byte(`"stale"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &refetchFetcher{body: vendoredBytes(t)}
+	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Mutating: true, Warnf: func(string, ...any) {}})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if src != SourceLive {
+		t.Errorf("source = %q, want live (recovered via unconditional refetch)", src)
+	}
+	if f.calls != 2 {
+		t.Errorf("expected 2 fetches (conditional 304 + unconditional refetch); got %d", f.calls)
+	}
+}
+
+// failRefetchFetcher answers 304 to a conditional request and errors on the
+// unconditional refetch — a fetch failure inside the 304-recovery path.
+type failRefetchFetcher struct{ calls int }
+
+func (f *failRefetchFetcher) FetchCatalog(_ context.Context, ifNoneMatch string) (FetchResult, error) {
+	f.calls++
+	if ifNoneMatch != "" {
+		return FetchResult{NotModified: true}, nil
+	}
+	return FetchResult{}, errors.New("refetch: connection reset")
+}
+
+func TestResolve_Mutating_304RefetchError_SurfacesCause(t *testing.T) {
+	dir := t.TempDir()
+	// ETag only, no body: the 304 validates a cache we cannot read back, and the
+	// recovery refetch then fails. The error must carry the real fetch failure,
+	// not the generic no-fetcher message.
+	if err := os.WriteFile(filepath.Join(dir, cacheETagFile), []byte(`"stale"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &failRefetchFetcher{}
+	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Mutating: true, Warnf: func(string, ...any) {}})
+	if err == nil {
+		t.Fatalf("mutating resolve used %q after a failed 304 recovery; want an error", src)
+	}
+	if !strings.Contains(err.Error(), "connection reset") {
+		t.Errorf("error = %q, want the underlying refetch failure surfaced", err)
+	}
+	if strings.Contains(err.Error(), "requires a live catalog fetch or --catalog override") {
+		t.Errorf("error = %q; the generic no-fetcher message must not swallow the real cause", err)
+	}
+	if f.calls != 2 {
+		t.Errorf("expected 2 fetches (conditional 304 + failed unconditional refetch); got %d", f.calls)
+	}
+}
+
+func TestResolve_Mutating_NoFetcherNoOverrideFails(t *testing.T) {
+	_, src, err := Resolve(context.Background(), ResolveOptions{CacheDir: t.TempDir(), Mutating: true})
+	if err == nil {
+		t.Fatalf("mutating resolve used %q with no fetcher and no override; want an error", src)
+	}
+	if !strings.Contains(err.Error(), "requires a live catalog fetch or --catalog override") {
+		t.Errorf("error = %q, want the live-or-override message", err)
+	}
+}
+
+func TestCacheDirUnder_SeparatesOrigins(t *testing.T) {
+	base := filepath.Join("some", "base")
+
+	a := CacheDirUnder(base, "https://api.member.dev")
+	b := CacheDirUnder(base, "https://api.other.dev")
+	if a == b {
+		t.Errorf("distinct origins share a cache dir: %q", a)
+	}
+	if want := filepath.Join(base, "api.member.dev"); a != want {
+		t.Errorf("CacheDirUnder = %q, want %q (URL host extraction)", a, want)
+	}
+	if got, want := CacheDirUnder(base, "http://localhost:8000"), filepath.Join(base, "localhost_8000"); got != want {
+		t.Errorf("CacheDirUnder = %q, want %q (port separator sanitized)", got, want)
+	}
+	if got, want := CacheDirUnder(base, "https://API.Member.DEV"), filepath.Join(base, "api.member.dev"); got != want {
+		t.Errorf("CacheDirUnder = %q, want %q (hosts are case-insensitive; segment lowercased)", got, want)
+	}
+	if got, want := CacheDirUnder(base, "wéird stuff"), filepath.Join(base, "w_ird_stuff"); got != want {
+		t.Errorf("CacheDirUnder = %q, want %q (weird chars sanitized to _)", got, want)
+	}
+	if got := CacheDirUnder(base, ""); got != base {
+		t.Errorf("empty origin: got %q, want base %q unchanged", got, base)
+	}
+	if got := CacheDirUnder("", "https://api.member.dev"); got != "" {
+		t.Errorf("empty base: got %q, want \"\" unchanged", got)
+	}
+	if got := CacheDirForOrigin(""); got != DefaultCacheDir() {
+		t.Errorf("CacheDirForOrigin(\"\") = %q, want DefaultCacheDir() %q", got, DefaultCacheDir())
 	}
 }
 

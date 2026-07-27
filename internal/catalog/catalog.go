@@ -89,9 +89,10 @@ type Catalog struct {
 	Meta          Meta
 	PageTypes     []string
 	SectionTypes  []SectionType
-	Templates     []Template // section templates (templates[])
-	PageTemplates []Template // page templates (pageTemplates[])
-	raw           Node       // full parsed catalog (json.Number-bearing) for Digest
+	Templates     []Template    // section templates (templates[])
+	PageTemplates []Template    // page templates (pageTemplates[])
+	HubTemplates  []HubTemplate // hub templates (hubTemplates[], schema ≥2.1; empty otherwise)
+	raw           Node          // full parsed catalog (json.Number-bearing) for Digest
 }
 
 // Load parses the embedded, digest-pinned vendored catalog. Use Parse to load a
@@ -149,6 +150,13 @@ func Parse(data []byte) (*Catalog, error) {
 	for _, v := range slice(raw["pageTemplates"]) {
 		if m, ok := v.(map[string]any); ok {
 			c.PageTemplates = append(c.PageTemplates, templateFromRaw(m, true))
+		}
+	}
+	// hubTemplates[] arrived with schema 2.1; the vendored 0.3.1 catalog has no
+	// such key, so this stays an empty slice there (zero behavior change).
+	for _, v := range slice(raw["hubTemplates"]) {
+		if m, ok := v.(map[string]any); ok {
+			c.HubTemplates = append(c.HubTemplates, parseHubTemplate(m))
 		}
 	}
 	return c, nil

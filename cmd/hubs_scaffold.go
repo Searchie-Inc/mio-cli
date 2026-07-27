@@ -3,16 +3,20 @@ package cmd
 // hubs_scaffold.go — `mio hubs scaffold`, the template-driven full-experience
 // hub seeder (MIO-2543). See docs/superpowers/specs/2026-07-21-hubs-scaffold-design.md.
 //
-// This file is the ORCHESTRATOR SKELETON: the command shell, the mutable
+// This file is the ORCHESTRATOR: the command shell, the mutable
 // scaffoldContext threaded through every step, the ordered pipeline runner, and
-// the --dry-run plan. The per-step BODIES are no-ops here — Phase 4 fills each
-// step (hub/blobs/spaces/…) with the extracted attribute-builders + client
-// calls the individual `mio hubs`/`community`/`media`/`pages` commands use, so
-// the scaffold stays strictly CLI-only and never re-invokes a command's RunE.
+// the --dry-run plan. Each step body (hub/blobs/spaces/…) is fully implemented
+// from the extracted attribute-builders + client calls the individual
+// `mio hubs`/`community`/`media`/`pages` commands use, so the scaffold stays
+// strictly CLI-only and never re-invokes a command's RunE; in --dry-run a step
+// records its plan entry instead of firing HTTP (see sc.step).
 //
-// Design invariants pinned by this skeleton (hubs_scaffold_test.go):
-//   - the template is loaded + validated BEFORE any HTTP, so an unknown/invalid
-//     template exits ExitUsage without touching the network;
+// Design invariants pinned here (hubs_scaffold_test.go):
+//   - the CLI holds NO templates (MIO-2672, spec §0): the hub template comes
+//     from the LIVE catalog of the target backend, resolved + validated +
+//     preliminarily interpolated by the WRITE-FREE preflight
+//     (hubs_scaffold_preflight.go) BEFORE stepHub creates anything — an
+//     unknown/invalid template exits ExitUsage after only the catalog GET;
 //   - auth + team + (in resume mode) the target hub are resolved ONCE, up front,
 //     and shared by every step via scaffoldContext — steps 2-8 cannot build
 //     their request without the ids this resolution mints;
@@ -24,7 +28,6 @@ import (
 	"io"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +36,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
-	"github.com/Searchie-Inc/mio-cli/internal/hubtemplate"
 )
 
 // ---- context (the data-flow spine) ------------------------------------------
@@ -50,7 +52,11 @@ type scaffoldContext struct {
 	teamID string
 
 	hubID, hubSlug string
-	isPrivate      bool
+	// hubName is the hub's ACTUAL title — the {{hub_name}} interpolation value.
+	// Resume mode: from the resume GET; create mode: from the create response,
+	// falling back to nameOverride when the response omits the title.
+	hubName   string
+	isPrivate bool
 	// isPrivateKnown reports whether isPrivate was actually observed from the server
 	// (create response / resume GET / publish PATCH) rather than left at its bool
 	// zero value. The summary keys the LIVE/PRIVATE label off the REAL state
@@ -74,10 +80,11 @@ type scaffoldContext struct {
 
 	spaceIDsBySlug, defIDsBySlug, playlistIDsByKey map[string]string
 
-	// homePageID + homeDraftVersion are minted/read by the homepage step
-	// (stepHomepage: pages create → tree set → publish). The tree PUT returns the
-	// fresh draft_version into homeDraftVersion, which the publish step then uses
-	// as its If-Match OCC token (MIO-2636).
+	// homePageID + homeDraftVersion are minted by the pages step (stepPages,
+	// hubs_scaffold_pages.go) for the pages[] entry marked isHomepage: the tree
+	// PUT returns the fresh draft_version into homeDraftVersion (the If-Match
+	// OCC token its publish uses, MIO-2636), and the summary + W0 publish guard
+	// read both after the run.
 	homePageID       string
 	homeDraftVersion int
 
@@ -86,13 +93,37 @@ type scaffoldContext struct {
 	// false the publish step is a skip-with-note and the hub stays private.
 	publish bool
 
+	// Preflight state (MIO-2672, hubs_scaffold_preflight.go): the resolved live
+	// catalog + its provenance, the hub template sourced from it, and the
+	// instantiated (not-yet-interpolated) page plan. catalogOverride carries the
+	// --catalog escape-hatch path ("" = resolve live from the target backend).
+	cat             *catalog.Catalog
+	hubTmpl         catalog.HubTemplate
+	pagePlan        *scaffoldPlan
+	catalogOverride string
+
 	dryRun bool
 	plan   *[]planEntry // collected when dryRun
+
+	// noteW receives operator-facing progress notes from a REAL run (the §5.1
+	// recovery skips: resume-onto-existing, already-applied no-op). Dry-run
+	// decisions never reach it — recovery is decided at apply time, so the plan
+	// cannot know them. runHubsScaffold points it at the command's stderr; a
+	// nil noteW (unit-driven contexts) discards.
+	noteW io.Writer
 }
 
-// planEntry is one line of the --dry-run plan: the step name and an optional
-// human detail (Phase 4 fills detail with the target path + static attrs +
-// placeholder ids for resources not yet created).
+// notef writes one operator-facing note line (no-op when noteW is unset).
+func (sc *scaffoldContext) notef(format string, args ...any) {
+	if sc.noteW == nil {
+		return
+	}
+	fmt.Fprintf(sc.noteW, format+"\n", args...)
+}
+
+// planEntry is one line of the --dry-run plan: the step name and a human
+// detail (the target path + static attrs, with placeholder ids for resources
+// not yet created).
 type planEntry struct {
 	step   string
 	detail string
@@ -109,8 +140,8 @@ func (sc *scaffoldContext) recordPlan(step, detail string) {
 // step runs one pipeline stage: in dry-run it records the stage in the plan and
 // fires NO HTTP; otherwise it runs fn. The dry-run branch lives HERE (per stage)
 // — not in the runner — so a step self-annotates its own plan detail (target
-// path + static attrs + placeholder ids), which only the step body knows. Phase
-// 4 enriches the detail arg and fills fn; the runner needs no change.
+// path + static attrs + placeholder ids), which only the step body knows; the
+// runner just dispatches.
 func (sc *scaffoldContext) step(name, detail string, fn func() error) error {
 	if sc.dryRun {
 		sc.recordPlan(name, detail)
@@ -121,16 +152,15 @@ func (sc *scaffoldContext) step(name, detail string, fn func() error) error {
 
 // ---- step model + ordered pipeline ------------------------------------------
 
-// scaffoldStep is one named stage of the apply pipeline. Phase 4 fills each run
-// body; today they are no-ops so the runner + dry-run plan can be exercised.
+// scaffoldStep is one named stage of the apply pipeline: a fully-implemented
+// run body that fires real HTTP (or, in dry-run, records its plan entry).
 type scaffoldStep struct {
 	name string
-	run  func(sc *scaffoldContext, t *hubtemplate.Template) error
+	run  func(sc *scaffoldContext, t *catalog.HubTemplate) error
 }
 
 // scaffoldPipeline is the ordered apply pipeline (design §Apply pipeline). The
-// names + order are a contract the dry-run plan surfaces; the bodies are no-ops
-// until Phase 4.
+// names + order are a contract the dry-run plan surfaces.
 var scaffoldPipeline = []scaffoldStep{
 	{"hub", stepHub},
 	{"blobs", stepBlobs},
@@ -138,7 +168,7 @@ var scaffoldPipeline = []scaffoldStep{
 	{"onboarding", stepOnboarding},
 	{"policies", stepPolicies},
 	{"playlists", stepPlaylists},
-	{"homepage", stepHomepage},
+	{"pages", stepPages},
 	{"publish", stepPublish},
 	{"backend-gated", stepBackendGated},
 }
@@ -148,9 +178,10 @@ var scaffoldPipeline = []scaffoldStep{
 // presentation blobs (branding/favicon/settings/registration/navigation) are the
 // province of stepBlobs, so nothing is applied twice (design §Apply pipeline
 // step 1; the create/blobs split is documented on stepBlobs). On create it
-// captures the server-assigned id + slug + is_private into the context, which
-// every later step consumes (MIO-2543 Task 12).
-func stepHub(sc *scaffoldContext, _ *hubtemplate.Template) error {
+// captures the server-assigned id + slug + title + is_private into the
+// context, which every later step consumes (MIO-2543 Task 12; the title is the
+// FINAL {{hub_name}} interpolation value the blobs/pages steps use).
+func stepHub(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	// Resume mode: the runner already resolved --hub and GET-populated hubID/
 	// hubSlug/isPrivate, so there is nothing to create. Record the reuse and skip.
 	if sc.hubID != "" {
@@ -184,6 +215,10 @@ func stepHub(sc *scaffoldContext, _ *hubtemplate.Template) error {
 		}
 		sc.hubID = res.ID
 		sc.hubSlug, _ = res.Attributes["slug"].(string)
+		sc.hubName, _ = res.Attributes["title"].(string)
+		if sc.hubName == "" {
+			sc.hubName = sc.nameOverride // response omitted the title — fall back to the intent
+		}
 		if p, ok := res.Attributes["is_private"].(bool); ok {
 			sc.isPrivate, sc.isPrivateKnown = p, true
 		}
@@ -199,8 +234,8 @@ func stepHub(sc *scaffoldContext, _ *hubtemplate.Template) error {
 // branding (+ --favicon-url/--logo-url overrides), settings (incl.
 // registration.enabled honoring --registration-enabled), and the navigation
 // REPLACE. Each blob is therefore applied exactly once, in exactly one place —
-// no double application. The template has no `meta` blob (the hubtemplate schema
-// carries no Meta field), so none is sent.
+// no double application. The template has no `meta` blob (the catalog
+// hubTemplates[] schema carries no Meta field), so none is sent.
 //
 // It runs in STRICT key mode (a bad template branding/settings key ERRORS, not
 // warns — the whole point of the feature is that a malformed template is caught,
@@ -214,8 +249,9 @@ func stepHub(sc *scaffoldContext, _ *hubtemplate.Template) error {
 // hub-scoping validation. Only header/footer type=="url" items with a leading
 // "/" same-origin path that is NOT already scoped are rewritten; absolute
 // http(s):// hrefs, protocol-relative "//" hrefs, non-url items, and
-// already-scoped hrefs pass through unchanged. Mutates nav in place — the
-// template is loaded fresh per invocation, so there is no shared state.
+// already-scoped hrefs pass through unchanged. Mutates nav in place — stepBlobs
+// therefore hands it a deep CLONE of the template's navigation, never the
+// preflight-resolved template itself.
 func scopeNavHrefs(nav map[string]any, slug string) {
 	if slug == "" || nav == nil {
 		return
@@ -252,10 +288,17 @@ func scopeNavHrefs(nav map[string]any, slug string) {
 	}
 }
 
-func stepBlobs(sc *scaffoldContext, t *hubtemplate.Template) error {
+func stepBlobs(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	detail := fmt.Sprintf("PATCH %s — branding+settings+navigation (strict keys)",
 		hubsPath(sc.teamID, sc.hubIDOrPlaceholder()))
 	return sc.step("blobs", detail, func() error {
+		// Navigation is location (c) of the {{hub_name}}/{{hub_slug}} token
+		// contract (MIO-2573 §4.3: header/footer item LABELS), interpolated at
+		// APPLY time with the FINAL hub name/slug — stepBlobs runs after stepHub,
+		// so both values are the server-observed ones. Work on a deep CLONE
+		// (CloneNode(nil) is nil-safe): the template is preflight-resolved shared
+		// state, and neither interpolation nor scopeNavHrefs may mutate it.
+		nav := catalog.CloneNode(t.Navigation)
 		// applyHubBlobs runs the hub-scoped href check but, by design, leaves the
 		// navigation SHAPE check to the CALLER (see blobPatches' doc comment): both
 		// existing callers (hubs create/update) call validateNavigationBlob first,
@@ -264,8 +307,11 @@ func stepBlobs(sc *scaffoldContext, t *hubtemplate.Template) error {
 		// shape- nor href-validated (validateNavigationHrefs silently skips a
 		// non-array bucket), gets PATCHed, and is then silently dropped by the hub
 		// renderer: exactly the silent-drop trap this feature exists to eliminate.
-		if t.Navigation != nil {
-			if err := validateNavigationBlob(t.Navigation); err != nil {
+		if nav != nil {
+			if err := catalog.InterpolateNavigation(nav, sc.hubName, sc.hubSlug); err != nil {
+				return errs.Wrap(errs.ExitUsage, err)
+			}
+			if err := validateNavigationBlob(nav); err != nil {
 				return err
 			}
 			// A template is authored slug-agnostically (e.g. href "/content"), but
@@ -273,12 +319,12 @@ func stepBlobs(sc *scaffoldContext, t *hubtemplate.Template) error {
 			// requires a hub-relative menu href to stay within this hub. The
 			// scaffold knows the slug (from create or the resume GET), so rewrite
 			// the template's hub-relative hrefs to "/{slug}/…" before applying.
-			scopeNavHrefs(t.Navigation, sc.hubSlug)
+			scopeNavHrefs(nav, sc.hubSlug)
 		}
 		_, err := applyHubBlobs(sc.ctx, sc.cl, sc.teamID, sc.hubID, sc.hubSlug, blobPatches{
 			Branding:     t.Branding,
 			Settings:     t.Settings,
-			Navigation:   t.Navigation,
+			Navigation:   nav,
 			SlugKnown:    true,
 			Favicon:      sc.faviconOverride,
 			Logo:         sc.logoOverride,
@@ -298,7 +344,7 @@ func stepBlobs(sc *scaffoldContext, t *hubtemplate.Template) error {
 // pagination cursor (meta.next) to exhaustion before deciding create-vs-skip
 // (design §Idempotency "lookup must be exhaustive, not first-page"). Each created
 // space's id is recorded by slug so later steps can reference it.
-func stepSpaces(sc *scaffoldContext, t *hubtemplate.Template) error {
+func stepSpaces(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	if len(t.Spaces) == 0 {
 		return sc.step("spaces", "no spaces in template", func() error { return nil })
 	}
@@ -410,7 +456,7 @@ func nextPageCursor(col *client.Collection) string {
 // partial-write semantics. buildSpaceAttrs still enforces the access_level /
 // posting_permission enum checks, so a scaffold gets the same validation the
 // `community spaces create` command does.
-func templateSpaceInput(s hubtemplate.Space) SpaceInput {
+func templateSpaceInput(s catalog.TemplateSpace) SpaceInput {
 	in := SpaceInput{Slug: &s.Slug}
 	if s.Name != "" {
 		in.Name = &s.Name
@@ -448,7 +494,7 @@ func templateSpaceInput(s hubtemplate.Space) SpaceInput {
 // only supports PATCH/DELETE. is_in_onboarding + is_required carry the template's
 // intent (mapping Required through too, so a required-in-template attribute is
 // never silently dropped).
-func stepOnboarding(sc *scaffoldContext, t *hubtemplate.Template) error {
+func stepOnboarding(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	if len(t.Onboarding) == 0 {
 		return sc.step("onboarding", "no onboarding attributes in template", func() error { return nil })
 	}
@@ -532,7 +578,7 @@ func (sc *scaffoldContext) existingContactAttrDefs() (map[string]string, error) 
 // template validator guarantees them); Name is set only when non-empty.
 // buildAttrDefCreateAttrs still validates the field_type enum, so the scaffold
 // gets the same check `contact-attributes create` does.
-func templateAttrDefInput(d hubtemplate.AttrDef) AttrDefInput {
+func templateAttrDefInput(d catalog.TemplateAttrDef) AttrDefInput {
 	in := AttrDefInput{Slug: &d.Slug, FieldType: &d.FieldType}
 	if d.Name != "" {
 		in.Name = &d.Name
@@ -557,7 +603,7 @@ var policyTypeAliases = map[string]string{
 // applyHubPolicies helper — one PATCH per policy, keys sorted for deterministic
 // ordering (design §Apply pipeline step 5, MIO-2543 Task 16). An empty/nil
 // Policies map is a clean no-op.
-func stepPolicies(sc *scaffoldContext, t *hubtemplate.Template) error {
+func stepPolicies(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	if len(t.Policies) == 0 {
 		return sc.step("policies", "no policies in template", func() error { return nil })
 	}
@@ -623,7 +669,7 @@ func templateHubPolicy(key string, raw any) (hubPolicy, error) {
 // publishes it with published_at set to NOW unconditionally (sidesteps MIO-2536)
 // and visibility public, POSTing playlist_id in the BODY to the hub-playlists
 // COLLECTION path (design §Apply pipeline step 6, MIO-2543 Task 17).
-func stepPlaylists(sc *scaffoldContext, t *hubtemplate.Template) error {
+func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	if len(t.Playlists) == 0 {
 		return sc.step("playlists", "no playlists in template", func() error { return nil })
 	}
@@ -678,219 +724,6 @@ func stepPlaylists(sc *scaffoldContext, t *hubtemplate.Template) error {
 	})
 }
 
-// homepageTitle / homepageSlug are the conventional identity of the scaffolded
-// homepage. The template's HomepageRef carries only the catalog template to
-// instantiate (the experience), not a page name — the operator's hub already has
-// its own identity — so the page itself gets a stable, conventional title+slug.
-const (
-	homepageTitle = "Home"
-	// The homepage is marked by is_homepage:true, not by its slug — and the
-	// backend RESERVES the slug "home" (rejects it, telling you to use the
-	// is_homepage flag). So the page carries a non-reserved slug.
-	homepageSlug = "homepage"
-)
-
-// stepHomepage builds the hub's homepage: it creates a "home" page (reusing an
-// existing one on resume) and PUTs its draft node-tree, instantiated OFFLINE from
-// the vendored page-builder catalog (design §Apply pipeline step 7, MIO-2543 Task
-// 18).
-//
-// OFFLINE-ONLY catalog: the homepage tree is instantiated from the embedded,
-// digest-pinned vendored catalog (catalog.Load) — NEVER a live fetch — so a
-// scaffold is fully self-contained and needs no network beyond the hub's own API.
-//
-// IDEMPOTENCY / If-Match: the homepage is looked up by page slug (is_homepage /
-// slug) with an EXHAUSTIVE page list. On a fresh hub no home page exists, so the
-// step creates it and PUTs the first tree with If-Match 0 (the first-set OCC
-// sentinel the backend accepts only while a page has never had a draft). On resume
-// the existing home page is reused (no duplicate) and its current draft_version is
-// the If-Match token. The tree PUT can never SILENTLY clobber an existing draft:
-// if the detected draft_version is stale the backend rejects the PUT as a loud
-// conflict (pages_tree.go's OCC contract), so a resume mismatch surfaces as an
-// error to re-run, not a silent overwrite.
-func stepHomepage(sc *scaffoldContext, t *hubtemplate.Template) error {
-	if t.Homepage == nil || t.Homepage.Template == "" {
-		// Template.Validate guarantees a homepage on any LOADED template; this guards
-		// a hand-built in-memory template so the step is a clean no-op, never a panic.
-		return sc.step("homepage", "no homepage in template", func() error { return nil })
-	}
-	detail := fmt.Sprintf("POST %s then PUT %s then publish — create the %q page from catalog template %q (offline), set its draft tree (If-Match 0 first set, else the existing draft_version), and publish it so the homepage renders",
-		pagesPath(sc.teamID, sc.hubIDOrPlaceholder(), ""),
-		pagesTreePath(sc.teamID, sc.hubIDOrPlaceholder(), "<page_id>"),
-		homepageSlug, t.Homepage.Template)
-	return sc.step("homepage", detail, func() error {
-		// 1. Resolve + instantiate the homepage tree OFFLINE first, so a bad catalog
-		//    ref fails LOUD before any HTTP (never creating an orphan page).
-		treeObj, err := instantiateHomepageTree(t.Homepage)
-		if err != nil {
-			return err
-		}
-
-		// 2. Resume detection: reuse an existing home page rather than creating a
-		//    duplicate. Its draft_version (the tree PUT's If-Match OCC token) is read
-		//    via a tree-get, NOT the page list — the list does not surface it.
-		existingID, found, lerr := sc.existingHomepage()
-		if lerr != nil {
-			return lerr
-		}
-		ifMatch := 0
-		if found {
-			sc.homePageID = existingID
-			dv, derr := sc.homepageDraftVersion(existingID)
-			if derr != nil {
-				return derr
-			}
-			ifMatch = dv
-		} else {
-			// 3. Create the page with the homepage identity (title/slug/is_homepage +
-			//    privacy from the template). buildPageAttrs is the shared `pages create`
-			//    builder, so the scaffold gets the same privacy-enum validation.
-			attrs, berr := buildPageAttrs(homepagePageInput(t.Homepage))
-			if berr != nil {
-				return berr
-			}
-			res, cerr := sc.cl.Create(sc.ctx, pagesPath(sc.teamID, sc.hubID, ""), attrs)
-			if cerr != nil {
-				return cerr
-			}
-			sc.homePageID = res.ID
-		}
-
-		// 4. Set the draft tree with the If-Match OCC header (mirrors `pages tree
-		//    set`). The tree PUT derives the page_draft_trees JSON:API type from the
-		//    path via the client's type override.
-		res, terr := sc.cl.ActionWithHeaders(
-			sc.ctx, client.StyleEnvelope, "PUT",
-			pagesTreePath(sc.teamID, sc.hubID, sc.homePageID),
-			map[string]any{"tree": treeObj},
-			map[string]string{"If-Match": strconv.Itoa(ifMatch)},
-		)
-		if terr != nil {
-			return terr
-		}
-		// Capture the new draft_version the PUT returns (the OCC token the publish
-		// below uses); default to the If-Match on a bodyless response.
-		sc.homeDraftVersion = ifMatch
-		if res != nil {
-			if dv, ok := attrInt(res.Attributes["draft_version"]); ok {
-				sc.homeDraftVersion = dv
-			}
-		}
-
-		// 5. Publish the draft tree (MIO-2636). The backend serves NO resolved tree
-		//    until a draft is published, so without this the homepage renders empty
-		//    ("No content available") even though the PUT succeeded. POST …/publish
-		//    is guarded by If-Match = the draft_version the PUT just returned
-		//    (mirrors `mio pages publish`); no body.
-		if _, perr := sc.cl.ActionWithHeaders(
-			sc.ctx, client.StyleEnvelope, "POST",
-			pagesPath(sc.teamID, sc.hubID, sc.homePageID)+"/publish",
-			nil,
-			map[string]string{"If-Match": strconv.Itoa(sc.homeDraftVersion)},
-		); perr != nil {
-			return perr
-		}
-		return nil
-	})
-}
-
-// instantiateHomepageTree resolves the homepage's catalog template from the
-// VENDORED (offline) catalog and instantiates it into a fresh, settable page tree
-// wrapped as {"root":…} (mirroring `pages catalog scaffold` for a page template).
-// A ref that is unknown, or that names a section template (no page root), fails
-// loud with ExitUsage — never a silent empty homepage.
-func instantiateHomepageTree(h *hubtemplate.HomepageRef) (map[string]any, error) {
-	cat, err := catalog.Load()
-	if err != nil {
-		return nil, errs.Wrap(errs.ExitGeneric, err)
-	}
-	tmpl, ok := cat.TemplateByID(h.Template)
-	if !ok {
-		return nil, errs.New(errs.ExitUsage,
-			"homepage template %q is not in the page-builder catalog — run 'mio pages catalog templates' for valid ids", h.Template)
-	}
-	if !tmpl.IsPage {
-		return nil, errs.New(errs.ExitUsage,
-			"homepage template %q is a section template, not a page template — the homepage needs a whole-page root", h.Template)
-	}
-	node, err := catalog.InstantiateTemplate(tmpl, h.Variant, catalog.NewUUIDv7Gen())
-	if err != nil {
-		return nil, errs.Wrap(errs.ExitGeneric, err)
-	}
-	return map[string]any{"root": node}, nil
-}
-
-// homepagePageInput maps the template HomepageRef onto the PageInput the shared
-// buildPageAttrs consumes: the conventional Home title/slug, is_homepage true, and
-// the optional privacy (validated by buildPageAttrs).
-func homepagePageInput(h *hubtemplate.HomepageRef) PageInput {
-	title, slug, isHome := homepageTitle, homepageSlug, true
-	in := PageInput{Title: &title, Slug: &slug, IsHome: &isHome}
-	if h.Privacy != "" {
-		priv := h.Privacy
-		in.Privacy = &priv
-	}
-	return in
-}
-
-// existingHomepage finds the hub's homepage page with an EXHAUSTIVE page list
-// (same cursor convention + stall guard as the other steps' lookups) so a resume
-// reuses it instead of creating a duplicate. It matches ONLY is_homepage:true —
-// the authoritative "this is the homepage" signal — so it never hijacks an
-// unrelated page that merely shares the conventional "home" slug. It returns just
-// the page id; the caller reads draft_version separately via a tree-get, because
-// the page list does not surface draft_version.
-func (sc *scaffoldContext) existingHomepage() (id string, found bool, err error) {
-	query := url.Values{}
-	seen := map[string]bool{}
-	const maxPages = 1000 // hard ceiling; a hub never has this many pages
-	for page := 0; page < maxPages; page++ {
-		col, lerr := sc.cl.List(sc.ctx, pagesPath(sc.teamID, sc.hubID, ""), query)
-		if lerr != nil {
-			return "", false, lerr
-		}
-		for _, r := range col.Data {
-			if isHome, _ := r.Attributes["is_homepage"].(bool); isHome {
-				return r.ID, true, nil
-			}
-		}
-		next := nextPageCursor(col)
-		if next == "" || seen[next] {
-			break
-		}
-		seen[next] = true
-		query = url.Values{}
-		query.Set("page[after]", next)
-	}
-	return "", false, nil
-}
-
-// homepageDraftVersion reads an existing page's current draft_version via a
-// tree-get (RetrieveWithQuery on the author draft, mirroring `pages tree get`) —
-// the authoritative OCC source the rest of the codebase uses (pages tree get /
-// pages publish), since the page LIST does not surface draft_version. A page that
-// has never had a draft 404s on tree-get; that is TOLERATED as draft_version 0
-// (the first-set sentinel), so a resume onto a created-but-never-tree-set page
-// still sets the first tree. Any other error propagates.
-func (sc *scaffoldContext) homepageDraftVersion(pageID string) (int, error) {
-	q := url.Values{}
-	q.Set("audience", "author")
-	q.Set("resolve", "true")
-	res, err := sc.cl.RetrieveWithQuery(sc.ctx, pagesTreePath(sc.teamID, sc.hubID, pageID), q)
-	if err != nil {
-		if errs.CodeOf(err) == errs.ExitNotFound {
-			return 0, nil // no draft yet → first-set sentinel
-		}
-		return 0, err
-	}
-	if res != nil {
-		if dv, ok := attrInt(res.Attributes["draft_version"]); ok {
-			return dv, nil
-		}
-	}
-	return 0, nil
-}
-
 // attrInt coerces a JSON:API attribute to an int. JSON numbers decode as float64
 // through the client's standard resource decode; int is accepted for
 // hand-built values. A non-numeric/absent value reports ok=false.
@@ -912,7 +745,7 @@ func attrInt(v any) (int, bool) {
 // It PATCHes via publishedStateAttrs(true) — the single source of truth for the
 // published→is_private inversion — so "published" (not a writable attribute) is
 // never sent; only is_private is.
-func stepPublish(sc *scaffoldContext, _ *hubtemplate.Template) error {
+func stepPublish(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	if !sc.publish {
 		return sc.step("publish",
 			"skipped — hub stays private (pass --publish to go live)",
@@ -944,7 +777,7 @@ func stepPublish(sc *scaffoldContext, _ *hubtemplate.Template) error {
 // fires NO request and records exactly what is deferred and why, so an operator
 // (or a future revision) knows precisely which endpoints to wire in when they land
 // (design §Apply pipeline step 9, MIO-2543 Task 20).
-func stepBackendGated(sc *scaffoldContext, _ *hubtemplate.Template) error {
+func stepBackendGated(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	return sc.step("backend-gated",
 		"welcome post (MIO-2262) and auto-admin (MIO-2540) skipped — need backend endpoints; wire in when they land",
 		func() error { return nil })
@@ -977,16 +810,12 @@ mid-pipeline failure). --dry-run prints the ordered plan and makes no changes.`,
 }
 
 func runHubsScaffold(cmd *cobra.Command, _ []string) error {
-	// 1. Load + validate the template BEFORE any HTTP so an unknown or malformed
-	//    template exits ExitUsage without touching the network (design §Error
-	//    handling; TestScaffold_UnknownTemplate).
+	// 1. Read the template ID. Existence + validity are checked by
+	//    scaffoldPreflight against the TARGET BACKEND's live catalog (spec §0:
+	//    the CLI holds no templates), so there is nothing to load here.
 	templateID, ferr := cmd.Flags().GetString("template")
 	if ferr != nil {
 		return errs.New(errs.ExitUsage, "--template: %s", ferr.Error())
-	}
-	tmpl, err := hubtemplate.Load(templateID)
-	if err != nil {
-		return errs.Wrap(errs.ExitUsage, err)
 	}
 
 	// 2. Resolve auth + team ONCE (shared by every step). With an id-shaped
@@ -1010,6 +839,8 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 	// false — the scaffold leaves the hub private until Task 21 registers the flag.
 	publish, _ := cmd.Flags().GetBool("publish")
 
+	catalogOverride, _ := cmd.Flags().GetString("catalog")
+
 	var plan []planEntry
 	sc := &scaffoldContext{
 		ctx:                  c.ctx,
@@ -1024,8 +855,10 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 		defIDsBySlug:         map[string]string{},
 		playlistIDsByKey:     map[string]string{},
 		publish:              publish,
+		catalogOverride:      strings.TrimSpace(catalogOverride),
 		dryRun:               dryRun,
 		plan:                 &plan,
+		noteW:                cmd.ErrOrStderr(),
 	}
 
 	// 3. Resume/target mode: an EXPLICIT --hub applies onto an existing hub. The
@@ -1048,6 +881,7 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 		}
 		sc.hubID = hubID
 		sc.hubSlug, _ = res.Attributes["slug"].(string)
+		sc.hubName, _ = res.Attributes["title"].(string)
 		if p, ok := res.Attributes["is_private"].(bool); ok {
 			sc.isPrivate, sc.isPrivateKnown = p, true
 		}
@@ -1057,12 +891,22 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 		scaffoldAfterResolve(sc)
 	}
 
-	// 4. Run the pipeline in order. Each step decides for itself whether to fire
+	// 4. WRITE-FREE preflight (MIO-2573 §5): resolve the catalog LIVE from the
+	//    target backend (or the --catalog override), source + validate the hub
+	//    template from it, instantiate the page plan, and preliminarily
+	//    interpolate the whole plan — all BEFORE stepHub writes anything. On
+	//    failure return directly: nothing was written, so there is no recovery
+	//    guidance to print.
+	if perr := scaffoldPreflight(cmd, sc, templateID); perr != nil {
+		return perr
+	}
+
+	// 5. Run the pipeline in order. Each step decides for itself whether to fire
 	//    HTTP or (in dry-run) record its plan entry — see sc.step — so the runner
 	//    just dispatches and, on failure, prints the recovery guidance and returns
 	//    the step-tagged error (rendered once by main.go).
 	for _, step := range scaffoldPipeline {
-		if serr := step.run(sc, tmpl); serr != nil {
+		if serr := step.run(sc, &sc.hubTmpl); serr != nil {
 			printScaffoldRecovery(cmd.ErrOrStderr(), sc, templateID)
 			return errs.Wrap(errs.CodeOf(serr),
 				fmt.Errorf("scaffold: step %q failed: %w", step.name, serr))
@@ -1075,7 +919,7 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 		// Real run: echo the finished hub's reference + published state + a recap so
 		// the operator knows what landed and how to go live (design §Apply pipeline
 		// step 8 + §Command surface). Dry-run keeps the plan output untouched.
-		printScaffoldSummary(cmd.OutOrStdout(), sc, tmpl, templateID)
+		printScaffoldSummary(cmd.OutOrStdout(), sc, &sc.hubTmpl, templateID)
 	}
 	return nil
 }
@@ -1141,7 +985,7 @@ func printScaffoldRecovery(w io.Writer, sc *scaffoldContext, templateID string) 
 //     policy counts + homepage). Worded "Includes:" — not "Applied:" — because on a
 //     resume the skip-if-exists / O1-gate steps converge WITHOUT re-creating, so the
 //     line must describe what the hub contains, not claim this run wrote it all.
-func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *hubtemplate.Template, templateID string) {
+func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTemplate, templateID string) {
 	fmt.Fprintf(w, "Scaffolded hub %q (id %s) from template %q.\n", sc.hubSlug, sc.hubID, templateID)
 
 	// Shape recap: counts come from the template (the experience the hub converged
@@ -1157,8 +1001,18 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *hubtemplate.Templ
 	if len(t.Policies) > 0 {
 		parts = append(parts, fmt.Sprintf("%d policy(ies)", len(t.Policies)))
 	}
-	if t.Homepage != nil && t.Homepage.Template != "" {
-		parts = append(parts, "homepage set")
+	// Every template page the pages step applies, slug by slug, with the
+	// homepage entry marked (MIO-2672 Task 7: the recap covers ALL pages[]
+	// entries, not just the homepage).
+	if len(t.Pages) > 0 {
+		names := make([]string, len(t.Pages))
+		for i, p := range t.Pages {
+			names[i] = p.Slug
+			if p.IsHomepage {
+				names[i] += " (homepage)"
+			}
+		}
+		parts = append(parts, "page(s): "+strings.Join(names, ", "))
 	}
 	fmt.Fprintf(w, "  Includes: %s.\n", strings.Join(parts, ", "))
 
@@ -1177,17 +1031,23 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *hubtemplate.Templ
 	fmt.Fprintf(w, "  Public URL: <your-hub-frontend-host>/%s (the API does not return the hub's public URL; substitute your hub frontend host).\n", sc.hubSlug)
 }
 
-// hubsTemplatesCmd lists the built-in hub scaffold templates that
-// `hubs scaffold --template <id>` can apply. The templates are embedded in the
-// binary (internal/hubtemplate), so this is a purely OFFLINE listing — it needs
-// no API key. It renders through the standard output layer (c.render) so
-// --output json|table|plain and --jq all work like any other list command.
+// hubsTemplatesCmd lists the hub templates the TARGET BACKEND's catalog offers
+// `hubs scaffold --template <id>` (spec §0: the CLI holds no templates, so the
+// listing is fetched from the backend). The resolve is LIVE-OR-FAIL (Mutating:
+// the listing is documented backend-live, so a fetch failure surfaces as
+// itself — with its typed exit code — instead of silently degrading to a stale
+// cache or the vendored copy and producing a misleading listing; a
+// 304-validated cache read is still fine). It renders through the standard
+// output layer (c.render) so --output json|table|plain and --jq all work like
+// any other list command.
 var hubsTemplatesCmd = &cobra.Command{
 	Use:   "templates",
-	Short: "List the built-in hub scaffold templates.",
-	Long: `List the built-in hub scaffold templates that 'mio hubs scaffold --template <id>'
-can apply. Each template is embedded in the binary, so this command needs no
-network access or credentials.`,
+	Short: "List the hub templates from the target backend's catalog.",
+	Long: `List the hub templates that 'mio hubs scaffold --template <id>' can apply.
+
+Templates live in the page-builder catalog served by the backend the CLI is
+pointed at, so this command needs credentials and lists exactly what a
+scaffold against that backend would see.`,
 	Example: `  mio hubs templates
   mio hubs templates --output json`,
 	Args: cobra.NoArgs,
@@ -1196,10 +1056,25 @@ network access or credentials.`,
 		if err != nil {
 			return err
 		}
-		ids := hubtemplate.List()
-		rows := make([]any, 0, len(ids))
-		for _, id := range ids {
-			rows = append(rows, map[string]any{"id": id})
+		if err := c.requireAuth(); err != nil {
+			return err
+		}
+		cat, src, rerr := catalog.Resolve(c.ctx, catalog.ResolveOptions{
+			Mutating: true, // live-or-fail: a listing must never silently degrade to a stale copy
+			CacheDir: catalogCacheDirFor(c.client.BaseURL()),
+			Fetcher:  catalogFetcher{c: c.client},
+			Warnf:    catalogWarnf(cmd),
+		})
+		if rerr != nil {
+			return wrapCatalogResolveErr(rerr, false) // no --catalog flag here
+		}
+		printCatalogProvenance(cmd, src, cat)
+		if len(cat.HubTemplates) == 0 {
+			return errNoHubTemplates(cat, src, false) // this command has no --catalog flag to point at
+		}
+		rows := make([]any, 0, len(cat.HubTemplates))
+		for _, ht := range cat.HubTemplates {
+			rows = append(rows, map[string]any{"id": ht.ID, "label": ht.Label, "pages": len(ht.Pages)})
 		}
 		return c.render(cmd, rows)
 	},
@@ -1217,6 +1092,12 @@ func init() {
 	hubsScaffoldCmd.Flags().String("slug", "", "URL slug for the new hub (create mode).")
 	hubsScaffoldCmd.Flags().Bool("dry-run", false, "Print the ordered plan and make no changes.")
 	_ = hubsScaffoldCmd.MarkFlagRequired("template")
+
+	// MIO-2672: the scaffold sources its hub template from the target backend's
+	// LIVE catalog; --catalog <file> is the ONLY escape hatch (no --offline —
+	// a mutating command never runs off a stale copy).
+	hubsScaffoldCmd.Flags().String("catalog", "",
+		"Path to a catalog.json file to scaffold from instead of the backend's live catalog (digest-verified; fails closed on mismatch).")
 
 	// Phase-5 flags (MIO-2543 Task 21): the --publish gate + the presentation
 	// overrides. runHubsScaffold already reads these existence-guarded

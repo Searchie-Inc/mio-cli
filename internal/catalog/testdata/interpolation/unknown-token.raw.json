@@ -1,0 +1,6 @@
+{
+  "vars": { "hub_name": "Acme", "hub_slug": "acme" },
+  "input": {
+    "trees": [{ "kind": "stack", "children": [{ "kind": "text", "value": "Visit {{hub_url}} today" }] }]
+  }
+}
