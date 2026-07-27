@@ -1894,8 +1894,10 @@ func TestScaffold_CatalogOverrideFile(t *testing.T) {
 }
 
 // TestHubsTemplates_ListsFromLiveCatalog: `hubs templates` lists the hub
-// templates from the TARGET BACKEND's catalog — and explains itself when the
-// backend (and every fallback) yields a catalog without hubTemplates[].
+// templates from the TARGET BACKEND's catalog, LIVE-OR-FAIL — a fetch failure
+// surfaces as itself (with its typed exit code), never as a stale cache or
+// vendored-fallback listing; the pin-hint explanation is reserved for a
+// backend that actually SERVES a catalog without hubTemplates[].
 func TestHubsTemplates_ListsFromLiveCatalog(t *testing.T) {
 	t.Run("lists from the backend catalog", func(t *testing.T) {
 		srv := newMockServer(t, []mockHandler{catalogRoute(catalog21Body(t))})
@@ -1907,20 +1909,131 @@ func TestHubsTemplates_ListsFromLiveCatalog(t *testing.T) {
 			t.Errorf("output must include the backend's 'community' hub template; stdout=%q", res.Stdout)
 		}
 	})
-	t.Run("backend without hub templates errors actionably", func(t *testing.T) {
-		srv := newMockServer(t, nil) // no catalog route → 404 → fallback yields no hubTemplates
+	t.Run("catalog 401 surfaces the auth failure, not a fallback listing", func(t *testing.T) {
+		srv := newMockServer(t, []mockHandler{{
+			Method: http.MethodGet, PathPfx: "/api/v1/page-builder/catalog",
+			Status: 401, Body: `{"errors":[{"status":"401","detail":"invalid api key"}]}`,
+		}})
 		err := executeCLI(t, scaffoldEnv(t, srv.URL), "hubs", "templates")
-		if err == nil {
-			t.Fatal("hubs templates must error when no catalog carries hub templates")
+		if got := errs.CodeOf(err); got != errs.ExitAuth {
+			t.Errorf("exit code = %d, want %d (ExitAuth — the fetch failure's typed code must survive); err=%v", got, errs.ExitAuth, err)
 		}
-		if !strings.Contains(err.Error(), "no hub templates") {
-			t.Errorf("error must be actionable about the missing hub templates; err=%v", err)
+		if err == nil || !strings.Contains(err.Error(), "live fetch failed") {
+			t.Errorf("error must surface the underlying fetch failure; err=%v", err)
 		}
-		if !strings.Contains(err.Error(), "the vendored catalog") {
-			t.Errorf("the message must attribute the hub-template-less catalog to its SOURCE (the read-only resolve degraded to the vendored copy — not the backend's catalog); err=%v", err)
+		if err != nil && strings.Contains(err.Error(), "contains no hub templates") {
+			t.Errorf("an auth failure must NOT masquerade as a hub-template-less (fallback) catalog; err=%v", err)
 		}
-		if strings.Contains(err.Error(), "--catalog") {
+	})
+	t.Run("no catalog route fails live-or-fail, never a vendored listing", func(t *testing.T) {
+		srv := newMockServer(t, nil) // catalog GET → 404: surface it, do NOT degrade to the vendored copy
+		err := executeCLI(t, scaffoldEnv(t, srv.URL), "hubs", "templates")
+		if got := errs.CodeOf(err); got != errs.ExitNotFound {
+			t.Errorf("exit code = %d, want %d (ExitNotFound — the 404 fetch failure's typed code); err=%v", got, errs.ExitNotFound, err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "live fetch failed") {
+			t.Errorf("error must surface the fetch failure; err=%v", err)
+		}
+		if err != nil && strings.Contains(err.Error(), "no hub templates") {
+			t.Errorf("a fetch failure must NOT be reported as a (vendored) catalog without hub templates; err=%v", err)
+		}
+	})
+	t.Run("backend serving a pre-2.1 catalog gets the pin hint", func(t *testing.T) {
+		oldBody, rerr := os.ReadFile("../internal/catalog/catalog.json") // 0.3.1: no hubTemplates
+		if rerr != nil {
+			t.Fatalf("read old vendored catalog: %v", rerr)
+		}
+		srv := newMockServer(t, []mockHandler{catalogRoute(oldBody)})
+		err := executeCLI(t, scaffoldEnv(t, srv.URL), "hubs", "templates")
+		if err == nil || !strings.Contains(err.Error(), "contains no hub templates") {
+			t.Errorf("a SERVED catalog without hubTemplates[] must get the pin-hint explanation; err=%v", err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "the live catalog") {
+			t.Errorf("the message must attribute the hub-template-less catalog to its SOURCE (live); err=%v", err)
+		}
+		if err != nil && strings.Contains(err.Error(), "--catalog") {
 			t.Errorf("hubs templates has no --catalog flag, so its message must not advertise one; err=%v", err)
 		}
 	})
+}
+
+// catalogErrorScaffoldServer answers the catalog route with the given HTTP
+// error status (JSON:API error body) and every other GET with a minimal hub
+// body, flipping *mutated on any non-GET request.
+func catalogErrorScaffoldServer(t *testing.T, status int) (*httptest.Server, *bool) {
+	t.Helper()
+	mutated := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			mutated = true
+		}
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/page-builder/catalog") {
+			w.WriteHeader(status)
+			_, _ = fmt.Fprintf(w, `{"errors":[{"status":"%d","detail":"catalog fetch failed"}]}`, status)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"hub_x","type":"hubs","attributes":{"slug":"x","is_private":true}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &mutated
+}
+
+// TestScaffold_CatalogFetchHTTPErrorPreservesExitCode: catalog.Resolve keeps
+// the client's typed HTTP error in the chain (%w), and the preflight must
+// surface THAT code — 401 → ExitAuth, 5xx → ExitServer — not collapse
+// everything to ExitGeneric. Nothing may be written either way.
+func TestScaffold_CatalogFetchHTTPErrorPreservesExitCode(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		want   int
+	}{
+		{"401 unauthorized → ExitAuth", 401, errs.ExitAuth},
+		{"502 bad gateway → ExitServer", 502, errs.ExitServer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, mutated := catalogErrorScaffoldServer(t, tc.status)
+			res := runContract(t, scaffoldEnv(t, srv.URL),
+				withTeam("t_team1", "hubs", "scaffold",
+					"--template", "community", "--name", "X", "--slug", "x")...)
+			if res.Code != tc.want {
+				t.Errorf("exit = %d, want %d (the catalog fetch failure's typed code); stderr=%q", res.Code, tc.want, res.Stderr)
+			}
+			if *mutated {
+				t.Errorf("a failed catalog fetch must fire NO mutating HTTP")
+			}
+		})
+	}
+}
+
+// TestScaffold_CatalogOverrideDigestMismatchExitsUsage: a --catalog file that
+// fails digest verification is bad USER-SUPPLIED INPUT — ExitUsage, not a
+// generic failure — and nothing is fetched or written (the override is
+// exclusive; the mutating resolve fails closed before any HTTP).
+func TestScaffold_CatalogOverrideDigestMismatchExitsUsage(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+
+	// Corrupt the pinned digest so verification fails while the JSON still parses.
+	corrupted := strings.Replace(string(catalog21Body(t)), "sha256:ab30e06a", "sha256:ab30e06b", 1)
+	if !strings.Contains(corrupted, "sha256:ab30e06b") {
+		t.Fatal("fixture drift: expected the pinned 2.1 digest prefix in the fixture")
+	}
+	path := filepath.Join(t.TempDir(), "catalog-corrupt.json")
+	if werr := os.WriteFile(path, []byte(corrupted), 0o600); werr != nil {
+		t.Fatalf("write corrupted catalog: %v", werr)
+	}
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x",
+			"--catalog", path)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit = %d, want %d (ExitUsage — a bad user-supplied --catalog file); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Errorf("a digest-mismatched --catalog must fail before ANY HTTP")
+	}
 }

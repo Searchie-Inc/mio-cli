@@ -1033,11 +1033,13 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 
 // hubsTemplatesCmd lists the hub templates the TARGET BACKEND's catalog offers
 // `hubs scaffold --template <id>` (spec §0: the CLI holds no templates, so the
-// listing is fetched from the backend — same resolve shape as the scaffold
-// preflight, but READ-ONLY: Mutating is false, so a failed fetch may degrade to
-// the last-good cache or the vendored copy where the scaffold fails closed).
-// It renders through the standard output layer (c.render) so --output
-// json|table|plain and --jq all work like any other list command.
+// listing is fetched from the backend). The resolve is LIVE-OR-FAIL (Mutating:
+// the listing is documented backend-live, so a fetch failure surfaces as
+// itself — with its typed exit code — instead of silently degrading to a stale
+// cache or the vendored copy and producing a misleading listing; a
+// 304-validated cache read is still fine). It renders through the standard
+// output layer (c.render) so --output json|table|plain and --jq all work like
+// any other list command.
 var hubsTemplatesCmd = &cobra.Command{
 	Use:   "templates",
 	Short: "List the hub templates from the target backend's catalog.",
@@ -1058,12 +1060,13 @@ scaffold against that backend would see.`,
 			return err
 		}
 		cat, src, rerr := catalog.Resolve(c.ctx, catalog.ResolveOptions{
+			Mutating: true, // live-or-fail: a listing must never silently degrade to a stale copy
 			CacheDir: catalogCacheDirFor(c.client.BaseURL()),
 			Fetcher:  catalogFetcher{c: c.client},
 			Warnf:    catalogWarnf(cmd),
 		})
 		if rerr != nil {
-			return errs.Wrap(errs.ExitGeneric, rerr)
+			return wrapCatalogResolveErr(rerr, false) // no --catalog flag here
 		}
 		printCatalogProvenance(cmd, src, cat)
 		if len(cat.HubTemplates) == 0 {

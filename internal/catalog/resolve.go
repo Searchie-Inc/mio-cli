@@ -68,12 +68,13 @@ type ResolveOptions struct {
 	Fetcher      Fetcher                       // live fetch source (nil skips live fetch)
 	Warnf        func(format string, a ...any) // non-fatal diagnostics ("" → stderr; nil → silent)
 
-	// Mutating marks a resolve whose catalog will drive WRITES. It fails closed
-	// where a read-only resolve degrades: a digest-mismatched OverrideFile is
-	// rejected; a failed live fetch is an error (no stale-cache or vendored
-	// fallback); absent both a Fetcher and an OverrideFile it errors
-	// immediately. A 304-validated cache read is still allowed (the server
-	// confirmed it current).
+	// Mutating marks a resolve whose catalog must be CURRENT — one that will
+	// drive writes, or a live listing that must not silently degrade to a
+	// stale copy. It fails closed where a read-only resolve degrades: a
+	// digest-mismatched OverrideFile is rejected; a failed live fetch is an
+	// error (no stale-cache or vendored fallback); absent both a Fetcher and
+	// an OverrideFile it errors immediately. A 304-validated cache read is
+	// still allowed (the server confirmed it current).
 	Mutating bool
 }
 

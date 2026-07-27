@@ -83,12 +83,30 @@ func validatePlanInterpolation(ht catalog.HubTemplate, plan *scaffoldPlan, hubNa
 	return nil
 }
 
+// wrapCatalogResolveErr maps a catalog.Resolve failure onto the right exit
+// code. catalog.Resolve preserves the client's typed HTTP errors through %w
+// (401/403 → ExitAuth, 404 → ExitNotFound, 429 → ExitRateLimited, 5xx →
+// ExitServer), so a typed code found in the chain WINS — a blanket
+// ExitGeneric wrap would shadow it, because CodeOf reads the OUTERMOST
+// CLIError. With no typed code in the chain, a failure loading a
+// user-supplied --catalog file (read/parse/digest mismatch) is usage-style;
+// anything else stays generic.
+func wrapCatalogResolveErr(err error, fromOverrideFile bool) error {
+	if code := errs.CodeOf(err); code != errs.ExitGeneric {
+		return errs.Wrap(code, err)
+	}
+	if fromOverrideFile {
+		return errs.Wrap(errs.ExitUsage, err)
+	}
+	return errs.Wrap(errs.ExitGeneric, err)
+}
+
 // errNoHubTemplates is the shared pin-hint error for a catalog with no
 // hubTemplates[] — the catalog predates the 2.1 artifact (MIO-2666/W2a). Used
 // by both scaffoldPreflight and `hubs templates` so the explanation cannot
-// drift between the two surfaces. src attributes the catalog correctly: the
-// hubs-templates read-only resolve can degrade to the cached/vendored copy,
-// and the message must not blame "the backend's catalog" for a local fallback.
+// drift between the two surfaces. src attributes the catalog correctly: a
+// resolve can also answer from a 304-validated cache or a --catalog override,
+// and the message must not blame "the backend's catalog" for a local copy.
 // catalogFlagHint appends the --catalog escape-hatch pointer — the scaffold
 // sets it; `hubs templates` has no such flag, so its message must not
 // advertise one.
@@ -176,7 +194,7 @@ func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID strin
 	// --catalog override is rejected (see scaffoldResolveOptions).
 	cat, src, err := catalog.Resolve(sc.ctx, scaffoldResolveOptions(sc, catalogWarnf(cmd)))
 	if err != nil {
-		return errs.Wrap(errs.ExitGeneric, err)
+		return wrapCatalogResolveErr(err, sc.catalogOverride != "")
 	}
 	printCatalogProvenance(cmd, src, cat)
 	sc.cat = cat
