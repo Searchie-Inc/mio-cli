@@ -7,7 +7,8 @@ package cmd
 // the marker flipped to "applied" (with the applied tree digest + draft
 // version). This is the client-side FALLBACK branch — stepPages first probes
 // the W2b backend op (Task 9, hubs_scaffold_op.go) and runs this loop when
-// the op is absent (404) or a --catalog override is in play.
+// the op is absent (404/405: dormant flag, or the path shadowed by a GET
+// route on older backends) or a --catalog override is in play.
 //
 // Crash RECOVERY (MIO-2672 Task 8, spec §5.1): a re-run onto a half-applied
 // hub reads back the provenance snapshot of any existing page at a manifest
@@ -115,8 +116,9 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	}
 
 	// The ONLY runtime branch (spec §0): try the backend's one-step
-	// scaffold-from-template op; 404 → apply client-side. BOTH branches produce
-	// a real hub — there is no "backend behind" error for a missing op. Guards:
+	// scaffold-from-template op; 404/405 (op absent or path shadowed on older
+	// backends) → apply client-side. BOTH branches produce a real hub — there
+	// is no "backend behind" error for a missing op. Guards:
 	//   - dry-run never probes (the op POST is MUTATING; the plan detail below
 	//     hedges the apply method instead);
 	//   - a --catalog override skips the probe: an override catalog can never
@@ -133,7 +135,7 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 		if done {
 			return nil
 		}
-		// Fall through: op absent (404) — client-side apply.
+		// Fall through: op absent (404/405) — client-side apply.
 	}
 
 	for i := range sc.pagePlan.pages {

@@ -599,21 +599,42 @@ func (c *Client) ActionRaw(ctx context.Context, style BodyStyle, method, path st
 // non-nil. extra is merged on top of the standard Accept/Content-Type/Authorization
 // headers; callers that need no extras should use Action or ActionWith instead.
 func (c *Client) ActionWithHeaders(ctx context.Context, style BodyStyle, method, path string, body map[string]any, extra map[string]string) (*Resource, error) {
-	payload := buildWriteBody(style, path, body)
-	raw, err := c.doWithHeaders(ctx, method, path, nil, payload, contentTypeJSONAPI, extra)
-	if err != nil {
-		return nil, err
-	}
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil, nil
-	}
-	return decodeResourceWrapped(raw)
+	res, _, err := c.actionWithHeadersStatus(ctx, style, method, path, body, extra)
+	return res, err
 }
 
-// doWithHeaders is the single HTTP request choke point. It is called by do()
-// (which passes a nil extra map) and by ActionWithHeaders (which passes extra
-// headers for conditional requests such as If-Match). All client methods
-// ultimately funnel through here.
+// actionWithHeadersStatus is ActionWithHeaders plus visibility of the HTTP
+// status code of the final response (0 when the request never produced one —
+// encode/build/transport failures). It exists for PROBE-style callers that
+// must classify specific statuses beyond the global exit-code mapping (e.g.
+// ScaffoldFromTemplate treating 405 as op-absent) WITHOUT changing
+// errorForResponse for every other caller.
+func (c *Client) actionWithHeadersStatus(ctx context.Context, style BodyStyle, method, path string, body map[string]any, extra map[string]string) (*Resource, int, error) {
+	payload := buildWriteBody(style, path, body)
+	raw, status, err := c.doWithHeadersStatus(ctx, method, path, nil, payload, contentTypeJSONAPI, extra)
+	if err != nil {
+		return nil, status, err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, status, nil
+	}
+	res, derr := decodeResourceWrapped(raw)
+	return res, status, derr
+}
+
+// doWithHeaders is doWithHeadersStatus without the status return — the shape
+// every non-probe caller uses.
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, query url.Values, payload any, accept string, extra map[string]string) ([]byte, error) {
+	raw, _, err := c.doWithHeadersStatus(ctx, method, path, query, payload, accept, extra)
+	return raw, err
+}
+
+// doWithHeadersStatus is the single HTTP request choke point. It is called by
+// do() (via doWithHeaders, which passes a nil extra map) and by
+// ActionWithHeaders (which passes extra headers for conditional requests such
+// as If-Match). All client methods ultimately funnel through here. The second
+// return is the HTTP status of the final response, 0 when the request never
+// produced one (encode/build/transport failures).
 //
 // 429 handling: when the server returns HTTP 429 Too Many Requests this method
 // reads the Retry-After response header (whole seconds) and sleeps for that
@@ -621,7 +642,7 @@ func (c *Client) ActionWithHeaders(ctx context.Context, style BodyStyle, method,
 // rateLimitMaxRetries times; if the server keeps returning 429 after all
 // retries are exhausted it returns the 429 error with a message that includes
 // the suggested wait time so the user knows how long to back off manually.
-func (c *Client) doWithHeaders(ctx context.Context, method, path string, query url.Values, payload any, accept string, extra map[string]string) ([]byte, error) {
+func (c *Client) doWithHeadersStatus(ctx context.Context, method, path string, query url.Values, payload any, accept string, extra map[string]string) ([]byte, int, error) {
 	u := c.baseURL + canonicalRequestPath(path)
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -634,7 +655,7 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, query u
 		var err error
 		payloadBuf, err = json.Marshal(payload)
 		if err != nil {
-			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("encode request body: %w", err))
+			return nil, 0, errs.Wrap(errs.ExitGeneric, fmt.Errorf("encode request body: %w", err))
 		}
 	}
 
@@ -646,7 +667,7 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, query u
 
 		req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
 		if err != nil {
-			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("build request: %w", err))
+			return nil, 0, errs.Wrap(errs.ExitGeneric, fmt.Errorf("build request: %w", err))
 		}
 		req.Header.Set("Accept", accept)
 		// Set Content-Type on any write method even when the body is empty.
@@ -669,12 +690,12 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, query u
 
 		resp, err := c.http.Do(req)
 		if err != nil {
-			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("%s %s: %w", method, u, err))
+			return nil, 0, errs.Wrap(errs.ExitGeneric, fmt.Errorf("%s %s: %w", method, u, err))
 		}
 		respBody, rerr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if rerr != nil {
-			return nil, errs.Wrap(errs.ExitGeneric, fmt.Errorf("read response: %w", rerr))
+			return nil, resp.StatusCode, errs.Wrap(errs.ExitGeneric, fmt.Errorf("read response: %w", rerr))
 		}
 
 		if c.debug {
@@ -683,7 +704,7 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, query u
 
 		// Happy path.
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return respBody, nil
+			return respBody, resp.StatusCode, nil
 		}
 
 		// 429: honour Retry-After if we have retries left.
@@ -695,14 +716,14 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, query u
 			}
 			select {
 			case <-ctx.Done():
-				return nil, errs.Wrap(errs.ExitGeneric, ctx.Err())
+				return nil, resp.StatusCode, errs.Wrap(errs.ExitGeneric, ctx.Err())
 			case <-time.After(wait):
 			}
 			continue
 		}
 
 		// All other non-2xx responses, or 429 after retries exhausted.
-		return nil, c.errorForResponse(resp.StatusCode, respBody)
+		return nil, resp.StatusCode, c.errorForResponse(resp.StatusCode, respBody)
 	}
 }
 

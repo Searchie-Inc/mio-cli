@@ -3,10 +3,12 @@ package cmd
 // hubs_scaffold_op.go — the W2b backend-op branch of the pages step (MIO-2672
 // Task 9, spec §0). stepPages PROBES the backend's one-step
 // POST …/pages/scaffold-from-template op by simply calling it — the probe IS
-// the real POST, never a separate capability/HEAD check — and a 404 (dormant
-// feature flag or older backend) falls back to the client-side loop in
-// hubs_scaffold_pages.go. This is the design's ONLY runtime branch: BOTH paths
-// produce a real hub; a missing op is never an error.
+// the real POST, never a separate capability/HEAD check — and a 404/405 (op
+// absent: dormant flag, or the path shadowed by a GET route on older
+// backends; the client normalizes both onto ExitNotFound) falls back to the
+// client-side loop in hubs_scaffold_pages.go. This is the design's ONLY
+// runtime branch: BOTH paths produce a real hub; a missing op is never an
+// error.
 
 import (
 	"fmt"
@@ -16,14 +18,15 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// opAbsentNote is the operator note both probe misses share — the initial 404
-// and the freak retry-404 (op disappeared between the two POSTs).
+// opAbsentNote is the operator note both probe misses share — the initial
+// 404/405 and the freak retry miss (op disappeared between the two POSTs).
 const opAbsentNote = "scaffold-from-template op not available — applying client-side"
 
 // applyViaServerOp tries the backend op for the WHOLE pages[] plan. Returns
 // (true, nil) when the op handled it (stepPages is done), (false, nil) when
-// the op is absent — the 404 probe signal; the caller runs the client-side
-// loop — and (false, err) for everything the op path must surface:
+// the op is absent — the 404/405 probe signal, surfaced by the client as
+// ExitNotFound; the caller runs the client-side loop — and (false, err) for
+// everything the op path must surface:
 //
 //   - ExitUsage (409/422/400): the likely cause is the backend's catalog pin
 //     moving between our preflight resolve and this POST, so the request is
@@ -67,8 +70,8 @@ func applyViaServerOp(sc *scaffoldContext) (bool, error) {
 // rejection all surface the ORIGINAL error with guidance; a plan-rebuild
 // failure against the fresh catalog surfaces the REBUILD error instead (it is
 // the more actionable one: the new catalog is what the retry cannot proceed
-// against); the retry's own 404 (freak case: the op disappeared between the
-// two POSTs) falls back client-side like any other probe miss.
+// against); the retry's own 404/405 (freak case: the op disappeared between
+// the two POSTs) falls back client-side like any other probe miss.
 func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTemplateRequest, opErr error) (bool, error) {
 	rejected := func() error {
 		return errs.Wrap(errs.CodeOf(opErr), fmt.Errorf(

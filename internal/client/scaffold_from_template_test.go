@@ -116,6 +116,36 @@ func TestScaffoldFromTemplate_404IsExitNotFound(t *testing.T) {
 	}
 }
 
+// TestScaffoldFromTemplate_405IsOpAbsent: on a backend WITHOUT the W2b route
+// the probe path can be SHADOWED by an existing GET route pattern
+// (/pages/{page_id_or_slug}), so FastAPI answers 405 Method Not Allowed — not
+// 404. That is the same "op absent, apply client-side" signal, so it must
+// surface as ExitNotFound exactly like the 404 probe miss (found live against
+// mio-backend main on :8001).
+func TestScaffoldFromTemplate_405IsOpAbsent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = w.Write([]byte(`{"detail":"Method Not Allowed"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	_, err := c.ScaffoldFromTemplate(context.Background(), "t_1", "hub_1", ScaffoldFromTemplateRequest{
+		HubTemplateID:  "tmpl_1",
+		Name:           "My Hub",
+		Slug:           "my-hub",
+		CatalogDigest:  "sha256:abc",
+		IdempotencyKey: "k-123",
+	})
+	if err == nil {
+		t.Fatal("expected error on 405, got nil")
+	}
+	if got := errs.CodeOf(err); got != errs.ExitNotFound {
+		t.Errorf("CodeOf(err) = %d, want ExitNotFound (%d) — 405 is the path-shadowed probe miss; err = %v", got, errs.ExitNotFound, err)
+	}
+}
+
 // TestScaffoldFromTemplate_409IsExitUsage: a digest/page/fingerprint conflict
 // is an actionable caller mistake → ExitUsage, with the server detail intact.
 func TestScaffoldFromTemplate_409IsExitUsage(t *testing.T) {

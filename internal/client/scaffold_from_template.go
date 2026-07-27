@@ -1,14 +1,17 @@
 package client
 
 // scaffold_from_template.go — the W2b one-step scaffold op (MIO-2573 §5.1).
-// The CLI PROBES this op: a 404 (dormant flag or older backend) means "apply
-// client-side instead" and is surfaced as ExitNotFound for the caller to catch.
+// The CLI PROBES this op: a 404/405 (op absent, or the POST path shadowed by a
+// GET route on older backends) means "apply client-side instead" and is
+// surfaced as ExitNotFound for the caller to catch.
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
 // ScaffoldFromTemplateRequest carries the scaffold attributes plus the
@@ -37,9 +40,14 @@ type ScaffoldFromTemplateResult struct {
 // ScaffoldFromTemplate calls POST .../hubs/{hub}/pages/scaffold-from-template
 // with a JSON:API envelope (data.type "template_scaffolds") and the required
 // Idempotency-Key header. Errors flow through the client's normal status
-// mapping: 404 → ExitNotFound (op absent — dormant flag or older backend; the
-// caller falls back to client-side apply), 409/422 → ExitUsage. An empty 2xx
-// body yields a zero-value result and nil error.
+// mapping — 409/422 → ExitUsage — with ONE probe-specific normalization: both
+// 404 AND 405 surface as ExitNotFound, the op-absent signal the caller's
+// single probe-miss branch falls back client-side on. 404 = the W2b flag is
+// dormant or the backend predates the route (the W2b contract); 405 = an
+// older backend where the POST path is SHADOWED by an existing GET route
+// pattern (/pages/{page_id_or_slug}), so the router answers Method Not
+// Allowed instead of 404. An empty 2xx body yields a zero-value result and
+// nil error.
 func (c *Client) ScaffoldFromTemplate(ctx context.Context, teamID, hubID string, req ScaffoldFromTemplateRequest) (ScaffoldFromTemplateResult, error) {
 	path := fmt.Sprintf("/api/teams/%s/hubs/%s/pages/scaffold-from-template", teamID, hubID)
 	attrs := map[string]any{
@@ -48,9 +56,15 @@ func (c *Client) ScaffoldFromTemplate(ctx context.Context, teamID, hubID string,
 		"slug":            req.Slug,
 		"catalog_digest":  req.CatalogDigest,
 	}
-	res, err := c.ActionWithHeaders(ctx, StyleEnvelope, http.MethodPost, path, attrs,
+	res, status, err := c.actionWithHeadersStatus(ctx, StyleEnvelope, http.MethodPost, path, attrs,
 		map[string]string{"Idempotency-Key": req.IdempotencyKey})
 	if err != nil {
+		if status == http.StatusMethodNotAllowed {
+			// Path-shadowed probe miss (see the doc above): re-tag onto
+			// ExitNotFound; the outer wrap wins errs.CodeOf, the cause keeps
+			// the server detail.
+			return ScaffoldFromTemplateResult{}, errs.Wrap(errs.ExitNotFound, err)
+		}
 		return ScaffoldFromTemplateResult{}, err
 	}
 	if res == nil {
