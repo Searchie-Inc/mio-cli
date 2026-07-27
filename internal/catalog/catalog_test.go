@@ -99,6 +99,46 @@ func TestTemplateByID_SectionAndPage(t *testing.T) {
 	}
 }
 
+// TestTemplateByID_ScrollAlias covers the MIO-2681 CLI-side discoverability
+// alias: "scroll" resolves to the "compact" template (id is a stored contract,
+// unchanged since the picker-label rename at 0.9.1), a near-miss of the alias
+// still fails lookup like any other unknown id, and the alias itself never
+// leaks into TemplateIDs()/listings — only the real id does.
+func TestTemplateByID_ScrollAlias(t *testing.T) {
+	c := loadForTest(t)
+
+	tmpl, ok := c.TemplateByID("scroll")
+	if !ok || tmpl.ID != "compact" {
+		t.Errorf("TemplateByID(scroll) = %+v, %v; want the compact template", tmpl, ok)
+	}
+	want, wantOK := c.TemplateByID("compact")
+	if !reflect.DeepEqual(tmpl, want) || ok != wantOK {
+		t.Errorf("TemplateByID(scroll) = %+v, %v; want identical to TemplateByID(compact) = %+v, %v", tmpl, ok, want, wantOK)
+	}
+
+	if _, ok := c.TemplateByID("scrol"); ok {
+		t.Error("TemplateByID(scrol) (typo of the alias) should still be unknown")
+	}
+	if _, ok := c.TemplateByID("scroll-bar"); ok {
+		t.Error("TemplateByID(scroll-bar) should still be unknown — not a fuzzy alias match")
+	}
+
+	for _, id := range c.TemplateIDs() {
+		if id == "scroll" {
+			t.Error(`TemplateIDs() must not include the CLI-side alias "scroll" — only the real catalog id "compact"`)
+		}
+	}
+	found := false
+	for _, id := range c.TemplateIDs() {
+		if id == "compact" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error(`TemplateIDs() should still include the real id "compact"`)
+	}
+}
+
 func TestRecommendedTemplates_ForHomepage_OrderedByRecommendation(t *testing.T) {
 	c := loadForTest(t)
 	got := c.RecommendedTemplates("homepage")

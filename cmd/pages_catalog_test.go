@@ -119,6 +119,46 @@ func TestCatalogScaffold_ValidVariant(t *testing.T) {
 	}
 }
 
+func TestCatalogScaffold_ScrollAliasResolvesToCompact(t *testing.T) {
+	// MIO-2681: "scroll" is a CLI-side discoverability alias for the compact
+	// template (picker label renamed "Compact" -> "Scroll" at 0.9.1; the id
+	// itself is a stored contract and stays "compact"). The scaffolded node's
+	// embedded "template" attribute — baked into the catalog recipe itself,
+	// not derived from what the caller typed — must read the real id.
+	res := runContract(t, offlineEnv(), "pages", "catalog", "scaffold", "--template", "scroll", "--offline")
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+	}
+	node := parseTreeJSON(t, res.Stdout)
+	if node["template"] != "compact" {
+		t.Errorf(`scaffold --template scroll: node["template"] = %v, want "compact"`, node["template"])
+	}
+	// Same recipe as scaffolding by the real id directly.
+	direct := runContract(t, offlineEnv(), "pages", "catalog", "scaffold", "--template", "compact", "--offline")
+	if direct.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0; stderr=%q", direct.Code, direct.Stderr)
+	}
+	directNode := parseTreeJSON(t, direct.Stdout)
+	if node["template"] != directNode["template"] {
+		t.Errorf("scroll alias and compact direct scaffold disagree on template: %v vs %v", node["template"], directNode["template"])
+	}
+}
+
+func TestCatalogTemplates_DoesNotListScrollAlias(t *testing.T) {
+	// Listings show only the real catalog id — the alias is a lookup-time
+	// convenience, never a first-class id.
+	res := runContract(t, offlineEnv(), "pages", "catalog", "templates", "--offline", "--output", "json")
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+	}
+	if strings.Contains(res.Stdout, `"scroll"`) {
+		t.Errorf(`templates listing must not include the "scroll" alias as an id; got %s`, res.Stdout)
+	}
+	if !strings.Contains(res.Stdout, `"compact"`) {
+		t.Errorf(`templates listing should still include the real id "compact"; got %s`, res.Stdout)
+	}
+}
+
 func TestCatalogScaffold_UnknownTemplate_ExitUsage(t *testing.T) {
 	err := executeCLI(t, offlineEnv(), "pages", "catalog", "scaffold", "--template", "does-not-exist", "--offline")
 	if codeForExecuteErr(err) != errs.ExitUsage {
