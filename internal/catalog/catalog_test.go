@@ -1,7 +1,7 @@
 package catalog
 
 // catalog_test.go — loader + accessor invariants over the vendored catalog
-// (mio-page-catalog@5ffdfaf, catalogVersion 0.8.0). These accessors are what the CLI commands consume
+// (mio-page-catalog@45258a1, catalogVersion 0.10.0). These accessors are what the CLI commands consume
 // instead of hardcoded lists: the writable section-type allow-list (imperative
 // door), template-id validation (tree door), and recommended templates per page
 // type.
@@ -29,8 +29,10 @@ func TestParse_RejectsTrailingContent(t *testing.T) {
 
 func TestSectionType_KnownVsUnknown(t *testing.T) {
 	c := loadForTest(t)
-	if st, ok := c.SectionType("compact"); !ok || st.Writable {
-		t.Errorf("SectionType(compact) = %+v, %v; want known + not writable", st, ok)
+	// compact flipped writable false -> true in 0.10.0 (MIO-2681,
+	// imperative-door parity with grid).
+	if st, ok := c.SectionType("compact"); !ok || !st.Writable {
+		t.Errorf("SectionType(compact) = %+v, %v; want known + writable", st, ok)
 	}
 	if st, ok := c.SectionType("grid"); !ok || !st.Writable {
 		t.Errorf("SectionType(grid) = %+v, %v; want known + writable", st, ok)
@@ -58,9 +60,10 @@ func TestLoad_Counts(t *testing.T) {
 
 func TestWritableSectionTypes_MatchesCatalog(t *testing.T) {
 	c := loadForTest(t)
-	// The 9 writable=true section types (the imperative `sections create --type`
-	// allow-list), sorted for a stable help string.
-	want := []string{"carousel", "content-grid", "cta", "feature", "grid", "row", "search", "text", "video"}
+	// The 10 writable=true section types (the imperative `sections create --type`
+	// allow-list), sorted for a stable help string. compact joined the set in
+	// 0.10.0 (MIO-2681).
+	want := []string{"carousel", "compact", "content-grid", "cta", "feature", "grid", "row", "search", "text", "video"}
 	got := c.WritableSectionTypes()
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("WritableSectionTypes() = %v, want %v", got, want)
@@ -73,7 +76,7 @@ func TestIsWritableSectionType(t *testing.T) {
 		"grid":    true,
 		"video":   true,
 		"feature": true,
-		"compact": false, // writable=false
+		"compact": true, // writable=true as of 0.10.0 (MIO-2681)
 		"unknown": false,
 	}
 	for id, want := range cases {

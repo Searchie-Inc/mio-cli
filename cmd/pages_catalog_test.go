@@ -163,13 +163,17 @@ func TestCatalogSectionTypes_WritableOnly(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Stdout), &rows); err != nil {
 		t.Fatalf("stdout not a JSON array: %v\n%s", err, res.Stdout)
 	}
-	if len(rows) != 9 {
-		t.Errorf("writable section types = %d, want 9", len(rows))
+	if len(rows) != 10 {
+		t.Errorf("writable section types = %d, want 10", len(rows))
 	}
+	found := false
 	for _, r := range rows {
 		if id, _ := r["id"].(string); id == "compact" {
-			t.Error("compact (writable=false) must not appear in --writable-only output")
+			found = true
 		}
+	}
+	if !found {
+		t.Error("compact (writable=true as of 0.10.0, MIO-2681) must appear in --writable-only output")
 	}
 }
 
