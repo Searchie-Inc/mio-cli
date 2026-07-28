@@ -36,7 +36,10 @@ plain JSON.
   `refunds`; body REQUIRED — `--reason` mandatory, `--amount` optional and
   omitted for a full refund), `content reorder` (envelope `content_nodes`), and
   `checkout accounts onboarding-link` (envelope `onboarding_links`, ALL of
-  `--hub-id`/`--return-url`/`--refresh-url` required).
+  `--hub-id`/`--return-url`/`--refresh-url` required — `hub-id` must be the
+  hub's canonical UUID, slugs are NOT resolved for this endpoint). **This
+  command is web/JWT-only (MIO-2655) and always fails fast client-side with
+  `ExitAuth` from this API-key-only CLI — see `cmd/checkout.go`.**
 - **Type derivation:** the envelope `type` is derived from the request path via
   `resourceTypeFromPath` + a `typeOverrides` table for the cases where the backend
   `type` literal differs from the URL segment (e.g. `segments`→`segment`,
@@ -257,7 +260,10 @@ plain JSON.
 - webhooks:      `list/retrieve` `…/payment-webhooks[/{id}]`; `replay` POST `…/payment-webhooks/{id}/replay`
 - accounts:      `list/retrieve` `/api/teams/{team_id}/payment-accounts[/{id}]`;
                  `onboarding-link` POST `…/payment-accounts/onboarding-link`
-                 (envelope `onboarding_links`; requires `--hub-id`/`--return-url`/`--refresh-url`)
+                 (envelope `onboarding_links`; requires `--hub-id` [canonical UUID,
+                 slugs not resolved]/`--return-url`/`--refresh-url`) — **web/JWT-only
+                 (MIO-2655): the backend 403s API-key principals, so this API-key-only
+                 CLI always fails fast client-side (`ExitAuth`); MIO-2717**
 - stripe-sync:   `import` POST `/api/teams/{team_id}/checkout/sync/import-from-stripe`;
                  `import-status` GET `…/checkout/sync/import-runs/{run_id}`;
                  `adopt-product` POST `/api/teams/{team_id}/products/adopt-from-stripe`

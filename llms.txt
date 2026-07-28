@@ -221,7 +221,7 @@ mio checkout webhooks retrieve — retrieve a webhook event by id
 mio checkout webhooks replay — replay a payment webhook event
 mio checkout accounts list — list connected payment accounts
 mio checkout accounts retrieve — retrieve a payment account by id
-mio checkout accounts onboarding-link — generate a Stripe Connect onboarding link
+mio checkout accounts onboarding-link — WEB/JWT-ONLY, always fails from this CLI (exit 3): the backend rejects API-key principals on this route (leaked key must not attach a payout account) and this CLI is API-key-only; connect Stripe via the member.dev dashboard instead
 mio checkout stripe-sync import — start a Stripe data import for the active team
 mio checkout stripe-sync import-status — check the status of a Stripe import run
 mio checkout stripe-sync adopt-product — adopt an existing Stripe product into mio

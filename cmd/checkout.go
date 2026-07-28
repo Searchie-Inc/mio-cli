@@ -13,6 +13,10 @@ package cmd
 //	               replay            POST …/payment-webhooks/{id}/replay
 //	accounts:      list/retrieve     /api/teams/{team_id}/payment-accounts[/{id}]
 //	               onboarding-link   POST …/payment-accounts/onboarding-link
+//	                                 (web/JWT-only — the backend rejects API-key
+//	                                 principals on this route, MIO-2655, and this
+//	                                 CLI is API-key-only, so the command always
+//	                                 fails fast with a clear error; MIO-2717)
 //	stripe-sync:   import            POST /api/teams/{team_id}/checkout/sync/import-from-stripe
 //	               import-status     GET  …/checkout/sync/import-runs/{run_id}
 //	               adopt-product     POST /api/teams/{team_id}/products/adopt-from-stripe
@@ -98,8 +102,10 @@ func init() {
 	checkoutPaymentsRefundCmd.Flags().String("reason", "", "Reason for the refund (e.g. duplicate, fraudulent, requested_by_customer). (required)")
 	_ = checkoutPaymentsRefundCmd.MarkFlagRequired("reason")
 
-	// onboarding-link flags (all required by the backend)
-	checkoutAccountsOnboardingLinkCmd.Flags().String("hub-id", "", "Hub ID the onboarding link is for. (required)")
+	// onboarding-link flags (documented for reference — the backend requires
+	// all three — but this command always fails fast client-side; see the
+	// WEB/JWT-ONLY note on the command itself).
+	checkoutAccountsOnboardingLinkCmd.Flags().String("hub-id", "", "Hub ID the onboarding link is for — canonical UUID; slugs are not resolved. (required)")
 	checkoutAccountsOnboardingLinkCmd.Flags().String("return-url", "", "URL Stripe returns the user to after completing onboarding. (required)")
 	checkoutAccountsOnboardingLinkCmd.Flags().String("refresh-url", "", "URL Stripe sends the user to if the onboarding link expires. (required)")
 
@@ -551,9 +557,10 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 var checkoutAccountsCmd = &cobra.Command{
 	Use:   "accounts",
 	Short: "Manage payment accounts for a team.",
-	Long: `List, retrieve, and onboard payment accounts (Stripe Connect) for the active team.
+	Long: `List and retrieve payment accounts (Stripe Connect) for the active team.
 
-Payment accounts are team-scoped (no --hub required).`,
+Payment accounts are team-scoped (no --hub required). Connecting a new Stripe
+account (onboarding-link) is web/JWT-only — see 'onboarding-link --help'.`,
 }
 
 var checkoutAccountsListCmd = &cobra.Command{
@@ -602,43 +609,43 @@ var checkoutAccountsRetrieveCmd = &cobra.Command{
 
 var checkoutAccountsOnboardingLinkCmd = &cobra.Command{
 	Use:   "onboarding-link",
-	Short: "Generate a Stripe Connect onboarding link.",
+	Short: "Generate a Stripe Connect onboarding link. (web/JWT-only — always fails from this CLI; see below)",
 	Long: `Generate a Stripe Connect account onboarding or re-onboarding link for the
 active team. Returns a short-lived URL the team owner should visit to complete
 or update their Stripe account setup.
 
-The backend requires --hub-id, --return-url and --refresh-url (all sent inside a
-JSON:API onboarding_links envelope).`,
-	Example: `  mio checkout accounts onboarding-link --hub-id hub_abc123 --return-url https://app.example.com/return --refresh-url https://app.example.com/refresh`,
-	Args:    cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		c, teamID, err := checkoutTeamContext(cmd)
-		if err != nil {
-			return err
-		}
+WEB/JWT-ONLY: the backend rejects API-key principals on this route (MIO-2655) —
+a leaked team API key must not be able to attach an attacker's Stripe payout
+account, so connecting a Stripe account requires a user JWT (the MIO-2599
+posture, matching api-keys/oauth-clients/external-login-providers). The mio
+CLI authenticates exclusively via team API keys ("mio_sk_..." — see 'mio
+login'; any JWT minted during the email+password login flow is discarded
+immediately after minting the stored key), so this command can never satisfy
+that requirement. It always fails fast with a clear error instead of sending
+the request and surfacing a raw 403 — complete Stripe Connect onboarding in
+the member.dev dashboard instead.
 
-		// Backend OnboardingLinkRequest requires an envelope (type
-		// onboarding_links) with hub_id, return_url and refresh_url — all
-		// mandatory. A nil body 422s.
-		attrs := map[string]any{}
-		setMappedString(cmd, attrs, "hub-id", "hub_id")
-		setMappedString(cmd, attrs, "return-url", "return_url")
-		setMappedString(cmd, attrs, "refresh-url", "refresh_url")
-		for _, f := range []string{"hub-id", "return-url", "refresh-url"} {
-			if !cmd.Flags().Changed(f) {
-				return errs.New(errs.ExitUsage, "onboarding-link requires --hub-id, --return-url and --refresh-url")
-			}
-		}
+For reference, the backend requires --hub-id (the hub's canonical UUID —
+slugs are NOT resolved for this endpoint), --return-url and --refresh-url,
+sent inside a JSON:API onboarding_links envelope.`,
+	Example: `  mio checkout accounts onboarding-link --hub-id 3fa85f64-5717-4562-b3fc-2c963f66afa6 --return-url https://app.example.com/return --refresh-url https://app.example.com/refresh
 
-		path := accountsPath(teamID, "") + "/onboarding-link"
-		res, err := c.client.Action(c.ctx, "POST", path, attrs)
-		if err != nil {
-			return err
-		}
-		if res == nil {
-			return errs.New(errs.ExitGeneric, "onboarding-link: server returned no data")
-		}
-		return c.render(cmd, res)
+  # The above always fails (web/JWT-only, MIO-2655) — use the member.dev
+  # dashboard to connect a Stripe account instead.`,
+	Args: cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		// The backend requires a user JWT on this route (MIO-2655/MIO-2599
+		// posture): a leaked team API key must not be able to attach an
+		// attacker's Stripe payout account. The mio CLI is API-key-only (see
+		// login.go — any JWT minted during the email+password login flow is
+		// discarded immediately after minting the stored mio_sk_... key), so
+		// this command can never satisfy that requirement. Fail fast with a
+		// clear, actionable message instead of sending the request and
+		// surfacing a raw 403. (MIO-2717)
+		return errs.New(errs.ExitAuth,
+			"connecting a Stripe account is a web/JWT-only operation for security "+
+				"(a leaked API key must not be able to attach a payout account) — "+
+				"complete Stripe Connect onboarding in the member.dev dashboard, not the CLI")
 	},
 }
 
