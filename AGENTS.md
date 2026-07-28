@@ -165,7 +165,7 @@ Every implemented resource and its verbs.
 | `checkout subscriptions` | `list` `retrieve` `cancel` |
 | `checkout payments` | `list` `retrieve` `refund` |
 | `checkout webhooks` | `list` `retrieve` `replay` |
-| `checkout accounts` | `list` `retrieve` `onboarding-link` |
+| `checkout accounts` | `list` `retrieve` `onboarding-link` (web/JWT-only — always fails from this CLI, see Command Gotchas) |
 | `checkout stripe-sync` | `import` `import-status` `adopt-product` |
 | `email drip-campaigns` | `create` `list` `retrieve` `update` `delete` `activate` `pause` (create/update accept `--enrollment-mode` `--trigger-event-type` `--segment-id` `--segment-check-interval-minutes` `--allow-reenrollment`) |
 | `email steps` | `create` `list` `update` `delete` |
@@ -213,6 +213,7 @@ Every implemented resource and its verbs.
   mio segments search --conditions @conditions.json --page-size 50 --page-after <cursor>
   ```
 - **Generate the full reference** for any command set with `mio gen-docs --dir ./docs` (one Markdown file per command).
+- **`checkout accounts onboarding-link` always fails (exit 3, `ExitAuth`)** — the backend rejects API-key principals on this route so a leaked team API key can't attach an attacker's Stripe payout account (MIO-2655). This CLI is API-key-only (see Authentication above — any JWT is discarded right after `mio login` mints the stored key), so the command can never succeed here; it fails fast client-side with no HTTP request. Connect a Stripe account via the member.dev dashboard instead. (MIO-2717)
 
 ---
 

@@ -339,7 +339,7 @@ Scripts and agents can branch on these stable codes.
 | `media attachments` | `list`, `show`, `update`, `delete` |
 | `media transcripts` | `get`, `vtt`, `content`, `versions`, `edit`, `revert` |
 | `products` | `create`, `list`, `retrieve`, `update`, `delete`; `prices create/list/retrieve/update/delete` |
-| `checkout` | `orders list/retrieve`; `subscriptions list/retrieve/cancel`; `payments list/retrieve/refund`; `webhooks list/retrieve/replay`; `accounts list/retrieve/onboarding-link`; `stripe-sync import/import-status/adopt-product` |
+| `checkout` | `orders list/retrieve`; `subscriptions list/retrieve/cancel`; `payments list/retrieve/refund`; `webhooks list/retrieve/replay`; `accounts list/retrieve/onboarding-link` (onboarding-link is web/JWT-only — see [Troubleshooting](#troubleshooting)); `stripe-sync import/import-status/adopt-product` |
 | `email` | `drip-campaigns create/list/retrieve/update/delete/activate/pause` (create/update now accept `--enrollment-mode`, `--trigger-event-type`, `--segment-id`, `--segment-check-interval-minutes`, `--allow-reenrollment`); `steps create/list/update/delete`; `templates create/list/retrieve/update/delete/preview`; `config set/get/delete/test`; `enrollments list/exit`; `stats get` |
 | `access-rules` | `rules create/list/retrieve/update/delete`; `overrides create/list/retrieve/update/delete` |
 | `activity` | `contact`, `top-engaged` |
@@ -376,6 +376,7 @@ Multiple named profiles are supported via `--profile`.
 | Exit code **6** (`ExitRateLimited`) | Too many requests (HTTP 429) | Back off and retry. |
 | Exit code **7** (`ExitServer`) | Upstream 5xx | Transient — retry; if it persists, the backend is down. |
 | Calls fail against production | Wrong API base or stale/revoked key | Verify with `mio whoami`. Point at a different backend with `--api-base <url>` or `MIO_API_BASE_URL`. |
+| `checkout accounts onboarding-link` always errors (exit 3) | The route is web/JWT-only — the backend rejects API-key principals so a leaked team API key can't attach an attacker's Stripe payout account, and this CLI authenticates exclusively via API keys | Expected — connect a Stripe account through the member.dev dashboard instead of the CLI. |
 
 Errors are rendered TTY-aware: on an interactive terminal you get a friendly one-line `Error: <detail>` plus a dimmed `(exit code N)`; when stderr is piped or otherwise non-interactive you get the machine-readable JSON:API `errors` array with the exit code echoed in `meta.exit_code`. Either way the process exit code is the same, so scripts can branch on the exit code (and, off a TTY, on the body).
 
