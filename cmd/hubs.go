@@ -155,10 +155,7 @@ func hubsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 func (c *cmdContext) hubTargetID(cmd *cobra.Command, hubArg string, supplied bool) (string, error) {
 	if supplied {
 		if strings.TrimSpace(hubArg) == "" {
-			return "", errs.New(errs.ExitUsage,
-				"empty hub id argument to `%s`: a blank positional is not a request to use "+
-					"--hub/current_hub — pass a real hub id, or omit the argument entirely to use "+
-					"the hub in context", cmd.CommandPath())
+			return "", errs.New(errs.ExitUsage, "%s", blankHubIDMessage(cmd))
 		}
 		return hubArg, nil
 	}
@@ -178,6 +175,39 @@ func (c *cmdContext) hubTargetID(cmd *cobra.Command, hubArg string, supplied boo
 		return "", err
 	}
 	return id, nil
+}
+
+// hubsOptionalIDArgs is the Args validator for every hubs verb whose hub id is an
+// OPTIONAL positional. It allows 0 or 1 positional and REJECTS a blank one.
+//
+// The blank check lives here, in the Args phase, and not only inside hubTargetID,
+// because the repo contract is that a usage error fires NO HTTP request. RunE
+// resolves auth and team (hubsContext) before it ever reaches hubTargetID, so a
+// blank id caught there had already triggered a team-resolution GET when no
+// --team was in context. Rejecting in Args means the invocation never reaches
+// RunE at all, making the no-request guarantee unconditional (Codex R2).
+//
+// hubTargetID keeps its own blank check as defence in depth for any future caller
+// that does not route through this validator.
+func hubsOptionalIDArgs(cmd *cobra.Command, args []string) error {
+	if len(args) > 1 {
+		return errs.New(errs.ExitUsage,
+			"`%s` accepts at most one hub id, got %d", cmd.CommandPath(), len(args))
+	}
+	if len(args) == 1 && strings.TrimSpace(args[0]) == "" {
+		return errs.New(errs.ExitUsage, "%s", blankHubIDMessage(cmd))
+	}
+	return nil
+}
+
+// blankHubIDMessage explains why a supplied-but-empty hub id is refused rather
+// than quietly treated as "use the hub in context". Shared so the Args validators
+// and hubTargetID cannot drift apart.
+func blankHubIDMessage(cmd *cobra.Command) string {
+	return fmt.Sprintf(
+		"empty hub id argument to `%s`: a blank positional is not a request to use "+
+			"--hub/current_hub — pass a real hub id, or omit the argument entirely to use "+
+			"the hub in context", cmd.CommandPath())
 }
 
 // optionalArg returns the i-th positional and whether it was SUPPLIED at all.
@@ -531,7 +561,7 @@ hub-scoped command.`,
 	Example: `  mio hubs retrieve hub_abc123
   mio hubs retrieve --hub hub_abc123
   mio hubs retrieve                      # uses current_hub from config`,
-	Args: cobra.MaximumNArgs(1),
+	Args: hubsOptionalIDArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)
 		if err != nil {
@@ -567,7 +597,7 @@ the ambient context (--hub, or current_hub in config).`,
 	Example: `  mio hubs update hub_abc123 --name "New Name"
   mio hubs update hub_abc123 --published=true
   mio hubs update --hub hub_abc123 --name "New Name"`,
-	Args: cobra.MaximumNArgs(1),
+	Args: hubsOptionalIDArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Build and validate attributes BEFORE resolving auth/team so a malformed
 		// flag exits with a usage error and fires no HTTP request. The read-modify-
@@ -909,11 +939,19 @@ the hub id must be given positionally.`,
 	// "accepts 1 arg(s), received 0" is exactly the arg-count-for-a-context-problem
 	// message this ticket is about, and a reader who just learned that the other
 	// verbs honour --hub deserves to be told this one intentionally does not.
-	Args: func(_ *cobra.Command, args []string) error {
-		switch len(args) {
-		case 1:
+	//
+	// It also rejects a BLANK id, which matters more here than anywhere else:
+	// hubsPath returns the COLLECTION path when the id is empty, so `hubs delete ""`
+	// would issue `DELETE /api/teams/{team}/hubs` — a destructive verb aimed at the
+	// collection. Whether the backend happens to reject that is not a contract the
+	// CLI may lean on (Codex R2).
+	Args: func(cmd *cobra.Command, args []string) error {
+		switch {
+		case len(args) == 1 && strings.TrimSpace(args[0]) != "":
 			return nil
-		case 0:
+		case len(args) == 1:
+			return errs.New(errs.ExitUsage, "%s", blankHubIDMessage(cmd))
+		case len(args) == 0:
 			return errs.New(errs.ExitUsage,
 				"hubs delete requires the hub id positionally: `mio hubs delete <id>`. "+
 					"It does NOT fall back to --hub/current_hub the way the other hubs verbs do — "+
@@ -1042,18 +1080,13 @@ Exactly one of --content or --reset-content must be provided:
   mio hubs policies update hub_abc123 --policy-type privacy_policy --content @privacy.md
   mio hubs policies update hub_abc123 --policy-type tos --reset-content
   mio hubs policies update --hub hub_abc123 --policy-type tos --content @tos.md`,
-	Args: cobra.MaximumNArgs(1),
+	Args: hubsOptionalIDArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		c, teamID, err := hubsContext(cmd)
-		if err != nil {
-			return err
-		}
-		hubArg, hubGiven := optionalArg(args, 0)
-		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
-		if err != nil {
-			return err
-		}
-
+		// Validate the flag contract BEFORE resolving auth/team/hub so a usage error
+		// fires NO HTTP request — the same ordering every sibling verb already used
+		// (policies gate, redirect-origins set, hubs update). This verb was the
+		// outlier: it resolved context first, so a bad --policy-type performed a
+		// team-resolution GET before failing (Codex R2).
 		policyType, ferr := cmd.Flags().GetString("policy-type")
 		if ferr != nil {
 			return errs.New(errs.ExitUsage, "--policy-type: %s", ferr.Error())
@@ -1104,6 +1137,17 @@ Exactly one of --content or --reset-content must be provided:
 			if ra, rerr := cmd.Flags().GetBool("require-acceptance"); rerr == nil {
 				policy.RequireAcceptance = &ra
 			}
+		}
+
+		// Everything above is flag-only and fires no request; resolve context now.
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
+		hubArg, hubGiven := optionalArg(args, 0)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
+		if err != nil {
+			return err
 		}
 
 		res, err := applyHubPolicies(c.ctx, c.client, teamID, hubID, policy)
@@ -1186,7 +1230,7 @@ positionally; omit it to use the ambient hub (--hub, or current_hub in config).
 	Example: `  mio hubs policies gate hub_abc123 --enabled
   mio hubs policies gate hub_abc123 --enabled=false
   mio hubs policies gate --hub hub_abc123 --enabled`,
-	Args: cobra.MaximumNArgs(1),
+	Args: hubsOptionalIDArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Require --enabled explicitly BEFORE resolving auth/team so a usage
 		// error fires no HTTP request. A bare bool flag defaults to false, so we
@@ -1250,7 +1294,7 @@ The hub identifier may be given positionally; omit it to use the ambient hub
 (--hub, or current_hub in config).`,
 	Example: `  mio hubs redirect-origins get hub_abc123
   mio hubs redirect-origins get --hub hub_abc123`,
-	Args: cobra.MaximumNArgs(1),
+	Args: hubsOptionalIDArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)
 		if err != nil {
@@ -1289,7 +1333,7 @@ The hub identifier may be given positionally; omit it to use the ambient hub
 	Example: `  mio hubs redirect-origins set hub_abc123 --origins "https://app.example.com,https://portal.example.com"
   mio hubs redirect-origins set hub_abc123 --clear
   mio hubs redirect-origins set --hub hub_abc123 --clear`,
-	Args: cobra.MaximumNArgs(1),
+	Args: hubsOptionalIDArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Validate the origins/clear contract BEFORE resolving auth/team so a
 		// usage error fires no HTTP request.
@@ -1378,7 +1422,7 @@ The hub identifier may be given positionally; omit it to use the ambient hub
 (--hub, or current_hub in config).`,
 	Example: `  mio hubs email-settings get hub_abc123
   mio hubs email-settings get --hub hub_abc123`,
-	Args: cobra.MaximumNArgs(1),
+	Args: hubsOptionalIDArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)
 		if err != nil {
@@ -1414,7 +1458,7 @@ The hub identifier may be given positionally; omit it to use the ambient hub
   mio hubs email-settings update hub_abc123 --from-name "Support" --reply-to support@example.com
   mio hubs email-settings update hub_abc123 --reply-to ""
   mio hubs email-settings update --hub hub_abc123 --from-name "My Community"`,
-	Args: cobra.MaximumNArgs(1),
+	Args: hubsOptionalIDArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)
 		if err != nil {

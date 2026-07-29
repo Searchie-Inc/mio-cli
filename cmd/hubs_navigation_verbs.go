@@ -124,6 +124,25 @@ func splitNavArgs(args []string) (hubArg string, hubGiven bool, bucket string) {
 	}
 }
 
+// hubsNavArgs builds the Args validator for a navigation verb accepting between
+// minArgs and maxArgs positionals, rejecting a supplied-but-BLANK hub id in the
+// Args phase so it can never reach RunE and fire a resolution request — the same
+// no-request-on-usage-error guarantee hubsOptionalIDArgs gives the other hubs
+// verbs (Codex R2).
+func hubsNavArgs(minArgs, maxArgs int) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if len(args) < minArgs || len(args) > maxArgs {
+			return errs.New(errs.ExitUsage,
+				"`%s` accepts between %d and %d arguments, got %d",
+				cmd.CommandPath(), minArgs, maxArgs, len(args))
+		}
+		if hubArg, hubGiven, _ := splitNavArgs(args); hubGiven && strings.TrimSpace(hubArg) == "" {
+			return errs.New(errs.ExitUsage, "%s", blankHubIDMessage(cmd))
+		}
+		return nil
+	}
+}
+
 // fetchHubNav retrieves the hub and returns a shallow-copied, mutable navigation
 // blob plus the hub's slug (for hub-scoped href validation). A hub with no
 // navigation yields an empty map.
@@ -213,7 +232,7 @@ current_hub in config).`,
   mio hubs navigation list hub_abc123 header
   mio hubs navigation list header          # ambient hub, header bucket
   mio hubs navigation list --hub hub_abc123`,
-	Args: cobra.MaximumNArgs(2),
+	Args: hubsNavArgs(0, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		hubArg, hubGiven, bucket := splitNavArgs(args)
 
@@ -311,7 +330,7 @@ ambient hub (--hub, or current_hub in config).`,
 	Example: `  mio hubs navigation add hub_abc123 header --type url --href /my-hub/about --label About
   mio hubs navigation add hub_abc123 header --item-json '{"type":"page","label":"Guide","page_id":"pg_1"}'
   mio hubs navigation add header --type url --href /my-hub/about --label About`,
-	Args: cobra.RangeArgs(1, 2),
+	Args: hubsNavArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		hubArg, hubGiven, bucket := splitNavArgs(args)
 		if err := requireNavBucket(bucket); err != nil {
@@ -371,7 +390,7 @@ The hub id may be given positionally before the bucket; omit it to use the
 ambient hub (--hub, or current_hub in config).`,
 	Example: `  mio hubs navigation remove hub_abc123 header --index 2
   mio hubs navigation remove header --index 2`,
-	Args: cobra.RangeArgs(1, 2),
+	Args: hubsNavArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		hubArg, hubGiven, bucket := splitNavArgs(args)
 		if err := requireNavBucket(bucket); err != nil {
@@ -459,7 +478,7 @@ The hub id may be given positionally before the bucket; omit it to use the
 ambient hub (--hub, or current_hub in config).`,
 	Example: `  mio hubs navigation reorder hub_abc123 header --order 2,0,1
   mio hubs navigation reorder header --order 2,0,1`,
-	Args: cobra.RangeArgs(1, 2),
+	Args: hubsNavArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		hubArg, hubGiven, bucket := splitNavArgs(args)
 		if err := requireNavBucket(bucket); err != nil {

@@ -241,6 +241,120 @@ func TestHubsVerbs_BlankPositionalNeverFallsBackToAmbientHub(t *testing.T) {
 	}
 }
 
+// TestHubsDelete_BlankPositionalIsRejected (Codex R2, Critical).
+//
+// `hubsPath(teamID, "")` returns the COLLECTION path, so a blank positional on
+// delete produced `DELETE /api/teams/{team}/hubs` — a destructive verb aimed at
+// the collection instead of a hub. Whether the backend happens to 405 that is not
+// a contract the CLI may lean on. It must be refused client-side, with no request.
+func TestHubsDelete_BlankPositionalIsRejected(t *testing.T) {
+	for _, arg := range []string{"", "   "} {
+		t.Run("arg="+arg, func(t *testing.T) {
+			var fired atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fired.Store(true)
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			t.Cleanup(srv.Close)
+
+			env := append(baseEnv(srv.URL), seedConfigHub(t, ""))
+			res := runContract(t, env, withTeam("t_team1", "--yes", "hubs", "delete", arg)...)
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit=%d want ExitUsage (2); stderr=%q", res.Code, res.Stderr)
+			}
+			if fired.Load() {
+				t.Error("a blank hub id on `hubs delete` must fire NO HTTP request — it targeted the hubs COLLECTION")
+			}
+		})
+	}
+}
+
+// TestHubsVerbs_BlankPositionalFiresNoRequestWithoutTeam (Codex R2, Important).
+//
+// The repo contract is that a usage error fires NO HTTP request. The blank-id
+// check originally lived in hubTargetID, which runs AFTER hubsContext — so with
+// no --team in context the command still performed a team-resolution GET before
+// failing. Rejecting a blank positional in the Args phase makes the guarantee
+// unconditional: nothing reaches RunE at all.
+func TestHubsVerbs_BlankPositionalFiresNoRequestWithoutTeam(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"retrieve", []string{"hubs", "retrieve", ""}},
+		{"update", []string{"hubs", "update", "", "--name", "X"}},
+		{"delete", []string{"hubs", "delete", "", "--yes"}},
+		{"navigation add", []string{"hubs", "navigation", "add", "", "header",
+			"--type", "url", "--href", "/h/x", "--label", "X"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var fired atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fired.Store(true)
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				_, _ = w.Write([]byte(`{"data":[{"id":"team_only","type":"teams","attributes":{"name":"S","slug":"s"}}]}`))
+			}))
+			t.Cleanup(srv.Close)
+
+			// NO --team: without an Args-phase rejection, requireTeam's single-team
+			// auto-default would fire GET /api/v1/teams before the usage error.
+			env := append(baseEnv(srv.URL), seedConfigHub(t, ""))
+			res := runContract(t, env, tc.args...)
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit=%d want ExitUsage (2); stderr=%q", res.Code, res.Stderr)
+			}
+			if fired.Load() {
+				t.Error("usage error fired an HTTP request (team resolution) before rejecting the blank hub id")
+			}
+		})
+	}
+}
+
+// TestHubsPoliciesUpdate_BadFlagsFireNoRequest (Codex R2, Important).
+//
+// Every sibling verb validates its flags BEFORE resolving auth/team/hub, with an
+// explicit comment saying so. `hubs policies update` was the odd one out: it
+// resolved context first, so a bad --policy-type or a violated
+// --content/--reset-content contract performed resolution HTTP before failing as
+// a usage error.
+func TestHubsPoliciesUpdate_BadFlagsFireNoRequest(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"bad policy-type", []string{"hubs", "policies", "update", "hub_x",
+			"--policy-type", "bogus", "--content", "x"}},
+		{"content and reset together", []string{"hubs", "policies", "update", "hub_x",
+			"--policy-type", "tos", "--content", "x", "--reset-content"}},
+		{"neither content nor reset", []string{"hubs", "policies", "update", "hub_x",
+			"--policy-type", "tos"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var fired atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fired.Store(true)
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				_, _ = w.Write([]byte(`{"data":[{"id":"team_only","type":"teams","attributes":{"name":"S","slug":"s"}}]}`))
+			}))
+			t.Cleanup(srv.Close)
+
+			// NO --team, so any context resolution is observable as a request.
+			env := append(baseEnv(srv.URL), seedConfigHub(t, ""))
+			res := runContract(t, env, tc.args...)
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit=%d want ExitUsage (2); stderr=%q", res.Code, res.Stderr)
+			}
+			if fired.Load() {
+				t.Error("a flag usage error must fire NO HTTP request; context was resolved first")
+			}
+		})
+	}
+}
+
 // ─── sibling verbs that shared the defect ───────────────────────────────────────
 
 // TestHubsSiblingVerbs_HonorHubFlag sweeps every other `mio hubs` verb whose hub
