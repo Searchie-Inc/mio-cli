@@ -123,7 +123,7 @@ Every implemented resource and its verbs.
 | `logout` | _(interactive only)_ |
 | `whoami` | _(no subcommand — prints resolved user, team, hub, api-base, profile, key source)_ |
 | `version` | _(no subcommand)_ |
-| `update` | _(self-update via the official release installer; supports `--version` and `--prefix`)_ |
+| `update` | _(self-update; supports `--version` and `--prefix`. macOS/Linux rerun the official release installer; Windows updates natively — Go-native download + SHA-256 verify + binary swap, no `sh`/`curl` required)_ |
 | `config` | `set` `get` `list` |
 | `api-keys` | `create` `list` `retrieve` `delete` |
 | `teams` | `create` `list` `retrieve` `update` `delete` `switch` |

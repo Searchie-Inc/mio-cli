@@ -3,10 +3,13 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
 func TestUpdateCommandInvokesInstallerWithPrefixAndVersion(t *testing.T) {
@@ -55,6 +58,41 @@ func TestUpdateCommandDefaultsPrefixToExecutableDir(t *testing.T) {
 	}
 	if got != filepath.Dir(exe) {
 		t.Errorf("default prefix = %q, want executable dir %q", got, filepath.Dir(exe))
+	}
+}
+
+// The exit-code contract reaches the update command too: a deterministic local
+// input error from the native (Windows) updater must exit 2, while an untyped
+// failure — everything the Unix install-script path can return — stays generic
+// exit 1. Codex review round 2.
+func TestUpdateCommandPreservesATypedExitCode(t *testing.T) {
+	resetGlobalFlags()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", t.TempDir())
+	oldRunner := selfUpdateRunner
+	t.Cleanup(func() { selfUpdateRunner = oldRunner })
+
+	cases := []struct {
+		name      string
+		runnerErr error
+		wantCode  int
+	}{
+		{"typed usage error from the native updater", errs.New(errs.ExitUsage, "bad --version"), errs.ExitUsage},
+		{"untyped failure from the install script", errors.New("exit status 1"), errs.ExitGeneric},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			selfUpdateRunner = func(context.Context, updateOptions, io.Writer, io.Writer) error {
+				return tc.runnerErr
+			}
+			err := runRoot(t, "update", "--prefix", t.TempDir())
+			if err == nil {
+				t.Fatal("expected the update to fail")
+			}
+			if got := errs.CodeOf(err); got != tc.wantCode {
+				t.Errorf("exit code = %d, want %d", got, tc.wantCode)
+			}
+		})
 	}
 }
 

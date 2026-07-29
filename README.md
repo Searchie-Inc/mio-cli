@@ -82,8 +82,16 @@ mio update              # latest release
 mio update --version 0.2.1
 ```
 
-`mio update` reruns the official installer into the directory containing the
-current executable. Use `--prefix <dir>` to install somewhere else.
+`mio update` installs into the directory containing the current executable; use
+`--prefix <dir>` to install somewhere else.
+
+- **macOS / Linux** — reruns the official installer.
+- **Windows** — updates natively: `mio.exe` downloads the release zip itself,
+  verifies its SHA-256 against `checksums.txt`, and swaps the binary. No Unix
+  shell (`sh`) and no `curl` are needed, so it works in stock PowerShell and
+  `cmd.exe`. Windows cannot delete a running executable, so the previous
+  version is renamed to `mio.exe.old` next to the new one and removed
+  automatically on the next `mio` run.
 
 ---
 

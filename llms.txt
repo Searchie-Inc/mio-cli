@@ -10,7 +10,7 @@
 # Full reference: mio gen-docs --dir ./docs  (one Markdown file per command)
 
 mio version — print version information
-mio update — update mio via the official release installer; --version pins a release; --prefix chooses install dir; also refreshes an unmodified installed agent skill
+mio update — self-update mio; --version pins a release; --prefix chooses install dir; also refreshes an unmodified installed agent skill. macOS/Linux rerun the official release installer; Windows updates natively (download + SHA-256 verify against checksums.txt + binary swap) with no sh/curl dependency, leaving mio.exe.old behind until the next run
 mio skills install — install the embedded mio agent skill into your coding agent; --target claude|codex (default claude); --user (default) or --project; --force overwrites a hand-edited file; idempotent
 mio skills print — print the embedded mio agent skill (SKILL.md) to stdout; --target claude|codex
 mio login — interactive login (stores key; auto-resolves team for single-team accounts); use MIO_API_KEY instead in agents

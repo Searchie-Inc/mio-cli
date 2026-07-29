@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -73,6 +74,12 @@ func init() {
 // map onto a process exit code. It does not call os.Exit itself.
 func Execute() error {
 	ensureGroupGuards()
+	// A Windows self-update has to rename the running mio.exe aside (Windows
+	// refuses to overwrite or delete a running executable), so the previous
+	// binary is still on disk as mio.exe.old when `mio update` exits. This is
+	// the next process — the first one that can actually delete it. Best-effort,
+	// Windows-only, never fails a command (MIO-2688).
+	sweepSupersededBinary(runtime.GOOS, currentExecutablePath())
 	return rootCmd.Execute()
 }
 
