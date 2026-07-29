@@ -73,6 +73,12 @@ Branch on these stable codes. Do not parse stderr for error detection.
 | `6` | Rate limited (429) | Back off, then retry |
 | `7` | Upstream server error (5xx) | Transient — retry with backoff |
 
+These codes are intentionally coarse. When you need the exact HTTP status the API returned — 403 vs 401 (re-authenticating cannot help with a 403), or 409 vs 422 (a conflict may clear, a validation rejection will not) — read `errors[0].status` from the JSON:API envelope on stderr, which carries the API's real status verbatim. `errors[0].meta.exit_code` echoes the coarse code. Errors that never reached the network (bad flag, missing file, no API key) have no HTTP status, so their `status` is derived from the exit code instead.
+
+```sh
+mio contacts retrieve <id> 2>err.json || jq -r '.errors[0].status' err.json   # e.g. "422"
+```
+
 ---
 
 ## Destructive Operations

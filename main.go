@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 
 	"golang.org/x/term"
 
@@ -75,13 +76,14 @@ func writeFriendlyError(err error, code int) {
 }
 
 // writeJSONErrorEnvelope prints the error to stderr as a JSON:API-style error
-// document so agents can parse failures uniformly. The HTTP-ish status mirrors
-// the exit code's class for convenience. This is the non-TTY contract path.
+// document so agents can parse failures uniformly. This is the non-TTY contract
+// path: the KEYS (`errors[].status`, `errors[].detail`, `errors[].meta.exit_code`)
+// must never change.
 func writeJSONErrorEnvelope(err error, code int) {
 	doc := map[string]any{
 		"errors": []map[string]any{
 			{
-				"status": exitToStatus(code),
+				"status": statusForEnvelope(err, code),
 				"detail": err.Error(),
 				"meta":   map[string]any{"exit_code": code},
 			},
@@ -96,8 +98,35 @@ func writeJSONErrorEnvelope(err error, code int) {
 	}
 }
 
+// statusForEnvelope resolves the value of the envelope's `status` member.
+//
+// When the failure came from the API, the client recorded the status the API
+// actually answered with (see client.errorForResponse) and we report THAT
+// verbatim. Previously this member was reconstructed from the exit code, which
+// is lossy by construction because errs.ExitCodeForStatus is many-to-one:
+// 401/403 both become ExitAuth and 400/409/422 all become ExitUsage. The CLI
+// consequently told agents "401" when the API had said 403, and "400" when it
+// had said 409 or 422 — the three mis-mappings MIO-2656 reports. Exit codes
+// stay deliberately coarse (that contract is unchanged); `status` becomes exact.
+//
+// When there is NO HTTP status — a genuinely local failure such as a bad flag,
+// an unreadable file, or no API key at all — we keep the historical
+// exit-code-derived value rather than omitting or zeroing the member. That is
+// both backward compatible and defensible on its own terms: "no API key found"
+// really is a 401-class condition, and a rejected flag really is a 400-class
+// one. Inventing a more specific status for a failure that never reached the
+// network would be worse than the honest approximation.
+func statusForEnvelope(err error, code int) string {
+	if status := errs.HTTPStatusOf(err); status > 0 {
+		return strconv.Itoa(status)
+	}
+	return exitToStatus(code)
+}
+
 // exitToStatus maps an exit code to an HTTP-ish status string for the error
-// envelope's `status` member. Best-effort and informational only.
+// envelope's `status` member. This is the FALLBACK for local errors that never
+// produced an HTTP response; API failures report their real status via
+// statusForEnvelope. Best-effort and informational only.
 func exitToStatus(code int) string {
 	switch code {
 	case errs.ExitAuth:

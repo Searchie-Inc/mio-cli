@@ -818,23 +818,47 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 // carries a JSON:API `errors` array, its joined message is used; otherwise a
 // generic status-based message is returned. The exit code is derived from the
 // HTTP status so it is correct regardless of body shape.
+//
+// The TRANSPORT status (the one the HTTP response line actually carried) is
+// also recorded on the error via errs.WrapHTTP/errs.NewHTTP so main.go can put
+// the API's real answer in the error envelope instead of reverse-engineering a
+// lossy one from the exit code (MIO-2656).
+//
+// Transport status vs body status. A JSON:API error object may carry its own
+// `status` member (apiError.Status), and the backend usually sets it. We use
+// the transport status anyway, deliberately:
+//
+//   - It always exists. The body's `status` is optional per the JSON:API spec,
+//     is frequently absent, and vanishes entirely for non-JSON:API failures
+//     (gateway/proxy/WAF HTML pages, an empty body, a 502 from in front of the
+//     app), so it cannot be the primary source.
+//   - It is unambiguous. `errors` is an ARRAY and each element may carry a
+//     DIFFERENT status; there is no single body status to promote.
+//   - It cannot contradict the exit code. Code is derived from the same
+//     transport status, so `status` and `meta.exit_code` in the envelope always
+//     describe one and the same failure. Sourcing status from the body would
+//     let the envelope claim a 422 alongside an exit code computed from a 400.
+//   - It is what actually happened on the wire. If a body status disagrees with
+//     the response line, the response line is the truth; the body is the app's
+//     (possibly stale or hand-written) description of it.
+//
+// The body's status is not discarded — it still reaches the user inside the
+// rendered detail message when the backend included it there.
 func (c *Client) errorForResponse(status int, body []byte) error {
-	code := errs.ExitCodeForStatus(status)
-
 	// Try to parse a JSON:API errors array for a precise message. We reuse the
 	// collection decoder shape which already understands the errors array.
 	var doc struct {
 		Errors []apiError `json:"errors"`
 	}
 	if json.Unmarshal(body, &doc) == nil && len(doc.Errors) > 0 {
-		return errs.Wrap(code, &apiErrorList{Errors: doc.Errors})
+		return errs.WrapHTTP(status, &apiErrorList{Errors: doc.Errors})
 	}
 
 	msg := strings.TrimSpace(string(body))
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
-	return errs.New(code, "request failed (HTTP %d): %s", status, msg)
+	return errs.NewHTTP(status, "request failed (HTTP %d): %s", status, msg)
 }
 
 func ensureLeadingSlash(p string) string {

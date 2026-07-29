@@ -1060,6 +1060,161 @@ func TestContract_ErrorEnvelope_NonTTYDestructiveNoYes(t *testing.T) {
 	}
 }
 
+// TestContract_ErrorEnvelope_RealHTTPStatus pins that the envelope's `status`
+// member reports the status the API ACTUALLY returned — not one reconstructed
+// from the exit code (MIO-2656).
+//
+// errs.ExitCodeForStatus is deliberately many-to-one (401 and 403 both →
+// ExitAuth; 400, 409 and 422 all → ExitUsage), so deriving `status` back out of
+// the exit code cannot be anything but lossy. Before the fix the CLI reported a
+// 403 as "401", and a 409 or a 422 as "400". Agents branch on this member —
+// 403-vs-401 decides whether re-authenticating can help, 409-vs-422 decides
+// whether retrying can help — so a rewritten status is a broken contract.
+//
+// Each case ALSO asserts the process exit code, because the coarse exit-code
+// contract is intentional and must not move: precise status + coarse exit code
+// is the correct end state, and an exit code that shifted here would mean the
+// fix had overreached.
+//
+// CONTRACT: errors[0].status == the API's real HTTP status; exit codes unchanged.
+func TestContract_ErrorEnvelope_RealHTTPStatus(t *testing.T) {
+	bin := buildBinary(t)
+
+	cases := []struct {
+		name       string
+		httpStatus int
+		body       string
+		wantStatus string
+		wantExit   int
+	}{
+		{
+			// The five team-security command trees reject API-key principals by
+			// design (MIO-2599: "Team-security stays JWT-only, permanently"), so
+			// a real 403 is a normal, expected answer here. The bug was never
+			// the 403 — it was the CLI relabelling it "401" and thereby telling
+			// an agent that re-authenticating might help, when nothing about a
+			// different API key can ever satisfy a JWT-only route.
+			name:       "403 Forbidden is not reported as 401",
+			httpStatus: 403,
+			body:       `{"errors":[{"status":"403","detail":"API key principals cannot manage API keys"}]}`,
+			wantStatus: "403",
+			wantExit:   errs.ExitAuth, // 3 — unchanged
+		},
+		{
+			// 409 says "the request was fine; the world is not in the state it
+			// needs to be in" — the caller may be able to retry after fixing
+			// state. Reporting "400" says "your request was malformed", which
+			// tells the agent to stop and rewrite the command instead.
+			name:       "409 Conflict is not reported as 400",
+			httpStatus: 409,
+			body:       `{"errors":[{"status":"409","detail":"Email 'a@b.c' is already registered."}]}`,
+			wantStatus: "409",
+			wantExit:   errs.ExitUsage, // 2 — unchanged
+		},
+		{
+			// 422 (well-formed request, semantically rejected) vs 400
+			// (malformed) is the distinction this CLI's faithful-conduit rubric
+			// turns on: it is the difference between "the API considered your
+			// input and said no" and "the API could not parse you at all".
+			name:       "422 Unprocessable is not reported as 400",
+			httpStatus: 422,
+			body:       `{"errors":[{"status":"422","detail":"String should have at least 8 characters"}]}`,
+			wantStatus: "422",
+			wantExit:   errs.ExitUsage, // 2 — unchanged
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newMockServer(t, []mockHandler{
+				{Status: tc.httpStatus, Body: tc.body},
+			})
+
+			_, stderr, exitCode := runBinary(t, bin, []string{
+				"MIO_API_KEY=test-key",
+				"MIO_API_BASE_URL=" + srv.URL,
+			}, "--team", "t_team1", "contacts", "retrieve", "ctt_any")
+
+			raw := strings.TrimSpace(stderr)
+			var envelope struct {
+				Errors []struct {
+					Status string         `json:"status"`
+					Detail string         `json:"detail"`
+					Meta   map[string]any `json:"meta"`
+				} `json:"errors"`
+			}
+			if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+				t.Fatalf("CONTRACT: %d stderr not valid JSON:API envelope: %v; stderr=%q",
+					tc.httpStatus, err, raw)
+			}
+			if len(envelope.Errors) == 0 {
+				t.Fatalf("CONTRACT: %d error envelope empty; stderr=%q", tc.httpStatus, raw)
+			}
+
+			e := envelope.Errors[0]
+			if e.Status != tc.wantStatus {
+				t.Errorf("CONTRACT: HTTP %d → errors[0].status = %q, want %q; stderr=%q",
+					tc.httpStatus, e.Status, tc.wantStatus, raw)
+			}
+			// The exit code is echoed in the envelope AND is the process exit
+			// code; both must still be the pre-fix value.
+			if got, ok := e.Meta["exit_code"].(float64); !ok || int(got) != tc.wantExit {
+				t.Errorf("CONTRACT: HTTP %d → meta.exit_code = %v, want %d; stderr=%q",
+					tc.httpStatus, e.Meta["exit_code"], tc.wantExit, raw)
+			}
+			if exitCode != tc.wantExit {
+				t.Errorf("CONTRACT: HTTP %d → process exit code = %d, want %d; stderr=%q",
+					tc.httpStatus, exitCode, tc.wantExit, raw)
+			}
+			// The API's message must still survive into detail — carrying the
+			// status must not cost us the body.
+			if e.Detail == "" {
+				t.Errorf("CONTRACT: HTTP %d → errors[0].detail empty; stderr=%q", tc.httpStatus, raw)
+			}
+		})
+	}
+}
+
+// TestContract_ErrorEnvelope_LocalErrorKeepsDerivedStatus pins the FALLBACK arm
+// of MIO-2656: an error that never reached the network has no HTTP status to
+// report, so the envelope keeps the historical exit-code-derived value rather
+// than omitting the member or emitting "0".
+//
+// Here the failure is "no API key" — a purely local precondition — and "401"
+// remains the honest description of it. This is what keeps the fix backward
+// compatible for every non-HTTP failure path.
+//
+// CONTRACT: local (non-HTTP) error → status still derived from the exit code.
+func TestContract_ErrorEnvelope_LocalErrorKeepsDerivedStatus(t *testing.T) {
+	bin := buildBinary(t)
+
+	// A bad flag is rejected by cobra before any request is built, so no HTTP
+	// status can exist. ExitUsage → "400".
+	_, stderr, exitCode := runBinary(t, bin, nil,
+		"version", "--definitely-not-a-real-flag")
+
+	raw := strings.TrimSpace(stderr)
+	var envelope struct {
+		Errors []struct {
+			Status string `json:"status"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		t.Fatalf("CONTRACT: local-error stderr not valid JSON: %v; stderr=%q", err, raw)
+	}
+	if len(envelope.Errors) == 0 {
+		t.Fatalf("CONTRACT: local-error envelope empty; stderr=%q", raw)
+	}
+	if envelope.Errors[0].Status != "400" {
+		t.Errorf("CONTRACT: local usage error → errors[0].status = %q, want 400; stderr=%q",
+			envelope.Errors[0].Status, raw)
+	}
+	if exitCode != errs.ExitUsage {
+		t.Errorf("CONTRACT: local usage error exit code = %d, want %d (ExitUsage)",
+			exitCode, errs.ExitUsage)
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TTY vs non-TTY contracts
 // ═══════════════════════════════════════════════════════════════════════════════
