@@ -49,6 +49,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 	"github.com/Searchie-Inc/mio-cli/internal/version"
 )
 
@@ -106,25 +107,33 @@ func runNativeUpdate(ctx context.Context, cfg nativeUpdateConfig) error {
 
 	// ── validate every local input BEFORE touching the network ───────────────
 	//
-	// Same rule the resource commands follow: a usage error must fire no
-	// request. Resolving "latest" first meant a typo'd --prefix surfaced as a
+	// Same rule the resource commands follow: a deterministic input error must
+	// fire no request and must carry ExitUsage (exit 2), not a generic failure.
+	// Resolving "latest" first meant a typo'd --prefix surfaced as a
 	// DNS/connection error instead of "that directory does not exist" (Codex
-	// review round 1).
+	// review rounds 1-2).
 
 	// goreleaser explicitly skips windows/arm64 (see .goreleaser.yaml `ignore`),
 	// so there is no asset to fetch. Say that instead of surfacing a 404 from a
 	// URL the user never typed.
 	if cfg.GOOS == "windows" && cfg.GOARCH != "amd64" {
-		return fmt.Errorf("no published mio release for %s/%s — install the amd64 build or build from source", cfg.GOOS, cfg.GOARCH)
+		return errs.New(errs.ExitUsage,
+			"no published mio release for %s/%s — install the amd64 build or build from source", cfg.GOOS, cfg.GOARCH)
 	}
 
 	destDir := cfg.Prefix
 	if fi, err := os.Stat(destDir); err != nil {
-		return fmt.Errorf("install directory %s is not usable: %w", destDir, err)
+		return errs.New(errs.ExitUsage, "install directory %s is not usable: %v", destDir, err)
 	} else if !fi.IsDir() {
-		return fmt.Errorf("install directory %s is not a directory", destDir)
+		return errs.New(errs.ExitUsage, "install directory %s is not a directory", destDir)
 	}
 	dest := filepath.Join(destDir, installedBinaryName(cfg.GOOS))
+	// Preflight the destination itself, not just its directory: a non-regular
+	// mio.exe is the same "bad local target" class and must be refused before we
+	// spend a download on it (Codex review round 2).
+	if err := checkInstallTarget(dest); err != nil {
+		return err
+	}
 
 	rel := normalizeReleaseVersion(cfg.Version)
 	if rel != "" {
@@ -244,21 +253,19 @@ func installStagedBinary(staged, dest string, out io.Writer) error {
 	// mio) is dead weight now, and step 2 must not trip over it.
 	_ = os.Remove(backup)
 
+	// Re-checked here, not just in runNativeUpdate's preflight: this is the
+	// moment of use, and it keeps the guard attached to the destructive step for
+	// any future caller.
+	if err := checkInstallTarget(dest); err != nil {
+		return err
+	}
+
 	existed := true
-	fi, err := os.Lstat(dest)
-	if err != nil {
+	if _, err := os.Lstat(dest); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("inspect %s: %w", dest, err)
 		}
 		existed = false
-	} else if !fi.Mode().IsRegular() {
-		// Whatever is sitting there is not a mio binary — a directory, a
-		// symlink, a device. Renaming it aside and dropping an executable in
-		// its place would be a silent, destructive surprise (it would move a
-		// whole directory to mio.exe.old and report success). Refuse instead
-		// (Codex review round 1).
-		return fmt.Errorf("%s exists but is not a regular file (%s) — refusing to replace it; "+
-			"remove it or choose another directory with --prefix", dest, fi.Mode().Type())
 	}
 
 	if existed {
@@ -285,6 +292,30 @@ func installStagedBinary(staged, dest string, out io.Writer) error {
 		if err := os.Remove(backup); err != nil {
 			nativeInfof(out, "Previous binary kept at %s (it is still open — Windows cannot delete a running executable); it is removed automatically on the next mio run.", backup)
 		}
+	}
+	return nil
+}
+
+// checkInstallTarget verifies that dest is either absent or an ordinary file we
+// may replace.
+//
+// Whatever else could sit there — a directory, a symlink, a device — is not a
+// mio binary, and renaming it aside to drop an executable in its place would be
+// a silent, destructive surprise: with a directory the old code moved the whole
+// tree to mio.exe.old and reported success. Refuse instead, as a usage error so
+// it exits 2 and fires no request (Codex review rounds 1-2).
+func checkInstallTarget(dest string) error {
+	fi, err := os.Lstat(dest)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil // a fresh install is fine
+		}
+		return fmt.Errorf("inspect %s: %w", dest, err)
+	}
+	if !fi.Mode().IsRegular() {
+		return errs.New(errs.ExitUsage,
+			"%s exists but is not a regular file (%s) — refusing to replace it; "+
+				"remove it or choose another directory with --prefix", dest, fi.Mode().Type())
 	}
 	return nil
 }
@@ -338,8 +369,11 @@ func normalizeReleaseVersion(v string) string {
 // this is a cheap fail-closed guard rather than a semver parser (Codex review
 // round 1).
 func validateReleaseVersion(v string) error {
+	bad := func() error {
+		return errs.New(errs.ExitUsage, "%q is not a valid release version (expected a tag like 0.12.1)", v)
+	}
 	if v == "" {
-		return errors.New("release version is empty")
+		return errs.New(errs.ExitUsage, "release version is empty")
 	}
 	for _, r := range v {
 		switch {
@@ -348,11 +382,11 @@ func validateReleaseVersion(v string) error {
 			r >= 'A' && r <= 'Z',
 			r == '.' || r == '-' || r == '_' || r == '+':
 		default:
-			return fmt.Errorf("%q is not a valid release version (expected a tag like 0.12.1)", v)
+			return bad()
 		}
 	}
 	if strings.Contains(v, "..") {
-		return fmt.Errorf("%q is not a valid release version (expected a tag like 0.12.1)", v)
+		return bad()
 	}
 	return nil
 }

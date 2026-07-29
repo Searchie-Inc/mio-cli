@@ -54,6 +54,16 @@ shell and no curl are required.`,
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Updating mio in %s...\n", opts.Prefix)
 		if err := selfUpdateRunner(cmd.Context(), opts, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+			// Keep an exit code the runner already decided: the native Windows
+			// updater returns ExitUsage for deterministic local-input failures
+			// (bad --prefix/--version, unsupported arch, non-file destination)
+			// that fire no request, and the contract says those exit 2. The Unix
+			// install-script path only ever returns untyped exec errors, so it
+			// still maps to ExitGeneric exactly as before (Codex review round 2).
+			var ce *errs.CLIError
+			if errors.As(err, &ce) {
+				return ce
+			}
 			return errs.Wrap(errs.ExitGeneric, err)
 		}
 		// After a successful self-update, keep any managed agent skill in sync:

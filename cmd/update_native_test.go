@@ -24,6 +24,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
 func TestUseNativeUpdaterOnlyOnWindows(t *testing.T) {
@@ -426,6 +428,13 @@ func TestRunNativeUpdateValidatesLocalInputBeforeAnyRequest(t *testing.T) {
 			cfg:     nativeUpdateConfig{Prefix: t.TempDir(), Version: "0.12.1/../x", GOOS: "windows", GOARCH: "amd64"},
 			wantErr: "not a valid release version",
 		},
+		{
+			// Same "bad local target" class: refuse before spending a download,
+			// not after (Codex review round 2).
+			name:    "dest exists but is not a regular file",
+			cfg:     nativeUpdateConfig{Prefix: dirContainingDir(t, "mio.exe"), GOOS: "windows", GOARCH: "amd64"},
+			wantErr: "not a regular file",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -434,6 +443,11 @@ func TestRunNativeUpdateValidatesLocalInputBeforeAnyRequest(t *testing.T) {
 			err := runNativeUpdate(context.Background(), tc.cfg)
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
+			}
+			// Exit-code contract: deterministic local-input failures are usage
+			// errors (exit 2), not generic failures (Codex review round 2).
+			if got := errs.CodeOf(err); got != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
 			}
 		})
 	}
@@ -557,6 +571,17 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+// dirContainingDir returns a fresh directory that holds a subdirectory called
+// name — i.e. an install prefix whose mio.exe is not a regular file.
+func dirContainingDir(t *testing.T, name string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	return dir
 }
 
 // writeTempFile creates a file (not a directory) and returns its path.
