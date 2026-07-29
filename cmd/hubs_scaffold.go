@@ -36,6 +36,7 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
+	"github.com/Searchie-Inc/mio-cli/internal/output"
 )
 
 // ---- context (the data-flow spine) ------------------------------------------
@@ -88,6 +89,14 @@ type scaffoldContext struct {
 	homePageID       string
 	homeDraftVersion int
 
+	// pageIDsBySlug records the page id this run minted OR recovered for each
+	// template pages[] slug — the per-page ids of the machine-readable result
+	// (MIO-2574). BOTH apply branches fill it: the client-side loop on every
+	// verdict that leaves a real page (create/resumeFull/noop), and the backend
+	// op by mapping its role-keyed listing back onto the template's slugs. Only
+	// ids actually observed land here, so a recorded id is always a real one.
+	pageIDsBySlug map[string]string
+
 	// publish is the --publish intent (Task 21 registers the flag; read
 	// existence-guarded in runHubsScaffold, so it defaults false until then). When
 	// false the publish step is a skip-with-note and the hub stays private.
@@ -119,6 +128,21 @@ func (sc *scaffoldContext) notef(format string, args ...any) {
 		return
 	}
 	fmt.Fprintf(sc.noteW, format+"\n", args...)
+}
+
+// recordPageID stores the page id observed for a template page slug. It
+// allocates the map on first use — the same tolerance notef has for a nil
+// noteW: the unit-style step tests build a scaffoldContext carrying only the
+// maps the step under test needs, and a result-only field must never turn one
+// of those into a nil-map panic.
+func (sc *scaffoldContext) recordPageID(slug, pageID string) {
+	if slug == "" || pageID == "" {
+		return
+	}
+	if sc.pageIDsBySlug == nil {
+		sc.pageIDsBySlug = map[string]string{}
+	}
+	sc.pageIDsBySlug[slug] = pageID
 }
 
 // planEntry is one line of the --dry-run plan: the step name and a human
@@ -801,10 +825,16 @@ client layer (strictly CLI-only; never raw REST).
 
 Create mode (default) uses --name/--slug to create a new hub. Resume/target mode
 uses --hub <id> to apply onto an existing hub (also how you resume after a
-mid-pipeline failure). --dry-run prints the ordered plan and makes no changes.`,
+mid-pipeline failure). --dry-run prints the ordered plan and makes no changes.
+
+Output follows --output: json (the default off a TTY) and plain emit the result
+— the new hub's id/slug plus the page, space, onboarding and playlist ids the
+run created — while table prints the human summary. Progress notes always go to
+stderr, so a json stdout stays parseable.`,
 	Example: `  mio hubs scaffold --template community --name "My Community" --slug my-community
   mio hubs scaffold --template community --name "My Community" --slug my-community --dry-run
-  mio hubs scaffold --template community --hub hub_abc123`,
+  mio hubs scaffold --template community --hub hub_abc123
+  HUB_ID=$(mio hubs scaffold --template community --name "My Community" --slug my-community --jq .hub_id)`,
 	Args: cobra.NoArgs,
 	RunE: runHubsScaffold,
 }
@@ -908,20 +938,60 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 	for _, step := range scaffoldPipeline {
 		if serr := step.run(sc, &sc.hubTmpl); serr != nil {
 			printScaffoldRecovery(cmd.ErrOrStderr(), sc, templateID)
-			return errs.Wrap(errs.CodeOf(serr),
-				fmt.Errorf("scaffold: step %q failed: %w", step.name, serr))
+			return errs.Wrap(errs.CodeOf(serr), scaffoldStepError(sc, step.name, serr))
 		}
 	}
 
+	// 6. Emit the result. BOTH surfaces are format-driven (MIO-2574): the prose
+	//    below is the `table` rendering, and json/plain go through the shared
+	//    output layer so an agent reads the hub id off stdout instead of
+	//    string-scraping the summary (or, as QA had to, re-listing hubs
+	//    out-of-band to find what it had just created). Off a TTY the resolved
+	//    default is already json — the agent contract AGENTS.md documents and
+	//    every other command honors; this command was the one that ignored it.
+	//    Every progress line the run emits already goes to STDERR (sc.notef, the
+	//    catalog provenance + warnings, the recovery guidance), so stdout carries
+	//    the rendered value and nothing else.
 	if dryRun {
-		printScaffoldPlan(cmd.OutOrStdout(), templateID, plan)
-	} else {
-		// Real run: echo the finished hub's reference + published state + a recap so
-		// the operator knows what landed and how to go live (design §Apply pipeline
-		// step 8 + §Command surface). Dry-run keeps the plan output untouched.
-		printScaffoldSummary(cmd.OutOrStdout(), sc, &sc.hubTmpl, templateID)
+		if scaffoldHumanOutput(c) {
+			printScaffoldPlan(cmd.OutOrStdout(), templateID, plan)
+			return nil
+		}
+		return c.render(cmd, scaffoldPlanResult(templateID, plan))
 	}
-	return nil
+	// Real run: echo the finished hub's reference + published state + a recap so
+	// the operator knows what landed and how to go live (design §Apply pipeline
+	// step 8 + §Command surface).
+	if scaffoldHumanOutput(c) {
+		printScaffoldSummary(cmd.OutOrStdout(), sc, &sc.hubTmpl, templateID)
+		return nil
+	}
+	return c.render(cmd, scaffoldResult(sc, templateID))
+}
+
+// scaffoldHumanOutput reports whether this invocation wants the prose summary/
+// plan rather than the machine-readable result: the `table` format (the TTY
+// default), and only with no --jq in play. --jq is a filter over the RESULT, so
+// honoring it means rendering the structured value — exactly what every other
+// command does — never prose a gojq program cannot address.
+func scaffoldHumanOutput(c *cmdContext) bool {
+	return c.out.Format == output.FormatTable && c.out.JQ == ""
+}
+
+// scaffoldStepError tags a mid-pipeline failure with the failing step and, once
+// a hub EXISTS, with its id. The id belongs in the error itself because the
+// JSON:API envelope main.go writes to stderr is the machine-readable FAILURE
+// contract, and a scaffold that dies after step 1 has already created a hub
+// that is never rolled back (§Idempotency & recovery): losing that id is
+// precisely the pain MIO-2574 is about. The operator-facing resume command
+// still comes from printScaffoldRecovery — this is the same fact, in the one
+// place a machine reads.
+func scaffoldStepError(sc *scaffoldContext, step string, err error) error {
+	if sc.hubID == "" {
+		return fmt.Errorf("scaffold: step %q failed: %w", step, err)
+	}
+	return fmt.Errorf("scaffold: step %q failed (hub %s was created and is NOT rolled back): %w",
+		step, sc.hubID, err)
 }
 
 // printScaffoldPlan writes the ordered dry-run plan. Each step is named on its
@@ -1029,6 +1099,155 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 	// Public URL (MIO-2521): host-relative only — the CLI cannot know the hub
 	// frontend host, so the operator substitutes it.
 	fmt.Fprintf(w, "  Public URL: <your-hub-frontend-host>/%s (the API does not return the hub's public URL; substitute your hub frontend host).\n", sc.hubSlug)
+}
+
+// ---- machine-readable result (MIO-2574) --------------------------------------
+
+// scaffoldResult builds the value `--output json|plain` renders for a REAL
+// scaffold run: the same facts printScaffoldSummary narrates, in a shape an
+// agent can read a single field off.
+//
+// Shape decisions worth knowing before changing anything here:
+//
+//   - hub_id leads, because the reported bug is exactly that an agent could not
+//     recover the id of the hub it had just created and had to scrape
+//     `mio hubs list` out-of-band to find it;
+//   - hub_path, NOT hub_url: the API does not return the hub's public URL and
+//     the CLI cannot know the hub frontend host (MIO-2521, the reason the prose
+//     prints "<your-hub-frontend-host>/<slug>"), so we emit the host-relative
+//     path and never fabricate an absolute URL that could name the wrong host;
+//   - published mirrors the summary's LIVE/PRIVATE label — read from the REAL
+//     server-observed is_private, fail-safe (state unknown ⇒ not published) —
+//     and uses the CLI's own `published` vocabulary, the derived field
+//     injectHubDerivedState already adds to a rendered hub resource;
+//   - the per-resource arrays follow the TEMPLATE's order, like the summary's
+//     template-derived "Includes:" recap: they describe what the hub CONTAINS,
+//     so a resume run reports the full shape rather than only what this
+//     invocation happened to create. An id this run never learned (a space that
+//     already existed, a page the backend op did not list) is JSON null, never
+//     an empty string — a present value is always a real id;
+//   - every key is emitted unconditionally, empty arrays included: a machine
+//     contract whose keys come and go with the template is not one an agent can
+//     write `.spaces | length` against.
+func scaffoldResult(sc *scaffoldContext, templateID string) map[string]any {
+	t := &sc.hubTmpl
+
+	pages := make([]any, 0, len(t.Pages))
+	for _, p := range t.Pages {
+		pages = append(pages, map[string]any{
+			"slug":          p.Slug,
+			"role":          p.Role,
+			"page_template": p.PageTemplate,
+			"is_homepage":   p.IsHomepage,
+			"page_id":       nilIfEmpty(sc.pageIDsBySlug[p.Slug]),
+		})
+	}
+	spaces := make([]any, 0, len(t.Spaces))
+	for _, s := range t.Spaces {
+		spaces = append(spaces, map[string]any{
+			"slug":     s.Slug,
+			"name":     s.Name,
+			"space_id": nilIfEmpty(sc.spaceIDsBySlug[s.Slug]),
+		})
+	}
+	onboarding := make([]any, 0, len(t.Onboarding))
+	for _, d := range t.Onboarding {
+		onboarding = append(onboarding, map[string]any{
+			"slug":          d.Slug,
+			"definition_id": nilIfEmpty(sc.defIDsBySlug[d.Slug]),
+		})
+	}
+	playlists := make([]any, 0, len(t.Playlists))
+	for _, p := range t.Playlists {
+		playlists = append(playlists, map[string]any{
+			"key":         p.Key,
+			"title":       p.Title,
+			"playlist_id": nilIfEmpty(sc.playlistIDsByKey[p.Key]),
+		})
+	}
+	policies := make([]string, 0, len(t.Policies))
+	for k := range t.Policies {
+		policies = append(policies, k)
+	}
+	sort.Strings(policies) // same deterministic ordering stepPolicies applies in
+
+	out := map[string]any{
+		"dry_run":               false,
+		"hub_id":                sc.hubID,
+		"hub_slug":              sc.hubSlug,
+		"hub_name":              sc.hubName,
+		"hub_path":              nilIfEmpty(hubPublicPath(sc.hubSlug)),
+		"published":             sc.isPrivateKnown && !sc.isPrivate,
+		"template_id":           templateID,
+		"catalog_revision":      nil,
+		"homepage_page_id":      nilIfEmpty(scaffoldHomepageID(sc)),
+		"pages":                 pages,
+		"spaces":                spaces,
+		"onboarding_attributes": onboarding,
+		"playlists":             playlists,
+		"policies":              policies,
+	}
+	// The catalog revision the template was sourced from — the provenance the
+	// stderr "catalog: …" line carries for a human, so a machine run can record
+	// which catalog produced this hub. nil when no catalog was resolved (only
+	// reachable from a hand-built context; production always has one).
+	if sc.cat != nil {
+		out["catalog_revision"] = sc.cat.Meta.Revision
+	}
+	return out
+}
+
+// scaffoldHomepageID returns the homepage page id as far as THIS run knows it:
+// the id recorded for the slug of the template's isHomepage entry, falling back
+// to the homePageID the pages step captured (the backend-op branch sets that
+// one from the op's ROLE-keyed listing, which may name a role no template entry
+// claims). "" when neither is known — an op response that listed no pages, or a
+// hand-built context — which the caller renders as null.
+func scaffoldHomepageID(sc *scaffoldContext) string {
+	for _, p := range sc.hubTmpl.Pages {
+		if p.IsHomepage {
+			if id := sc.pageIDsBySlug[p.Slug]; id != "" {
+				return id
+			}
+		}
+	}
+	return sc.homePageID
+}
+
+// hubPublicPath is the host-relative public path of a hub — the machine-readable
+// half of the summary's "<your-hub-frontend-host>/<slug>" line (MIO-2521). Empty
+// slug in, empty path out (never a bare "/").
+func hubPublicPath(slug string) string {
+	if slug == "" {
+		return ""
+	}
+	return "/" + slug
+}
+
+// nilIfEmpty maps "" onto a JSON null so an unknown id is DISTINGUISHABLE from a
+// known-empty one. `jq -e .homepage_page_id` on a run that never learned the id
+// must fail, not hand back a truthy empty string.
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// scaffoldPlanResult is the --dry-run plan as data: the same ordered step list
+// printScaffoldPlan narrates. It exists so `--output json` is valid JSON for
+// EVERY scaffold invocation — a dry-run that printed prose onto a json stdout
+// would break the same `| jq` pipeline the real run just learned to serve.
+func scaffoldPlanResult(templateID string, plan []planEntry) map[string]any {
+	steps := make([]any, 0, len(plan))
+	for _, e := range plan {
+		steps = append(steps, map[string]any{"step": e.step, "detail": e.detail})
+	}
+	return map[string]any{
+		"dry_run":     true,
+		"template_id": templateID,
+		"steps":       steps,
+	}
 }
 
 // hubsTemplatesCmd lists the hub templates the TARGET BACKEND's catalog offers

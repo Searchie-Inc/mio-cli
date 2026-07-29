@@ -135,6 +135,10 @@ func recordServerOpResult(sc *scaffoldContext, res client.ScaffoldFromTemplateRe
 	}
 	for _, p := range res.Pages {
 		sc.notef("page %q applied by backend op (page %s, published revision %d)", p.Role, p.PageID, p.PublishedRevision)
+		// Record the id under the template SLUG (MIO-2574) so both apply
+		// branches key the machine-readable result the same way — the op
+		// listing is role-keyed, the client-side loop slug-keyed.
+		sc.recordPageID(templateSlugForRole(sc, p.Role), p.PageID)
 		if p.Role == "homepage" && sc.homePageID == "" {
 			sc.homePageID = p.PageID
 		}
@@ -142,4 +146,32 @@ func recordServerOpResult(sc *scaffoldContext, res client.ScaffoldFromTemplateRe
 	if sc.homePageID == "" {
 		sc.notef("scaffold-from-template op returned no homepage entry — homepage id unknown to this run")
 	}
+}
+
+// templateSlugForRole maps a role from the op's page listing back onto the
+// template pages[] slug that declared it, and does so ONLY when the role is
+// UNAMBIGUOUS — exactly one template entry claims it.
+//
+// The ambiguity is real, not theoretical: the shipped community template gives
+// its secondary pages the SAME role ("secondary" for both about and faq), so a
+// first-match mapping would attribute one page's id to the other page's slug —
+// a wrong id is far worse than a missing one for a caller that acts on it. An
+// unmatched or ambiguous role yields "" and is simply not recorded (recordPageID
+// drops it), leaving that entry's page_id null in the result. The homepage —
+// the id callers actually chase — carries a unique role in every template we
+// serve, and has its own role-keyed fallback in scaffoldHomepageID besides.
+func templateSlugForRole(sc *scaffoldContext, role string) string {
+	if role == "" {
+		return ""
+	}
+	slug, matches := "", 0
+	for _, p := range sc.hubTmpl.Pages {
+		if p.Role == role {
+			slug, matches = p.Slug, matches+1
+		}
+	}
+	if matches != 1 {
+		return ""
+	}
+	return slug
 }
