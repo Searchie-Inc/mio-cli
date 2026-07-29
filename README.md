@@ -238,6 +238,19 @@ mio hubs update <hub-id> --unset branding.favicon_url,settings.customCss
 # (url|page|playlist|discussions) — untyped items are rejected. Whole-blob replace.
 mio hubs update <hub-id> --navigation-json '{"header":[{"type":"url","label":"Home","href":"/my-hub/","position":0}]}'
 
+# Build a whole branded hub in ONE command from a template (see `mio hubs templates`).
+# The branding flags MERGE over the template's palette — a key you don't name keeps
+# the template's value. --primary-color also fills header_color unless you give a
+# header color yourself (--header-color, or a header_color key in --branding-json).
+mio hubs scaffold --template community --name "Acme" --slug acme \
+  --primary-color '#B91C1C' --secondary-color '#F59E0B' --text-color '#0F172A' \
+  --logo-url https://cdn.example.com/logo.png --publish
+# Already have a branding blob? Pass it whole; the scalar flags win over its keys.
+mio hubs scaffold --template community --name "Acme" --slug acme \
+  --branding-json @branding.json --primary-color '#B91C1C'
+# Preview first — the plan names the palette it would apply, and changes nothing.
+mio hubs scaffold --template community --name "Acme" --slug acme --primary-color '#B91C1C' --dry-run
+
 # Products & prices  (the product id is a positional argument, not a flag)
 mio products list
 mio products create --name "Pro Plan" --description "Full access"

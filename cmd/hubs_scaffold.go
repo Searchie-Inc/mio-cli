@@ -79,6 +79,15 @@ type scaffoldContext struct {
 	faviconOverride, logoOverride *string
 	registrationOverride          *bool
 
+	// branding is the scaffold-time branding OVERRIDE LAYER (MIO-2604): the
+	// palette flags (--primary-color/--secondary-color/…) plus --branding-json,
+	// with the --primary-color → header_color cascade already resolved. It is
+	// layered over the template's branding block by stepBlobs
+	// (hubs_scaffold_branding.go owns the whole shape). The ZERO value means "no
+	// overrides" and every method on it is nil-map safe, so the unit-style step
+	// tests that hand-build a scaffoldContext need no changes.
+	branding scaffoldBranding
+
 	spaceIDsBySlug, defIDsBySlug, playlistIDsByKey map[string]string
 
 	// homePageID + homeDraftVersion are minted by the pages step (stepPages,
@@ -313,8 +322,12 @@ func scopeNavHrefs(nav map[string]any, slug string) {
 }
 
 func stepBlobs(sc *scaffoldContext, t *catalog.HubTemplate) error {
-	detail := fmt.Sprintf("PATCH %s — branding+settings+navigation (strict keys)",
-		hubsPath(sc.teamID, sc.hubIDOrPlaceholder()))
+	// The plan detail names the palette the run would apply (MIO-2604) so
+	// --dry-run is honest about the branding, not just the step. planDetail is
+	// empty when no override was passed, keeping the override-free plan line
+	// byte-identical to what it always was.
+	detail := fmt.Sprintf("PATCH %s — branding+settings+navigation (strict keys)%s",
+		hubsPath(sc.teamID, sc.hubIDOrPlaceholder()), sc.branding.planDetail())
 	return sc.step("blobs", detail, func() error {
 		// Navigation is location (c) of the {{hub_name}}/{{hub_slug}} token
 		// contract (MIO-2573 §4.3: header/footer item LABELS), interpolated at
@@ -345,8 +358,15 @@ func stepBlobs(sc *scaffoldContext, t *catalog.HubTemplate) error {
 			// the template's hub-relative hrefs to "/{slug}/…" before applying.
 			scopeNavHrefs(nav, sc.hubSlug)
 		}
+		// Branding is the template's block with the operator's override layer
+		// merged on top (MIO-2604): --branding-json first, then the scalar palette
+		// flags, then the --primary-color → header_color cascade — all resolved by
+		// hubs_scaffold_branding.go. It MERGES, so a template key the operator did
+		// not name survives; applyHubBlobs then deep-merges the whole thing onto
+		// the hub's CURRENT branding and applies Favicon/Logo last (disjoint keys,
+		// so those land exactly where they always did).
 		_, err := applyHubBlobs(sc.ctx, sc.cl, sc.teamID, sc.hubID, sc.hubSlug, blobPatches{
-			Branding:     t.Branding,
+			Branding:     sc.branding.applyTo(t.Branding),
 			Settings:     t.Settings,
 			Navigation:   nav,
 			SlugKnown:    true,
@@ -355,7 +375,14 @@ func stepBlobs(sc *scaffoldContext, t *catalog.HubTemplate) error {
 			Registration: sc.registrationOverride,
 			Strict:       true,
 		}, io.Discard)
-		return err
+		// A strict blob-key rejection from HERE is about a TEMPLATE key, and the
+		// shared message's "drop --strict-keys" tail names a flag `hubs scaffold`
+		// does not have (nor does it have the --settings-json/--meta-json the
+		// message opens with) — a dead end for the one person who has to act on
+		// it. Re-point it at the template (MIO-2604). scaffoldStrictKeyErr is a
+		// strict no-op for every OTHER error this call returns — notably the
+		// PATCH's own failures, which keep their text AND their exit code.
+		return scaffoldStrictKeyErr(err, scaffoldTemplateStrictKeyHint)
 	})
 }
 
@@ -827,12 +854,21 @@ Create mode (default) uses --name/--slug to create a new hub. Resume/target mode
 uses --hub <id> to apply onto an existing hub (also how you resume after a
 mid-pipeline failure). --dry-run prints the ordered plan and makes no changes.
 
+Brand the hub in the SAME command: --primary-color/--secondary-color/
+--text-color/--background-color/--header-color/--header-accent, plus
+--logo-url/--favicon-url/--social-image-url, each merge over the template's
+branding block (they do not replace it). --branding-json merges a whole object
+the same way, and the scalar flags win over the keys in it. --primary-color also
+fills header_color unless you give a header color yourself.
+
 Output follows --output: json (the default off a TTY) and plain emit the result
 — the new hub's id/slug plus the page, space, onboarding and playlist ids the
 run created — while table prints the human summary. Progress notes always go to
 stderr, so a json stdout stays parseable.`,
 	Example: `  mio hubs scaffold --template community --name "My Community" --slug my-community
   mio hubs scaffold --template community --name "My Community" --slug my-community --dry-run
+  mio hubs scaffold --template community --name Acme --slug acme --primary-color '#B91C1C' --secondary-color '#F59E0B'
+  mio hubs scaffold --template community --name Acme --slug acme --branding-json '{"primary":"#B91C1C","font_body":"Inter"}'
   mio hubs scaffold --template community --hub hub_abc123
   HUB_ID=$(mio hubs scaffold --template community --name "My Community" --slug my-community --jq .hub_id)`,
 	Args: cobra.NoArgs,
@@ -846,6 +882,18 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 	templateID, ferr := cmd.Flags().GetString("template")
 	if ferr != nil {
 		return errs.New(errs.ExitUsage, "--template: %s", ferr.Error())
+	}
+
+	// 1b. Resolve the branding override layer (MIO-2604) BEFORE auth/team, so a
+	//     malformed --branding-json or an unknown branding key exits ExitUsage
+	//     with no HTTP request at all — the same pre-auth discipline
+	//     `hubs update` follows for its blob flags. The cascade
+	//     (--primary-color → header_color) is resolved here too, once, so every
+	//     consumer — stepBlobs, the dry-run plan, the summary, the machine
+	//     result and the resume command — reads the SAME answer.
+	branding, berr := resolveScaffoldBranding(cmd)
+	if berr != nil {
+		return berr
 	}
 
 	// 2. Resolve auth + team ONCE (shared by every step). With an id-shaped
@@ -881,6 +929,7 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 		faviconOverride:      changedString(cmd, "favicon-url"),
 		logoOverride:         changedString(cmd, "logo-url"),
 		registrationOverride: changedBool(cmd, "registration-enabled"),
+		branding:             branding,
 		spaceIDsBySlug:       map[string]string{},
 		defIDsBySlug:         map[string]string{},
 		playlistIDsByKey:     map[string]string{},
@@ -1037,6 +1086,12 @@ func printScaffoldRecovery(w io.Writer, sc *scaffoldContext, templateID string) 
 	if sc.registrationOverride != nil {
 		parts = append(parts, fmt.Sprintf("--registration-enabled=%t", *sc.registrationOverride))
 	}
+	// The branding override layer (MIO-2604) is part of that intent too: resuming
+	// without it would rebuild the hub in the TEMPLATE's palette, silently undoing
+	// the whole point of the flags. flagArgs echoes what the operator passed and
+	// omits the cascaded header_color — the resume re-derives it from
+	// --primary-color.
+	parts = append(parts, sc.branding.flagArgs()...)
 	fmt.Fprintf(w, "Resume with: %s\n", strings.Join(parts, " "))
 }
 
@@ -1086,6 +1141,14 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 	}
 	fmt.Fprintf(w, "  Includes: %s.\n", strings.Join(parts, ", "))
 
+	// Branding overrides (MIO-2604), printed ONLY when the operator passed some —
+	// so the summary of an override-free run stays byte-for-byte what it always
+	// was (TestScaffold_TableSummaryUnchanged). When they did, the line is the one
+	// place that shows the cascade actually fired.
+	if !sc.branding.empty() {
+		fmt.Fprintf(w, "  Branding overrides: %s.\n", sc.branding.describe())
+	}
+
 	// Published state, read from the REAL server-observed is_private (published =
 	// !isPrivate). Only claim LIVE when the state is KNOWN and public; an unknown
 	// state falls back to PRIVATE (the safe direction) rather than a bool-zero LIVE.
@@ -1128,7 +1191,14 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 //     an empty string — a present value is always a real id;
 //   - every key is emitted unconditionally, empty arrays included: a machine
 //     contract whose keys come and go with the template is not one an agent can
-//     write `.spaces | length` against.
+//     write `.spaces | length` against;
+//   - branding_overrides (MIO-2604) reports the RESOLVED override layer — the
+//     palette flags and --branding-json keys, CASCADE INCLUDED — so a caller can
+//     see what the CLI actually sent (notably the header_color it derived from
+//     --primary-color) without a second GET. It is the override layer, not the
+//     hub's final branding: template defaults the operator never touched are not
+//     in it, and `mio hubs retrieve <id> --jq .branding` remains the way to read
+//     the whole blob back. `{}` when nothing was overridden.
 func scaffoldResult(sc *scaffoldContext, templateID string) map[string]any {
 	t := &sc.hubTmpl
 
@@ -1180,6 +1250,7 @@ func scaffoldResult(sc *scaffoldContext, templateID string) map[string]any {
 		"published":             sc.isPrivateKnown && !sc.isPrivate,
 		"template_id":           templateID,
 		"catalog_revision":      nil,
+		"branding_overrides":    sc.branding.resolved(),
 		"homepage_page_id":      nilIfEmpty(scaffoldHomepageID(sc)),
 		"pages":                 pages,
 		"spaces":                spaces,
@@ -1329,6 +1400,14 @@ func init() {
 	hubsScaffoldCmd.Flags().String("favicon-url", "", "Override the template's branding.favicon_url.")
 	hubsScaffoldCmd.Flags().String("logo-url", "", "Override the template's branding.logo_url.")
 	hubsScaffoldCmd.Flags().Bool("registration-enabled", false, "Override the template's settings.registration.enabled.")
+
+	// MIO-2604: the PALETTE overrides (+ --branding-json), so a branded hub is one
+	// command rather than a scaffold followed by a hand-authored
+	// `hubs update --branding-json`. Same shape as --favicon-url/--logo-url above:
+	// each flag merges over the template's branding block, it does not replace it.
+	// See hubs_scaffold_branding.go for the precedence order, the
+	// --primary-color → header_color cascade, and why no value format is checked.
+	registerScaffoldBrandingFlags(hubsScaffoldCmd)
 
 	hubsCmd.AddCommand(hubsScaffoldCmd)
 	hubsCmd.AddCommand(hubsTemplatesCmd)

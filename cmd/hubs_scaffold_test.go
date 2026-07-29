@@ -476,6 +476,51 @@ func TestStepBlobs_StrictRejectsUnknownSettingsKey(t *testing.T) {
 	if patched {
 		t.Error("no PATCH must fire when strict validation rejects a key")
 	}
+	// …and the guidance must be actionable HERE too (MIO-2604). The shared strict
+	// message ends "drop --strict-keys", a flag `hubs scaffold` does not have —
+	// a dead end whether the bad key came from the operator's --branding-json or,
+	// as here, from the TEMPLATE. stepBlobs routes the rejection through the same
+	// swap resolveScaffoldBranding uses, so the whole command speaks with one
+	// voice.
+	if strings.Contains(err.Error(), "drop --strict-keys") {
+		t.Errorf("a template strict-key rejection must not tell the operator to drop --strict-keys (no such flag on scaffold); err=%v", err)
+	}
+	if !strings.Contains(err.Error(), "no --strict-keys to drop") {
+		t.Errorf("a template strict-key rejection must carry the scaffold-specific guidance; err=%v", err)
+	}
+}
+
+// TestStepBlobs_NonKeyErrorPassesThroughUnchanged: the strict-key message swap
+// must be a NO-OP for every other failure. A PATCH that dies with a 500 has to
+// keep its own text AND its own exit code (ExitServer) — rewriting every error
+// stepBlobs returns into a usage error would corrupt the exit-code contract and
+// mislabel a server outage as the operator's mistake.
+func TestStepBlobs_NonKeyErrorPassesThroughUnchanged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if r.Method == http.MethodPatch {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"errors":[{"status":"500","detail":"boom"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"hub_1","type":"hubs","attributes":{"slug":"acme"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &catalog.HubTemplate{ID: "community", Branding: map[string]any{"favicon_url": "f"}}
+
+	err := stepBlobs(sc, tmpl)
+	if err == nil {
+		t.Fatal("a 500 on the blobs PATCH must be an error")
+	}
+	if got := errs.CodeOf(err); got != errs.ExitServer {
+		t.Errorf("error code = %d, want %d (ExitServer) — the strict-key swap must not relabel a server error as usage", got, errs.ExitServer)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("the server's own detail must survive untouched; err=%v", err)
+	}
 }
 
 // TestStepBlobs_RejectsMalformedNavShape: a template whose navigation bucket is
@@ -1602,19 +1647,7 @@ func TestScaffold_OverridesReachBlobsPatch(t *testing.T) {
 		t.Fatalf("scaffold overrides exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
 
-	// Find the blobs PATCH — the one carrying branding (the publish PATCH, if any,
-	// carries only is_private).
-	var blobs map[string]any
-	for _, b := range rec.hubPatchBodies {
-		attrs := decodeHubAttrs(t, b)
-		if _, ok := attrs["branding"]; ok {
-			blobs = attrs
-		}
-	}
-	if blobs == nil {
-		t.Fatalf("no blobs PATCH (with branding) captured; %d hub PATCH(es)", len(rec.hubPatchBodies))
-	}
-
+	blobs := scaffoldBlobsPatch(t, rec)
 	branding, _ := blobs["branding"].(map[string]any)
 	if branding["favicon_url"] != "https://override.example/fav.png" {
 		t.Errorf("branding.favicon_url = %v, want the --favicon-url override (proves --favicon-url reached stepBlobs)", branding["favicon_url"])
@@ -1628,6 +1661,24 @@ func TestScaffold_OverridesReachBlobsPatch(t *testing.T) {
 	if reg["enabled"] != false {
 		t.Errorf("settings.registration.enabled = %v, want false — the --registration-enabled=false override must reach stepBlobs and WIN over the template's true", reg["enabled"])
 	}
+}
+
+// scaffoldBlobsPatch returns the attributes of the run's BLOBS patch — the hub
+// PATCH carrying branding. (The publish PATCH, when there is one, carries only
+// is_private, so "has a branding key" identifies the blobs step unambiguously.)
+func scaffoldBlobsPatch(t *testing.T, rec *scaffoldCapture) map[string]any {
+	t.Helper()
+	var blobs map[string]any
+	for _, b := range rec.hubPatchBodies {
+		attrs := decodeHubAttrs(t, b)
+		if _, ok := attrs["branding"]; ok {
+			blobs = attrs
+		}
+	}
+	if blobs == nil {
+		t.Fatalf("no blobs PATCH (with branding) captured; %d hub PATCH(es)", len(rec.hubPatchBodies))
+	}
+	return blobs
 }
 
 // TestScaffold_RealRunPrintsSummaryWithSlugAndID: a real (non-dry-run) scaffold
@@ -2321,5 +2372,360 @@ func TestScaffold_CatalogOverrideDigestMismatchExitsUsage(t *testing.T) {
 	}
 	if *fired {
 		t.Errorf("a digest-mismatched --catalog must fail before ANY HTTP")
+	}
+}
+
+// ─── MIO-2604: scaffold-time palette / branding overrides ─────────────────────
+//
+// The reported bug: scaffold exposed --favicon-url/--logo-url but no way to
+// touch the PALETTE, so every hub built from `community` shipped the template's
+// indigo primary regardless of brand, and recoloring took a second command plus
+// a hand-authored --branding-json blob. These tests pin the fix from the
+// operator's side — pass a flag, watch it land in the blobs PATCH — plus the two
+// things that are easy to get subtly wrong: the flags must MERGE over the
+// template (not replace its branding block), and the --primary-color →
+// header_color cascade must fire exactly when the operator gave no header color.
+//
+// Template branding these assert against (catalog-2.1.json `community`, the same
+// block the embedded 0.12.0 catalog carries):
+//
+//	logo_url/favicon_url/social_image_url …, primary #4F46E5, secondary #15803D,
+//	background #FFFFFF, text #111827, header_color #4F46E5, header_accent #A5B4FC
+
+// tmplCommunityLogoURL is the community template's branding.logo_url — a key NO
+// palette flag writes, so it is the canary for "the flags merged over the
+// template's block instead of replacing it".
+const tmplCommunityLogoURL = "https://assets.searchie.io/hub-templates/community/logo.png"
+
+// scaffoldBrandingFromRun runs a full create-mode scaffold with the given extra
+// args and returns the branding object of the blobs PATCH.
+func scaffoldBrandingFromRun(t *testing.T, extra ...string) map[string]any {
+	t.Helper()
+	srv, rec := fullScaffoldServer(t)
+	args := withTeam("t_team1", "hubs", "scaffold",
+		"--template", "community", "--name", "X", "--slug", "x")
+	res := runContract(t, scaffoldEnv(t, srv.URL), append(args, extra...)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold %v exit = %d, want %d (ExitOK); stderr=%q", extra, res.Code, errs.ExitOK, res.Stderr)
+	}
+	branding, _ := scaffoldBlobsPatch(t, rec)["branding"].(map[string]any)
+	if branding == nil {
+		t.Fatal("blobs PATCH carried no branding object")
+	}
+	return branding
+}
+
+// assertBranding checks the expected key→value pairs on a branding object.
+func assertBranding(t *testing.T, branding map[string]any, want map[string]string) {
+	t.Helper()
+	for k, v := range want {
+		if branding[k] != v {
+			t.Errorf("branding.%s = %v, want %q; branding=%v", k, branding[k], v, branding)
+		}
+	}
+}
+
+// TestScaffoldBrandingFlags_KeysAreOnTheAllowlist: every palette flag writes a
+// key on the MIO-2515 branding allowlist, and is actually registered on the
+// command. Without this a flag could ship writing a key the scaffold's own
+// strict-key validation then REJECTS at apply time — a flag that always errors.
+func TestScaffoldBrandingFlags_KeysAreOnTheAllowlist(t *testing.T) {
+	seenFlag, seenKey := map[string]bool{}, map[string]bool{}
+	for _, f := range scaffoldBrandingFlags {
+		if !brandingKeys[f.key] {
+			t.Errorf("--%s writes branding key %q, which is NOT on the MIO-2515 allowlist — scaffold runs strict, so it would be rejected at apply time", f.flag, f.key)
+		}
+		if seenFlag[f.flag] || seenKey[f.key] {
+			t.Errorf("duplicate flag/key in scaffoldBrandingFlags: --%s → %s", f.flag, f.key)
+		}
+		seenFlag[f.flag], seenKey[f.key] = true, true
+		if hubsScaffoldCmd.Flags().Lookup(f.flag) == nil {
+			t.Errorf("--%s is in the table but not registered on `hubs scaffold`", f.flag)
+		}
+	}
+	// The cascade keys off these two by name — they must be in the table.
+	if !seenFlag[scaffoldPrimaryFlag] || !seenFlag[scaffoldHeaderColorFlag] {
+		t.Errorf("the cascade's flags (--%s / --%s) must both be in scaffoldBrandingFlags", scaffoldPrimaryFlag, scaffoldHeaderColorFlag)
+	}
+	if hubsScaffoldCmd.Flags().Lookup("branding-json") == nil {
+		t.Error("--branding-json must be registered on `hubs scaffold`")
+	}
+}
+
+// TestScaffold_PaletteFlagsReachBlobsPatch: EVERY scalar palette flag threads
+// end-to-end into the branding of the blobs PATCH, overriding the template's
+// value — and the template keys no flag names (logo_url here) SURVIVE, proving
+// the overrides merge over the template's branding block rather than replacing
+// it.
+func TestScaffold_PaletteFlagsReachBlobsPatch(t *testing.T) {
+	branding := scaffoldBrandingFromRun(t,
+		"--primary-color", "#B91C1C",
+		"--secondary-color", "#F59E0B",
+		"--text-color", "#0F172A",
+		"--background-color", "#FAFAF9",
+		"--header-color", "#111827",
+		"--header-accent", "#FCA5A5",
+		"--social-image-url", "https://cdn.example/social.png",
+	)
+	assertBranding(t, branding, map[string]string{
+		// Each flag → the SHORT-form key the template itself sets (writing the
+		// legacy primary_color/secondary_color spelling would land BESIDE the
+		// template's value instead of overriding it).
+		"primary":          "#B91C1C",
+		"secondary":        "#F59E0B",
+		"text":             "#0F172A",
+		"background":       "#FAFAF9",
+		"header_color":     "#111827",
+		"header_accent":    "#FCA5A5",
+		"social_image_url": "https://cdn.example/social.png",
+		// MERGE, not replace: a template branding key no flag names survives.
+		"logo_url": tmplCommunityLogoURL,
+	})
+}
+
+// TestScaffold_PrimaryColorCascadesToHeaderColor: with no header color given,
+// --primary-color also fills header_color (the cascade MIO-2604 requires) and
+// BEATS the template's own header_color. The community template sets
+// header_color to the same value as primary (#4F46E5) — its header IS its
+// primary — so a cascade that yielded to the template would never fire and would
+// leave a red-branded hub with an indigo header: the exact mismatch reported.
+// Sibling template keys (header_accent, secondary) are untouched.
+func TestScaffold_PrimaryColorCascadesToHeaderColor(t *testing.T) {
+	branding := scaffoldBrandingFromRun(t, "--primary-color", "#B91C1C")
+	assertBranding(t, branding, map[string]string{
+		"primary":       "#B91C1C",
+		"header_color":  "#B91C1C", // cascaded — NOT the template's #4F46E5
+		"header_accent": "#A5B4FC", // template value, untouched by the cascade
+		"secondary":     "#15803D", // template value, untouched
+	})
+}
+
+// TestScaffold_ExplicitHeaderColorSuppressesCascade: an explicit --header-color
+// wins and the cascade does NOT fire — the escape hatch for decoupling the
+// header from the brand color.
+func TestScaffold_ExplicitHeaderColorSuppressesCascade(t *testing.T) {
+	branding := scaffoldBrandingFromRun(t,
+		"--primary-color", "#B91C1C", "--header-color", "#0F172A")
+	assertBranding(t, branding, map[string]string{
+		"primary":      "#B91C1C",
+		"header_color": "#0F172A",
+	})
+}
+
+// TestScaffold_BrandingJSONHeaderColorSuppressesCascade: a header_color inside
+// --branding-json counts as "the operator gave a header color" too, so the
+// cascade must not clobber it. Without this the cascade would silently beat an
+// explicit key in the operator's own blob.
+func TestScaffold_BrandingJSONHeaderColorSuppressesCascade(t *testing.T) {
+	branding := scaffoldBrandingFromRun(t,
+		"--primary-color", "#B91C1C",
+		"--branding-json", `{"header_color":"#0F172A"}`)
+	assertBranding(t, branding, map[string]string{
+		"primary":      "#B91C1C",
+		"header_color": "#0F172A",
+	})
+}
+
+// TestScaffold_BrandingJSONMergesAndScalarFlagsWin: --branding-json (ticket
+// Option B) merges over the template, and a scalar flag WINS over the same key
+// in it — the documented precedence, and the same order applyHubBlobs already
+// applies for --logo-url/--favicon-url over --branding-json on `hubs update`.
+func TestScaffold_BrandingJSONMergesAndScalarFlagsWin(t *testing.T) {
+	branding := scaffoldBrandingFromRun(t,
+		"--branding-json", `{"primary":"#111111","font_body":"Inter"}`,
+		"--primary-color", "#B91C1C")
+	assertBranding(t, branding, map[string]string{
+		"primary":   "#B91C1C", // the scalar flag beats the JSON key
+		"font_body": "Inter",   // a JSON-only key still lands
+		"secondary": "#15803D", // template value survives the merge
+		"logo_url":  tmplCommunityLogoURL,
+	})
+}
+
+// TestScaffold_BrandingJSONBadInputFailsBeforeAnyHTTP: --branding-json is parsed
+// and key-checked PRE-AUTH, so malformed JSON or a misspelled branding key exits
+// ExitUsage having fired no request at all — the scaffold reuses the `hubs
+// update` parser + the MIO-2515 allowlist rather than adding a second validator,
+// and runs it in STRICT mode like every other blob key it applies.
+func TestScaffold_BrandingJSONBadInputFailsBeforeAnyHTTP(t *testing.T) {
+	for _, tc := range []struct{ name, value string }{
+		{"malformed", `{"primary":`},
+		{"non-object", `["#fff"]`},
+		{"unknown key", `{"primry":"#fff"}`}, // typo of "primary"
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, fired := firedGuardServer(t)
+			res := runContract(t, scaffoldEnv(t, srv.URL),
+				withTeam("t_team1", "hubs", "scaffold",
+					"--template", "community", "--name", "X", "--slug", "x",
+					"--branding-json", tc.value)...)
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+			}
+			if *fired {
+				t.Errorf("bad --branding-json must fail before ANY HTTP request")
+			}
+		})
+	}
+}
+
+// TestScaffold_StrictKeyErrorDoesNotAdviseAMissingFlag: the SHARED strict
+// blob-key message ends "drop --strict-keys …" — sound advice on `hubs
+// create`/`hubs update`, a dead end on `hubs scaffold`, which has no such flag
+// and always checks branding keys strictly. The scaffold swaps that tail for
+// guidance that works (fix the key, or apply it afterwards via `hubs update`),
+// and the swap is anchored on the shared const so a reworded hint fails loudly
+// here rather than silently reinstating the dead end.
+func TestScaffold_StrictKeyErrorDoesNotAdviseAMissingFlag(t *testing.T) {
+	srv, _ := firedGuardServer(t)
+	err := executeCLI(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x",
+			"--branding-json", `{"primry":"#fff"}`)...)
+	if err == nil {
+		t.Fatal("an unknown --branding-json key must be an error")
+	}
+	if errs.CodeOf(err) != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage)", errs.CodeOf(err), errs.ExitUsage)
+	}
+	// The dead-end instruction is gone. (The message may still MENTION
+	// --strict-keys — it says there is none to drop here — but it must never
+	// tell the operator to drop one.)
+	if strings.Contains(err.Error(), "drop --strict-keys to send") {
+		t.Errorf("the scaffold error must not tell the operator to drop --strict-keys (no such flag here); err=%v", err)
+	}
+	for _, want := range []string{
+		`unknown key "branding.primry"`, // the offending key is still named
+		"no --strict-keys to drop",      // …why there is no opt-out here
+		"mio hubs update",               // …and the escape hatch that does exist
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("scaffold strict-key error must contain %q; err=%v", want, err)
+		}
+	}
+	// The shared hint itself is untouched for the commands that DO have the flag.
+	if !strings.Contains(strictKeyDropHint, "--strict-keys") {
+		t.Error("strictKeyDropHint no longer mentions --strict-keys — the scaffold swap is now anchored on stale text")
+	}
+}
+
+// TestScaffold_DryRunPlanShowsPalette: --dry-run REFLECTS the palette it would
+// apply, cascade annotated, and still fires no mutation. A dry run that named
+// only the step would leave the operator unable to preview the one thing these
+// flags exist to change.
+func TestScaffold_DryRunPlanShowsPalette(t *testing.T) {
+	srv, mutated := mutationGuardServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		humanScaffold(withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--dry-run",
+			"--primary-color", "#B91C1C", "--secondary-color", "#F59E0B"))...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("dry-run exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if *mutated {
+		t.Errorf("a palette dry-run must still fire NO mutating request")
+	}
+	for _, want := range []string{
+		"branding overrides:",
+		"primary=#B91C1C",
+		"secondary=#F59E0B",
+		"header_color=#B91C1C (cascaded from --primary-color)",
+	} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Errorf("dry-run plan must show %q; stdout:\n%s", want, res.Stdout)
+		}
+	}
+}
+
+// TestScaffold_JSONResultCarriesBrandingOverrides: the machine-readable result
+// reports the RESOLVED override layer — cascade included — so an agent can see
+// what the CLI actually sent without a second GET. The key is emitted
+// unconditionally ({} when nothing was overridden), like every other key in the
+// MIO-2574 contract.
+func TestScaffold_JSONResultCarriesBrandingOverrides(t *testing.T) {
+	run := func(t *testing.T, extra ...string) map[string]any {
+		t.Helper()
+		srv, _ := fullScaffoldServer(t)
+		args := withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--output", "json")
+		res := runContract(t, scaffoldEnv(t, srv.URL), append(args, extra...)...)
+		if res.Code != errs.ExitOK {
+			t.Fatalf("scaffold -o json exit = %d, want %d; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+		}
+		return decodeSoleJSON(t, res.Stdout)
+	}
+
+	got := run(t, "--primary-color", "#B91C1C", "--branding-json", `{"font_body":"Inter"}`)
+	overrides, ok := got["branding_overrides"].(map[string]any)
+	if !ok {
+		t.Fatalf("branding_overrides = %v, want an object; result=%v", got["branding_overrides"], got)
+	}
+	for k, want := range map[string]string{
+		"primary":      "#B91C1C",
+		"header_color": "#B91C1C", // the cascade, visible without a second GET
+		"font_body":    "Inter",   // --branding-json keys are part of the layer
+	} {
+		if overrides[k] != want {
+			t.Errorf("branding_overrides.%s = %v, want %q; overrides=%v", k, overrides[k], want, overrides)
+		}
+	}
+	// A template key the operator never touched is NOT an override — this field
+	// is the override LAYER, not the hub's final branding.
+	if _, has := overrides["secondary"]; has {
+		t.Errorf("branding_overrides must carry only what the OPERATOR set; got %v", overrides)
+	}
+
+	bare := run(t)
+	empty, ok := bare["branding_overrides"].(map[string]any)
+	if !ok || len(empty) != 0 {
+		t.Errorf("branding_overrides = %v, want an empty object on a run with no overrides", bare["branding_overrides"])
+	}
+}
+
+// TestScaffold_TableSummaryReportsBrandingOverrides: the prose summary gains a
+// "Branding overrides" line — but ONLY when there are some, which is why
+// TestScaffold_TableSummaryUnchanged (the byte-exact golden for an override-free
+// run) still passes untouched.
+func TestScaffold_TableSummaryReportsBrandingOverrides(t *testing.T) {
+	srv, _ := fullScaffoldServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		humanScaffold(withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x",
+			"--primary-color", "#B91C1C"))...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	want := "  Branding overrides: header_color=#B91C1C (cascaded from --primary-color), primary=#B91C1C.\n"
+	if !strings.Contains(res.Stdout, want) {
+		t.Errorf("summary must report the branding overrides.\n got:\n%s\nwant line:\n%s", res.Stdout, want)
+	}
+}
+
+// TestPrintScaffoldRecovery_PreservesBrandingIntent: the resume command echoes
+// the branding flags the OPERATOR passed — following it verbatim after a
+// mid-pipeline failure must not rebuild the hub in the template's palette. The
+// CASCADED header_color is omitted: --primary-color is echoed and the resume
+// re-derives it, so the printed command stays the one the operator ran.
+func TestPrintScaffoldRecovery_PreservesBrandingIntent(t *testing.T) {
+	sc := &scaffoldContext{
+		hubID: "hub_9", teamID: "t_1",
+		branding: scaffoldBranding{
+			jsonBlob: map[string]any{"font_body": "Inter"},
+			scalars:  map[string]string{"primary": "#B91C1C", "header_color": "#B91C1C"},
+			cascaded: map[string]bool{"header_color": true},
+		},
+	}
+	var b strings.Builder
+	printScaffoldRecovery(&b, sc, "community")
+	out := b.String()
+	for _, want := range []string{`--primary-color "#B91C1C"`, "--branding-json", "font_body"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("recovery output missing %q; got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "--header-color") {
+		t.Errorf("the CASCADED header_color must not be echoed as a flag (the resume re-derives it); got:\n%s", out)
 	}
 }

@@ -126,6 +126,19 @@ var (
 	metaKeysHelp     = strings.Join(sortedKeySet(metaKeys), ", ")
 )
 
+// strictKeyDropHint is the tail of the strict-mode rejection message: what to do
+// about an unrecognized key on a command that HAS --strict-keys (hubs
+// create/update).
+//
+// It is a named const, not an inline literal, because a caller with no
+// --strict-keys flag to drop must be able to swap it for guidance that actually
+// applies — `hubs scaffold` validates branding keys strictly and
+// unconditionally, so telling its user to drop a flag that does not exist there
+// would be a dead end (see scaffoldStrictKeyErr, MIO-2604). Referencing the same
+// const on both ends keeps the swap from silently no-op'ing if this wording ever
+// changes.
+const strictKeyDropHint = "These blobs are stored verbatim by the API with no server-side validation, so a misspelled key silently has no effect. Fix the key, or drop --strict-keys to send unrecognized keys anyway (the hub frontend is the authoritative render schema)."
+
 // unknownBlobKey records one key that is not on the allowlist, with the accepted
 // key set at the same level so the error/warning can suggest the right spelling.
 type unknownBlobKey struct {
@@ -204,9 +217,7 @@ func validateBlobKeys(warnW io.Writer, blobName string, obj map[string]any, allo
 		flag, first.path, first.level, strings.Join(first.allowed, ", "), more)
 
 	if strict {
-		return errs.New(errs.ExitUsage,
-			"%s. These blobs are stored verbatim by the API with no server-side validation, so a misspelled key silently has no effect. Fix the key, or drop --strict-keys to send unrecognized keys anyway (the hub frontend is the authoritative render schema).",
-			detail)
+		return errs.New(errs.ExitUsage, "%s. %s", detail, strictKeyDropHint)
 	}
 	fmt.Fprintf(warnW,
 		"Warning: %s. It is stored verbatim (a typo silently has no effect); pass --strict-keys to make this an error. This allowlist is best-effort — the hub frontend is the authoritative render schema.\n",
