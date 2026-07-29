@@ -271,7 +271,11 @@ mio pages tree get <page-id> --hub <hub-id> --jq .tree > tree.json
 mio products list
 mio products create --name "Pro Plan" --description "Full access"
 mio products prices list <product-id>
-mio products prices create <product-id> --amount 4900 --currency usd --interval month
+# --amount, --currency and --type are required; --interval AND --interval-count are
+# required when --type=recurring. The label flag is --name (there is no --nickname).
+mio products prices create <product-id> --amount 4900 --currency usd \
+  --type recurring --interval month --interval-count 1 --name "Monthly"
+mio products prices create <product-id> --amount 19900 --currency usd --type one_time
 
 # Segments — preview who matches a condition tree (does not save)
 mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'

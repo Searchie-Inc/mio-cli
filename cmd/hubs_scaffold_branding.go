@@ -376,10 +376,15 @@ func formatBrandingValue(v any) string {
 //   - the backend stores `branding` as opaque JSONB (app/hubs/models.py types it
 //     `dict[str, Any] | None`; HubCreate/UpdateAttributes accept arbitrary keys),
 //     so a color value has NO server-side format contract to mirror;
-//   - the authoritative reader is the hub frontend, which accepts far more than
-//     `#rrggbb` — named CSS colors, rgb()/hsl(), gradients, custom properties —
-//     so a hex regex would reject values that render perfectly well: a
-//     false-positive the operator could not override;
+//   - the authoritative reader is the hub frontend, and its contract is NOT ours
+//     to enforce. (Correction, MIO-2576: this comment used to claim the frontend
+//     "accepts far more than `#rrggbb` — named CSS colors, rgb()/hsl(), gradients".
+//     It does not: `src/lib/hub-shape/branding.ts` tests every color key against
+//     /^#[0-9a-fA-F]{6}$/ and silently falls back otherwise. The conclusion still
+//     holds, for the stronger reason — that regex lives in another repo and applies
+//     only to the six color keys, so mirroring it here would reject values the API
+//     accepts and pin this CLI to a render contract it does not own. The docs say
+//     "pass 6-digit hex"; the code does not enforce it.)
 //   - the CLI already ships ZERO validation on the sibling --logo-url/
 //     --favicon-url overrides (there is no URL-scheme check anywhere in cmd/), so
 //     validating colors while waving URLs through would be incoherent.

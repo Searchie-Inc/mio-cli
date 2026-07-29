@@ -140,6 +140,20 @@ func TestSkillDoc_CatalogVocabularyMatchesEmbeddedCatalog(t *testing.T) {
 			t.Errorf("mio-skill.md has no <!-- catalog-sync:%s --> block; the %s list must stay marked so this test can guard it", name, name)
 			continue
 		}
+		// VACUOUS-PASS GUARD. Set comparison alone is satisfied by two empty
+		// lists, so a catalog that silently stopped yielding a vocabulary — an
+		// empty nodeKinds object, a raw-projection change, a renamed catalog key
+		// — would turn this test into a no-op that still reports PASS. Both sides
+		// must be non-empty for the comparison below to mean anything, so assert
+		// that first and name which side collapsed (Codex review round 1, [Low]).
+		if len(actual) == 0 {
+			t.Errorf("catalog-sync:%s — the embedded catalog (%s) yielded ZERO entries for this vocabulary; the comparison below would pass vacuously. The catalog projection is broken, not the doc.", name, cat.Meta.CatalogVersion)
+			continue
+		}
+		if len(documented) == 0 {
+			t.Errorf("catalog-sync:%s — the marked block in mio-skill.md contains no `backtick-quoted` items; an empty block guards nothing. Document the %d entries the catalog declares.", name, len(actual))
+			continue
+		}
 		missing, extra := diffSets(documented, actual)
 		if len(missing) == 0 && len(extra) == 0 {
 			continue

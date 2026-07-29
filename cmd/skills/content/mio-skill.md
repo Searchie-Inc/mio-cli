@@ -106,7 +106,7 @@ mio hubs update hub_abc123 \
 | `text` | body copy |
 | `background` | page background |
 | `header_color` / `header_accent` | top-nav background + accent (emitted raw — no contrast correction) |
-| `dark_mode` (bool) | dark theme |
+| `dark_mode` (bool) | **not** the theme selector — only flips the defaults for `background`/`text` when those are unset (see below) |
 | `logo_url` / `favicon_url` / `social_image_url` | imagery |
 | `font_heading` / `font_body` / `heading_font_size` / `body_font_size` | typography |
 
@@ -114,18 +114,35 @@ mio hubs update hub_abc123 \
   the frontend's `--foreground`, so it colors every heading *and* tints every `tint`
   surface. Set it light and every heading goes invisible on a white page — the most
   common branding mistake. Pick a dark, high-contrast value.
-- **Colors must be 6-digit hex** (`#0F766E`). The frontend's branding parser rejects
-  3-digit and 8-digit hex and falls back to its own defaults, silently.
+- **Color values must be 6-digit hex** (`#0F766E`) — for all six color keys
+  (`primary`, `secondary`, `background`, `text`, `header_color`, `header_accent`).
+  The frontend's branding parser tests them against `/^#[0-9a-fA-F]{6}$/` and silently
+  substitutes its own default on anything else, so 3-digit hex, 8-digit hex, named
+  colors, `rgb()`/`hsl()` and gradients all render as "not what you asked for" with a
+  `200` on the wire. The CLI does not validate values (conduit rule) — this is a
+  render contract, not an API one.
 - **`logo_url`/`favicon_url` are the exception to "stored verbatim".** The rest of
   the branding blob has no server schema, but these two are validated server-side:
   an absolute `https://` URL is required, and `data:`/`javascript:` URLs are rejected
   (MIO-2658). A `data:` SVG logo fails — upload the asset and use a durable URL.
-- **Dark/light:** `--branding-json '{"dark_mode":false,"background":"#ffffff"}'` is
-  the reliable lever. The frontend also honours `settings.theme.mode`
-  (`light`|`dark`|`custom`), and it **wins over `branding.dark_mode`** where they
-  disagree — but `theme` is not on the CLI's settings-key allowlist yet, so
-  `--settings-json '{"theme":{"mode":"dark"}}'` warns on stderr (and is still sent).
-  Don't pair it with `--strict-keys`.
+- **Dark/light — the theme selector lives in `settings`, not `branding`.** The
+  frontend reads **`settings.background.type`** (`light` | `dark` | `custom`, default
+  `light`) and that is what the theme layer renders from. `background` is on the CLI's
+  settings-key allowlist, so this works today with no warning:
+
+  ```bash
+  mio hubs update hub_abc123 --settings-json '{"background":{"type":"dark"}}'
+  ```
+
+  There is **no `settings.theme` key** — writing one is a silent no-op. (The
+  frontend's parsed `theme.mode` is *derived* from `settings.background.type`; nothing
+  reads a raw `settings.theme`.)
+- **`branding.dark_mode` is a different, weaker knob.** It does not select the theme —
+  it only flips the *defaults* the branding parser uses when `branding.background` and
+  `branding.text` are absent or invalid (dark: background←`secondary`, text←`#FFFFFF`).
+  Set both keys explicitly and `dark_mode` changes nothing. Where the two disagree the
+  frontend logs a dev-only warning and `settings.background.type` wins, so set them
+  consistently.
 
 #### Menus and nav icons
 

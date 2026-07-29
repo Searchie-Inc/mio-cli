@@ -216,7 +216,8 @@ Every implemented resource and its verbs.
 
 - **Contact name flags are kebab-case**, like every other resource: `--first-name`, `--last-name`. `--email`, `--phone`, `--status` are also available. (The legacy underscore spellings `--first_name`/`--last_name` still work as hidden, deprecated aliases for back-compat, but new scripts should use the kebab form.)
 - **`products prices` takes the product id as a positional argument**, not `--product`:
-  `mio products prices create <product_id> --amount 4900 --currency usd --interval month`.
+  `mio products prices create <product_id> --amount 4900 --currency usd --type recurring --interval month --interval-count 1`.
+  `--amount`, `--currency` and `--type` (`one_time`|`recurring`) are all required; `--interval` **and** `--interval-count` are required when `--type=recurring`. The optional label flag is `--name` (there is no `--nickname`), alongside `--description` and `--is-active`.
 - **`segments search --conditions` takes the full condition tree** (the backend write shape), not a flat list. Prefix with `@` to read from a file. There is no `--match` flag.
   ```sh
   mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
@@ -310,20 +311,27 @@ frontend like this:
 | `secondary` | **section headings (h1–h3) AND the base of every `surface.background:{"type":"tint"}` block** |
 | `text` / `background` | body copy / page background |
 | `header_color` / `header_accent` | top-nav background + accent (emitted raw, no contrast correction) |
-| `dark_mode` (bool) | dark theme |
+| `dark_mode` (bool) | **not** the theme selector — only flips the defaults for `background`/`text` when those are unset |
 
 - **`secondary` is the classic mistake**: it is not a decorative accent. Set it light
   and every heading goes invisible on a white page.
-- Colors must be **6-digit hex**; the frontend parser rejects 3- and 8-digit forms
-  and silently substitutes its own defaults.
+- Color values must be **6-digit hex** for all six color keys (`primary`, `secondary`,
+  `background`, `text`, `header_color`, `header_accent`). The frontend parser tests
+  `/^#[0-9a-fA-F]{6}$/` and silently substitutes its own default on anything else, so
+  3- and 8-digit hex, named colors, `rgb()`/`hsl()` and gradients all render wrong with
+  a `200` on the wire. The CLI does not validate values (conduit rule) — this is the
+  frontend's render contract, not the API's.
 - **`logo_url` / `favicon_url` are the exception to "stored verbatim"** — they are
   validated server-side (absolute `https://` required; `data:`/`javascript:`
   rejected, MIO-2658). Everything else in the blob round-trips unchecked.
-- Theme selection: `branding.dark_mode` + `branding.background` is the reliable
-  lever from the CLI. The frontend also honours `settings.theme.mode`
-  (`light`|`dark`|`custom`) and it **wins** over `branding.dark_mode` — but `theme`
-  is not on the CLI's settings-key allowlist, so it warns (and still sends); don't
-  combine it with `--strict-keys`.
+- **Theme selection lives in `settings`, not `branding`**: the frontend reads
+  `settings.background.type` (`light`|`dark`|`custom`, default `light`), and
+  `background` is already on the settings-key allowlist —
+  `--settings-json '{"background":{"type":"dark"}}'` works with no warning. There is
+  **no `settings.theme` key**; writing one is a silent no-op (the frontend's parsed
+  `theme.mode` is *derived* from `settings.background.type`). Where
+  `branding.dark_mode` disagrees, the frontend logs a dev-only warning and the
+  settings-derived mode wins.
 
 **Navigation `icon` values are two different vocabularies** (MIO-2675), neither
 validated by the CLI:
