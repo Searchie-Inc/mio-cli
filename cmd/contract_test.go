@@ -1122,6 +1122,29 @@ func TestContract_ErrorEnvelope_RealHTTPStatus(t *testing.T) {
 			wantStatus: "422",
 			wantExit:   errs.ExitUsage, // 2 — unchanged
 		},
+		{
+			// Beyond the three cases the ticket names, the same de-collapsing
+			// applies to every status that shared an exit code. 5xx all mapped
+			// to ExitServer and so all reported "500"; a 503 now says 503, which
+			// is the difference between "the app blew up" and "the app is not
+			// accepting traffic right now" (the latter is worth retrying).
+			name:       "5xx variants no longer all report 500",
+			httpStatus: 503,
+			body:       `{"errors":[{"status":"503","detail":"Service temporarily unavailable"}]}`,
+			wantStatus: "503",
+			wantExit:   errs.ExitServer, // 7 — unchanged
+		},
+		{
+			// The "other 4xx" bucket (405, 415, …) mapped to ExitGeneric, which
+			// exitToStatus had no case for — so it fell through to the default
+			// and reported a CLIENT error as "500". That was the worst of the
+			// lot: it pointed the agent at the backend for its own mistake.
+			name:       "other 4xx no longer reports 500",
+			httpStatus: 405,
+			body:       `{"errors":[{"status":"405","detail":"Method Not Allowed"}]}`,
+			wantStatus: "405",
+			wantExit:   errs.ExitGeneric, // 1 — unchanged
+		},
 	}
 
 	for _, tc := range cases {

@@ -1,10 +1,15 @@
 package client
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
 // makeTestToken constructs a syntactically-valid but cryptographically unsigned
@@ -78,6 +83,68 @@ func TestTeamIDFromAccessToken_ReturnsEmptyForMalformedToken(t *testing.T) {
 				t.Errorf("TeamIDFromAccessToken(%q) = %q, want empty", tc.token, got)
 			}
 		})
+	}
+}
+
+// MIO-2656 (codex review round 1): Login masks a failed sign-in with the
+// friendlier "invalid email or password". That mask used to key off
+// errs.CodeOf(err) == ExitAuth — but ExitAuth covers 401 AND 403, so a 403 on
+// the login route was both mislabelled ("invalid email or password" when the
+// credentials may have been perfectly correct) and stripped of its status,
+// leaving the envelope to fall back to "401" — the exact mis-mapping this
+// ticket exists to remove, at a second site.
+//
+// The mask is now narrowed to a true 401, and it carries that 401 explicitly so
+// the envelope reports it rather than deriving it.
+func TestLogin_401IsMaskedAndKeepsStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"detail":"Incorrect email or password"}`))
+	}))
+	defer srv.Close()
+
+	_, err := newTestClient(srv, "").Login(context.Background(), "a@b.c", "pw")
+	if err == nil {
+		t.Fatal("Login must fail on a 401")
+	}
+	if got := errs.CodeOf(err); got != errs.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth) — unchanged", got, errs.ExitAuth)
+	}
+	if got := errs.HTTPStatusOf(err); got != http.StatusUnauthorized {
+		t.Errorf("HTTPStatusOf = %d, want 401 — the masked error must still carry its status", got)
+	}
+	if !strings.Contains(err.Error(), "invalid email or password") {
+		t.Errorf("detail = %q, want the friendly bad-credentials message", err.Error())
+	}
+}
+
+// A 403 on the login route is a DIFFERENT refusal from bad credentials (the
+// account is locked, SSO is mandatory, the origin is blocked...). It must keep
+// both the backend's own explanation and its own status, so an agent is not
+// told to retry with a different password for a door that no password opens.
+func TestLogin_403KeepsBackendDetailAndStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"errors":[{"status":"403","detail":"Account locked; contact support"}]}`))
+	}))
+	defer srv.Close()
+
+	_, err := newTestClient(srv, "").Login(context.Background(), "a@b.c", "pw")
+	if err == nil {
+		t.Fatal("Login must fail on a 403")
+	}
+	if got := errs.HTTPStatusOf(err); got != http.StatusForbidden {
+		t.Errorf("HTTPStatusOf = %d, want 403 — a 403 must not be reported as a 401", got)
+	}
+	// The exit code is unchanged: ExitCodeForStatus maps 401 and 403 alike.
+	if got := errs.CodeOf(err); got != errs.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth) — unchanged", got, errs.ExitAuth)
+	}
+	if !strings.Contains(err.Error(), "Account locked") {
+		t.Errorf("detail = %q, want the backend's own explanation preserved", err.Error())
+	}
+	if strings.Contains(err.Error(), "invalid email or password") {
+		t.Errorf("detail = %q, must NOT claim bad credentials for a 403", err.Error())
 	}
 }
 
