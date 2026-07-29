@@ -1,7 +1,7 @@
 package catalog
 
 // catalog_test.go — loader + accessor invariants over the vendored catalog
-// (mio-page-catalog@45258a1, catalogVersion 0.10.0). These accessors are what the CLI commands consume
+// (mio-page-catalog@5f35b09, catalogVersion 0.12.0). These accessors are what the CLI commands consume
 // instead of hardcoded lists: the writable section-type allow-list (imperative
 // door), template-id validation (tree door), and recommended templates per page
 // type.
@@ -50,8 +50,8 @@ func TestLoad_Counts(t *testing.T) {
 	if got := len(c.PageTemplates); got != 13 {
 		t.Errorf("page templates = %d, want 13", got)
 	}
-	if got := len(c.SectionTypes); got != 12 {
-		t.Errorf("section types = %d, want 12", got)
+	if got := len(c.SectionTypes); got != 9 {
+		t.Errorf("section types = %d, want 9", got)
 	}
 	if got := len(c.PageTypes); got != 12 {
 		t.Errorf("page types = %d, want 12", got)
@@ -60,10 +60,10 @@ func TestLoad_Counts(t *testing.T) {
 
 func TestWritableSectionTypes_MatchesCatalog(t *testing.T) {
 	c := loadForTest(t)
-	// The 10 writable=true section types (the imperative `sections create --type`
-	// allow-list), sorted for a stable help string. compact joined the set in
-	// 0.10.0 (MIO-2681).
-	want := []string{"carousel", "compact", "content-grid", "cta", "feature", "grid", "row", "search", "text", "video"}
+	// The 7 writable=true section types (the imperative `sections create --type`
+	// allow-list), sorted for a stable help string. cta/text/video were removed
+	// entirely in 0.12.0 (mio-page-catalog#19).
+	want := []string{"carousel", "compact", "content-grid", "feature", "grid", "row", "search"}
 	got := c.WritableSectionTypes()
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("WritableSectionTypes() = %v, want %v", got, want)
@@ -74,9 +74,9 @@ func TestIsWritableSectionType(t *testing.T) {
 	c := loadForTest(t)
 	cases := map[string]bool{
 		"grid":    true,
-		"video":   true,
 		"feature": true,
-		"compact": true, // writable=true as of 0.10.0 (MIO-2681)
+		"compact": true,  // writable=true as of 0.10.0 (MIO-2681)
+		"video":   false, // removed entirely in 0.12.0 (mio-page-catalog#19)
 		"unknown": false,
 	}
 	for id, want := range cases {

@@ -1,9 +1,9 @@
 {
   "meta": {
     "schemaVersion": "2.1.0",
-    "catalogVersion": "0.10.0",
-    "revision": 11,
-    "digest": "sha256:aced7764cb44a58bc89650a63ffccb60ee2d0ffcef15a211a6ed16f77697ba43",
+    "catalogVersion": "0.12.0",
+    "revision": 13,
+    "digest": "sha256:e5c963249b232535a6b157c9ff561cf00e10e180040e6d9e07b51ba274d09dde",
     "createdAt": "2026-07-14T00:00:00Z"
   },
   "nodeKinds": {
@@ -103,16 +103,6 @@
       ]
     },
     {
-      "id": "cta",
-      "lifecycle": "active",
-      "anonSafe": true,
-      "writable": true,
-      "compiledFrom": [
-        "cta",
-        "cta-grid"
-      ]
-    },
-    {
       "id": "row",
       "lifecycle": "active",
       "anonSafe": true,
@@ -121,13 +111,6 @@
         "row",
         "free-stack"
       ]
-    },
-    {
-      "id": "text",
-      "lifecycle": "active",
-      "anonSafe": true,
-      "writable": true,
-      "compiledFrom": []
     },
     {
       "id": "grid",
@@ -191,13 +174,6 @@
       "compiledFrom": [
         "calendar"
       ]
-    },
-    {
-      "id": "video",
-      "lifecycle": "legacy",
-      "anonSafe": false,
-      "writable": true,
-      "compiledFrom": []
     }
   ],
   "nestingRules": {
@@ -2882,62 +2858,332 @@
         "kind": "stack",
         "template": "page-homepage-community",
         "settings": {
-          "gap": 6
+          "gap": 0
         },
         "children": [
           {
             "id": "hero",
-            "kind": "row",
+            "kind": "container",
             "template": "hero",
-            "settings": {},
+            "settings": {
+              "maxWidth": "content",
+              "padding": 0,
+              "surface": {
+                "padding": "section",
+                "background": {
+                  "type": "tint"
+                }
+              }
+            },
             "children": [
               {
-                "id": "hero-headline",
-                "kind": "headline",
+                "id": "hero-body",
+                "kind": "row",
                 "settings": {
-                  "level": 1
+                  "responsive": true,
+                  "split": true,
+                  "gap": "section"
                 },
-                "value": "Welcome to {{hub_name}}"
-              },
-              {
-                "id": "hero-text",
-                "kind": "text",
-                "settings": {},
-                "value": "A place for our community to learn, share, and connect."
-              },
-              {
-                "id": "hero-cta",
-                "kind": "button",
-                "settings": {
-                  "variant": "primary",
-                  "action": {
-                    "type": "url",
-                    "value": "/register"
+                "children": [
+                  {
+                    "id": "hero-media",
+                    "kind": "image",
+                    "settings": {
+                      "aspectRatio": "16:9",
+                      "objectFit": "cover",
+                      "radius": "m",
+                      "outline": true
+                    },
+                    "value": "https://assets.searchie.io/hub-templates/community/hero.jpg"
+                  },
+                  {
+                    "id": "hero-content",
+                    "kind": "stack",
+                    "settings": {
+                      "gap": 2,
+                      "align": "start"
+                    },
+                    "children": [
+                      {
+                        "id": "hero-headline",
+                        "kind": "headline",
+                        "settings": {
+                          "level": 1,
+                          "weight": 700
+                        },
+                        "value": "Welcome to {{hub_name}}"
+                      },
+                      {
+                        "id": "hero-text",
+                        "kind": "text",
+                        "settings": {
+                          "clamp": 5,
+                          "marginBottom": 4
+                        },
+                        "value": "A place for our community to learn, share, and connect. Join the conversation and grow together."
+                      },
+                      {
+                        "id": "hero-cta",
+                        "kind": "button",
+                        "settings": {
+                          "size": "lg",
+                          "variant": "primary",
+                          "action": {
+                            "type": "page",
+                            "value": "register"
+                          }
+                        },
+                        "value": "Join the community"
+                      }
+                    ]
                   }
-                },
-                "value": "Join the community"
+                ]
               }
             ]
           },
           {
             "id": "intro",
-            "kind": "row",
+            "kind": "container",
             "template": "row",
-            "settings": {},
+            "settings": {
+              "maxWidth": "content",
+              "padding": 0,
+              "surface": {
+                "padding": "section"
+              }
+            },
             "children": [
               {
-                "id": "intro-headline",
-                "kind": "headline",
+                "id": "intro-body",
+                "kind": "stack",
                 "settings": {
-                  "level": 2
+                  "gap": 2,
+                  "align": "center"
                 },
-                "value": "What you'll find here"
+                "children": [
+                  {
+                    "id": "intro-headline",
+                    "kind": "headline",
+                    "settings": {
+                      "level": 2,
+                      "weight": 700,
+                      "align": "center"
+                    },
+                    "value": "What you'll find here"
+                  },
+                  {
+                    "id": "intro-text",
+                    "kind": "text",
+                    "settings": {
+                      "muted": true,
+                      "align": "center"
+                    },
+                    "value": "Everything our community offers, all in one place."
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "features",
+            "kind": "grid",
+            "template": "content-grid",
+            "settings": {
+              "variant": "ds-content"
+            },
+            "children": [
+              {
+                "id": "feat-1",
+                "kind": "stack",
+                "settings": {
+                  "gap": 2
+                },
+                "children": [
+                  {
+                    "id": "feat-1-img",
+                    "kind": "image",
+                    "settings": {
+                      "aspectRatio": "16:9",
+                      "objectFit": "cover",
+                      "radius": "m",
+                      "outline": true
+                    },
+                    "value": "https://assets.searchie.io/hub-templates/community/feature-discussions.jpg"
+                  },
+                  {
+                    "id": "feat-1-body",
+                    "kind": "stack",
+                    "settings": {
+                      "gap": 0.5
+                    },
+                    "children": [
+                      {
+                        "id": "feat-1-title",
+                        "kind": "text",
+                        "settings": {
+                          "weight": 700
+                        },
+                        "value": "Discussions"
+                      },
+                      {
+                        "id": "feat-1-desc",
+                        "kind": "text",
+                        "settings": {
+                          "muted": true
+                        },
+                        "value": "Ask questions, share ideas, and connect with members."
+                      }
+                    ]
+                  }
+                ]
               },
               {
-                "id": "intro-text",
-                "kind": "text",
-                "settings": {},
-                "value": "Discussions, resources, and events curated for members."
+                "id": "feat-2",
+                "kind": "stack",
+                "settings": {
+                  "gap": 2
+                },
+                "children": [
+                  {
+                    "id": "feat-2-img",
+                    "kind": "image",
+                    "settings": {
+                      "aspectRatio": "16:9",
+                      "objectFit": "cover",
+                      "radius": "m",
+                      "outline": true
+                    },
+                    "value": "https://assets.searchie.io/hub-templates/community/feature-resources.jpg"
+                  },
+                  {
+                    "id": "feat-2-body",
+                    "kind": "stack",
+                    "settings": {
+                      "gap": 0.5
+                    },
+                    "children": [
+                      {
+                        "id": "feat-2-title",
+                        "kind": "text",
+                        "settings": {
+                          "weight": 700
+                        },
+                        "value": "Resources"
+                      },
+                      {
+                        "id": "feat-2-desc",
+                        "kind": "text",
+                        "settings": {
+                          "muted": true
+                        },
+                        "value": "Guides, templates, and materials curated for you."
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "feat-3",
+                "kind": "stack",
+                "settings": {
+                  "gap": 2
+                },
+                "children": [
+                  {
+                    "id": "feat-3-img",
+                    "kind": "image",
+                    "settings": {
+                      "aspectRatio": "16:9",
+                      "objectFit": "cover",
+                      "radius": "m",
+                      "outline": true
+                    },
+                    "value": "https://assets.searchie.io/hub-templates/community/feature-events.jpg"
+                  },
+                  {
+                    "id": "feat-3-body",
+                    "kind": "stack",
+                    "settings": {
+                      "gap": 0.5
+                    },
+                    "children": [
+                      {
+                        "id": "feat-3-title",
+                        "kind": "text",
+                        "settings": {
+                          "weight": 700
+                        },
+                        "value": "Events"
+                      },
+                      {
+                        "id": "feat-3-desc",
+                        "kind": "text",
+                        "settings": {
+                          "muted": true
+                        },
+                        "value": "Live sessions and community meetups."
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "cta",
+            "kind": "container",
+            "template": "row",
+            "settings": {
+              "maxWidth": "content",
+              "padding": 0,
+              "surface": {
+                "padding": "section",
+                "background": {
+                  "type": "tint"
+                }
+              }
+            },
+            "children": [
+              {
+                "id": "cta-body",
+                "kind": "stack",
+                "settings": {
+                  "gap": 2,
+                  "align": "center"
+                },
+                "children": [
+                  {
+                    "id": "cta-headline",
+                    "kind": "headline",
+                    "settings": {
+                      "level": 2,
+                      "weight": 700,
+                      "align": "center"
+                    },
+                    "value": "Ready to join {{hub_name}}?"
+                  },
+                  {
+                    "id": "cta-text",
+                    "kind": "text",
+                    "settings": {
+                      "align": "center"
+                    },
+                    "value": "Create your free account and start exploring the community."
+                  },
+                  {
+                    "id": "cta-button",
+                    "kind": "button",
+                    "settings": {
+                      "size": "lg",
+                      "variant": "primary",
+                      "action": {
+                        "type": "page",
+                        "value": "register"
+                      }
+                    },
+                    "value": "Join now"
+                  }
+                ]
               }
             ]
           }

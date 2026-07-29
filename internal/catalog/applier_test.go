@@ -3,7 +3,7 @@ package catalog
 // applier_test.go — Go port parity of mio-page-catalog src/applier.test.ts
 // (the applier UNIT invariants) plus the NormalizeIDs / CanonicalJSON helpers
 // the cross-language golden parity (parity_test.go) leans on. The reference
-// algorithm is mio-page-catalog@45258a1 src/applier.ts (instantiateTemplate /
+// algorithm is mio-page-catalog@5f35b09 src/applier.ts (instantiateTemplate /
 // cloneWithFreshIds).
 
 import (

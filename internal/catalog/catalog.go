@@ -28,8 +28,8 @@ import (
 )
 
 // vendoredCatalogJSON is the digest-pinned copy of mio-page-catalog/catalog.json
-// at commit 45258a1 (catalogVersion 0.10.0, revision 11, meta.digest
-// sha256:aced7764…). It is byte-identical to upstream so its embedded digest
+// at commit 5f35b09 (catalogVersion 0.12.0, revision 13, meta.digest
+// sha256:e5c96324…). It is byte-identical to upstream so its embedded digest
 // verifies (see parity_test.go). Refresh it and the golden fixtures together
 // when bumping the pinned catalog.
 //

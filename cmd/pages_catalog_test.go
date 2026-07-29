@@ -203,8 +203,8 @@ func TestCatalogSectionTypes_WritableOnly(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Stdout), &rows); err != nil {
 		t.Fatalf("stdout not a JSON array: %v\n%s", err, res.Stdout)
 	}
-	if len(rows) != 10 {
-		t.Errorf("writable section types = %d, want 10", len(rows))
+	if len(rows) != 7 {
+		t.Errorf("writable section types = %d, want 7", len(rows))
 	}
 	found := false
 	for _, r := range rows {
@@ -217,7 +217,7 @@ func TestCatalogSectionTypes_WritableOnly(t *testing.T) {
 	}
 }
 
-func TestCatalogSectionTypes_AllTwelve(t *testing.T) {
+func TestCatalogSectionTypes_AllNine(t *testing.T) {
 	res := runContract(t, offlineEnv(), "pages", "catalog", "section-types", "--offline", "--output", "json")
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)

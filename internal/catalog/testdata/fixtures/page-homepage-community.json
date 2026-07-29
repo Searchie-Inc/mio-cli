@@ -3,62 +3,332 @@
   "kind": "stack",
   "template": "page-homepage-community",
   "settings": {
-    "gap": 6
+    "gap": 0
   },
   "children": [
     {
       "id": "#1",
-      "kind": "row",
+      "kind": "container",
       "template": "hero",
-      "settings": {},
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section",
+          "background": {
+            "type": "tint"
+          }
+        }
+      },
       "children": [
         {
           "id": "#2",
-          "kind": "headline",
+          "kind": "row",
           "settings": {
-            "level": 1
+            "responsive": true,
+            "split": true,
+            "gap": "section"
           },
-          "value": "Welcome to {{hub_name}}"
-        },
-        {
-          "id": "#3",
-          "kind": "text",
-          "settings": {},
-          "value": "A place for our community to learn, share, and connect."
-        },
-        {
-          "id": "#4",
-          "kind": "button",
-          "settings": {
-            "variant": "primary",
-            "action": {
-              "type": "url",
-              "value": "/register"
+          "children": [
+            {
+              "id": "#3",
+              "kind": "image",
+              "settings": {
+                "aspectRatio": "16:9",
+                "objectFit": "cover",
+                "radius": "m",
+                "outline": true
+              },
+              "value": "https://assets.searchie.io/hub-templates/community/hero.jpg"
+            },
+            {
+              "id": "#4",
+              "kind": "stack",
+              "settings": {
+                "gap": 2,
+                "align": "start"
+              },
+              "children": [
+                {
+                  "id": "#5",
+                  "kind": "headline",
+                  "settings": {
+                    "level": 1,
+                    "weight": 700
+                  },
+                  "value": "Welcome to {{hub_name}}"
+                },
+                {
+                  "id": "#6",
+                  "kind": "text",
+                  "settings": {
+                    "clamp": 5,
+                    "marginBottom": 4
+                  },
+                  "value": "A place for our community to learn, share, and connect. Join the conversation and grow together."
+                },
+                {
+                  "id": "#7",
+                  "kind": "button",
+                  "settings": {
+                    "size": "lg",
+                    "variant": "primary",
+                    "action": {
+                      "type": "page",
+                      "value": "register"
+                    }
+                  },
+                  "value": "Join the community"
+                }
+              ]
             }
-          },
-          "value": "Join the community"
+          ]
         }
       ]
     },
     {
-      "id": "#5",
-      "kind": "row",
+      "id": "#8",
+      "kind": "container",
       "template": "row",
-      "settings": {},
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section"
+        }
+      },
       "children": [
         {
-          "id": "#6",
-          "kind": "headline",
+          "id": "#9",
+          "kind": "stack",
           "settings": {
-            "level": 2
+            "gap": 2,
+            "align": "center"
           },
-          "value": "What you'll find here"
+          "children": [
+            {
+              "id": "#10",
+              "kind": "headline",
+              "settings": {
+                "level": 2,
+                "weight": 700,
+                "align": "center"
+              },
+              "value": "What you'll find here"
+            },
+            {
+              "id": "#11",
+              "kind": "text",
+              "settings": {
+                "muted": true,
+                "align": "center"
+              },
+              "value": "Everything our community offers, all in one place."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#12",
+      "kind": "grid",
+      "template": "content-grid",
+      "settings": {
+        "variant": "ds-content"
+      },
+      "children": [
+        {
+          "id": "#13",
+          "kind": "stack",
+          "settings": {
+            "gap": 2
+          },
+          "children": [
+            {
+              "id": "#14",
+              "kind": "image",
+              "settings": {
+                "aspectRatio": "16:9",
+                "objectFit": "cover",
+                "radius": "m",
+                "outline": true
+              },
+              "value": "https://assets.searchie.io/hub-templates/community/feature-discussions.jpg"
+            },
+            {
+              "id": "#15",
+              "kind": "stack",
+              "settings": {
+                "gap": 0.5
+              },
+              "children": [
+                {
+                  "id": "#16",
+                  "kind": "text",
+                  "settings": {
+                    "weight": 700
+                  },
+                  "value": "Discussions"
+                },
+                {
+                  "id": "#17",
+                  "kind": "text",
+                  "settings": {
+                    "muted": true
+                  },
+                  "value": "Ask questions, share ideas, and connect with members."
+                }
+              ]
+            }
+          ]
         },
         {
-          "id": "#7",
-          "kind": "text",
-          "settings": {},
-          "value": "Discussions, resources, and events curated for members."
+          "id": "#18",
+          "kind": "stack",
+          "settings": {
+            "gap": 2
+          },
+          "children": [
+            {
+              "id": "#19",
+              "kind": "image",
+              "settings": {
+                "aspectRatio": "16:9",
+                "objectFit": "cover",
+                "radius": "m",
+                "outline": true
+              },
+              "value": "https://assets.searchie.io/hub-templates/community/feature-resources.jpg"
+            },
+            {
+              "id": "#20",
+              "kind": "stack",
+              "settings": {
+                "gap": 0.5
+              },
+              "children": [
+                {
+                  "id": "#21",
+                  "kind": "text",
+                  "settings": {
+                    "weight": 700
+                  },
+                  "value": "Resources"
+                },
+                {
+                  "id": "#22",
+                  "kind": "text",
+                  "settings": {
+                    "muted": true
+                  },
+                  "value": "Guides, templates, and materials curated for you."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "#23",
+          "kind": "stack",
+          "settings": {
+            "gap": 2
+          },
+          "children": [
+            {
+              "id": "#24",
+              "kind": "image",
+              "settings": {
+                "aspectRatio": "16:9",
+                "objectFit": "cover",
+                "radius": "m",
+                "outline": true
+              },
+              "value": "https://assets.searchie.io/hub-templates/community/feature-events.jpg"
+            },
+            {
+              "id": "#25",
+              "kind": "stack",
+              "settings": {
+                "gap": 0.5
+              },
+              "children": [
+                {
+                  "id": "#26",
+                  "kind": "text",
+                  "settings": {
+                    "weight": 700
+                  },
+                  "value": "Events"
+                },
+                {
+                  "id": "#27",
+                  "kind": "text",
+                  "settings": {
+                    "muted": true
+                  },
+                  "value": "Live sessions and community meetups."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#28",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section",
+          "background": {
+            "type": "tint"
+          }
+        }
+      },
+      "children": [
+        {
+          "id": "#29",
+          "kind": "stack",
+          "settings": {
+            "gap": 2,
+            "align": "center"
+          },
+          "children": [
+            {
+              "id": "#30",
+              "kind": "headline",
+              "settings": {
+                "level": 2,
+                "weight": 700,
+                "align": "center"
+              },
+              "value": "Ready to join {{hub_name}}?"
+            },
+            {
+              "id": "#31",
+              "kind": "text",
+              "settings": {
+                "align": "center"
+              },
+              "value": "Create your free account and start exploring the community."
+            },
+            {
+              "id": "#32",
+              "kind": "button",
+              "settings": {
+                "size": "lg",
+                "variant": "primary",
+                "action": {
+                  "type": "page",
+                  "value": "register"
+                }
+              },
+              "value": "Join now"
+            }
+          ]
         }
       ]
     }
