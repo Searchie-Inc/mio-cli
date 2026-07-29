@@ -482,10 +482,16 @@ func TestInstallStagedBinaryRefusesANonRegularDest(t *testing.T) {
 	}
 	staged := filepath.Join(dir, "mio.exe.new-1")
 	writeFile(t, staged, "NEW")
+	// An unrelated leftover .old must survive too: refusing an invalid target
+	// has to be completely no-touch (Codex review round 3).
+	writeFile(t, dest+".old", "PREVIOUS")
 
 	err := installStagedBinary(staged, dest, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("error = %v, want a not-a-regular-file refusal", err)
+	}
+	if got := readFile(t, dest+".old"); got != "PREVIOUS" {
+		t.Errorf("the existing .old was disturbed by a refused install: %q", got)
 	}
 	if fi, statErr := os.Stat(dest); statErr != nil || !fi.IsDir() {
 		t.Errorf("the existing directory must be left exactly as it was (stat err %v)", statErr)
@@ -493,8 +499,33 @@ func TestInstallStagedBinaryRefusesANonRegularDest(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(dest, "keep.txt")); statErr != nil {
 		t.Errorf("contents of the existing directory were disturbed: %v", statErr)
 	}
-	if _, statErr := os.Stat(dest + ".old"); statErr == nil {
-		t.Error("nothing should have been renamed aside")
+	if got := readFile(t, dest+".old"); got != "PREVIOUS" {
+		t.Errorf("nothing should have been renamed aside; .old = %q", got)
+	}
+}
+
+// A malformed tag from GitHub is a server-side problem, not something the user
+// typed, so it must NOT be reported as a usage error (Codex review round 3 —
+// the %w wrap was promoting the inner ExitUsage all the way to the exit code).
+func TestRunNativeUpdateMalformedUpstreamTagIsNotAUsageError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"tag_name":"v0.12.1/../../x"}`)
+	}))
+	defer srv.Close()
+	withReleaseEndpoints(t, srv.URL, srv.URL)
+
+	err := runNativeUpdate(context.Background(), nativeUpdateConfig{
+		Prefix:     t.TempDir(),
+		GOOS:       "windows",
+		GOARCH:     "amd64",
+		HTTPClient: srv.Client(),
+		Out:        &bytes.Buffer{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unusable") {
+		t.Fatalf("error = %v, want an unusable-upstream-tag error", err)
+	}
+	if got := errs.CodeOf(err); got != errs.ExitGeneric {
+		t.Errorf("exit code = %d, want %d (ExitGeneric — the user typed nothing wrong)", got, errs.ExitGeneric)
 	}
 }
 

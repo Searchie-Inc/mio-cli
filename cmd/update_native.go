@@ -150,9 +150,12 @@ func runNativeUpdate(ctx context.Context, cfg nativeUpdateConfig) error {
 			return err
 		}
 		// The tag came off the wire, so it gets the same treatment as --version
-		// before it reaches a URL path and a local filename.
+		// before it reaches a URL path and a local filename. Formatted with %v,
+		// NOT %w: validateReleaseVersion returns a usage-coded error because it
+		// normally judges what the user typed, and unwrapping it here would
+		// promote a server-side problem to exit 2 (Codex review round 3).
 		if err := validateReleaseVersion(resolved); err != nil {
-			return fmt.Errorf("the latest release tag from GitHub is unusable: %w", err)
+			return errs.New(errs.ExitGeneric, "the latest release tag from GitHub is unusable: %v", err)
 		}
 		rel = resolved
 	}
@@ -248,17 +251,18 @@ func runNativeUpdate(ctx context.Context, cfg nativeUpdateConfig) error {
 // working mio. If even the rollback fails we say exactly which file to move
 // where by hand — a half-installed CLI must not be reported as success.
 func installStagedBinary(staged, dest string, out io.Writer) error {
+	// Re-checked here, not just in runNativeUpdate's preflight: this is the
+	// moment of use, and it keeps the guard attached to the destructive step for
+	// any future caller. It runs BEFORE the stale-backup removal so refusing an
+	// invalid target touches nothing at all (Codex review round 3).
+	if err := checkInstallTarget(dest); err != nil {
+		return err
+	}
+
 	backup := dest + ".old"
 	// Best-effort: a .old from an earlier update (held open by the then-running
 	// mio) is dead weight now, and step 2 must not trip over it.
 	_ = os.Remove(backup)
-
-	// Re-checked here, not just in runNativeUpdate's preflight: this is the
-	// moment of use, and it keeps the guard attached to the destructive step for
-	// any future caller.
-	if err := checkInstallTarget(dest); err != nil {
-		return err
-	}
 
 	existed := true
 	if _, err := os.Lstat(dest); err != nil {
