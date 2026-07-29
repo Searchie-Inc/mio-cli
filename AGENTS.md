@@ -237,8 +237,17 @@ authoring recipe; this is the reference.
 **Node envelope** — `value` is a sibling of `settings`, *not* `settings.value`:
 
 ```json
-{ "id": "<uuid>", "kind": "headline", "template": "hero",
-  "value": "Welcome", "settings": { "level": 1, "weight": 700 }, "children": [] }
+{ "id": "<uuid>", "kind": "headline",
+  "value": "Welcome", "settings": { "level": 1, "weight": 700 } }
+```
+
+A section node is the same envelope plus a `template` and `children`:
+
+```json
+{ "id": "<uuid>", "kind": "container", "template": "row",
+  "settings": { "maxWidth": "content", "padding": 0,
+                "surface": { "padding": "section", "background": { "type": "tint" } } },
+  "children": [ ] }
 ```
 
 - The renderer dispatches on **`kind`**, never `type`. `template` marks a node as a
