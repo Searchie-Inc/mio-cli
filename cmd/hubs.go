@@ -144,8 +144,22 @@ func hubsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 // existing invocation that supplies an id behaves byte-identically; only the
 // fallback path is new, and it resolves names/slugs because requireHub already
 // does.
-func (c *cmdContext) hubTargetID(cmd *cobra.Command, hubArg string) (string, error) {
-	if strings.TrimSpace(hubArg) != "" {
+//
+// `supplied` is NOT the same as "non-empty", and conflating the two was a real
+// bug (caught in Codex review round 1). `mio hubs update "$HUB_ID" --name X`
+// with an empty $HUB_ID supplies a BLANK positional; if that fell through to the
+// ambient hub, the command would silently WRITE to a different hub than the
+// script named — exit 0, no diagnostic. A supplied positional is therefore
+// always authoritative: blank means usage error, never fallback. Only a genuinely
+// ABSENT positional consults the context.
+func (c *cmdContext) hubTargetID(cmd *cobra.Command, hubArg string, supplied bool) (string, error) {
+	if supplied {
+		if strings.TrimSpace(hubArg) == "" {
+			return "", errs.New(errs.ExitUsage,
+				"empty hub id argument to `%s`: a blank positional is not a request to use "+
+					"--hub/current_hub — pass a real hub id, or omit the argument entirely to use "+
+					"the hub in context", cmd.CommandPath())
+		}
 		return hubArg, nil
 	}
 
@@ -166,14 +180,18 @@ func (c *cmdContext) hubTargetID(cmd *cobra.Command, hubArg string) (string, err
 	return id, nil
 }
 
-// optionalArg returns the i-th positional, or "" when it was not supplied. The
-// hubs verbs declare their hub id with MaximumNArgs, so indexing args directly
-// would panic on the (now legal) zero-arg invocation.
-func optionalArg(args []string, i int) string {
+// optionalArg returns the i-th positional and whether it was SUPPLIED at all.
+// The hubs verbs declare their hub id with MaximumNArgs, so indexing args
+// directly would panic on the (now legal) zero-arg invocation.
+//
+// The bool is load-bearing: "omitted" and "supplied but blank" must never
+// collapse, or an empty shell variable silently retargets the ambient hub — see
+// hubTargetID.
+func optionalArg(args []string, i int) (string, bool) {
 	if i < len(args) {
-		return args[i]
+		return args[i], true
 	}
-	return ""
+	return "", false
 }
 
 // injectHubDerivedState adds convenience booleans to a hub resource's rendered
@@ -519,7 +537,8 @@ hub-scoped command.`,
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		hubArg, hubGiven := optionalArg(args, 0)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
@@ -664,7 +683,8 @@ the ambient context (--hub, or current_hub in config).`,
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		hubArg, hubGiven := optionalArg(args, 0)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
@@ -1028,7 +1048,8 @@ Exactly one of --content or --reset-content must be provided:
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		hubArg, hubGiven := optionalArg(args, 0)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
@@ -1182,7 +1203,8 @@ positionally; omit it to use the ambient hub (--hub, or current_hub in config).
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		hubArg, hubGiven := optionalArg(args, 0)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
@@ -1234,7 +1256,8 @@ The hub identifier may be given positionally; omit it to use the ambient hub
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		hubArg, hubGiven := optionalArg(args, 0)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
@@ -1303,7 +1326,8 @@ The hub identifier may be given positionally; omit it to use the ambient hub
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		hubArg, hubGiven := optionalArg(args, 0)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
@@ -1360,7 +1384,8 @@ The hub identifier may be given positionally; omit it to use the ambient hub
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		hubArg, hubGiven := optionalArg(args, 0)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
@@ -1395,7 +1420,8 @@ The hub identifier may be given positionally; omit it to use the ambient hub
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		hubArg, hubGiven := optionalArg(args, 0)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}

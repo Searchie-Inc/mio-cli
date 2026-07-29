@@ -185,6 +185,62 @@ func TestHubsRetrieve_NoHubAnywhereNamesTheRealCause(t *testing.T) {
 	}
 }
 
+// ─── blank positional must never silently retarget (Codex R1, Critical) ────────
+
+// TestHubsVerbs_BlankPositionalNeverFallsBackToAmbientHub is the regression guard
+// for the nastiest failure mode this change could have introduced.
+//
+// `mio hubs update "$HUB_ID" --name X` with an EMPTY $HUB_ID supplies a
+// positional that happens to be blank. If "omitted" and "supplied but blank"
+// collapse into the same case, that command silently retargets whatever sits in
+// --hub / current_hub / the single-hub auto-default — a WRITE to the wrong hub,
+// with no diagnostic. Before this branch the positional was mandatory, so a blank
+// value could never be redirected onto another hub.
+//
+// The contract: a positional that was SUPPLIED is always authoritative. If it is
+// blank it is a usage error (exit 2, no HTTP request) — never a fallback.
+func TestHubsVerbs_BlankPositionalNeverFallsBackToAmbientHub(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"retrieve empty", []string{"hubs", "retrieve", ""}},
+		{"retrieve whitespace", []string{"hubs", "retrieve", "   "}},
+		{"update empty", []string{"hubs", "update", "", "--name", "Renamed"}},
+		{"policies gate empty", []string{"hubs", "policies", "gate", "", "--enabled"}},
+		{"email-settings update empty", []string{"hubs", "email-settings", "update", "", "--from-name", "X"}},
+		{"redirect-origins set empty", []string{"hubs", "redirect-origins", "set", "", "--clear"}},
+		{"navigation add empty hub", []string{"hubs", "navigation", "add", "", "header",
+			"--type", "url", "--href", "/my-hub/x", "--label", "X"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var fired atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fired.Store(true)
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				_, _ = w.Write([]byte(`{"data":{"id":"hub_x","type":"hubs","attributes":{"slug":"s","navigation":{}}}}`))
+			}))
+			t.Cleanup(srv.Close)
+
+			// An ambient hub IS available from both --hub and current_hub: if the
+			// blank positional fell through, the command would happily target it.
+			env := append(baseEnv(srv.URL), seedConfigHub(t, "hub_from_config"))
+			args := append([]string{"--hub", "hub_from_flag"}, tc.args...)
+
+			res := runContract(t, env, withTeam("t_team1", args...)...)
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit=%d want ExitUsage (2) — a supplied-but-blank hub id must not resolve; stderr=%q",
+					res.Code, res.Stderr)
+			}
+			if fired.Load() {
+				t.Error("a blank positional hub id must fire NO HTTP request — it silently retargeted the ambient hub")
+			}
+		})
+	}
+}
+
 // ─── sibling verbs that shared the defect ───────────────────────────────────────
 
 // TestHubsSiblingVerbs_HonorHubFlag sweeps every other `mio hubs` verb whose hub
@@ -261,6 +317,100 @@ func TestHubsSiblingVerbs_HonorHubFlag(t *testing.T) {
 }
 
 // ─── navigation bucket/hub positional disambiguation ────────────────────────────
+
+// navBucketIDPrefixes mirrors the hub id-prefix conventions in
+// internal/client/resolve.go (hubIDPrefixes). Duplicated deliberately: this test
+// guards a cmd-package invariant and must keep failing even if that unexported
+// list moves.
+var navBucketIDPrefixes = []string{"hub_", "h_"}
+
+// looksLikeHubID reports whether s could be accepted as a hub id positional — a
+// canonical 8-4-4-4-12 UUID (the production shape) or one of the CLI's documented
+// id prefixes.
+func looksLikeHubID(s string) bool {
+	for _, p := range navBucketIDPrefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	if len(s) != 36 {
+		return false
+	}
+	for i, r := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			isHex := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+			if !isHex {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// TestNavBuckets_AreNeverIDShaped pins the invariant splitNavArgs rests on
+// (Codex R1, Important).
+//
+// A lone navigation positional is read as the BUCKET when it matches navBuckets,
+// otherwise as the hub id. That is only unambiguous while no bucket name could
+// ever BE a hub id. Today it holds trivially — hub ids are UUIDs or `hub_`/`h_`
+// prefixed, and positional hub ids are never resolved from a name or slug — but
+// nothing structurally prevents a future bucket from breaking it.
+//
+// This test is the tripwire: adding a bucket named like a hub id fails HERE,
+// loudly, instead of silently making `mio hubs navigation list <x>` address the
+// wrong hub.
+func TestNavBuckets_AreNeverIDShaped(t *testing.T) {
+	for _, b := range navBuckets {
+		if looksLikeHubID(b) {
+			t.Errorf("navigation bucket %q is hub-id-shaped — splitNavArgs can no longer tell a "+
+				"lone positional bucket from a hub id; rename the bucket or require the hub id "+
+				"explicitly on the navigation verbs", b)
+		}
+		if strings.TrimSpace(b) == "" {
+			t.Errorf("navigation bucket %q is blank — it would collide with the omitted-positional case", b)
+		}
+	}
+}
+
+// TestSplitNavArgs_Table pins the positional grammar directly, including the
+// supplied-vs-blank distinction the Critical fix turns on.
+func TestSplitNavArgs_Table(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantHub    string
+		wantGiven  bool
+		wantBucket string
+	}{
+		{"nothing", nil, "", false, ""},
+		{"bucket only", []string{"header"}, "", false, "header"},
+		{"mobile bucket only", []string{"mobile"}, "", false, "mobile"},
+		{"hub only", []string{"hub_abc123"}, "hub_abc123", true, ""},
+		{"hub and bucket", []string{"hub_abc123", "footer"}, "hub_abc123", true, "footer"},
+		// A blank positional must report supplied=true so hubTargetID rejects it
+		// instead of falling through to the ambient hub.
+		{"blank hub", []string{""}, "", true, ""},
+		{"blank hub with bucket", []string{"", "header"}, "", true, "header"},
+		// A non-bucket second positional stays the bucket slot — requireNavBucket
+		// rejects it downstream rather than splitNavArgs guessing.
+		{"unknown bucket", []string{"hub_abc123", "sidebar"}, "hub_abc123", true, "sidebar"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hub, given, bucket := splitNavArgs(tc.args)
+			if hub != tc.wantHub || given != tc.wantGiven || bucket != tc.wantBucket {
+				t.Errorf("splitNavArgs(%q) = (%q, %v, %q), want (%q, %v, %q)",
+					tc.args, hub, given, bucket, tc.wantHub, tc.wantGiven, tc.wantBucket)
+			}
+		})
+	}
+}
 
 // TestHubsNavigation_BucketOnlyPositionalUsesAmbientHub: `navigation add header`
 // (bucket only) must mean "the header bucket of the ambient hub". A bucket name

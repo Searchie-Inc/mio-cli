@@ -101,17 +101,26 @@ func requireNavBucket(bucket string) error {
 //
 // An empty bucket return means "not supplied": `navigation list` reads it as all
 // buckets, while add/remove/reorder reject it via requireNavBucket.
-func splitNavArgs(args []string) (hubArg, bucket string) {
+//
+// hubGiven reports whether a hub positional was SUPPLIED (even if blank), which
+// hubTargetID needs to keep a blank positional from silently falling through to
+// the ambient hub — see hubTargetID's contract.
+//
+// INVARIANT (test-enforced by TestNavBuckets_AreNeverIDShaped): no bucket name
+// may be id-shaped. The whole disambiguation rests on it — if a bucket were ever
+// named like a hub id, a one-positional invocation would become genuinely
+// ambiguous and could silently address the wrong hub.
+func splitNavArgs(args []string) (hubArg string, hubGiven bool, bucket string) {
 	switch len(args) {
 	case 0:
-		return "", ""
+		return "", false, ""
 	case 1:
 		if isNavBucket(args[0]) {
-			return "", args[0]
+			return "", false, args[0]
 		}
-		return args[0], ""
+		return args[0], true, ""
 	default:
-		return args[0], args[1]
+		return args[0], true, args[1]
 	}
 }
 
@@ -206,7 +215,7 @@ current_hub in config).`,
   mio hubs navigation list --hub hub_abc123`,
 	Args: cobra.MaximumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		hubArg, bucket := splitNavArgs(args)
+		hubArg, hubGiven, bucket := splitNavArgs(args)
 
 		buckets := navBuckets
 		if bucket != "" {
@@ -220,7 +229,7 @@ current_hub in config).`,
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, hubArg)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
@@ -304,7 +313,7 @@ ambient hub (--hub, or current_hub in config).`,
   mio hubs navigation add header --type url --href /my-hub/about --label About`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		hubArg, bucket := splitNavArgs(args)
+		hubArg, hubGiven, bucket := splitNavArgs(args)
 		if err := requireNavBucket(bucket); err != nil {
 			return err
 		}
@@ -317,7 +326,7 @@ ambient hub (--hub, or current_hub in config).`,
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, hubArg)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
@@ -364,7 +373,7 @@ ambient hub (--hub, or current_hub in config).`,
   mio hubs navigation remove header --index 2`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		hubArg, bucket := splitNavArgs(args)
+		hubArg, hubGiven, bucket := splitNavArgs(args)
 		if err := requireNavBucket(bucket); err != nil {
 			return err
 		}
@@ -377,7 +386,7 @@ ambient hub (--hub, or current_hub in config).`,
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, hubArg)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
@@ -452,7 +461,7 @@ ambient hub (--hub, or current_hub in config).`,
   mio hubs navigation reorder header --order 2,0,1`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		hubArg, bucket := splitNavArgs(args)
+		hubArg, hubGiven, bucket := splitNavArgs(args)
 		if err := requireNavBucket(bucket); err != nil {
 			return err
 		}
@@ -469,7 +478,7 @@ ambient hub (--hub, or current_hub in config).`,
 		if err != nil {
 			return err
 		}
-		hubID, err := c.hubTargetID(cmd, hubArg)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
 		if err != nil {
 			return err
 		}
