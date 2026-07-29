@@ -24,7 +24,7 @@ mio config set current_team <team-uuid>   # a UUID (see 'mio teams list'); drop 
   `unknown config key "team" (valid: [current_team current_hub api_base])` (MIO-2568).
 - **Auth resolution (first wins):** `--api-key` flag → `MIO_API_KEY` env → key stored by `mio login`. No key ⇒ exit `3`.
 - **Output:** JSON when piped/non-interactive (agent default), table on a TTY. Force with `--output json`. Filter inline with `--jq '<expr>'` (no external `jq` needed), e.g. `HUB_ID=$(mio hubs list --jq '.[0].id')`. Use `--raw` for the unflattened JSON:API envelope (`meta`/`links`/`included`).
-- **Exit codes (stable contract):** `0` ok · `1` error · `2` bad args (400/409/422) · `3` auth (401/403) · `4` not found · `5` needs `--yes` in a non-TTY · `6` rate limited (429) · `7` server (5xx).
+- **Exit codes (stable contract):** `0` ok · `1` error · `2` bad args (400/409/422) · `3` auth (401/403) · `4` not found · `5` needs `--yes` in a non-TTY · `6` rate limited (429) · `7` server (5xx). They are deliberately coarse; when you need the exact status the API returned (403 vs 401, 409 vs 422), read `errors[0].status` from the JSON:API envelope on stderr — it carries the real HTTP status verbatim, while `errors[0].meta.exit_code` echoes the coarse code (MIO-2656).
 - **Destructive ops** (`delete`/`cancel`/`refund`) require `--yes`/`-y` in a non-interactive shell or they exit `5`.
 - Info/hints print to **stderr**, so machine-readable stdout stays clean. `--jq .id` on a create gives you the new id for the next step.
 
