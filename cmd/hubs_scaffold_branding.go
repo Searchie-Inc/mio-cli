@@ -153,7 +153,7 @@ func resolveScaffoldBranding(cmd *cobra.Command) (scaffoldBranding, error) {
 		// request. io.Discard for warnW: strict mode returns the error instead of
 		// writing a warning, so nothing is ever written there.
 		if verr := validateBlobKeys(io.Discard, "branding", obj, brandingKeys, nil, true); verr != nil {
-			return scaffoldBranding{}, scaffoldStrictKeyErr(verr)
+			return scaffoldBranding{}, scaffoldStrictKeyErr(verr, scaffoldFlagStrictKeyHint)
 		}
 		b.jsonBlob = obj
 	}
@@ -187,21 +187,54 @@ func resolveScaffoldBranding(cmd *cobra.Command) (scaffoldBranding, error) {
 	return b, nil
 }
 
-// scaffoldStrictKeyHint replaces strictKeyDropHint (hubs_blob_keys.go) on the
-// scaffold path. The shared text tells the operator to "drop --strict-keys" —
-// sound advice on `hubs create`/`hubs update`, a dead end here: `hubs scaffold`
-// has no such flag and validates branding keys strictly and unconditionally,
-// because a key that silently does nothing is exactly how you end up with an
-// unbranded hub and no error.
-const scaffoldStrictKeyHint = "These blobs are stored verbatim by the API with no server-side validation, so a misspelled key silently has no effect — and `hubs scaffold` always checks them strictly (it has no --strict-keys to drop). Fix the key; to send one this best-effort allowlist does not know, scaffold first and then apply it with `mio hubs update <hub-id> --branding-json` (the hub frontend is the authoritative render schema)."
+// The two replacements for strictKeyDropHint (hubs_blob_keys.go) on the scaffold
+// path. The shared text tells the operator to "drop --strict-keys" — sound advice
+// on `hubs create`/`hubs update`, a dead end here: `hubs scaffold` has no such
+// flag and checks blob keys strictly and unconditionally, because a key that
+// silently does nothing is exactly how you end up with an unbranded hub and no
+// error.
+//
+// There are TWO of them because a strict rejection on a scaffold has two
+// possible ORIGINS, and each needs different advice. Worse, the shared message
+// opens by naming a flag (`--<blob>-json`, built by validateBlobKeys) that is
+// right for the operator's own --branding-json and simply wrong for a template
+// key — `hubs scaffold` has no --settings-json or --meta-json at all — so the
+// template hint has to say where the key really came from.
+const (
+	// scaffoldFlagStrictKeyHint: the key came from the operator's own
+	// --branding-json, so the named flag is real and the fix is theirs.
+	scaffoldFlagStrictKeyHint = "These blobs are stored verbatim by the API with no server-side validation, so a misspelled key silently has no effect — and `hubs scaffold` always checks them strictly (it has no --strict-keys to drop). Fix the key; to send one this best-effort allowlist does not know, scaffold first and then apply it with `mio hubs update <hub-id> --branding-json` (the hub frontend is the authoritative render schema)."
+
+	// scaffoldTemplateStrictKeyHint: the key came from the HUB TEMPLATE, so the
+	// operator passed no such flag at all and cannot fix it by editing one.
+	scaffoldTemplateStrictKeyHint = "These blobs are stored verbatim by the API with no server-side validation, so a misspelled key silently has no effect — which is why `hubs scaffold` checks them strictly and has no --strict-keys to drop. This key came from the HUB TEMPLATE, not from a flag you passed (the flag named above is the equivalent `hubs create`/`hubs update` one): fix the template in the page-builder catalog, or scaffold from a corrected copy with --catalog <file>. The hub frontend is the authoritative render schema."
+)
 
 // scaffoldStrictKeyErr re-points a strict blob-key rejection at guidance that
-// applies on the scaffold. The swap is anchored on the shared const, so if that
-// wording moves this stops matching rather than silently emitting the wrong
-// advice — and the message is returned unchanged when it does not match.
-func scaffoldStrictKeyErr(err error) error {
-	msg := strings.Replace(err.Error(), strictKeyDropHint, scaffoldStrictKeyHint, 1)
-	return errs.New(errs.ExitUsage, "%s", msg)
+// applies on the scaffold, using the hint for the offending key's ORIGIN.
+//
+// Two safety properties matter more than the wording:
+//
+//   - it is a NO-OP for anything that is not a strict blob-key rejection. The
+//     blobs step's error channel also carries the PATCH's own failures, and
+//     rewriting those would be a real bug — so a message that does not contain
+//     the shared hint is returned completely untouched, wrapping and all;
+//   - it PRESERVES the original exit code rather than asserting ExitUsage, so a
+//     5xx can never be relabelled as the operator's mistake even if the match
+//     logic is ever loosened.
+//
+// The swap is anchored on the shared const, so if that wording moves this stops
+// matching (and the message stands as-is) rather than silently emitting advice
+// that no longer fits.
+func scaffoldStrictKeyErr(err error, hint string) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, strictKeyDropHint) {
+		return err // not a strict blob-key rejection — leave it exactly as it is
+	}
+	return errs.New(errs.CodeOf(err), "%s", strings.Replace(msg, strictKeyDropHint, hint, 1))
 }
 
 // headerColorGiven reports whether the operator expressed a header color — via

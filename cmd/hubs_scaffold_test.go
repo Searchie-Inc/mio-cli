@@ -476,6 +476,51 @@ func TestStepBlobs_StrictRejectsUnknownSettingsKey(t *testing.T) {
 	if patched {
 		t.Error("no PATCH must fire when strict validation rejects a key")
 	}
+	// …and the guidance must be actionable HERE too (MIO-2604). The shared strict
+	// message ends "drop --strict-keys", a flag `hubs scaffold` does not have —
+	// a dead end whether the bad key came from the operator's --branding-json or,
+	// as here, from the TEMPLATE. stepBlobs routes the rejection through the same
+	// swap resolveScaffoldBranding uses, so the whole command speaks with one
+	// voice.
+	if strings.Contains(err.Error(), "drop --strict-keys") {
+		t.Errorf("a template strict-key rejection must not tell the operator to drop --strict-keys (no such flag on scaffold); err=%v", err)
+	}
+	if !strings.Contains(err.Error(), "no --strict-keys to drop") {
+		t.Errorf("a template strict-key rejection must carry the scaffold-specific guidance; err=%v", err)
+	}
+}
+
+// TestStepBlobs_NonKeyErrorPassesThroughUnchanged: the strict-key message swap
+// must be a NO-OP for every other failure. A PATCH that dies with a 500 has to
+// keep its own text AND its own exit code (ExitServer) — rewriting every error
+// stepBlobs returns into a usage error would corrupt the exit-code contract and
+// mislabel a server outage as the operator's mistake.
+func TestStepBlobs_NonKeyErrorPassesThroughUnchanged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if r.Method == http.MethodPatch {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"errors":[{"status":"500","detail":"boom"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"hub_1","type":"hubs","attributes":{"slug":"acme"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &catalog.HubTemplate{ID: "community", Branding: map[string]any{"favicon_url": "f"}}
+
+	err := stepBlobs(sc, tmpl)
+	if err == nil {
+		t.Fatal("a 500 on the blobs PATCH must be an error")
+	}
+	if got := errs.CodeOf(err); got != errs.ExitServer {
+		t.Errorf("error code = %d, want %d (ExitServer) — the strict-key swap must not relabel a server error as usage", got, errs.ExitServer)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("the server's own detail must survive untouched; err=%v", err)
+	}
 }
 
 // TestStepBlobs_RejectsMalformedNavShape: a template whose navigation bucket is

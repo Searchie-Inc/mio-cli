@@ -375,7 +375,14 @@ func stepBlobs(sc *scaffoldContext, t *catalog.HubTemplate) error {
 			Registration: sc.registrationOverride,
 			Strict:       true,
 		}, io.Discard)
-		return err
+		// A strict blob-key rejection from HERE is about a TEMPLATE key, and the
+		// shared message's "drop --strict-keys" tail names a flag `hubs scaffold`
+		// does not have (nor does it have the --settings-json/--meta-json the
+		// message opens with) — a dead end for the one person who has to act on
+		// it. Re-point it at the template (MIO-2604). scaffoldStrictKeyErr is a
+		// strict no-op for every OTHER error this call returns — notably the
+		// PATCH's own failures, which keep their text AND their exit code.
+		return scaffoldStrictKeyErr(err, scaffoldTemplateStrictKeyHint)
 	})
 }
 
