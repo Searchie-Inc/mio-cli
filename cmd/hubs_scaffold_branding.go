@@ -44,6 +44,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
 // Branding blob keys the cascade below reasons about by name, and the flags it
@@ -151,7 +153,7 @@ func resolveScaffoldBranding(cmd *cobra.Command) (scaffoldBranding, error) {
 		// request. io.Discard for warnW: strict mode returns the error instead of
 		// writing a warning, so nothing is ever written there.
 		if verr := validateBlobKeys(io.Discard, "branding", obj, brandingKeys, nil, true); verr != nil {
-			return scaffoldBranding{}, verr
+			return scaffoldBranding{}, scaffoldStrictKeyErr(verr)
 		}
 		b.jsonBlob = obj
 	}
@@ -183,6 +185,23 @@ func resolveScaffoldBranding(cmd *cobra.Command) (scaffoldBranding, error) {
 	}
 
 	return b, nil
+}
+
+// scaffoldStrictKeyHint replaces strictKeyDropHint (hubs_blob_keys.go) on the
+// scaffold path. The shared text tells the operator to "drop --strict-keys" —
+// sound advice on `hubs create`/`hubs update`, a dead end here: `hubs scaffold`
+// has no such flag and validates branding keys strictly and unconditionally,
+// because a key that silently does nothing is exactly how you end up with an
+// unbranded hub and no error.
+const scaffoldStrictKeyHint = "These blobs are stored verbatim by the API with no server-side validation, so a misspelled key silently has no effect — and `hubs scaffold` always checks them strictly (it has no --strict-keys to drop). Fix the key; to send one this best-effort allowlist does not know, scaffold first and then apply it with `mio hubs update <hub-id> --branding-json` (the hub frontend is the authoritative render schema)."
+
+// scaffoldStrictKeyErr re-points a strict blob-key rejection at guidance that
+// applies on the scaffold. The swap is anchored on the shared const, so if that
+// wording moves this stops matching rather than silently emitting the wrong
+// advice — and the message is returned unchanged when it does not match.
+func scaffoldStrictKeyErr(err error) error {
+	msg := strings.Replace(err.Error(), strictKeyDropHint, scaffoldStrictKeyHint, 1)
+	return errs.New(errs.ExitUsage, "%s", msg)
 }
 
 // headerColorGiven reports whether the operator expressed a header color — via

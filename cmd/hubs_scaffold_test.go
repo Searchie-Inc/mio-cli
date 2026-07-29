@@ -2524,6 +2524,46 @@ func TestScaffold_BrandingJSONBadInputFailsBeforeAnyHTTP(t *testing.T) {
 	}
 }
 
+// TestScaffold_StrictKeyErrorDoesNotAdviseAMissingFlag: the SHARED strict
+// blob-key message ends "drop --strict-keys …" — sound advice on `hubs
+// create`/`hubs update`, a dead end on `hubs scaffold`, which has no such flag
+// and always checks branding keys strictly. The scaffold swaps that tail for
+// guidance that works (fix the key, or apply it afterwards via `hubs update`),
+// and the swap is anchored on the shared const so a reworded hint fails loudly
+// here rather than silently reinstating the dead end.
+func TestScaffold_StrictKeyErrorDoesNotAdviseAMissingFlag(t *testing.T) {
+	srv, _ := firedGuardServer(t)
+	err := executeCLI(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x",
+			"--branding-json", `{"primry":"#fff"}`)...)
+	if err == nil {
+		t.Fatal("an unknown --branding-json key must be an error")
+	}
+	if errs.CodeOf(err) != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage)", errs.CodeOf(err), errs.ExitUsage)
+	}
+	// The dead-end instruction is gone. (The message may still MENTION
+	// --strict-keys — it says there is none to drop here — but it must never
+	// tell the operator to drop one.)
+	if strings.Contains(err.Error(), "drop --strict-keys to send") {
+		t.Errorf("the scaffold error must not tell the operator to drop --strict-keys (no such flag here); err=%v", err)
+	}
+	for _, want := range []string{
+		`unknown key "branding.primry"`, // the offending key is still named
+		"no --strict-keys to drop",      // …why there is no opt-out here
+		"mio hubs update",               // …and the escape hatch that does exist
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("scaffold strict-key error must contain %q; err=%v", want, err)
+		}
+	}
+	// The shared hint itself is untouched for the commands that DO have the flag.
+	if !strings.Contains(strictKeyDropHint, "--strict-keys") {
+		t.Error("strictKeyDropHint no longer mentions --strict-keys — the scaffold swap is now anchored on stale text")
+	}
+}
+
 // TestScaffold_DryRunPlanShowsPalette: --dry-run REFLECTS the palette it would
 // apply, cascade annotated, and still fires no mutation. A dry run that named
 // only the step would leave the operator unable to preview the one thing these
