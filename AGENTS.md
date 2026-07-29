@@ -18,7 +18,7 @@ API keys are `mio_sk_live_…`. Resolution order (first wins):
 2. `MIO_API_KEY` environment variable
 3. Key stored in the OS keychain by `mio login`
 
-If no key is found the command exits with code **3** (`ExitAuth`). Always set `MIO_API_KEY` before running any resource command. Pass `--anonymous` to deliberately run unauthenticated — it skips both `MIO_API_KEY` and the keychain (an explicit `--api-key` still takes effect).
+If no key is found the command exits with code **3** (`ExitAuth`). Always set `MIO_API_KEY` before running any resource command. Pass `--anonymous` to deliberately run unauthenticated — it skips both `MIO_API_KEY` and the keychain (an explicit `--api-key` still takes effect). `--anonymous` **sends the request** with no `Authorization` header and lets the API answer, so a 401 you see under it is the server's verdict, not a local precondition (MIO-2694); `whoami` reports `key_source: "none (--anonymous)"`.
 
 Key auth works against `https://api.member.dev` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL`.
 
@@ -194,7 +194,8 @@ Every implemented resource and its verbs.
   mio pages tree set <page_id> --if-match "$V" --file tree.json
   ```
   The catalog is live-fetched (`GET /api/page-builder/catalog`, ETag/304-cached per backend origin). The read-only `pages catalog` group also carries a digest-pinned embedded fallback, so these emit-only commands work offline (`--offline` forces the embedded copy; `--catalog <file>` overrides). The mutating `hubs scaffold` does NOT degrade: it requires a live fetch (no `--offline`; its `--catalog <file>` fails closed on a digest mismatch). `pages catalog templates --page-type <pt>` lists what's recommended per page type; `pages catalog section-types --writable-only` is the `sections create --type` allow-list.
-- **`hubs policies update <hub_id>`** takes the hub identifier as a positional argument, NOT the `--hub` context flag. Policy content supports the `@file` convention: `--content @tos.md`.
+- **`mio hubs …` verbs take the hub id as an OPTIONAL positional.** Precedence is positional → `--hub` → `current_hub` in config → single-hub auto-default, so `mio hubs retrieve --hub <id>` and a bare `mio hubs retrieve` (with `current_hub` set) both work, exactly like every other hub-scoped group. Applies to `retrieve`, `update`, `policies update`, `policies gate`, `redirect-origins get|set`, `email-settings get|update` and `navigation list|add|remove|reorder`. When no hub resolves from any source the error names all three sources (never Cobra's `accepts 1 arg(s), received 0`). **Exception: `hubs delete` still requires the id positionally** — it is irreversible, so it never takes its target from ambient context. On the `navigation` verbs the hub id shares the positional slot with the bucket; a lone `header`/`footer`/`mobile` is read as the bucket (`mio hubs navigation add header …` edits the ambient hub). (MIO-2732)
+- **`hubs policies update [hub_id]`** — policy content supports the `@file` convention: `--content @tos.md`.
 - **`hubs policies update --policy-type`** must be exactly `tos` or `privacy_policy`; the CLI validates this client-side. The `--require-acceptance` flag is only meaningful for `tos`; passing it with `privacy_policy` will result in a backend 422.
 - **`hubs policies update` content flags** — exactly one of `--content` or `--reset-content` is required (they are mutually exclusive):
   - `--content <text|@file>` — supply the policy body inline or read it from a file.

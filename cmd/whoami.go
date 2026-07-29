@@ -125,6 +125,13 @@ func keySource() string {
 	if flags.apiKey != "" {
 		return "flag (--api-key)"
 	}
+	// --anonymous skips the env + keychain fallbacks in config.Resolve, so
+	// reporting either of them here would name a key that is NOT being sent —
+	// exactly the kind of misreporting MIO-2694 is about. An explicit --api-key
+	// still wins, which is why it is checked first.
+	if flags.anonymous {
+		return "none (--anonymous)"
+	}
 	if os.Getenv(config.EnvAPIKey) != "" {
 		return "env (" + config.EnvAPIKey + ")"
 	}

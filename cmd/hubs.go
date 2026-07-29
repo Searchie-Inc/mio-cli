@@ -16,8 +16,14 @@ package cmd
 //	email-settings get       GET    /api/teams/{team_id}/hubs/{hub_id}/email-settings
 //	email-settings update    PATCH  /api/teams/{team_id}/hubs/{hub_id}/email-settings
 //
-// All routes are team-scoped. Hub id comes from a positional argument (not the
-// --hub context flag) so operators can manage any hub, not just the active one.
+// All routes are team-scoped. The hub id is an OPTIONAL positional argument: an
+// explicit positional still wins, so operators can manage any hub and not just
+// the active one, but when it is omitted the hub is resolved from the ambient
+// context (--hub / config current_hub / single-hub auto-default) exactly like
+// every other hub-scoped verb (pages, community, contact-attributes, media …).
+// See hubTargetID below — the positional-ONLY rule this file used to enforce was
+// MIO-2732: it made `mio hubs retrieve --hub <id>` fail with Cobra's generic
+// "accepts 1 arg(s), received 0".
 //
 // NOTE: there is no admin/team-scoped policies READ. The only policies GET is
 // the hub portal route /api/hubs/{hub_id}/policies, which requires member
@@ -26,6 +32,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -77,10 +84,16 @@ func init() {
 var hubsCmd = &cobra.Command{
 	Use:   "hubs",
 	Short: "Manage hubs.",
-	Long:  "Create, list, retrieve, update and delete hubs for the active team.",
+	Long: `Create, list, retrieve, update and delete hubs for the active team.
+
+Every verb except 'delete' takes the hub id as an OPTIONAL positional: give it
+explicitly to target any hub, or omit it to use the ambient hub context (--hub,
+or current_hub in config) like the other hub-scoped command groups. 'delete'
+requires the id positionally — it is irreversible.`,
 	Example: `  mio hubs list
   mio hubs create --name "My Community" --slug my-community
   mio hubs retrieve hub_abc123
+  mio hubs retrieve --hub hub_abc123
   mio hubs update hub_abc123 --name "Renamed Community"
   mio hubs delete hub_abc123`,
 }
@@ -108,6 +121,59 @@ func hubsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 		return nil, "", err
 	}
 	return c, teamID, nil
+}
+
+// hubTargetID resolves the hub a `mio hubs <verb>` operates on (MIO-2732).
+//
+// Resolution order:
+//
+//  1. an explicit POSITIONAL id wins — that is why these verbs take a positional
+//     at all, and it keeps "manage any hub, not just the active one" working;
+//  2. otherwise fall back to the ambient hub context via requireHub — --hub,
+//     config current_hub, or the single-hub auto-default — which is what every
+//     OTHER hub-scoped verb in the CLI has always done.
+//
+// Step 2 did not exist before: the hub id was positional-ONLY, so passing the
+// conventional --hub (or relying on a configured current_hub) produced Cobra's
+// generic "accepts 1 arg(s), received 0". That message describes an arg count
+// for what is really a context problem, and next to a flattened `errors`
+// envelope it reads like an empty/failed record — it cost a reporter roughly an
+// hour chasing a phantom data-loss bug on `hubs retrieve`.
+//
+// The positional is passed through UNCHANGED (no name/slug resolution) so every
+// existing invocation that supplies an id behaves byte-identically; only the
+// fallback path is new, and it resolves names/slugs because requireHub already
+// does.
+func (c *cmdContext) hubTargetID(cmd *cobra.Command, hubArg string) (string, error) {
+	if strings.TrimSpace(hubArg) != "" {
+		return hubArg, nil
+	}
+
+	id, err := c.requireHub()
+	if errors.Is(err, errNoHubInContext) {
+		// Widen the context-only message: on these verbs the positional is a
+		// legitimate third source, so naming only --hub/current_hub would be an
+		// incomplete account of the real cause. cmd.CommandPath() names the verb
+		// the operator actually typed ("mio hubs retrieve").
+		return "", errs.New(errs.ExitUsage,
+			"no hub id: pass it positionally (`%s <hub_id>`), pass --hub <id>, or run "+
+				"`mio config set current_hub <id>` — run 'mio hubs list' to see the ids",
+			cmd.CommandPath())
+	}
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// optionalArg returns the i-th positional, or "" when it was not supplied. The
+// hubs verbs declare their hub id with MaximumNArgs, so indexing args directly
+// would panic on the (now legal) zero-arg invocation.
+func optionalArg(args []string, i int) string {
+	if i < len(args) {
+		return args[i]
+	}
+	return ""
 }
 
 // injectHubDerivedState adds convenience booleans to a hub resource's rendered
@@ -437,18 +503,28 @@ var hubsListCmd = &cobra.Command{
 // ---- retrieve ---------------------------------------------------------------
 
 var hubsRetrieveCmd = &cobra.Command{
-	Use:     "retrieve <id>",
-	Short:   "Retrieve a hub by id.",
-	Long:    "Retrieve a single hub by its id.",
-	Example: `  mio hubs retrieve hub_abc123`,
-	Args:    cobra.ExactArgs(1),
+	Use:   "retrieve [id]",
+	Short: "Retrieve a hub by id.",
+	Long: `Retrieve a single hub.
+
+The hub id may be given positionally; when it is omitted the hub is taken from
+the ambient context (--hub, or current_hub in config), like every other
+hub-scoped command.`,
+	Example: `  mio hubs retrieve hub_abc123
+  mio hubs retrieve --hub hub_abc123
+  mio hubs retrieve                      # uses current_hub from config`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)
 		if err != nil {
 			return err
 		}
+		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		if err != nil {
+			return err
+		}
 
-		res, err := c.client.Retrieve(c.ctx, hubsPath(teamID, args[0]))
+		res, err := c.client.Retrieve(c.ctx, hubsPath(teamID, hubID))
 		if err != nil {
 			return err
 		}
@@ -463,12 +539,16 @@ var hubsRetrieveCmd = &cobra.Command{
 // ---- update -----------------------------------------------------------------
 
 var hubsUpdateCmd = &cobra.Command{
-	Use:   "update <id>",
+	Use:   "update [id]",
 	Short: "Update a hub by id.",
-	Long:  "Update one or more fields on a hub. Only the flags you provide are changed (partial update).",
+	Long: `Update one or more fields on a hub. Only the flags you provide are changed (partial update).
+
+The hub id may be given positionally; when it is omitted the hub is taken from
+the ambient context (--hub, or current_hub in config).`,
 	Example: `  mio hubs update hub_abc123 --name "New Name"
-  mio hubs update hub_abc123 --published=true`,
-	Args: cobra.ExactArgs(1),
+  mio hubs update hub_abc123 --published=true
+  mio hubs update --hub hub_abc123 --name "New Name"`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Build and validate attributes BEFORE resolving auth/team so a malformed
 		// flag exits with a usage error and fires no HTTP request. The read-modify-
@@ -584,8 +664,12 @@ var hubsUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		if err != nil {
+			return err
+		}
 
-		res, err := applyHubBlobs(c.ctx, c.client, teamID, args[0], navSlug, blobPatches{
+		res, err := applyHubBlobs(c.ctx, c.client, teamID, hubID, navSlug, blobPatches{
 			Base:         attrs,
 			Branding:     branding,
 			Settings:     settings,
@@ -790,10 +874,35 @@ func applyHubBlobs(ctx context.Context, cl *client.Client, teamID, hubID, hubSlu
 var hubsDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
 	Short: "Delete a hub by id.",
-	Long:  "Permanently delete a hub. This action cannot be undone. Pass --yes to skip the confirmation prompt.",
+	Long: `Permanently delete a hub. This action cannot be undone. Pass --yes to skip the confirmation prompt.
+
+Unlike the other hubs verbs this one does NOT fall back to --hub/current_hub:
+the hub id must be given positionally.`,
 	Example: `  mio hubs delete hub_abc123
   mio hubs delete hub_abc123 --yes`,
-	Args: cobra.ExactArgs(1),
+	// `hubs delete` deliberately opts OUT of the ambient-hub fallback the sibling
+	// verbs gained in MIO-2732. Deleting a whole hub is irreversible, and having
+	// the target silently supplied by whatever happens to sit in --hub or
+	// current_hub is a foot-gun with no undo — the operator must name it.
+	//
+	// The custom Args func exists so refusing still explains WHY: Cobra's stock
+	// "accepts 1 arg(s), received 0" is exactly the arg-count-for-a-context-problem
+	// message this ticket is about, and a reader who just learned that the other
+	// verbs honour --hub deserves to be told this one intentionally does not.
+	Args: func(_ *cobra.Command, args []string) error {
+		switch len(args) {
+		case 1:
+			return nil
+		case 0:
+			return errs.New(errs.ExitUsage,
+				"hubs delete requires the hub id positionally: `mio hubs delete <id>`. "+
+					"It does NOT fall back to --hub/current_hub the way the other hubs verbs do — "+
+					"deleting a hub is irreversible, so the target must be named explicitly")
+		default:
+			return errs.New(errs.ExitUsage,
+				"hubs delete takes exactly one hub id, got %d", len(args))
+		}
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)
 		if err != nil {
@@ -894,12 +1003,13 @@ var validPolicyTypes = map[string]bool{
 }
 
 var hubsPoliciesUpdateCmd = &cobra.Command{
-	Use:   "update <hub_id>",
+	Use:   "update [hub_id]",
 	Short: "Update (or create) a hub legal policy.",
 	Long: `Create or replace a hub legal policy (Terms of Service or Privacy Policy).
 
-The hub identifier is a positional argument (not the --hub context flag) so you
-can target any hub regardless of the active context.
+The hub identifier may be given positionally so you can target any hub
+regardless of the active context; omit it to use the ambient hub (--hub, or
+current_hub in config).
 
 Policy content may be supplied inline or read from a file by prefixing the path
 with '@':  --content @policy.md
@@ -910,10 +1020,15 @@ Exactly one of --content or --reset-content must be provided:
 	Example: `  mio hubs policies update hub_abc123 --policy-type tos --content "# Terms of Service\n…"
   mio hubs policies update hub_abc123 --policy-type tos --content @tos.md --require-acceptance
   mio hubs policies update hub_abc123 --policy-type privacy_policy --content @privacy.md
-  mio hubs policies update hub_abc123 --policy-type tos --reset-content`,
-	Args: cobra.ExactArgs(1),
+  mio hubs policies update hub_abc123 --policy-type tos --reset-content
+  mio hubs policies update --hub hub_abc123 --policy-type tos --content @tos.md`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
+		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
 		if err != nil {
 			return err
 		}
@@ -970,7 +1085,7 @@ Exactly one of --content or --reset-content must be provided:
 			}
 		}
 
-		res, err := applyHubPolicies(c.ctx, c.client, teamID, args[0], policy)
+		res, err := applyHubPolicies(c.ctx, c.client, teamID, hubID, policy)
 		if err != nil {
 			return err
 		}
@@ -1036,20 +1151,21 @@ func hubsPoliciesGatePath(teamID, hubID string) string {
 }
 
 var hubsPoliciesGateCmd = &cobra.Command{
-	Use:   "gate <hub_id>",
+	Use:   "gate [hub_id]",
 	Short: "Toggle the hub policy enforcement gate.",
 	Long: `Enable or disable hub-level policy enforcement (settings.policies.enabled).
 
 This only flips the enforcement gate; it does not change policy content, the
-TOS version, or member acceptance state. The hub identifier is a positional
-argument (not the --hub context flag).
+TOS version, or member acceptance state. The hub identifier may be given
+positionally; omit it to use the ambient hub (--hub, or current_hub in config).
 
 --enabled is required and must be given explicitly:
   --enabled           turn enforcement ON
   --enabled=false     turn enforcement OFF`,
 	Example: `  mio hubs policies gate hub_abc123 --enabled
-  mio hubs policies gate hub_abc123 --enabled=false`,
-	Args: cobra.ExactArgs(1),
+  mio hubs policies gate hub_abc123 --enabled=false
+  mio hubs policies gate --hub hub_abc123 --enabled`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Require --enabled explicitly BEFORE resolving auth/team so a usage
 		// error fires no HTTP request. A bare bool flag defaults to false, so we
@@ -1066,16 +1182,20 @@ argument (not the --hub context flag).
 		if err != nil {
 			return err
 		}
+		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		if err != nil {
+			return err
+		}
 
 		// Enveloped PATCH: the backend HubPolicyGateEnvelope pins data.type to
 		// "hub_policy_gate" (derived from the .../policies/gate tail).
 		res, err := c.client.Action(c.ctx, "PATCH",
-			hubsPoliciesGatePath(teamID, args[0]), map[string]any{"enabled": enabled})
+			hubsPoliciesGatePath(teamID, hubID), map[string]any{"enabled": enabled})
 		if err != nil {
 			return err
 		}
 		if res == nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "Set policy gate on hub %s to enabled=%t.\n", args[0], enabled)
+			fmt.Fprintf(cmd.OutOrStdout(), "Set policy gate on hub %s to enabled=%t.\n", hubID, enabled)
 			return nil
 		}
 		return c.render(cmd, res)
@@ -1100,18 +1220,26 @@ func hubsRedirectOriginsPath(teamID, hubID string) string {
 }
 
 var hubsRedirectOriginsGetCmd = &cobra.Command{
-	Use:     "get <hub_id>",
-	Short:   "Read the redirect-origin allowlist for a hub.",
-	Long:    "Return the current magic-link redirect-origin allowlist for a hub (may be empty). Owner-only.",
-	Example: `  mio hubs redirect-origins get hub_abc123`,
-	Args:    cobra.ExactArgs(1),
+	Use:   "get [hub_id]",
+	Short: "Read the redirect-origin allowlist for a hub.",
+	Long: `Return the current magic-link redirect-origin allowlist for a hub (may be empty). Owner-only.
+
+The hub identifier may be given positionally; omit it to use the ambient hub
+(--hub, or current_hub in config).`,
+	Example: `  mio hubs redirect-origins get hub_abc123
+  mio hubs redirect-origins get --hub hub_abc123`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)
 		if err != nil {
 			return err
 		}
+		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		if err != nil {
+			return err
+		}
 
-		res, err := c.client.Retrieve(c.ctx, hubsRedirectOriginsPath(teamID, args[0]))
+		res, err := c.client.Retrieve(c.ctx, hubsRedirectOriginsPath(teamID, hubID))
 		if err != nil {
 			return err
 		}
@@ -1120,7 +1248,7 @@ var hubsRedirectOriginsGetCmd = &cobra.Command{
 }
 
 var hubsRedirectOriginsSetCmd = &cobra.Command{
-	Use:   "set <hub_id>",
+	Use:   "set [hub_id]",
 	Short: "Full-replace the redirect-origin allowlist for a hub.",
 	Long: `Full-replace the magic-link redirect-origin allowlist for a hub (owner-only).
 
@@ -1131,10 +1259,14 @@ nothing is persisted.
 
 Provide the new list as a comma-separated --origins value, or pass --clear to
 empty the allowlist (which rejects all magic-link redirects at runtime).
-Exactly one of --origins or --clear is required.`,
+Exactly one of --origins or --clear is required.
+
+The hub identifier may be given positionally; omit it to use the ambient hub
+(--hub, or current_hub in config).`,
 	Example: `  mio hubs redirect-origins set hub_abc123 --origins "https://app.example.com,https://portal.example.com"
-  mio hubs redirect-origins set hub_abc123 --clear`,
-	Args: cobra.ExactArgs(1),
+  mio hubs redirect-origins set hub_abc123 --clear
+  mio hubs redirect-origins set --hub hub_abc123 --clear`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Validate the origins/clear contract BEFORE resolving auth/team so a
 		// usage error fires no HTTP request.
@@ -1171,17 +1303,21 @@ Exactly one of --origins or --clear is required.`,
 		if err != nil {
 			return err
 		}
+		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		if err != nil {
+			return err
+		}
 
 		// Enveloped PUT: the backend RedirectOriginsUpdateEnvelope pins data.type
 		// to "hub_redirect_origin_allowlists" (derived from the redirect-origins
 		// tail).
 		res, err := c.client.Action(c.ctx, "PUT",
-			hubsRedirectOriginsPath(teamID, args[0]), map[string]any{"origins": origins})
+			hubsRedirectOriginsPath(teamID, hubID), map[string]any{"origins": origins})
 		if err != nil {
 			return err
 		}
 		if res == nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "Replaced redirect-origin allowlist for hub %s (%d origin(s)).\n", args[0], len(origins))
+			fmt.Fprintf(cmd.OutOrStdout(), "Replaced redirect-origin allowlist for hub %s (%d origin(s)).\n", hubID, len(origins))
 			return nil
 		}
 		return c.render(cmd, res)
@@ -1207,21 +1343,29 @@ func hubsEmailSettingsPath(teamID, hubID string) string {
 }
 
 var hubsEmailSettingsGetCmd = &cobra.Command{
-	Use:   "get <hub_id>",
+	Use:   "get [hub_id]",
 	Short: "Get the per-hub email sender identity.",
 	Long: `Retrieve the email sender identity (from_name, reply_to) for a hub.
 
 Per-hub sender settings override the team-level defaults for all emails
-sent from that hub (MIO-1229).`,
-	Example: `  mio hubs email-settings get hub_abc123`,
-	Args:    cobra.ExactArgs(1),
+sent from that hub (MIO-1229).
+
+The hub identifier may be given positionally; omit it to use the ambient hub
+(--hub, or current_hub in config).`,
+	Example: `  mio hubs email-settings get hub_abc123
+  mio hubs email-settings get --hub hub_abc123`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)
 		if err != nil {
 			return err
 		}
+		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
+		if err != nil {
+			return err
+		}
 
-		res, err := c.client.Retrieve(c.ctx, hubsEmailSettingsPath(teamID, args[0]))
+		res, err := c.client.Retrieve(c.ctx, hubsEmailSettingsPath(teamID, hubID))
 		if err != nil {
 			return err
 		}
@@ -1230,20 +1374,28 @@ sent from that hub (MIO-1229).`,
 }
 
 var hubsEmailSettingsUpdateCmd = &cobra.Command{
-	Use:   "update <hub_id>",
+	Use:   "update [hub_id]",
 	Short: "Update the per-hub email sender identity.",
 	Long: `Update the email sender identity (from_name, reply_to) for a hub.
 
 Only the flags you provide are changed (partial update). Pass an empty
 string to explicitly clear a field (e.g. --reply-to="" clears the reply-to
 address). Merges into the hub's settings.email; other settings keys are
-preserved (MIO-1229).`,
+preserved (MIO-1229).
+
+The hub identifier may be given positionally; omit it to use the ambient hub
+(--hub, or current_hub in config).`,
 	Example: `  mio hubs email-settings update hub_abc123 --from-name "My Community"
   mio hubs email-settings update hub_abc123 --from-name "Support" --reply-to support@example.com
-  mio hubs email-settings update hub_abc123 --reply-to ""`,
-	Args: cobra.ExactArgs(1),
+  mio hubs email-settings update hub_abc123 --reply-to ""
+  mio hubs email-settings update --hub hub_abc123 --from-name "My Community"`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
+		hubID, err := c.hubTargetID(cmd, optionalArg(args, 0))
 		if err != nil {
 			return err
 		}
@@ -1256,7 +1408,7 @@ preserved (MIO-1229).`,
 			return errs.New(errs.ExitUsage, "nothing to update: set at least --from-name or --reply-to")
 		}
 
-		res, err := c.client.Update(c.ctx, hubsEmailSettingsPath(teamID, args[0]), attrs)
+		res, err := c.client.Update(c.ctx, hubsEmailSettingsPath(teamID, hubID), attrs)
 		if err != nil {
 			return err
 		}

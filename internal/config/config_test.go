@@ -148,6 +148,36 @@ func TestResolve_AnonymousSkipsEnvAndKeychain(t *testing.T) {
 	}
 }
 
+// MIO-2694 — Resolve must ECHO the anonymous mode back on Resolved. An empty
+// APIKey is ambiguous ("no key found" vs "no key wanted"), and the command layer
+// needs the difference to know whether to skip the key-required precondition. If
+// this flag is dropped, --anonymous can never reach the network.
+func TestResolve_AnonymousIsRecordedOnResolved(t *testing.T) {
+	withXDG(t)
+	cfg, _ := Load()
+
+	r, err := cfg.Resolve(Overrides{Anonymous: true})
+	if err != nil {
+		t.Fatalf("Resolve(anonymous): %v", err)
+	}
+	if !r.Anonymous {
+		t.Error("Resolved.Anonymous = false under Overrides{Anonymous: true}")
+	}
+	if r.APIKey != "" {
+		t.Errorf("APIKey = %q, want empty", r.APIKey)
+	}
+
+	// The default resolution must NOT claim to be anonymous — otherwise every
+	// command would silently skip the key check.
+	r, err = cfg.Resolve(Overrides{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.Anonymous {
+		t.Error("Resolved.Anonymous = true without Overrides.Anonymous")
+	}
+}
+
 func TestResolve_APIBaseDefault(t *testing.T) {
 	withXDG(t)
 	cfg, _ := Load()

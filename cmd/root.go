@@ -228,7 +228,22 @@ func newContext(cmd *cobra.Command) (*cmdContext, error) {
 
 // requireAuth returns a usage/auth error if no API key was resolved, so a
 // command that needs the API can fail fast with exit code 3.
+//
+// ORDER MATTERS (MIO-2694). --anonymous is an explicit request to run
+// UNAUTHENTICATED, so the precondition is skipped entirely and the request goes
+// out with no Authorization header — the API, not the CLI, decides 200 vs 401.
+// Previously this check ran ahead of anything that consulted --anonymous, so the
+// flag could never reach the HTTP client: `--anonymous` always died here with
+// "no API key found", even when pointed at a dead host (no DNS attempt was ever
+// made). That defeats the entire point of the flag, whose value is precisely
+// that the request IS sent so the caller can observe the API's own answer.
+//
+// An explicit --api-key still wins: config.Resolve keeps it, so APIKey is
+// non-empty and the client authenticates as documented in the flag help.
 func (c *cmdContext) requireAuth() error {
+	if c.resolved.Anonymous {
+		return nil
+	}
 	if c.resolved.APIKey == "" {
 		return errs.New(errs.ExitAuth,
 			"no API key found: set --api-key, export MIO_API_KEY, or run `mio login`")
@@ -303,10 +318,20 @@ func (c *cmdContext) requireHub() (string, error) {
 		return id, nil
 	}
 
-	return "", errs.New(errs.ExitUsage,
-		"no hub id in context: pass --hub <id> or run `mio config set current_hub <id>` "+
-			"— run 'mio hubs list' then 'mio config set current_hub <id>'")
+	return "", errNoHubInContext
 }
+
+// errNoHubInContext is the sentinel requireHub returns when NO hub can be
+// resolved from ANY source (--hub, config current_hub, single-hub auto-default).
+//
+// It is a package-level value rather than an inline errs.New so callers that ALSO
+// accept a positional hub id (the `mio hubs …` verbs) can recognise it with
+// errors.Is and widen the message to name the positional form too (MIO-2732).
+// A *CLIError is a pointer, so errors.Is matches it by identity; nothing mutates
+// it, so sharing the value across call sites is safe.
+var errNoHubInContext = errs.New(errs.ExitUsage,
+	"no hub id in context: pass --hub <id> or run `mio config set current_hub <id>` "+
+		"— run 'mio hubs list' then 'mio config set current_hub <id>'")
 
 // singleTeamDefault returns the id of the caller's sole team when EXACTLY one
 // exists, so a single-team user never has to pass --team. Zero or more-than-one

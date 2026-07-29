@@ -71,6 +71,16 @@ type Resolved struct {
 	APIBase string
 	TeamID  string
 	HubID   string
+	// Anonymous records that this resolution was DELIBERATELY unauthenticated
+	// (--anonymous). It is an input mode carried through to the output because
+	// the command layer must be able to tell "no key was found" apart from "no
+	// key was wanted" — an empty APIKey looks identical in both cases.
+	//
+	// Without it the key-required precondition (cmdContext.requireAuth) fires
+	// before anything consults --anonymous, so the flag could never actually send
+	// an unauthenticated request: every `--anonymous` invocation died with
+	// "no API key found" and never reached the HTTP client (MIO-2694).
+	Anonymous bool
 }
 
 // Path returns the absolute path of the config file, honouring XDG_CONFIG_HOME
@@ -516,9 +526,10 @@ func (c *Config) Resolve(o Overrides) (Resolved, error) {
 			// The stale blob has been deleted; treat as no key stored and surface
 			// the sentinel so callers (root wiring, login) can react appropriately.
 			return Resolved{
-				APIBase: firstNonEmpty(o.APIBase, os.Getenv(EnvAPIBase), prof.APIBase, c.APIBase, DefaultAPIBase),
-				TeamID:  firstNonEmpty(o.TeamID, prof.CurrentTeam, c.CurrentTeam),
-				HubID:   firstNonEmpty(o.HubID, prof.CurrentHub, c.CurrentHub),
+				APIBase:   firstNonEmpty(o.APIBase, os.Getenv(EnvAPIBase), prof.APIBase, c.APIBase, DefaultAPIBase),
+				TeamID:    firstNonEmpty(o.TeamID, prof.CurrentTeam, c.CurrentTeam),
+				HubID:     firstNonEmpty(o.HubID, prof.CurrentHub, c.CurrentHub),
+				Anonymous: o.Anonymous,
 			}, ErrLegacyCredentials
 		default:
 			return Resolved{}, err
@@ -540,7 +551,9 @@ func (c *Config) Resolve(o Overrides) (Resolved, error) {
 	team := firstNonEmpty(o.TeamID, prof.CurrentTeam, c.CurrentTeam)
 	hub := firstNonEmpty(o.HubID, prof.CurrentHub, c.CurrentHub)
 
-	return Resolved{APIKey: apiKey, APIBase: apiBase, TeamID: team, HubID: hub}, nil
+	// Anonymous is echoed back so the command layer can distinguish a deliberate
+	// unauthenticated resolution from a failed one (MIO-2694) — see Resolved.
+	return Resolved{APIKey: apiKey, APIBase: apiBase, TeamID: team, HubID: hub, Anonymous: o.Anonymous}, nil
 }
 
 // profile returns the named profile merged conceptually with defaults. An

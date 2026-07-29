@@ -90,17 +90,6 @@ func TestConfigSet_ValidValuePersists(t *testing.T) {
 	}
 }
 
-// MIO-2648 — --anonymous must thread flags → newContext → Resolve: with a key in
-// the env, --anonymous drops it, so an auth-required command (whoami) exits 3
-// (ExitAuth) BEFORE any HTTP request. Guards the root.go Overrides wiring — this
-// fails if `Anonymous: flags.anonymous` is dropped from newContext.
-func TestConfigAnonymous_WiringExitsAuth(t *testing.T) {
-	srv, fired := firedGuardServer(t)
-	res := runContract(t, baseEnv(srv.URL), "--anonymous", "whoami")
-	if res.Code != errs.ExitAuth {
-		t.Errorf("exit=%d want ExitAuth (3); stderr=%q", res.Code, res.Stderr)
-	}
-	if *fired {
-		t.Error("--anonymous with no resolvable key must exit before any HTTP request")
-	}
-}
+// The MIO-2648 --anonymous wiring guard that used to live here moved to
+// anonymous_test.go, where MIO-2694 corrected its assertion: --anonymous now
+// REACHES the network unauthenticated instead of exiting 3 beforehand.

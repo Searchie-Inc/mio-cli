@@ -15,6 +15,11 @@ package cmd
 // Concurrency: this is a read-modify-write with no optimistic-lock guard (the hub
 // update route exposes none), so a racing edit can be lost — the same
 // last-write-wins window as the existing `--navigation-json` replace.
+//
+// The hub id positional is OPTIONAL on every verb (MIO-2732): omit it and the hub
+// comes from --hub / config current_hub like every other hub-scoped verb. Because
+// it shares the positional slot with the bucket, the two are told apart by value
+// — see splitNavArgs.
 
 import (
 	"strconv"
@@ -77,6 +82,37 @@ func requireNavBucket(bucket string) error {
 		return errs.New(errs.ExitUsage, "invalid bucket %q: must be header, footer, or mobile", bucket)
 	}
 	return nil
+}
+
+// splitNavArgs separates the navigation verbs' positionals into the (optional)
+// hub id and the bucket, so these verbs honour --hub/current_hub like every
+// other hub-scoped verb (MIO-2732).
+//
+// The hub id shares the positional slot with the bucket, so the two are told
+// apart by VALUE: the buckets are a closed three-name set (header|footer|mobile)
+// and a hub id positional is passed through verbatim — it is never resolved from
+// a name or slug — so a bare "header" could never have addressed a hub before
+// this change either. There is therefore no invocation whose meaning shifts:
+//
+//	<hub_id> <bucket>   → explicit hub, explicit bucket   (unchanged)
+//	<bucket>            → ambient hub, explicit bucket    (new)
+//	<hub_id>            → explicit hub, no bucket         (unchanged; `list` only)
+//	(nothing)           → ambient hub, no bucket          (new; `list` only)
+//
+// An empty bucket return means "not supplied": `navigation list` reads it as all
+// buckets, while add/remove/reorder reject it via requireNavBucket.
+func splitNavArgs(args []string) (hubArg, bucket string) {
+	switch len(args) {
+	case 0:
+		return "", ""
+	case 1:
+		if isNavBucket(args[0]) {
+			return "", args[0]
+		}
+		return args[0], ""
+	default:
+		return args[0], args[1]
+	}
 }
 
 // fetchHubNav retrieves the hub and returns a shallow-copied, mutable navigation
@@ -158,26 +194,37 @@ func indexedBucket(nav map[string]any, bucket string) []any {
 // ── list ────────────────────────────────────────────────────────────────────
 
 var hubsNavListCmd = &cobra.Command{
-	Use:   "list <hub_id> [bucket]",
+	Use:   "list [hub_id] [bucket]",
 	Short: "List a hub's navigation items with their indices.",
-	Long:  "Print the hub navigation menu (header/footer/mobile), each item prefixed with its zero-based index for use with 'navigation remove'/'reorder'.",
+	Long: `Print the hub navigation menu (header/footer/mobile), each item prefixed with its zero-based index for use with 'navigation remove'/'reorder'.
+
+The hub id may be given positionally; omit it to use the ambient hub (--hub, or
+current_hub in config).`,
 	Example: `  mio hubs navigation list hub_abc123
-  mio hubs navigation list hub_abc123 header`,
-	Args: cobra.RangeArgs(1, 2),
+  mio hubs navigation list hub_abc123 header
+  mio hubs navigation list header          # ambient hub, header bucket
+  mio hubs navigation list --hub hub_abc123`,
+	Args: cobra.MaximumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		hubArg, bucket := splitNavArgs(args)
+
 		buckets := navBuckets
-		if len(args) == 2 {
-			if err := requireNavBucket(args[1]); err != nil {
+		if bucket != "" {
+			if err := requireNavBucket(bucket); err != nil {
 				return err
 			}
-			buckets = []string{args[1]}
+			buckets = []string{bucket}
 		}
 
 		c, teamID, err := hubsContext(cmd)
 		if err != nil {
 			return err
 		}
-		nav, _, err := fetchHubNav(c, teamID, args[0])
+		hubID, err := c.hubTargetID(cmd, hubArg)
+		if err != nil {
+			return err
+		}
+		nav, _, err := fetchHubNav(c, teamID, hubID)
 		if err != nil {
 			return err
 		}
@@ -240,7 +287,7 @@ func buildNavItem(cmd *cobra.Command, bucket string) (map[string]any, error) {
 }
 
 var hubsNavAddCmd = &cobra.Command{
-	Use:   "add <hub_id> <bucket>",
+	Use:   "add [hub_id] <bucket>",
 	Short: "Add an item to a navigation bucket (header|footer|mobile).",
 	Long: `Append (or insert with --position) a menu item into a navigation bucket.
 
@@ -248,12 +295,16 @@ Provide the item as a full JSON object with --item-json (any bucket/type:
 url|page|playlist|discussions for header/footer, or the {id,label,route,icon}
 shape for mobile), or use the url convenience flags: --type url --href <h> --label <l>.
 
-Hub-relative header/footer hrefs must stay within the hub (start with /{slug}).`,
+Hub-relative header/footer hrefs must stay within the hub (start with /{slug}).
+
+The hub id may be given positionally before the bucket; omit it to use the
+ambient hub (--hub, or current_hub in config).`,
 	Example: `  mio hubs navigation add hub_abc123 header --type url --href /my-hub/about --label About
-  mio hubs navigation add hub_abc123 header --item-json '{"type":"page","label":"Guide","page_id":"pg_1"}'`,
-	Args: cobra.ExactArgs(2),
+  mio hubs navigation add hub_abc123 header --item-json '{"type":"page","label":"Guide","page_id":"pg_1"}'
+  mio hubs navigation add header --type url --href /my-hub/about --label About`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		bucket := args[1]
+		hubArg, bucket := splitNavArgs(args)
 		if err := requireNavBucket(bucket); err != nil {
 			return err
 		}
@@ -266,7 +317,11 @@ Hub-relative header/footer hrefs must stay within the hub (start with /{slug}).`
 		if err != nil {
 			return err
 		}
-		nav, slug, err := fetchHubNav(c, teamID, args[0])
+		hubID, err := c.hubTargetID(cmd, hubArg)
+		if err != nil {
+			return err
+		}
+		nav, slug, err := fetchHubNav(c, teamID, hubID)
 		if err != nil {
 			return err
 		}
@@ -289,7 +344,7 @@ Hub-relative header/footer hrefs must stay within the hub (start with /{slug}).`
 		out = append(out, items[at:]...)
 		nav[bucket] = out
 
-		if err := writeHubNav(c, teamID, args[0], nav, slug); err != nil {
+		if err := writeHubNav(c, teamID, hubID, nav, slug); err != nil {
 			return err
 		}
 		return c.render(cmd, map[string]any{bucket: indexedBucket(nav, bucket)})
@@ -299,13 +354,17 @@ Hub-relative header/footer hrefs must stay within the hub (start with /{slug}).`
 // ── remove ──────────────────────────────────────────────────────────────────
 
 var hubsNavRemoveCmd = &cobra.Command{
-	Use:     "remove <hub_id> <bucket>",
-	Short:   "Remove a navigation item by index.",
-	Long:    "Remove the item at --index (zero-based, from 'navigation list') from a navigation bucket.",
-	Example: `  mio hubs navigation remove hub_abc123 header --index 2`,
-	Args:    cobra.ExactArgs(2),
+	Use:   "remove [hub_id] <bucket>",
+	Short: "Remove a navigation item by index.",
+	Long: `Remove the item at --index (zero-based, from 'navigation list') from a navigation bucket.
+
+The hub id may be given positionally before the bucket; omit it to use the
+ambient hub (--hub, or current_hub in config).`,
+	Example: `  mio hubs navigation remove hub_abc123 header --index 2
+  mio hubs navigation remove header --index 2`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		bucket := args[1]
+		hubArg, bucket := splitNavArgs(args)
 		if err := requireNavBucket(bucket); err != nil {
 			return err
 		}
@@ -318,7 +377,11 @@ var hubsNavRemoveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		nav, slug, err := fetchHubNav(c, teamID, args[0])
+		hubID, err := c.hubTargetID(cmd, hubArg)
+		if err != nil {
+			return err
+		}
+		nav, slug, err := fetchHubNav(c, teamID, hubID)
 		if err != nil {
 			return err
 		}
@@ -334,7 +397,7 @@ var hubsNavRemoveCmd = &cobra.Command{
 		out = append(out, items[idx+1:]...)
 		nav[bucket] = out
 
-		if err := writeHubNav(c, teamID, args[0], nav, slug); err != nil {
+		if err := writeHubNav(c, teamID, hubID, nav, slug); err != nil {
 			return err
 		}
 		return c.render(cmd, map[string]any{bucket: indexedBucket(nav, bucket)})
@@ -379,13 +442,17 @@ func applyPermutation(items []any, order []int) ([]any, error) {
 }
 
 var hubsNavReorderCmd = &cobra.Command{
-	Use:     "reorder <hub_id> <bucket>",
-	Short:   "Reorder a navigation bucket by an index permutation.",
-	Long:    "Reorder a navigation bucket by --order, a comma-separated permutation of its current zero-based indices (every index exactly once).",
-	Example: `  mio hubs navigation reorder hub_abc123 header --order 2,0,1`,
-	Args:    cobra.ExactArgs(2),
+	Use:   "reorder [hub_id] <bucket>",
+	Short: "Reorder a navigation bucket by an index permutation.",
+	Long: `Reorder a navigation bucket by --order, a comma-separated permutation of its current zero-based indices (every index exactly once).
+
+The hub id may be given positionally before the bucket; omit it to use the
+ambient hub (--hub, or current_hub in config).`,
+	Example: `  mio hubs navigation reorder hub_abc123 header --order 2,0,1
+  mio hubs navigation reorder header --order 2,0,1`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		bucket := args[1]
+		hubArg, bucket := splitNavArgs(args)
 		if err := requireNavBucket(bucket); err != nil {
 			return err
 		}
@@ -402,7 +469,11 @@ var hubsNavReorderCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		nav, slug, err := fetchHubNav(c, teamID, args[0])
+		hubID, err := c.hubTargetID(cmd, hubArg)
+		if err != nil {
+			return err
+		}
+		nav, slug, err := fetchHubNav(c, teamID, hubID)
 		if err != nil {
 			return err
 		}
@@ -416,7 +487,7 @@ var hubsNavReorderCmd = &cobra.Command{
 		}
 		nav[bucket] = reordered
 
-		if err := writeHubNav(c, teamID, args[0], nav, slug); err != nil {
+		if err := writeHubNav(c, teamID, hubID, nav, slug); err != nil {
 			return err
 		}
 		return c.render(cmd, map[string]any{bucket: indexedBucket(nav, bucket)})

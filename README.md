@@ -209,7 +209,11 @@ mio hubs create --name "My Hub" --slug my-hub \
   --settings-json '{"policies":{"enabled":true}}' \
   --meta-json '{"discussions":{"enabled":true}}'
 # retrieve surfaces derived registration_enabled + published booleans.
+# The hub id is an OPTIONAL positional on every hubs verb except `delete`:
+# positional > --hub > current_hub in config. All three of these are equivalent.
 mio hubs retrieve <hub-id>
+mio hubs retrieve --hub <hub-id>
+mio hubs retrieve                    # uses current_hub from config
 # Enable member self-registration (settings.registration.enabled) — read-modify-write,
 # sibling settings keys are preserved. Pass =false to disable explicitly.
 mio hubs update <hub-id> --registration-enabled
@@ -252,7 +256,7 @@ Every command inherits these flags.
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--api-key` | | env/keychain | API key. Overrides `MIO_API_KEY` and the stored key. |
-| `--anonymous` | | false | Ignore `MIO_API_KEY` and the stored key; resolve as unauthenticated (diagnostics). |
+| `--anonymous` | | false | Ignore `MIO_API_KEY` and the stored key; send the request with no `Authorization` header and let the API answer (diagnostics). An explicit `--api-key` still wins. |
 | `--team` | | config | Team ID for team-scoped resources. |
 | `--hub` | | config | Hub ID for hub-scoped resources. |
 | `--output` | `-o` | json (piped) / table (TTY) | Output format: `json`, `table`, `plain`. |
