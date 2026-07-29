@@ -76,9 +76,23 @@ func (c *Client) Login(ctx context.Context, email, password string) (*LoginResul
 	payload := map[string]string{"email": email, "password": password}
 	body, err := c.do(ctx, http.MethodPost, "/api/auth/login", nil, payload, contentTypeJSON)
 	if err != nil {
-		// A 401 here means bad credentials → auth exit code, with a clearer hint.
-		if errs.CodeOf(err) == errs.ExitAuth {
-			return nil, errs.New(errs.ExitAuth, "login failed: invalid email or password")
+		// A 401 here means exactly one thing — bad credentials — so replace the
+		// backend's terse detail with a clearer hint.
+		//
+		// Match on the STATUS, not on errs.CodeOf == ExitAuth (MIO-2656): the
+		// exit code is deliberately coarse and ExitAuth covers 403 too. A 403 on
+		// this route is a DIFFERENT refusal (account locked, SSO mandatory,
+		// origin blocked) where the credentials may be perfectly correct, so the
+		// old check both mislabelled it "invalid email or password" and — by
+		// building a fresh, status-less error — made the envelope fall back to
+		// reporting it as "401". Narrowing to 401 keeps the friendly message
+		// where it is true and lets a 403 through with its own detail and status.
+		//
+		// NewHTTP re-attaches the 401 so the replacement message does not cost
+		// us the status; the exit code it derives is ExitAuth either way, so
+		// nothing about process exit behaviour changes.
+		if errs.HTTPStatusOf(err) == http.StatusUnauthorized {
+			return nil, errs.NewHTTP(http.StatusUnauthorized, "login failed: invalid email or password")
 		}
 		return nil, err
 	}
