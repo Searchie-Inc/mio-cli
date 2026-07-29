@@ -1,0 +1,218 @@
+# catalog-pin-staleness.yml
+#
+# Daily check: compares the pinned page-builder catalog ref
+# (internal/catalog/CATALOG_REF) against the current HEAD of mio-page-catalog's
+# default branch.
+#
+# When the pin is stale:
+#   1. Checks out mio-page-catalog at its new HEAD (via App token).
+#   2. Re-vendors catalog.json, the golden fixtures, the interpolation corpus,
+#      CATALOG_REF and the pinnedDigest constant via
+#      scripts/update_catalog_pin.sh.
+#   3. Runs the catalog parity guards + the CLI command tests that read the
+#      embedded catalog.
+#   4. Pushes a branch chore/bump-catalog-pin and opens (or updates) a PR
+#      listing old -> new SHA. A human reviews and merges; this workflow does
+#      NOT auto-merge — a catalog bump can retire section types (see 0.11.0,
+#      which dropped cta/text/video) and that deserves eyes.
+#
+# Requires:
+#   - Repository variable SIBLING_APP_CLIENT_ID
+#   - Repository secret  SIBLING_APP_PRIVATE_KEY
+#   - the App installed on mio-page-catalog with contents:read
+#
+# When the App is not configured the job skips gracefully (no-op exit 0), so
+# this workflow can land before the credentials do.
+#
+# Mirrors mio-backend's .github/workflows/catalog-pin-staleness.yml. Why this
+# exists (MIO-2665): the CLI's embed sat at 0.10.0 for two upstream releases
+# while mio-backend served 0.12.0, because the pin lived only in a Go comment
+# and nothing watched it.
+
+name: Catalog pin staleness
+
+on:
+  schedule:
+    # Daily at 06:15 UTC — 15 minutes after mio-backend's, so when a catalog
+    # release moves both pins the backend PR lands first and the two bump PRs
+    # are easy to read in order.
+    - cron: '15 6 * * *'
+  workflow_dispatch: {}
+  # Receiver end of the cross-repo dispatch: a merge to mio-page-catalog's main
+  # can fire this event directly instead of waiting for the daily cron.
+  repository_dispatch:
+    types: [catalog-pin-bump]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: catalog-pin-staleness
+  cancel-in-progress: false
+
+jobs:
+  check-and-bump:
+    name: Check catalog pin and open bump PR if stale
+    runs-on: ubuntu-latest
+
+    # Gate: requires BOTH the private-key secret AND the client-id variable.
+    # Gating on the secret (not just the variable) prevents forks from entering
+    # the App-token path and hard-failing at create-github-app-token.
+    env:
+      APP_TOKEN_AVAILABLE: ${{ secrets.SIBLING_APP_PRIVATE_KEY != '' && vars.SIBLING_APP_CLIENT_ID != '' }}
+
+    steps:
+      # ── 1. Checkout mio-cli ─────────────────────────────────────────────
+      - name: Checkout mio-cli
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # ── 2. Skip if App is not configured ────────────────────────────────
+      - name: Skip when App is not configured
+        if: env.APP_TOKEN_AVAILABLE != 'true'
+        run: |
+          echo "::warning::SIBLING_APP_CLIENT_ID variable or SIBLING_APP_PRIVATE_KEY secret not \
+          configured — catalog pin staleness check skipped. Configure both (and install the App \
+          on mio-page-catalog with contents:read) to enable automatic bump PRs."
+          exit 0
+
+      # ── 3. Mint App token (mio-page-catalog read access) ────────────────
+      - name: Generate GitHub App token (mio-page-catalog)
+        if: env.APP_TOKEN_AVAILABLE == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SIBLING_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SIBLING_APP_PRIVATE_KEY }}
+          owner: Searchie-Inc
+          repositories: 'mio-page-catalog'
+          permission-contents: read
+
+      # ── 4. Set up Go (matches ci.yml) ───────────────────────────────────
+      - name: Set up Go
+        if: env.APP_TOKEN_AVAILABLE == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      # ── 5. Determine staleness and apply the bump ───────────────────────
+      - name: Determine staleness and apply bump
+        if: env.APP_TOKEN_AVAILABLE == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          pinned_ref=$(tr -d '[:space:]' < internal/catalog/CATALOG_REF)
+          test -n "$pinned_ref" || { echo "::error::Could not read internal/catalog/CATALOG_REF"; exit 1; }
+          echo "Pinned catalog ref: $pinned_ref"
+
+          latest_ref=$(gh api repos/Searchie-Inc/mio-page-catalog/commits/main --jq .sha)
+          echo "Latest catalog ref: $latest_ref"
+
+          if [ "$latest_ref" = "$pinned_ref" ]; then
+            echo "Catalog pin is current — no bump needed."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Catalog pin is stale — bumping $pinned_ref -> $latest_ref"
+
+          git clone --depth 1 \
+            "https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/Searchie-Inc/mio-page-catalog.git" \
+            --branch main ./mio-page-catalog
+
+          # A --depth 1 clone of main can race a merge landing between the API
+          # read and the clone. Trust the clone (that is what we vendored) and
+          # record its SHA.
+          cloned_sha=$(git -C ./mio-page-catalog rev-parse HEAD)
+          if [ "$cloned_sha" != "$latest_ref" ]; then
+            echo "::warning::Cloned mio-page-catalog HEAD ($cloned_sha) differs from API latest ($latest_ref); using cloned HEAD"
+            latest_ref="$cloned_sha"
+          fi
+
+          ./scripts/update_catalog_pin.sh \
+            --catalog-repo ./mio-page-catalog \
+            --ref "$latest_ref"
+
+          # Guards must pass before opening a PR: the digest/fixture parity
+          # suite, plus the cmd tests that read the embedded catalog through the
+          # `pages catalog` read path.
+          go build ./...
+          go test ./internal/catalog/... ./cmd/... -timeout 120s
+
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          BRANCH="chore/bump-catalog-pin"
+          git checkout -B "$BRANCH"
+
+          git add \
+            internal/catalog/catalog.json \
+            internal/catalog/CATALOG_REF \
+            internal/catalog/parity_test.go \
+            internal/catalog/testdata/fixtures \
+            internal/catalog/testdata/interpolation
+
+          if git diff --cached --quiet; then
+            echo "Nothing staged after regen — no-op."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git commit -m "chore(catalog): bump embedded catalog pin
+
+          Automated bump from the catalog-pin-staleness workflow.
+
+          catalog: ${pinned_ref:0:7} -> ${latest_ref:0:7}
+
+          Relates to MIO-2665"
+
+          echo "changed=true"        >> "$GITHUB_OUTPUT"
+          echo "old_ref=$pinned_ref" >> "$GITHUB_OUTPUT"
+          echo "new_ref=$latest_ref" >> "$GITHUB_OUTPUT"
+        id: bump
+
+      # ── 6. Open / update the bump PR ────────────────────────────────────
+      #   Pushes with the checkout's own GITHUB_TOKEN credentials (mio-cli write
+      #   access) — the App token above is scoped only to mio-page-catalog.
+      - name: Open or update bump PR
+        if: env.APP_TOKEN_AVAILABLE == 'true' && steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          BRANCH="chore/bump-catalog-pin"
+          OLD_REF="${{ steps.bump.outputs.old_ref }}"
+          NEW_REF="${{ steps.bump.outputs.new_ref }}"
+
+          git push --force-with-lease origin "$BRANCH"
+
+          if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -qiE "^OPEN$"; then
+            echo "PR for $BRANCH already open — branch updated."
+          else
+            gh pr create \
+              --title "chore(catalog): bump embedded catalog pin" \
+              --body "## Automated catalog pin bump
+
+          Opened automatically by the \`catalog-pin-staleness\` workflow.
+
+          \`internal/catalog/CATALOG_REF\`: \`${OLD_REF}\` → \`${NEW_REF}\`
+
+          Re-vendored by \`scripts/update_catalog_pin.sh\`: \`catalog.json\`, the golden fixtures, the interpolation corpus, \`CATALOG_REF\` and the \`pinnedDigest\` constant.
+
+          ### What a reviewer should check
+
+          - **Retired section types.** A bump can remove types the CLI advertises (0.11.0 dropped \`cta\`/\`text\`/\`video\`). Check the \`sectionTypes\` diff and whether \`WritableSectionTypes\` assertions need updating — an advertised type the backend 422s is a real CLI bug.
+          - **Fixture churn.** Golden fixtures are mirrored exactly; a deleted upstream fixture is deleted here.
+          - **Digest.** \`TestDigest_MatchesMetaAndPin\` proves the Go canonicalizer reproduces \`meta.digest\` over the new body — it ran green before this PR was opened.
+
+          CI runs the full suite; the workflow additionally gated on \`go test ./internal/catalog/... ./cmd/...\`." \
+              --base main \
+              --head "$BRANCH"
+          fi
