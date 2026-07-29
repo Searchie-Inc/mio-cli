@@ -104,21 +104,18 @@ func runNativeUpdate(ctx context.Context, cfg nativeUpdateConfig) error {
 		httpClient = &http.Client{Timeout: nativeUpdateTimeout}
 	}
 
+	// ── validate every local input BEFORE touching the network ───────────────
+	//
+	// Same rule the resource commands follow: a usage error must fire no
+	// request. Resolving "latest" first meant a typo'd --prefix surfaced as a
+	// DNS/connection error instead of "that directory does not exist" (Codex
+	// review round 1).
+
 	// goreleaser explicitly skips windows/arm64 (see .goreleaser.yaml `ignore`),
 	// so there is no asset to fetch. Say that instead of surfacing a 404 from a
 	// URL the user never typed.
 	if cfg.GOOS == "windows" && cfg.GOARCH != "amd64" {
 		return fmt.Errorf("no published mio release for %s/%s — install the amd64 build or build from source", cfg.GOOS, cfg.GOARCH)
-	}
-
-	rel := normalizeReleaseVersion(cfg.Version)
-	if rel == "" {
-		nativeInfof(out, "Fetching latest release version...")
-		resolved, err := latestReleaseVersion(ctx, httpClient)
-		if err != nil {
-			return err
-		}
-		rel = resolved
 	}
 
 	destDir := cfg.Prefix
@@ -128,6 +125,28 @@ func runNativeUpdate(ctx context.Context, cfg nativeUpdateConfig) error {
 		return fmt.Errorf("install directory %s is not a directory", destDir)
 	}
 	dest := filepath.Join(destDir, installedBinaryName(cfg.GOOS))
+
+	rel := normalizeReleaseVersion(cfg.Version)
+	if rel != "" {
+		if err := validateReleaseVersion(rel); err != nil {
+			return err
+		}
+	}
+
+	// ── resolve the release ──────────────────────────────────────────────────
+	if rel == "" {
+		nativeInfof(out, "Fetching latest release version...")
+		resolved, err := latestReleaseVersion(ctx, httpClient)
+		if err != nil {
+			return err
+		}
+		// The tag came off the wire, so it gets the same treatment as --version
+		// before it reaches a URL path and a local filename.
+		if err := validateReleaseVersion(resolved); err != nil {
+			return fmt.Errorf("the latest release tag from GitHub is unusable: %w", err)
+		}
+		rel = resolved
+	}
 
 	asset := releaseAssetName(rel, cfg.GOOS, cfg.GOARCH)
 	nativeInfof(out, "Installing mio v%s (%s/%s) → %s", rel, cfg.GOOS, cfg.GOARCH, dest)
@@ -226,11 +245,20 @@ func installStagedBinary(staged, dest string, out io.Writer) error {
 	_ = os.Remove(backup)
 
 	existed := true
-	if _, err := os.Lstat(dest); err != nil {
+	fi, err := os.Lstat(dest)
+	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("inspect %s: %w", dest, err)
 		}
 		existed = false
+	} else if !fi.Mode().IsRegular() {
+		// Whatever is sitting there is not a mio binary — a directory, a
+		// symlink, a device. Renaming it aside and dropping an executable in
+		// its place would be a silent, destructive surprise (it would move a
+		// whole directory to mio.exe.old and report success). Refuse instead
+		// (Codex review round 1).
+		return fmt.Errorf("%s exists but is not a regular file (%s) — refusing to replace it; "+
+			"remove it or choose another directory with --prefix", dest, fi.Mode().Type())
 	}
 
 	if existed {
@@ -299,6 +327,34 @@ func normalizeReleaseVersion(v string) string {
 		v = v[1:]
 	}
 	return strings.TrimSpace(v)
+}
+
+// validateReleaseVersion rejects anything that is not a plain release tag.
+//
+// The version reaches both a URL path segment and a local filename
+// (filepath.Join(tmpDir, asset)), so a value carrying a separator or a ".."
+// could walk out of the temp dir — or bend the download URL to another path on
+// github.com. Nothing in a goreleaser tag needs more than this alphabet, so
+// this is a cheap fail-closed guard rather than a semver parser (Codex review
+// round 1).
+func validateReleaseVersion(v string) error {
+	if v == "" {
+		return errors.New("release version is empty")
+	}
+	for _, r := range v {
+		switch {
+		case r >= '0' && r <= '9',
+			r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r == '.' || r == '-' || r == '_' || r == '+':
+		default:
+			return fmt.Errorf("%q is not a valid release version (expected a tag like 0.12.1)", v)
+		}
+	}
+	if strings.Contains(v, "..") {
+		return fmt.Errorf("%q is not a valid release version (expected a tag like 0.12.1)", v)
+	}
+	return nil
 }
 
 // releaseAssetName builds the goreleaser archive name for a version/platform:

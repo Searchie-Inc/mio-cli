@@ -382,14 +382,105 @@ func TestRunNativeUpdateRejectsUnbuiltWindowsArch(t *testing.T) {
 	}
 }
 
-func TestRunNativeUpdateRejectsAMissingPrefix(t *testing.T) {
-	err := runNativeUpdate(context.Background(), nativeUpdateConfig{
-		Prefix: filepath.Join(t.TempDir(), "nope"),
-		GOOS:   "windows",
-		GOARCH: "amd64",
-	})
-	if err == nil || !strings.Contains(err.Error(), "install directory") {
-		t.Fatalf("error = %v, want an install-directory error", err)
+// Local input must be validated BEFORE anything touches the network — the same
+// "no request fires on a usage error" rule the resource commands follow. Codex
+// review round 1 caught the original ordering: the prefix check sat after the
+// latest-release lookup, so a typo'd --prefix surfaced a DNS/network error (and
+// this very test silently reached the real api.github.com).
+func TestRunNativeUpdateValidatesLocalInputBeforeAnyRequest(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	withReleaseEndpoints(t, srv.URL, srv.URL)
+
+	cases := []struct {
+		name    string
+		cfg     nativeUpdateConfig
+		wantErr string
+	}{
+		{
+			name:    "missing install dir",
+			cfg:     nativeUpdateConfig{Prefix: filepath.Join(t.TempDir(), "nope"), GOOS: "windows", GOARCH: "amd64"},
+			wantErr: "install directory",
+		},
+		{
+			name:    "install dir is a file",
+			cfg:     nativeUpdateConfig{Prefix: writeTempFile(t, "not-a-dir"), GOOS: "windows", GOARCH: "amd64"},
+			wantErr: "not a directory",
+		},
+		{
+			name:    "unbuilt arch",
+			cfg:     nativeUpdateConfig{Prefix: t.TempDir(), GOOS: "windows", GOARCH: "arm64"},
+			wantErr: "windows/arm64",
+		},
+		{
+			name:    "path traversal in --version",
+			cfg:     nativeUpdateConfig{Prefix: t.TempDir(), Version: "../../../../etc", GOOS: "windows", GOARCH: "amd64"},
+			wantErr: "not a valid release version",
+		},
+		{
+			name:    "separator in --version",
+			cfg:     nativeUpdateConfig{Prefix: t.TempDir(), Version: "0.12.1/../x", GOOS: "windows", GOARCH: "amd64"},
+			wantErr: "not a valid release version",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.HTTPClient = srv.Client()
+			tc.cfg.Out = &bytes.Buffer{}
+			err := runNativeUpdate(context.Background(), tc.cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+	if requests != 0 {
+		t.Errorf("%d HTTP request(s) fired for locally-invalid input; want 0", requests)
+	}
+}
+
+func TestValidateReleaseVersion(t *testing.T) {
+	for _, ok := range []string{"0.12.1", "v0.12.1", "1.0.0-rc.1", "0.12.1+build_7"} {
+		if err := validateReleaseVersion(normalizeReleaseVersion(ok)); err != nil {
+			t.Errorf("validateReleaseVersion(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"../0.12.1", "0.12.1/x", `0.12.1\x`, "0.12 .1", "0.12.1?a=b", ".."} {
+		if err := validateReleaseVersion(normalizeReleaseVersion(bad)); err == nil {
+			t.Errorf("validateReleaseVersion(%q) = nil, want an error", bad)
+		}
+	}
+}
+
+// A dest that is not a regular file (a directory, most destructively) must not
+// be renamed aside and replaced — Codex review round 1.
+func TestInstallStagedBinaryRefusesANonRegularDest(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "mio.exe")
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "keep.txt"), []byte("precious"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	staged := filepath.Join(dir, "mio.exe.new-1")
+	writeFile(t, staged, "NEW")
+
+	err := installStagedBinary(staged, dest, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("error = %v, want a not-a-regular-file refusal", err)
+	}
+	if fi, statErr := os.Stat(dest); statErr != nil || !fi.IsDir() {
+		t.Errorf("the existing directory must be left exactly as it was (stat err %v)", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dest, "keep.txt")); statErr != nil {
+		t.Errorf("contents of the existing directory were disturbed: %v", statErr)
+	}
+	if _, statErr := os.Stat(dest + ".old"); statErr == nil {
+		t.Error("nothing should have been renamed aside")
 	}
 }
 
@@ -466,6 +557,14 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+// writeTempFile creates a file (not a directory) and returns its path.
+func writeTempFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "file")
+	writeFile(t, path, content)
+	return path
 }
 
 func readFile(t *testing.T, path string) string {
