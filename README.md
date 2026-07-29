@@ -251,6 +251,22 @@ mio hubs scaffold --template community --name "Acme" --slug acme \
 # Preview first — the plan names the palette it would apply, and changes nothing.
 mio hubs scaffold --template community --name "Acme" --slug acme --primary-color '#B91C1C' --dry-run
 
+# Pages & page trees
+# --privacy defaults to `members`: omit it and the page is behind the login wall.
+# `home` is a RESERVED slug — use a real one and mark the homepage with --is-home.
+mio pages create --hub <hub-id> --title "Welcome" --slug welcome --privacy public --is-home
+# Discover the page-builder catalog. (There is no `pages catalog list`.)
+mio pages catalog templates --page-type homepage
+mio pages catalog section-types --writable-only
+# Scaffold a tree, fill in the values, set the draft, publish.
+mio pages catalog scaffold --template page-homepage > tree.json
+mio pages catalog scaffold --template row --variant 3eq > cols.json   # a section to splice in
+mio pages tree set <page-id> --hub <hub-id> --file tree.json          # first tree: --if-match defaults to 0
+mio pages publish <page-id> --hub <hub-id> --if-match 1
+# `tree get` answers {tree, draft_version}; `tree set --file` wants the tree itself.
+V=$(mio pages tree get <page-id> --hub <hub-id> --jq .draft_version)
+mio pages tree get <page-id> --hub <hub-id> --jq .tree > tree.json
+
 # Products & prices  (the product id is a positional argument, not a flag)
 mio products list
 mio products create --name "Pro Plan" --description "Full access"
@@ -354,7 +370,7 @@ Scripts and agents can branch on these stable codes.
 | `tags` | `create`, `list`, `retrieve`, `update`, `delete`, `assign`, `assign-bulk`, `remove` |
 | `segments` | `create`, `list`, `retrieve`, `update`, `delete`, `search`, `members`, `count` |
 | `content` | `create`, `list`, `retrieve`, `children`, `update`, `delete`, `restore`, `reorder` |
-| `pages` | `create`, `list`, `retrieve` (add `--tree` for raw published node tree), `update`, `delete`, `home`, `publish` (requires `--if-match <draft_version>`); `tree get/set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit it for the first tree on a draft-less page, it defaults to `0`); `sections create/list/update/delete/reorder` |
+| `pages` | `create` (`--privacy public\|members\|private`, **default `members`**), `list`, `retrieve` (add `--tree` for raw published node tree), `update`, `delete`, `home`, `publish` (requires `--if-match <draft_version>`); `tree get/set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit it for the first tree on a draft-less page, it defaults to `0`); `sections create/list/update/delete/reorder`; `catalog templates/section-types/scaffold` (the page-builder catalog — no `catalog list` verb exists) |
 | `media files` | `list`, `retrieve`, `durable-url` (non-expiring hub-scoped image URL for page trees), `update`, `delete`; ingest from the CLI: `upload` (create → presigned S3 PUT → finalize; auto-multipart), `replace`, `finalize`, `transcode`, `register-synthetic`; `cards get/set`, `chapters get/set` |
 | `media folders` | `list`, `create`, `retrieve`, `update`, `delete`, `move` (`--parent-id`/`--to-root`) |
 | `media search` | hybrid search over the team's transcripts (`--query`, `--hub-id`, `--limit`) |
@@ -388,6 +404,36 @@ mio config list            # shows all values and the config file path
 ```
 
 Multiple named profiles are supported via `--profile`.
+
+---
+
+## Building a hub — and the silent-drop traps
+
+`mio hubs scaffold` builds a whole branded hub in one command and is the recommended
+starting point. When you customize it — or build a hub by hand — you are authoring
+against the hub frontend's render contract, and the API validates a page tree's
+**structure**, not its **renderability**. These all return `200` and then render
+nothing, with no error:
+
+- **A node's text lives in `value` at the TOP LEVEL of the node, not `settings.value`.**
+  This is the most common one by a distance. (`progress-ring` is the only kind that
+  genuinely reads `settings.value`.)
+- `settings.weight` must be a **number** (`700`), never `"bold"`.
+- A section node must carry a non-empty **`template`** (`hero`, `carousel`, `row`, …).
+- An off-enum **`surface.background.type`** renders a transparent row. The valid set
+  is `tint` · `color` (+`token`) · `custom-color` (+`value`) · `gradient` · `image`
+  (+`url`) · `none` · `thumbnail`.
+- The **gradient config is a sibling** of `background` — `surface.gradient`, not
+  `surface.background.gradient`. Nesting it silently yields the default gradient.
+- A `header`/`footer` menu item without a **`type`** is dropped; a `mobile` tab whose
+  `icon` is outside the 8-name whitelist is dropped.
+- `mio pages publish` returns **`section_count`** — compare it against the number of
+  sections you authored. That, not the `200`, is the "did it apply" signal.
+
+`mio pages tree set` catches the numeric-`weight` and blank-`template` cases
+client-side (exit `2`, no HTTP). The rest are documented in full in the bundled agent
+skill — `mio skills print`, or `mio skills install` to drop it into Claude Code /
+Codex — and in [AGENTS.md](./AGENTS.md#page-tree-render-contract).
 
 ---
 

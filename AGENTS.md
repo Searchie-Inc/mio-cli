@@ -150,10 +150,10 @@ Every implemented resource and its verbs.
 | `tags` | `create` `list` `retrieve` `update` `delete` `assign` `assign-bulk` `remove` |
 | `segments` | `create` `list` `retrieve` `update` `delete` `search` `members` `count` |
 | `content` | `create` `list` `retrieve` `children` `update` `delete` `restore` `reorder` |
-| `pages` | `create` `list` `retrieve` (add `--tree` for raw node tree) `update` `delete` `home` `publish` |
+| `pages` | `create` (`--privacy public\|members\|private` — **defaults to `members`**, so omitting it ships a login-walled page) `list` `retrieve` (add `--tree` for raw node tree) `update` `delete` `home` `publish` |
 | `pages sections` | `create` (`--type` validated against the catalog writable set) `list` `update` `delete` `reorder` |
-| `pages tree` | `get` `set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit for the first tree on a draft-less page, defaults to `0`) |
-| `pages catalog` | `scaffold` (`--template`/`--variant` → a node-tree for `pages tree set`) `templates` (`--page-type`) `section-types` (`--writable-only`) |
+| `pages tree` | `get` `set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit for the first tree on a draft-less page, defaults to `0`). `get` returns `{tree, draft_version}`; `set` wants `{root}` — unwrap and re-wrap (see Page-Tree Render Contract) |
+| `pages catalog` | `scaffold` (`--template`/`--variant` → a node-tree for `pages tree set`) `templates` (`--page-type`) `section-types` (`--writable-only`). **There is no `pages catalog list`** |
 | `media files` | `list` `retrieve` `durable-url` (non-expiring hub-scoped image URL; `--hub` `--preset` `--publish`) `update` `delete` `upload` (create → presigned PUT → finalize, auto-multipart) `replace` `finalize` `transcode` `register-synthetic` |
 | `media files cards` | `get` `set` (`--cards` JSON array/@file) |
 | `media files chapters` | `get` `set` (`--chapters` JSON array/@file) |
@@ -189,6 +189,9 @@ Every implemented resource and its verbs.
 
 - **`pages publish` requires `--if-match <draft_version>`** — read the `draft_version` attribute from a prior `pages retrieve`, then pass it as `--if-match`. The backend uses it as an optimistic-concurrency guard and will return 409 if the draft has changed since you read it.
 - **`pages tree set` `--if-match` is OPTIONAL (defaults to `0`) — publish's is not.** `pages tree get` 404s on a page that has no draft yet, so the very FIRST tree set has no `draft_version` to echo back: omit `--if-match` and it defaults to `0`, which the backend accepts only while the page is still at `draft_version 0` (a fresh page starts there). For every subsequent set pass the current `draft_version`. The default does NOT bypass optimistic concurrency: a defaulted (or stale) `0` against a page that already has a draft returns a 409 conflict, so you can never silently clobber an existing draft.
+- **`pages tree get` and `pages tree set` do NOT share a shape.** `get` answers `{"id": …, "tree": {"root": …}, "draft_version": N}`; `set --file` expects the tree object itself, `{"root": …}`. Feeding a `get` response straight back is rejected — unwrap with `--jq .tree` and keep the `draft_version` for `--if-match`. `pages catalog scaffold` already emits the `set` shape.
+- **A page created by `hubs scaffold` already has a draft.** Its `draft_version` is `1`, not `0`, so the first tree write YOU make against it needs `--if-match 1` — the `0` default is only correct for a page that has never had a draft. Always read it back: `mio pages tree get <page_id> --jq .draft_version`.
+- **`pages create --privacy` defaults to `members`.** A page created without `--privacy public` is behind the login wall, which is how a hub ships looking public and isn't. `hubs scaffold` sets it (MIO-2563); the manual page path does not. Also: `home` is a reserved slug (rejected) and an omitted `--slug` fails with `Field required` — use a real slug and mark the homepage with `--is-home`.
 - **`pages retrieve --tree`** returns a `page-trees` resource (raw published node tree) instead of page metadata. Use this for admin editor access.
 - **Scaffold real pages via the tree door, not imperative sections.** `pages catalog scaffold --template <id>` emits the same node-tree artifact the visual builder produces (a Go port of the reference applier mints fresh UUIDv7 ids). It is emit-only — pipe a PAGE template's `{"root":…}` output straight into `pages tree set`:
   ```sh
@@ -221,6 +224,111 @@ Every implemented resource and its verbs.
   ```
 - **Generate the full reference** for any command set with `mio gen-docs --dir ./docs` (one Markdown file per command).
 - **`checkout accounts onboarding-link` always fails (exit 3, `ExitAuth`)** — the backend rejects API-key principals on this route so a leaked team API key can't attach an attacker's Stripe payout account (MIO-2655). This CLI is API-key-only (see Authentication above — any JWT is discarded right after `mio login` mints the stored key), so the command can never succeed here; it fails fast client-side with no HTTP request. Connect a Stripe account via the member.dev dashboard instead. (MIO-2717)
+
+---
+
+## Page-Tree Render Contract
+
+The API validates a page tree's **structure**, not its **renderability**. The shapes
+below return `200` and then render nothing, with no error anywhere (MIO-2539,
+MIO-2663, MIO-2664). The embedded agent skill (`mio skills print`) carries the full
+authoring recipe; this is the reference.
+
+**Node envelope** — `value` is a sibling of `settings`, *not* `settings.value`:
+
+```json
+{ "id": "<uuid>", "kind": "headline", "template": "hero",
+  "value": "Welcome", "settings": { "level": 1, "weight": 700 }, "children": [] }
+```
+
+- The renderer dispatches on **`kind`**, never `type`. `template` marks a node as a
+  section (publish-time conversion + surface wrapping).
+- `value` in `settings.value` is the highest-frequency silent drop. The sole node
+  kind that legitimately reads `settings.value` is `progress-ring` (a number).
+- No defaults cascade — inline every rendering value on its own node. Exactly one
+  `level:1` headline per page (the rest are demoted to `<h2>`).
+- `settings.weight` must be a **number** (`700`), never `"bold"`; `pages tree set`
+  rejects both that and a blank/non-string `template` client-side, before any HTTP.
+
+**Leaf kinds** (the complete set): `headline` `text` `image` `video` `button` `icon`
+`divider` `progress-ring`. `subheadline`, `paragraph`, `embed`, `html`, `spacer`,
+`stat`, `input` and `section` are **not** node kinds — they were removed from the
+frontend (or never existed), so authoring one yields a blank node; use `headline`
+with `level:3`, `text`, and container `gap` respectively. `content-grid` is a
+*template* id, not a kind. There is **no `sidebar` kind**: a sidebar is a `row`
+whose `stack` children carry `settings.width`
+(`full`/`1/2`/`1/3`/`2/3`/`1/4`/`3/4`).
+
+**Button action** is `{"type": …, "value": …}` with `type` ∈ `url` | `page` |
+`email` | `scroll` | `playlist`; `value` is canonical (no scheme prefix, no `#`).
+
+**`settings.surface`** is `{"padding", "background", "gradient"}`:
+
+| `background` | renders |
+|---|---|
+| `{"type":"tint"}` | light tint of branding `secondary` — the only value scaffolds emit |
+| `{"type":"color","token":"primary\|secondary\|accent\|muted\|background"}` | solid theme color; `primary` also stamps `data-bg="primary"` (bold band + primary-button auto-inversion) |
+| `{"type":"custom-color","value":"#rrggbb"}` | solid inline color (invalid hex → nothing) |
+| `{"type":"gradient"}` | gradient, configured by the **sibling** `surface.gradient` |
+| `{"type":"image","url":"<durable-url>","blur":true}` | image layer + automatic `secondary` scrim (`overlay` is deprecated/ignored) |
+| `{"type":"none"}` / `{"type":"thumbnail"}` | nothing (`thumbnail` is accepted but unimplemented) |
+
+Two traps worth stating plainly:
+
+1. **An invalid `background.type` is accepted on publish and renders a transparent
+   row with no error** — the renderer's switch falls through a `default` case.
+2. **The gradient config is a SIBLING of `background` (`surface.gradient`), not
+   nested inside it.** Nesting is ignored and you silently get the default `split`
+   gradient. `gradient.type` ∈ `monochrome` | `analogous` | `complementary` |
+   `triadic` | `split` | `warm-shift` | `custom`; `custom` requires `customStart` +
+   `customEnd` (6-digit hex) or it falls back to `split`.
+
+**Vocabulary** comes from the catalog, not from this file — `mio pages catalog
+templates` and `mio pages catalog section-types` print the truth for the backend you
+are talking to. The skill's copies of those lists are guarded against catalog drift
+by `TestSkillDoc_CatalogVocabularyMatchesEmbeddedCatalog`.
+
+---
+
+## Hub Branding and Navigation Contract
+
+**Branding keys** (`--branding-json`, `hubs scaffold --*-color`) map onto the
+frontend like this:
+
+| key | paints |
+|---|---|
+| `primary` | buttons, links, CTAs, brand accents |
+| `secondary` | **section headings (h1–h3) AND the base of every `surface.background:{"type":"tint"}` block** |
+| `text` / `background` | body copy / page background |
+| `header_color` / `header_accent` | top-nav background + accent (emitted raw, no contrast correction) |
+| `dark_mode` (bool) | dark theme |
+
+- **`secondary` is the classic mistake**: it is not a decorative accent. Set it light
+  and every heading goes invisible on a white page.
+- Colors must be **6-digit hex**; the frontend parser rejects 3- and 8-digit forms
+  and silently substitutes its own defaults.
+- **`logo_url` / `favicon_url` are the exception to "stored verbatim"** — they are
+  validated server-side (absolute `https://` required; `data:`/`javascript:`
+  rejected, MIO-2658). Everything else in the blob round-trips unchecked.
+- Theme selection: `branding.dark_mode` + `branding.background` is the reliable
+  lever from the CLI. The frontend also honours `settings.theme.mode`
+  (`light`|`dark`|`custom`) and it **wins** over `branding.dark_mode` — but `theme`
+  is not on the CLI's settings-key allowlist, so it warns (and still sends); don't
+  combine it with `--strict-keys`.
+
+**Navigation `icon` values are two different vocabularies** (MIO-2675), neither
+validated by the CLI:
+
+- `header`/`footer` accept any id from the hub frontend's icon sprite (~205 ids;
+  `ICON_NAMES` in mio-hub `src/components/ui/icon.tsx` is generated alongside
+  `public/icons/sprite.svg` and is authoritative). `icon` is optional — an unknown
+  name drops the icon, not the item. **`info` and `globe` do not exist** (hence the
+  blank glyphs); use `information`/`information-circle` and `earth`/`global`.
+- `mobile` accepts an **8-value whitelist** and `icon` is **mandatory** — an off-list
+  icon drops the whole tab: `Home` `Bell` `User` `Users` `MessageSquare`
+  `MessageCircle` `Search` `content` (frontend component names, not sprite ids;
+  the lowercase `content` is deliberate). Under 3 valid tabs and the frontend
+  replaces the list with its defaults; over 5 and it truncates.
 
 ---
 
