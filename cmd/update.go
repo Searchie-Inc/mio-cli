@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -29,11 +30,15 @@ var selfUpdateRunner = defaultSelfUpdateRunner
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update mio to the latest released version.",
-	Long: `Update mio by running the official release installer.
+	Long: `Update mio to the latest released binary.
 
 By default this installs the latest released mio binary into the directory that
 contains the currently running executable. Use --version to pin a specific
-release, or --prefix to install into a different directory.`,
+release, or --prefix to install into a different directory.
+
+macOS and Linux re-run the official release installer. Windows updates natively
+(download, SHA-256 verify against checksums.txt, then swap the .exe), so no Unix
+shell and no curl are required.`,
 	Example: `  mio update
   mio update --version 0.2.1
   mio update --prefix "$HOME/.local/bin"`,
@@ -78,6 +83,22 @@ func resolveUpdatePrefix(prefix string) (string, error) {
 }
 
 func defaultSelfUpdateRunner(ctx context.Context, opts updateOptions, stdout, stderr io.Writer) error {
+	// Windows has no `sh` (and usually no `curl`), so the shell pipeline below
+	// cannot run there at all — it failed with `exec: "sh": executable file not
+	// found in %PATH%` and the Windows build could never self-update (MIO-2688).
+	// Take the Go-native download+replace path instead. Every other platform
+	// keeps re-running scripts/install.sh unchanged, including the darwin
+	// Gatekeeper mitigation from MIO-2603.
+	if useNativeUpdater(runtime.GOOS) {
+		return runNativeUpdate(ctx, nativeUpdateConfig{
+			Prefix:  opts.Prefix,
+			Version: opts.Version,
+			GOOS:    runtime.GOOS,
+			GOARCH:  runtime.GOARCH,
+			Out:     stdout,
+		})
+	}
+
 	pipeline, err := installerPipeline()
 	if err != nil {
 		return err
