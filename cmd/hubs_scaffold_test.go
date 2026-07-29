@@ -39,6 +39,20 @@ var scaffoldStepNames = []string{
 	"playlists", "pages", "publish", "backend-gated",
 }
 
+// humanScaffold pins a scaffold invocation to the PROSE surface (the plan /
+// end-of-run summary) by asking for `--output table` explicitly.
+//
+// Since MIO-2574 the scaffold's output is FORMAT-DRIVEN like every other
+// command: `table` renders the prose (and is the TTY default), while json and
+// plain render the machine-readable result. runContract drives the command tree
+// with a *bytes.Buffer, which is not a TTY, so the format resolved here is the
+// off-a-TTY default — json. A test asserting on the summary/plan TEXT must
+// therefore say `table`; the tests asserting the machine result pass
+// `--output json` (or rely on that same default) instead.
+func humanScaffold(args []string) []string {
+	return append(args, "--output", "table")
+}
+
 // mutationGuardServer starts a test server that flips *mutated to true on ANY
 // non-GET (mutating) request, so a dry-run can assert it created/changed
 // nothing. GETs (context resolution + the live catalog fetch, answered with the
@@ -56,8 +70,8 @@ func TestScaffold_DryRunEmitsPlanNoMutatingHTTP(t *testing.T) {
 	srv, mutated := mutationGuardServer(t)
 
 	res := runContract(t, scaffoldEnv(t, srv.URL),
-		withTeam("t_team1", "hubs", "scaffold",
-			"--template", "community", "--name", "X", "--slug", "x", "--dry-run")...)
+		humanScaffold(withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--dry-run"))...)
 
 	if res.Code != errs.ExitOK {
 		t.Fatalf("dry-run exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
@@ -1493,8 +1507,8 @@ func TestScaffold_PublishFlagReachesStep8(t *testing.T) {
 	srv, rec := fullScaffoldServer(t)
 
 	res := runContract(t, scaffoldEnv(t, srv.URL),
-		withTeam("t_team1", "hubs", "scaffold",
-			"--template", "community", "--name", "X", "--slug", "x", "--publish")...)
+		humanScaffold(withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--publish"))...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("scaffold --publish exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
@@ -1528,8 +1542,8 @@ func TestScaffold_NoPublishStaysPrivate(t *testing.T) {
 	srv, rec := fullScaffoldServer(t)
 
 	res := runContract(t, scaffoldEnv(t, srv.URL),
-		withTeam("t_team1", "hubs", "scaffold",
-			"--template", "community", "--name", "X", "--slug", "x")...)
+		humanScaffold(withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x"))...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
@@ -1557,7 +1571,7 @@ func TestScaffold_ResumePublishedHubSummaryLive(t *testing.T) {
 	srv, _ := fullScaffoldServerFor(t, "hub_pub", false) // already public
 
 	res := runContract(t, scaffoldEnv(t, srv.URL),
-		withTeam("t_team1", "hubs", "scaffold", "--hub", "hub_pub", "--template", "community")...)
+		humanScaffold(withTeam("t_team1", "hubs", "scaffold", "--hub", "hub_pub", "--template", "community"))...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("resume scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
@@ -1623,8 +1637,8 @@ func TestScaffold_RealRunPrintsSummaryWithSlugAndID(t *testing.T) {
 	srv, _ := fullScaffoldServer(t)
 
 	res := runContract(t, scaffoldEnv(t, srv.URL),
-		withTeam("t_team1", "hubs", "scaffold",
-			"--template", "community", "--name", "X", "--slug", "x")...)
+		humanScaffold(withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x"))...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
@@ -1644,8 +1658,8 @@ func TestScaffold_DryRunPrintsPlanNotSummary(t *testing.T) {
 	srv, _ := mutationGuardServer(t)
 
 	res := runContract(t, scaffoldEnv(t, srv.URL),
-		withTeam("t_team1", "hubs", "scaffold",
-			"--template", "community", "--name", "X", "--slug", "x", "--dry-run")...)
+		humanScaffold(withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--dry-run"))...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("dry-run exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
@@ -1654,6 +1668,253 @@ func TestScaffold_DryRunPrintsPlanNotSummary(t *testing.T) {
 	}
 	if strings.Contains(res.Stdout, "Scaffolded hub") {
 		t.Errorf("dry-run must NOT print the real-run summary; stdout=%q", res.Stdout)
+	}
+}
+
+// ─── MIO-2574: --output json|plain machine-readable result ───────────────────
+//
+// The reported bug: `hubs scaffold … -o json` printed the prose summary, so an
+// agent driving the CLI could not recover the id of the hub it had just created
+// and had to scrape `mio hubs list` out-of-band to find it. These tests pin the
+// fix from the agent's side — parse stdout, read a field — and pin that the
+// prose surface itself did not change.
+
+// decodeSoleJSON decodes stdout as EXACTLY ONE JSON value and fails if anything
+// else is on the stream. This is the "no progress chatter on stdout" assertion:
+// the scaffold is a nine-step pipeline that narrates as it goes, and a single
+// stray note line would break every `mio hubs scaffold … | jq` pipeline. A
+// plain json.Unmarshal would not catch trailing content.
+func decodeSoleJSON(t *testing.T, stdout string) map[string]any {
+	t.Helper()
+	dec := json.NewDecoder(strings.NewReader(stdout))
+	var got map[string]any
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("stdout is not a single JSON object: %v; stdout=%q", err, stdout)
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		t.Fatalf("stdout carries more than the JSON result (progress chatter must go to stderr): trailing=%v err=%v; stdout=%q",
+			trailing, err, stdout)
+	}
+	return got
+}
+
+// TestScaffold_JSONOutputCarriesHubID: `-o json` emits a parseable result whose
+// hub_id is the id of the hub the run just created — the headline of MIO-2574 —
+// along with the rest of what the run learned (slug, path, template, page ids,
+// space ids). Stdout carries the JSON and NOTHING else.
+func TestScaffold_JSONOutputCarriesHubID(t *testing.T) {
+	srv, _ := fullScaffoldServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--output", "json")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold -o json exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	got := decodeSoleJSON(t, res.Stdout)
+	for _, tc := range []struct{ key, want string }{
+		{"hub_id", "hub_new"},           // the field the whole ticket is about
+		{"hub_slug", "my-community"},    // as the create response reported it
+		{"hub_path", "/my-community"},   // host-relative (MIO-2521): no fabricated host
+		{"template_id", "community"},    // which template produced this hub
+		{"homepage_page_id", "res_new"}, // the stub answers every create with res_new
+	} {
+		if got[tc.key] != tc.want {
+			t.Errorf("%s = %v, want %q; result=%v", tc.key, got[tc.key], tc.want, got)
+		}
+	}
+	if got["published"] != false {
+		t.Errorf("published = %v, want false — no --publish, so the hub stays private", got["published"])
+	}
+	if got["dry_run"] != false {
+		t.Errorf("dry_run = %v, want false on a real run", got["dry_run"])
+	}
+
+	// Every template page is listed IN TEMPLATE ORDER with the id this run
+	// minted, so an agent can address a specific page (not just the homepage).
+	pages, _ := got["pages"].([]any)
+	if len(pages) != 3 {
+		t.Fatalf("pages = %v, want the community template's 3 entries", got["pages"])
+	}
+	first, _ := pages[0].(map[string]any)
+	if first["slug"] != "homepage" || first["page_id"] != "res_new" || first["is_homepage"] != true {
+		t.Errorf("pages[0] = %v, want the homepage entry carrying its created page id", first)
+	}
+	// Spaces created by the run carry their ids too.
+	spaces, _ := got["spaces"].([]any)
+	if len(spaces) != 2 {
+		t.Fatalf("spaces = %v, want the community template's 2 entries", got["spaces"])
+	}
+	if s0, _ := spaces[0].(map[string]any); s0["slug"] != "general" || s0["space_id"] != "res_new" {
+		t.Errorf("spaces[0] = %v, want the created space id under its slug", s0)
+	}
+}
+
+// TestScaffold_JSONIsTheOffTTYDefault: with NO --output flag and stdout not a
+// TTY (a pipe — how every agent runs it), the result is JSON. This is the
+// AGENTS.md contract ("piped ⇒ JSON, equivalent to --output json") that every
+// other command honors and that `hubs scaffold` was the sole holdout on.
+func TestScaffold_JSONIsTheOffTTYDefault(t *testing.T) {
+	srv, _ := fullScaffoldServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if got := decodeSoleJSON(t, res.Stdout); got["hub_id"] != "hub_new" {
+		t.Errorf("off-a-TTY default hub_id = %v, want hub_new; result=%v", got["hub_id"], got)
+	}
+}
+
+// TestScaffold_JQSelectsHubID: `--jq .hub_id` yields the bare id — the exact
+// one-liner an agent uses to capture the new hub
+// (HUB_ID=$(mio hubs scaffold … --jq .hub_id)).
+func TestScaffold_JQSelectsHubID(t *testing.T) {
+	srv, _ := fullScaffoldServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--jq", ".hub_id")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold --jq exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if got := strings.TrimSpace(res.Stdout); got != `"hub_new"` {
+		t.Errorf("--jq .hub_id stdout = %q, want %q", got, `"hub_new"`)
+	}
+}
+
+// TestScaffold_PlainOutputEmitsHubID: `-o plain` emits the repo's key=value
+// lines, so `… -o plain | grep ^hub_id=` works without a JSON parser.
+func TestScaffold_PlainOutputEmitsHubID(t *testing.T) {
+	srv, _ := fullScaffoldServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--output", "plain")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold -o plain exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	for _, want := range []string{"hub_id=hub_new\n", "hub_slug=my-community\n", "template_id=community\n"} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Errorf("plain output must contain %q; stdout=%q", want, res.Stdout)
+		}
+	}
+}
+
+// TestScaffold_DryRunJSONPlan: `--dry-run -o json` emits the ordered plan AS
+// DATA. A dry-run that kept printing prose onto a json stdout would break the
+// same `| jq` pipeline the real run now serves.
+func TestScaffold_DryRunJSONPlan(t *testing.T) {
+	srv, mutated := mutationGuardServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--dry-run", "--output", "json")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("dry-run -o json exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if *mutated {
+		t.Errorf("dry-run must fire NO mutating (non-GET) request")
+	}
+
+	got := decodeSoleJSON(t, res.Stdout)
+	if got["dry_run"] != true || got["template_id"] != "community" {
+		t.Errorf("plan result = %v, want dry_run:true + template_id:community", got)
+	}
+	// The same ordered pipeline the prose plan names, with consecutive per-page
+	// `pages` entries collapsed (one plan entry per page, MIO-2672 Task 7).
+	steps, _ := got["steps"].([]any)
+	var names []string
+	for _, s := range steps {
+		m, _ := s.(map[string]any)
+		name, _ := m["step"].(string)
+		if n := len(names); n > 0 && names[n-1] == name {
+			continue
+		}
+		names = append(names, name)
+	}
+	if !reflect.DeepEqual(names, scaffoldStepNames) {
+		t.Errorf("plan steps = %v, want %v (every step, in order)", names, scaffoldStepNames)
+	}
+}
+
+// TestScaffold_TableSummaryUnchanged: the prose summary is byte-for-byte what it
+// always was. MIO-2574 added a machine surface; it must not have edited the
+// human one — this golden is what an operator on a TTY still sees.
+func TestScaffold_TableSummaryUnchanged(t *testing.T) {
+	srv, _ := fullScaffoldServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		humanScaffold(withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x"))...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold -o table exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	want := `Scaffolded hub "my-community" (id hub_new) from template "community".
+  Includes: 2 space(s), 0 playlist(s), 2 onboarding attribute(s), 2 policy(ies), page(s): homepage (homepage), about, faq.
+  State: PRIVATE — the hub is not published yet. Publish with: mio hubs update hub_new --published (or re-run scaffold with --publish).
+  Public URL: <your-hub-frontend-host>/my-community (the API does not return the hub's public URL; substitute your hub frontend host).
+`
+	if res.Stdout != want {
+		t.Errorf("human summary changed.\n got:\n%s\nwant:\n%s", res.Stdout, want)
+	}
+}
+
+// TestScaffold_MidPipelineFailureNamesCreatedHub: scaffold does not roll back,
+// so a step that fails AFTER the hub was created must not lose the id — losing
+// it is the same pain MIO-2574 is about, one exit code over. The id therefore
+// rides the ERROR (which main.go renders into the machine-readable stderr
+// envelope) as well as the operator-facing resume line, and stdout stays empty
+// per the error-path contract.
+func TestScaffold_MidPipelineFailureNamesCreatedHub(t *testing.T) {
+	catBody := catalog21Body(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalogGET(w, r, catBody) {
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hubs"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"hub_partial","type":"hubs","attributes":{"slug":"my-community","is_private":true}}}`))
+		case r.Method == http.MethodPatch:
+			// The blobs step (step 2) dies here — after the hub exists.
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"errors":[{"status":"500","detail":"boom"}]}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"hub_partial","type":"hubs","attributes":{"slug":"my-community","is_private":true}}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	args := withTeam("t_team1", "hubs", "scaffold",
+		"--template", "community", "--name", "X", "--slug", "x", "--output", "json")
+
+	err := executeCLI(t, scaffoldEnv(t, srv.URL), args...)
+	if err == nil {
+		t.Fatal("a failing step must return an error")
+	}
+	if !strings.Contains(err.Error(), "hub_partial") {
+		t.Errorf("the failure must name the created hub so it is not lost; err=%v", err)
+	}
+	if !strings.Contains(err.Error(), `step "blobs"`) {
+		t.Errorf("the failure must name the failing step; err=%v", err)
+	}
+
+	// Same run through the capturing driver: no stdout on the error path (the
+	// json contract stays clean), and the resume command on stderr.
+	res := runContract(t, scaffoldEnv(t, srv.URL), args...)
+	if strings.TrimSpace(res.Stdout) != "" {
+		t.Errorf("the error path must produce no stdout; got %q", res.Stdout)
+	}
+	if !strings.Contains(res.Stderr, "mio hubs scaffold --hub hub_partial") {
+		t.Errorf("stderr must carry the resume command naming the created hub; stderr=%q", res.Stderr)
 	}
 }
 

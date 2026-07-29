@@ -107,6 +107,14 @@ func TestStepPages_OpPathSkipsClientSideWrites(t *testing.T) {
 	if sc.homeDraftVersion != 0 {
 		t.Errorf("homeDraftVersion = %d, want 0 — published_revision must NOT be conflated with a draft version", sc.homeDraftVersion)
 	}
+	// MIO-2574: the op's ROLE-keyed listing is recorded under the template SLUG,
+	// so both apply branches feed the machine-readable result the same way. Only
+	// the unambiguous roles map — the community template gives both secondary
+	// pages the role "secondary", and a wrong id would be worse than none.
+	if sc.pageIDsBySlug["homepage"] != "pg_home" {
+		t.Errorf("pageIDsBySlug[homepage] = %q, want pg_home (the op's role==homepage entry, keyed by slug)",
+			sc.pageIDsBySlug["homepage"])
+	}
 }
 
 // TestStepPages_Op404FallsBackToClientSide: the op is absent (dormant flag or

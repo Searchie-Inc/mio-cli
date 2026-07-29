@@ -197,7 +197,11 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 		// Idempotent re-run: the page is ours, applied, and untouched. Note the
 		// skip; the end-of-run summary already counts it — its "Includes:" page
 		// list is template-derived, so a converged page is reported either way.
+		// Record the id anyway (MIO-2574): a converged page is still a page the
+		// caller asked about, so the machine-readable result reports the REAL id
+		// instead of a null just because this run had nothing left to write.
 		sc.notef("page %q already applied (untouched) — skipping", pp.ref.Slug)
+		sc.recordPageID(pp.ref.Slug, rp.id)
 		return nil
 
 	case actionResumeFull:
@@ -259,6 +263,12 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 		// to the tree PUT below with an empty page id.
 		return errs.New(errs.ExitGeneric, "internal: unhandled recovery action")
 	}
+
+	// Both arms that reach here (create, resumeFull) hold a real page id, so
+	// record it for the machine-readable result (MIO-2574) BEFORE the remaining
+	// writes: a failure in the tree PUT / publish / marker PATCH below still
+	// leaves the id in the context for the recovery path to surface.
+	sc.recordPageID(pp.ref.Slug, pageID)
 
 	// 4. Set the draft tree with the first-set OCC sentinel If-Match: 0 —
 	// correct for BOTH arms that reach here: a just-created page has never had
