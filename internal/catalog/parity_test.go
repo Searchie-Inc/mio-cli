@@ -17,12 +17,19 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
-// pinnedDigest is the catalog digest at the vendored revision (mio-page-catalog
-// @ 5f35b09, catalogVersion 0.12.0, revision 13). If the vendored catalog.json
-// changes, this pin (and the fixtures) must be refreshed together.
+// pinnedDigest is the catalog digest at the vendored revision (the commit in
+// CATALOG_REF). It is an INDEPENDENT third value: TestDigest_MatchesMetaAndPin
+// cross-checks the Go canonicalizer's computed digest, the meta.digest carried
+// inside catalog.json, and this constant, so a re-vendor that swapped the body
+// without refreshing the fixtures cannot pass unnoticed.
+//
+// scripts/update_catalog_pin.sh rewrites exactly this line — it is the only Go
+// source a re-pin touches, which is why it is anchored on its own line and kept
+// free of any other pin metadata.
 const pinnedDigest = "sha256:e5c963249b232535a6b157c9ff561cf00e10e180040e6d9e07b51ba274d09dde"
 
 func fixtureName(id, variant string) string {
@@ -48,6 +55,23 @@ func TestDigest_MatchesMetaAndPin(t *testing.T) {
 	}
 	if computed != c.DigestPinned() {
 		t.Errorf("computed digest %s != vendored meta.digest %s", computed, c.DigestPinned())
+	}
+}
+
+// TestPinnedRef_WellFormed guards the machine-readable half of the pin. The
+// staleness workflow compares CATALOG_REF byte-for-byte against the SHA the
+// GitHub API reports for mio-page-catalog's HEAD; a short ref, a tag name, or a
+// stray "ref: " prefix would make every run look stale forever and open a bump
+// PR a day. Cheap assertion, expensive failure mode.
+func TestPinnedRef_WellFormed(t *testing.T) {
+	ref := PinnedRef()
+	if len(ref) != 40 {
+		t.Fatalf("CATALOG_REF = %q (len %d); want a full 40-char commit SHA", ref, len(ref))
+	}
+	for _, r := range ref {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			t.Fatalf("CATALOG_REF = %q; want lowercase hex only", ref)
+		}
 	}
 }
 

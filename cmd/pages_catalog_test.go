@@ -206,14 +206,25 @@ func TestCatalogSectionTypes_WritableOnly(t *testing.T) {
 	if len(rows) != 7 {
 		t.Errorf("writable section types = %d, want 7", len(rows))
 	}
-	found := false
+	ids := map[string]bool{}
 	for _, r := range rows {
-		if id, _ := r["id"].(string); id == "compact" {
-			found = true
+		if id, _ := r["id"].(string); id != "" {
+			ids[id] = true
 		}
 	}
-	if !found {
+	if !ids["compact"] {
 		t.Error("compact (writable=true as of 0.10.0, MIO-2681) must appear in --writable-only output")
+	}
+	// Retired upstream in 0.11.0 (mio-page-catalog#19); the backend 422s writes
+	// naming them. This is the read path an agent inspects to decide what to
+	// author, and the one path that can still serve the VENDORED copy (--offline
+	// or a failed fetch), so a stale pin here hands an agent phantom options.
+	// Asserting absence by name — not just the count — is what makes a future
+	// re-pin regression name the culprit instead of reporting "7 != 8".
+	for _, retired := range []string{"cta", "text", "video"} {
+		if ids[retired] {
+			t.Errorf("retired section type %q must not appear in --writable-only output", retired)
+		}
 	}
 }
 
@@ -221,6 +232,16 @@ func TestCatalogSectionTypes_AllNine(t *testing.T) {
 	res := runContract(t, offlineEnv(), "pages", "catalog", "section-types", "--offline", "--output", "json")
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+	}
+	// Check the count the name claims: this test previously asserted only that
+	// two ids were present, so the unfiltered listing could have drifted by any
+	// amount without failing.
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(res.Stdout), &rows); err != nil {
+		t.Fatalf("stdout not a JSON array: %v\n%s", err, res.Stdout)
+	}
+	if len(rows) != 9 {
+		t.Errorf("section types = %d, want 9", len(rows))
 	}
 	if !strings.Contains(res.Stdout, `"feature"`) || !strings.Contains(res.Stdout, `"compact"`) {
 		t.Errorf("full section-types list should include both writable and non-writable ids; got %s", res.Stdout)

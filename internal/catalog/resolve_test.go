@@ -47,8 +47,12 @@ func TestResolve_Live200_Valid_AdoptsAndCaches(t *testing.T) {
 	if src != SourceLive {
 		t.Errorf("source = %q, want live", src)
 	}
-	if cat.Meta.CatalogVersion != "0.12.0" {
-		t.Errorf("catalogVersion = %q", cat.Meta.CatalogVersion)
+	// Assert against the vendored copy's own version rather than a literal: this
+	// test proves Resolve ADOPTED the body it was handed, not what today's pin
+	// happens to be (that is parity_test's digest pin). Keeps a re-pin to
+	// catalog.json + fixtures + CATALOG_REF with no unrelated test churn.
+	if want := loadForTest(t).Meta.CatalogVersion; cat.Meta.CatalogVersion != want {
+		t.Errorf("catalogVersion = %q, want %q (the vendored pin)", cat.Meta.CatalogVersion, want)
 	}
 	// Cache must be written for the next invocation.
 	if _, err := os.Stat(filepath.Join(dir, cacheBodyFile)); err != nil {

@@ -24,17 +24,39 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"unicode/utf16"
 )
 
 // vendoredCatalogJSON is the digest-pinned copy of mio-page-catalog/catalog.json
-// at commit 5f35b09 (catalogVersion 0.12.0, revision 13, meta.digest
-// sha256:e5c96324…). It is byte-identical to upstream so its embedded digest
-// verifies (see parity_test.go). Refresh it and the golden fixtures together
-// when bumping the pinned catalog.
+// at the commit recorded in CATALOG_REF. It is byte-identical to upstream so its
+// embedded meta.digest verifies (see parity_test.go).
+//
+// The pinned commit and catalogVersion are deliberately NOT repeated here:
+// CATALOG_REF and the meta block inside catalog.json are the sources of truth.
+// A prose copy of the pin is what let this file claim 0.10.0 through two
+// upstream releases while mio-backend served 0.12.0 (MIO-2741). Read the pin,
+// don't recite it.
+//
+// Re-pin with scripts/update_catalog_pin.sh — it refreshes catalog.json, the
+// golden fixtures, the interpolation corpus, CATALOG_REF and the pinnedDigest
+// constant together, which is the only combination the parity guards accept.
 //
 //go:embed catalog.json
 var vendoredCatalogJSON []byte
+
+// pinnedRefRaw is the mio-page-catalog commit the vendored catalog was taken
+// from. Embedded rather than left as a build-time-only file so the pin is
+// readable at runtime and assertable in tests.
+//
+//go:embed CATALOG_REF
+var pinnedRefRaw string
+
+// PinnedRef returns the upstream mio-page-catalog commit SHA that
+// vendoredCatalogJSON was vendored from. The catalog-pin-staleness workflow
+// compares this against mio-page-catalog's HEAD to decide whether to open a
+// bump PR.
+func PinnedRef() string { return strings.TrimSpace(pinnedRefRaw) }
 
 // Node is a page-builder recipe/tree node. Unknown fields round-trip untouched;
 // numbers are decoded as json.Number so canonicalization is byte-faithful to
