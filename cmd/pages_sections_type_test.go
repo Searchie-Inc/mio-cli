@@ -77,27 +77,31 @@ func TestSectionsCreate_UnknownType_DefersToBackend(t *testing.T) {
 }
 
 func TestSectionsCreate_WritableType_Proceeds(t *testing.T) {
+	// "text" was removed as a section type entirely in catalogVersion 0.12.0
+	// (mio-page-catalog#19, along with cta/video) — use "row" (still
+	// writable=true) so this test exercises the known-writable path rather
+	// than the unknown-type-deferred-to-backend path.
 	var gotType string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		if strings.Contains(string(body), `"type":"text"`) {
-			gotType = "text"
+		if strings.Contains(string(body), `"type":"row"`) {
+			gotType = "row"
 		}
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"data":{"id":"sec_1","type":"sections","attributes":{"type":"text"}}}`))
+		_, _ = w.Write([]byte(`{"data":{"id":"sec_1","type":"sections","attributes":{"type":"row"}}}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
-			"pages", "sections", "create", "page_x", "--type", "text", "--title", "Intro",
+			"pages", "sections", "create", "page_x", "--type", "row", "--title", "Intro",
 		)...)
 
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
 	}
-	if gotType != "text" {
+	if gotType != "row" {
 		t.Errorf("a writable --type must reach the create POST; gotType=%q", gotType)
 	}
 }

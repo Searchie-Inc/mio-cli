@@ -47,7 +47,7 @@ func TestResolve_Live200_Valid_AdoptsAndCaches(t *testing.T) {
 	if src != SourceLive {
 		t.Errorf("source = %q, want live", src)
 	}
-	if cat.Meta.CatalogVersion != "0.10.0" {
+	if cat.Meta.CatalogVersion != "0.12.0" {
 		t.Errorf("catalogVersion = %q", cat.Meta.CatalogVersion)
 	}
 	// Cache must be written for the next invocation.
