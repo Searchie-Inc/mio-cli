@@ -40,11 +40,11 @@ XDG_CONFIG_HOME=$(mktemp -d) go test ./... -race -timeout 120s
 go run ./internal/docsgen/cmd/skilldocs -file cmd/skills/content/mio-skill.md -check
 ```
 
-The first five mirror `.github/workflows/ci.yml`. `skilldocs -check` is **not** a separate CI step — CI covers it through `TestSkillDocIsGeneratedFromCatalog` inside `go test` — but running it directly gives a clearer message than the test failure does.
+The first five mirror `.github/workflows/ci.yml`. `skilldocs -check` is **not** a separate CI step — CI covers it through `TestSkillDocIsGeneratedFromCatalog` inside `go test`, and that test's message is the more useful of the two: it names *which* generated block went stale, where `-check` only reports that the file doesn't match.
 
 CI installs golangci-lint with `go install …@v2.12.2` rather than using a release binary — prebuilt binaries refuse to lint a project targeting a newer Go.
 
-`skilldocs -check` reports up-to-date without writing. To regenerate after a catalog re-pin: `go generate ./...` (directive at `cmd/skills.go:31`). `TestSkillDocIsGeneratedFromCatalog` turns a forgotten regen into a build failure instead of silent doc rot.
+`skilldocs -check` reports up-to-date without writing. To regenerate after a catalog re-pin: `go generate ./...` (directive at `cmd/skills.go:31`). `TestSkillDocIsGeneratedFromCatalog` turns a forgotten regen into a red test instead of silent doc rot — `go build` stays green with a stale doc, so the suite is what catches it.
 
 ## 3. Environmental hazards
 
@@ -128,7 +128,9 @@ python3 -c "import json;print(json.load(open('internal/catalog/catalog.json'))['
 
 Re-pin with `scripts/update_catalog_pin.sh --catalog-repo ../mio-page-catalog [--ref <sha>]` — never by hand. It moves all five artifacts together (`catalog.json`, the golden fixtures, the interpolation corpus, `CATALOG_REF`, and `pinnedDigest` in `parity_test.go`); doing it by hand is what let the CLI sit on 0.10.0 while the backend served 0.12.0. Then run `go generate ./...`.
 
-`.github/workflows/catalog-pin-staleness.yml` watches this daily at 06:15 UTC. It self-gates on `SIBLING_APP_CLIENT_ID` + `SIBLING_APP_PRIVATE_KEY`; **without them it reports success while skipping every step**, which is precisely how the drift went unnoticed. If you touch it, confirm the steps actually ran.
+`.github/workflows/catalog-pin-staleness.yml` watches this daily at 06:15 UTC. It self-gates on `SIBLING_APP_CLIENT_ID` + `SIBLING_APP_PRIVATE_KEY`: without them, step 2 warns and exits 0 while every later step is skipped, so **the job goes green having done nothing**.
+
+That failure mode is not theoretical — mio-backend's equivalent watcher ran that way for weeks with the credentials unprovisioned, reporting success on every run. (This repo's own watcher arrived later, as part of the fix in #79; before it there was simply nothing watching, and the pin lived only in a Go comment.) Both hazards are the same lesson: **if you touch this workflow, confirm the steps actually ran** — a green check-mark here is not evidence.
 
 ## 6. State
 

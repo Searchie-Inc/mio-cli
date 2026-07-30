@@ -37,18 +37,20 @@ build_prompt > "$PROMPT_FILE"              # you assemble this: repo-context blo
 [ -s "$PROMPT_FILE" ] || { echo "ABORT: empty prompt — not a verdict"; exit 1; }
 
 timeout "$CODEX_TIMEOUT" codex exec -m gpt-5.6-sol -c model_reasoning_effort="xhigh" \
-  --sandbox read-only -C "$(pwd)" - < "$PROMPT_FILE"
+  --sandbox read-only -C "$(pwd)" - < "$PROMPT_FILE" 2>&1
 ```
 
 **Prove the prompt is non-empty before the call.** An empty `PROMPT_FILE` is caught by Codex itself — it prints `No prompt provided via stdin.` and exits **1** (measured on v0.145.0) — so this guard buys a clear abort rather than a rescue. The guard that genuinely matters is the one on the **diff file** in the fallback path below, where the prompt is valid and only the *content* is empty: Codex has nothing to object to, reviews nothing, and returns an APPROVE.
 
-Resume the same session for follow-up rounds (preserves context, no diff re-upload):
+Resume the same session for follow-up rounds (preserves context, no diff re-upload). **Run it from the repo root** — `resume` takes no `-C`, and outside a trusted directory it fails with `Not inside a trusted directory and --skip-git-repo-check was not specified.` (exit 1):
 
 ```bash
 echo "Round 2 — fixes applied: ..." | timeout "$CODEX_TIMEOUT" codex exec resume --last \
-  -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -c sandbox_mode="read-only" -
+  -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -c sandbox_mode="read-only" - 2>&1
 git status --porcelain   # confirm Codex wrote nothing
 ```
+
+Capture **stderr** on every call (`2>&1`): the run header, the quota banner and the credits error all go to stderr, and stdout can be entirely empty on a failed round. Reading stdout alone makes a hard failure look like a quiet success.
 
 | Flag | Purpose |
 |---|---|
@@ -69,9 +71,9 @@ codex exec --full-auto --sandbox read-only  -> approval: never  sandbox: workspa
 codex exec --sandbox read-only --full-auto  -> approval: never  sandbox: workspace-write [workdir, /tmp, $TMPDIR]
 ```
 
-It does print `warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.` — but that warning says nothing about it beating an explicit `--sandbox read-only`, which is the part that matters and the part that is easy to read past.
+It does print a deprecation warning — ``warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.`` — but that warning says nothing about it beating an *explicit* `--sandbox read-only`, which is the part that matters and the part that is easy to read past.
 
-This skill carried `--full-auto --sandbox read-only` until MIO-2836, so every review this repo has ever run gave Codex **write access to the working tree** while claiming a read-only guarantee. `--full-auto` buys nothing — autonomy comes from `exec`'s approval policy, not from the sandbox mode. If you find yourself re-adding it because "Codex isn't reading files", the cause is a missing `bubblewrap`, not the sandbox mode (see **Reliability** below).
+This skill carried `--full-auto --sandbox read-only` until MIO-2836, so every review this repo has ever run gave Codex **write access to the working tree** while claiming a read-only guarantee. `--full-auto` buys nothing — autonomy comes from `exec`'s approval policy (`never`), not from the sandbox mode. If you find yourself tempted to re-add it because "Codex isn't reading files", diagnose the actual stall first (see **Reliability** below); write access is never the fix for a read problem.
 
 Confirm the header of any run you start: it must print `sandbox: read-only`.
 
@@ -113,13 +115,15 @@ On a `124`, first retry once — a hang is usually the sandbox doing many file r
 If it still hangs, fall back to a single pre-captured diff file and tell Codex to read **only** that file:
 
 ```bash
-BASE=${BASE:?set BASE to the base ref first}          # unset -> "..HEAD" resolves to HEAD..HEAD -> EMPTY diff
+BASE=${BASE:?set BASE to the base ref first}          # unset -> "...HEAD" resolves to HEAD...HEAD -> EMPTY diff
 DIFF_FILE=$(mktemp -t codex-review.XXXXXX.diff)
 git diff "$BASE"...HEAD > "$DIFF_FILE"
 [ -s "$DIFF_FILE" ] || { echo "ABORT: empty diff — inconclusive, NOT an approval"; exit 1; }
 ```
 
-**Both guards are load-bearing, and this is the dangerous path.** With `BASE` unset, `git diff "$BASE"..HEAD` resolves to `HEAD..HEAD`, writes a **0-byte file, and exits 0** (measured). Codex then receives a perfectly valid prompt pointing at an empty file, has nothing to object to, and returns an APPROVE having reviewed nothing. Unlike an empty *prompt* — which Codex rejects with exit 1 — an empty *diff* fails completely silently. That is a gate that cannot fail, in the fallback path taken exactly when the gate is under most stress.
+**Both guards are load-bearing, and this is the dangerous path.** With `BASE` unset or empty, `git diff "$BASE"...HEAD` collapses to `HEAD...HEAD` and writes a **0-byte file, exit 0** — measured for all four combinations of unset/empty × `..`/`...`. Codex then receives a perfectly valid prompt pointing at an empty file. Unlike an empty *prompt*, which Codex rejects outright with exit 1, an empty *diff* gives it nothing to object to: the expected result is a confident APPROVE over no content. That is a gate that cannot fail, in the fallback path taken exactly when the gate is under most stress.
+
+(The 0-byte-and-exit-0 half is measured. That Codex then returns APPROVE is inference — the workspace is out of credits, so no round can complete to confirm it. The guard is warranted either way: an empty diff is inconclusive, never an approval.)
 
 This mode is narrower — Codex sees the changed lines but not the surrounding code or tests — so **say in the report that the round saw the diff only**. If even that times out, the round is **inconclusive**: surface it, do not force-approve.
 
@@ -151,7 +155,7 @@ Codex needs a passing build to give useful signal. Before Round 1, confirm all g
 ```bash
 go build ./...            # compiles
 go vet ./...              # vet clean
-gofmt -l cmd internal     # prints nothing
+gofmt -l .                # prints nothing — `.`, not `cmd internal`: CI checks root main.go too
 golangci-lint run ./...   # 0 issues (v2.12.2 — same as CI)
 go test ./... -race -timeout 120s
 ```
@@ -182,8 +186,8 @@ Fixed:
 Deferred:
 - [Low] <desc> — tracked as follow-up
 Please re-review and issue a new verdict." | timeout "$CODEX_TIMEOUT" codex exec resume --last \
-  -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -
-git status --porcelain   # resume runs workspace-write; confirm Codex wrote nothing
+  -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -c sandbox_mode="read-only" -
+git status --porcelain   # belt-and-braces; must be clean
 ```
 
 Loop until **APPROVE** or the 3-round cap.
@@ -324,7 +328,7 @@ Triage findings exactly as for Codex (Critical → fix now with a regression tes
 
 ## When NOT to use
 
-- Documentation-only or formatting-only changes — skip it.
+- Prose-only or formatting-only changes — skip it. **But `AGENTS.md`, `llms.txt`, `cmd/skills/content/mio-skill.md` and `.claude/skills/**` are not prose** — agents execute them literally, so a wrong command or a false claim in them is a runtime defect and gets the full gate. This is not hypothetical: the review of *this very skill* found a fallback command that silently handed the reviewer an empty diff, and a resume invocation that ran with write access while the file three sections up asserted read-only. Both would have shipped under a docs-only exemption.
 - Trivial renames/refactors — skip it.
 - Build/tests failing — fix those first; Codex needs green gates for useful signal.
 - The user says "skip Codex" — honor it.
@@ -358,5 +362,5 @@ Triage findings exactly as for Codex (Critical → fix now with a regression tes
 - [ ] **Every guard added or changed this round mutation-tested** — implementation broken, guard observed failing by name, mutation reverted (`.claude/rules/verifying-guards.md`)
 - [ ] After any non-trivial rebase, at least one mutation re-run — auto-merge can silently produce an unfailable test with nobody writing one
 - [ ] Important findings fixed or explicitly deferred with justification
-- [ ] Round 2+ used `codex exec resume --last`
+- [ ] Round 2+ used `codex exec resume --last` **with `-c sandbox_mode="read-only"`**, run from the repo root, stderr captured
 - [ ] Final verdict APPROVE (or escalated at the 3-round cap); fixes committed
