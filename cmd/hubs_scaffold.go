@@ -1146,6 +1146,14 @@ func stepWelcomePost(sc *scaffoldContext, t *catalog.HubTemplate) error {
 		// key), so this is the branch every real run takes today. The CLI holds no
 		// templates (spec §0) and must not invent post copy, so the step converges
 		// to a clean no-op rather than posting something nobody authored.
+		//
+		// This branch is also where a MIS-SPELLED or not-yet-ratified key lands
+		// (MIO-2812 — `welcomePost` is CLI-defined vocabulary that the catalog
+		// schema accepts only via additionalProperties:true, so it can catch
+		// neither a typo nor a rename). It records a plan-VISIBLE entry rather
+		// than skipping quietly precisely because that is the only signal
+		// available: an operator seeing "no welcome post in template" against a
+		// template they believe declares one has their answer.
 		return sc.step("welcome-post", "no welcome post in template", func() error { return nil })
 	}
 	// Strip once, here, so the plan detail, the pre-check and the POST body all

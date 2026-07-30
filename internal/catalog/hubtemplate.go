@@ -116,16 +116,31 @@ const DiscussionTitleMaxCP = 280
 // extra="forbid"); notably there is no author field, because the author is
 // derived server-side from the caller's credentials.
 //
-// NOT RATIFIED CATALOG VOCABULARY (read this before relying on the key name).
-// `welcomePost` does not appear in mio-page-catalog's catalog.schema.json —
-// $defs/hubTemplate declares no such property, nothing in that repo mentions it,
-// and neither the TS reference applier nor the backend's W2b
-// scaffold-from-template op implements it. It parses today only because
-// $defs/hubTemplate is additionalProperties:true. A catalog-side ticket to
-// ratify the shape is being filed off the MIO-2558 review; if it lands with a
-// different key or field spelling, BOTH this parser and stepWelcomePost must
-// move with it, or the step silently no-ops forever (which is also why the
-// no-declaration branch is a plan-VISIBLE entry rather than a silent skip).
+// NOT RATIFIED CATALOG VOCABULARY — MIO-2812 (read this before relying on the
+// key name or the field spellings). `welcomePost` does not appear in
+// mio-page-catalog's catalog.schema.json — $defs/hubTemplate declares no such
+// property, nothing in that repo mentions it, and neither the TS reference
+// applier nor the backend's W2b scaffold-from-template op implements it. It
+// parses today only because $defs/hubTemplate is additionalProperties:true, i.e.
+// the CLI defined this vocabulary unilaterally and the schema is not in a
+// position to disagree. MIO-2812 asks the catalog owners to ratify it.
+//
+// Both failure modes are SILENT, which is the whole reason this is worth a
+// ticket rather than a TODO:
+//
+//   - if the ratified spec lands with a different name or shape (`welcome_post`,
+//     the block nested under spaces[], `body` renamed), this parser sees no
+//     `welcomePost` key, the step takes its no-declaration branch, and the post
+//     simply never appears — nothing errors, nothing warns;
+//   - additionalProperties:true also means the schema cannot catch a TYPO, so a
+//     template author who writes `welcomepost` gets neither a validation error
+//     from the catalog nor a post from the scaffold.
+//
+// The one mitigation available here is that the no-declaration branch records a
+// plan-VISIBLE entry ("no welcome post in template") rather than skipping
+// silently, so `--dry-run` at least shows an operator that the step ran and
+// found nothing to do. When MIO-2812 lands, BOTH this parser and stepWelcomePost
+// move with it.
 //
 // Title/Body are LITERAL: {{hub_name}}/{{hub_slug}} interpolation is a closed
 // contract whose scanned locations are exhaustively specified (MIO-2573 §4.3:
@@ -134,7 +149,10 @@ const DiscussionTitleMaxCP = 280
 // shared corpus. A welcome post is not one of those locations, so a token here
 // would be stored verbatim — exactly like the equally literal spaces[].name,
 // playlists[].title and policies[].content. Widening §4.3 is a catalog-spec
-// change, not something the CLI may do unilaterally.
+// change, not something the CLI may do unilaterally — which is why "should
+// title/body join the §4.3 set?" is an open question ON MIO-2812 with this
+// reasoning recorded as the CLI's position, not a decision taken here. If the
+// catalog owners say yes, interpolating them is a follow-up on this repo.
 type TemplateWelcomePost struct {
 	Space, Title, Body string
 	// Published mirrors the endpoint's is_published, whose server-side default is
