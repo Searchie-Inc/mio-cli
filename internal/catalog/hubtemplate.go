@@ -281,8 +281,9 @@ func parseHubTemplate(n Node) HubTemplate {
 // "home"), a valid privacy on every page, every pageTemplate resolving to a
 // page template in c, and exactly one homepage; space/onboarding slugs unique
 // and non-empty with enum-valid attributes; an optional welcomePost whose title
-// clears the endpoint's own reject conditions (non-blank, NUL-free, ≤280 raw
-// code points), whose body is NUL-free, and whose space slug names one of this
+// clears the endpoint's own reject conditions (non-blank, NUL-free, and ≤280
+// code points measured on the STRIPPED title — what the scaffold actually posts),
+// whose body is NUL-free, and whose space slug names one of this
 // template's own spaces; every policies value an object
 // whose fields are within hubPolicyFieldKeys (a typo must fail preflight, not
 // silently reset policy content); playlist titles non-empty and keys unique

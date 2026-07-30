@@ -2180,6 +2180,87 @@ func TestStepWelcomePost_TruncatedWalkFailsRatherThanDuplicating(t *testing.T) {
 	}
 }
 
+// TestStepWelcomePost_RepeatedCursorFailsRatherThanDuplicating: a server that
+// hands back the SAME cursor instead of advancing has not shown us every row.
+// Breaking out as "no match" would create a duplicate, so it must fail — the same
+// treatment the null-cursor envelope gets. Unlike that one this is defence in
+// depth (no backend path is known to repeat a cursor), but it is one of the two
+// exits an earlier revision left falling through to a create.
+func TestStepWelcomePost_RepeatedCursorFailsRatherThanDuplicating(t *testing.T) {
+	var posts, lists int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodPost:
+			posts++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"disc_dupe","type":"discussions","attributes":{}}}`))
+		case strings.HasSuffix(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(oneSpaceBody))
+		default:
+			// Always the same cursor, page after page.
+			lists++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"disc_other","type":"discussions","attributes":{"title":"Chatter","space_id":"sp_gen"}}],` +
+				`"meta":{"has_more":true,"next_cursor":"stuck"}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	err := stepWelcomePost(sc, templateWithWelcomePost())
+	if err == nil {
+		t.Fatal("a non-advancing cursor must fail the step, not fall through to a create")
+	}
+	if posts != 0 {
+		t.Errorf("POSTs = %d, want 0", posts)
+	}
+	if lists > 3 {
+		t.Errorf("list GETs = %d, want the walk to stop as soon as the cursor repeats", lists)
+	}
+	// The recovery must name the hand-create path: re-running cannot help, since
+	// the condition is the server's, not this run's.
+	if !strings.Contains(err.Error(), "mio community discussions create") {
+		t.Errorf("error = %v, want it to name the hand-create recovery", err)
+	}
+}
+
+// TestStepWelcomePost_ScanErrorsNameTheRecoveryThatWorks: every incomplete-scan
+// error must point at creating the post by hand, NOT at re-running. The
+// conditions are persistent — stored data or a server bug — so a re-run fails
+// identically; a hand-created post is the newest discussion, so the next scan
+// finds it on page 1 (list_for_hub is id DESC over UUIDv7) and adopts it.
+func TestStepWelcomePost_ScanErrorsNameTheRecoveryThatWorks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if strings.HasSuffix(r.URL.Path, "/spaces") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(oneSpaceBody))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[],"meta":{"has_more":true,"next_cursor":null}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	err := stepWelcomePost(sc, templateWithWelcomePost())
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"mio community discussions create", "adopts it"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to contain %q", err, want)
+		}
+	}
+	// A malformed envelope is an UPSTREAM fault, not a local one — exit 7, so a
+	// caller can tell it apart from a usage error without parsing prose.
+	if got := errs.CodeOf(err); got != errs.ExitServer {
+		t.Errorf("exit code = %d, want %d (ExitServer — the server's envelope is unusable)", got, errs.ExitServer)
+	}
+}
+
 // TestStepWelcomePost_AdoptsMemberAuthoredPaddedTitle pins the one place the
 // pre-check is deliberately WIDER than server equality: the stored title is
 // compared stripped as well as the template's.

@@ -1129,6 +1129,15 @@ func stepPublish(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 // never matches its own earlier post, and EVERY resume posts another copy — the
 // exact failure this pre-check exists to prevent.
 //
+// strings.TrimSpace is NOT exactly Python's str.strip(): they agree on every
+// ordinary whitespace character, but Python also strips the C0 separators
+// U+001C-U+001F, which Go's unicode.IsSpace does not. A title padded with those
+// would be sent by us with them and stored by the server without, so the
+// comparison would never match and each resume would duplicate. Not chased: no
+// plausible authored template contains a file/group/record/unit separator, and
+// the alternative — hand-rolling Python's whitespace table in Go — is a worse
+// bet than this note.
+//
 // The scan reads the admin list UNFILTERED and matches space_id client-side
 // rather than passing filter[space_id]. That looks like the more expensive
 // choice and is the correct one: the filtered branch runs through
@@ -1282,25 +1291,41 @@ func discussionSoftDeleted(r client.Resource) bool {
 // the separate reader below. page[size] is asked at the backend's clamp ceiling
 // (100) to bound the walk.
 //
-// TRUNCATION IS AN ERROR, NOT AN END-OF-LIST. _list_response computes
+// AN INCOMPLETE SCAN IS AN ERROR, NOT AN END-OF-LIST. Only ONE way out of the
+// loop means "I saw every row": the server said there is no next page. Every
+// other exit means the walk stopped early, and because the sole caller CREATES a
+// discussion when this returns no match, returning (nil, nil) from any of them
+// converts "I could not finish looking" into "it is not there" and lands a
+// duplicate welcome post. All three therefore return an error:
+//
+//   - meta.has_more true with no meta.next_cursor (see discussionsNextCursor);
+//   - a repeated cursor — the server is not advancing;
+//   - maxPages exhausted.
+//
+// The first is the one the backend can actually emit today; the other two are
+// defence in depth. An earlier revision guarded only the first and left the other
+// two breaking to (nil, nil) — i.e. it hardened the exit the server cannot reach
+// and left the two it can, which is precisely the outcome this comment says must
+// never happen.
+//
+// On the truncation case specifically: _list_response computes
 // `has_more = len(discussions) == page_size` independently of the cursor, while
 // _build_cursor returns None when the page's LAST row has a NULL
-// last_activity_at — so {has_more: true, next_cursor: null} is a producible
-// envelope that means "there are more pages and I cannot give you one". Reading
-// that as end-of-list would return "no match" and the caller would POST a second
-// welcome post; refusing outright is strictly better, because a failed scaffold
-// is recoverable by re-running and a duplicate welcome post is not.
+// last_activity_at, so {has_more: true, next_cursor: null} is a producible
+// envelope meaning "there are more pages and I cannot give you one". It needs a
+// NULL last_activity_at, and no writer in app/ produces one today
+// (repositories/discussions.py::insert is the only Discussion(...) construction
+// and always sets it; update_last_activity takes a non-optional value) — but the
+// column is nullable with no server default and the backend's own readers COALESCE
+// it defensively for legacy rows.
 //
-// An earlier revision of this comment dismissed the case as unreachable "for
-// anything this CLI could have posted". That reasoning was wrong twice over: the
-// truncating row is whichever row lands LAST on a page, not the welcome post, and
-// last_activity_at is nullable with no server default (the backend's own readers
-// COALESCE it defensively for legacy rows). Worth noting the exposure GREW when
-// this walk moved off filter[space_id]: list_for_space sorts -last_activity,
-// where Postgres puts NULLs first and the keyset excludes them from page 2 on, so
-// truncation needed ~a full page of NULL rows in one space; list_for_hub orders
-// by id DESC with no NULL predicate, so ONE such row at any page boundary
-// anywhere in the hub ends the walk.
+// An earlier revision dismissed that case as unreachable "for anything this CLI
+// could have posted". Wrong twice over: the truncating row is whichever row lands
+// LAST on a page, not the welcome post, and the exposure GREW when this walk moved
+// off filter[space_id] — list_for_space sorts -last_activity, where Postgres puts
+// NULLs first and the keyset excludes them from page 2 on, so truncation needed ~a
+// full page of NULL rows in one space; list_for_hub orders by id DESC with no NULL
+// predicate, so ONE such row at any page boundary anywhere in the hub ends the walk.
 func (sc *scaffoldContext) findDiscussionByTitle(spaceID, title string) (*client.Resource, error) {
 	seen := map[string]bool{}
 	cursor := ""
@@ -1329,14 +1354,37 @@ func (sc *scaffoldContext) findDiscussionByTitle(spaceID, title string) (*client
 		if nerr != nil {
 			return nil, nerr
 		}
-		if next == "" || seen[next] {
-			break // no more pages, or a repeated cursor (buggy server) — stop
+		if next == "" {
+			return nil, nil // the ONLY complete-scan exit: the server has no next page
+		}
+		if seen[next] {
+			return nil, errs.New(errs.ExitServer,
+				"discussions list: the server repeated pagination cursor %q instead of advancing, so the scan "+
+					"cannot be completed; refusing to continue rather than risk creating a duplicate welcome post. %s",
+				next, welcomePostScanRecovery)
 		}
 		seen[next] = true
 		cursor = next
 	}
-	return nil, nil
+	return nil, errs.New(errs.ExitGeneric,
+		"discussions list: gave up after %d pages without reaching the end of the hub's discussions, so the scan "+
+			"cannot be completed; refusing to continue rather than risk creating a duplicate welcome post. %s",
+		maxPages, welcomePostScanRecovery)
 }
+
+// welcomePostScanRecovery is the operator-facing tail shared by every
+// incomplete-scan error. Re-running is NOT the recovery for these: the conditions
+// are persistent (a null last_activity_at at a page boundary is stored data, a
+// non-advancing cursor is a server bug), so every re-run fails identically and
+// there is no flag to skip the step.
+//
+// Posting by hand works because of the ordering: list_for_hub is id DESC over
+// UUIDv7 ids, i.e. newest first, so a just-created discussion is row 1 of page 1
+// and the next scan adopts it long before reaching whatever boundary broke the
+// walk. Every other scaffold step is idempotent, so re-running afterwards is safe.
+const welcomePostScanRecovery = "Create the welcome post by hand with " +
+	"`mio community discussions create --hub <hub> --space-id <space> --title <title>` and re-run the scaffold: " +
+	"it is the newest discussion, so the next scan finds it on the first page and adopts it instead of posting again."
 
 // discussionsNextCursor reads the admin discussions list's own pagination
 // envelope: a top-level meta.next_cursor gated by meta.has_more (NOT the
@@ -1347,14 +1395,22 @@ func (sc *scaffoldContext) findDiscussionByTitle(spaceID, title string) (*client
 // findDiscussionByTitle. Returning "" there would silently convert "I have more
 // pages but cannot address them" into "that was everything", and the one caller
 // creates a discussion when it finds nothing.
+//
+// ExitServer (7) rather than ExitGeneric: the request succeeded and the server
+// answered with an envelope that contradicts itself, which is an upstream fault,
+// not an unexpected local one. Note 7 is documented as "upstream server error
+// (5xx)" and this arrives on a 200 — a deliberate widening to "the upstream's
+// response is unusable", chosen because main.go's exitToStatus renders BOTH codes
+// as "500" in the stderr envelope, so the exit code is the only signal that
+// distinguishes them and 7 is the one that says "not your input".
 func discussionsNextCursor(col *client.Collection) (string, error) {
 	hasMore, present := col.Meta["has_more"].(bool)
 	cur, _ := col.Meta["next_cursor"].(string)
 	if present && hasMore && cur == "" {
-		return "", errs.New(errs.ExitGeneric,
+		return "", errs.New(errs.ExitServer,
 			"discussions list: the server reports more pages (meta.has_more=true) but returned no meta.next_cursor, "+
 				"so the scan cannot be completed; refusing to continue rather than risk creating a duplicate welcome post "+
-				"(this happens when the last row of a page has a null last_activity_at)")
+				"(the last row of a page has a null last_activity_at). %s", welcomePostScanRecovery)
 	}
 	if present && !hasMore {
 		return "", nil

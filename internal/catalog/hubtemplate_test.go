@@ -189,9 +189,13 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 				Title: strings.Repeat("é", DiscussionTitleMaxCP+1), // multi-BYTE, single code point each
 			}
 		}},
-		{"welcomePost title over the cap once stripped", func(h *HubTemplate) {
-			// Whitespace does not buy headroom: the padding is stripped before the
-			// count, so this is 281 counted characters, not 279 plus two spaces.
+		{"welcomePost over-cap title survives padding", func(h *HubTemplate) {
+			// Padding an already-over-cap title does not sneak it past the check.
+			// NOTE this case cannot discriminate stripped-vs-raw measurement and no
+			// reject case can: stripped length is always ≤ raw, so anything that is
+			// over the cap stripped is over it raw too. Only the ACCEPT side can tell
+			// them apart — TestHubTemplateWelcomePost_TitleLengthIsCodePointsNotBytes
+			// owns that, and this case is here for the plain behaviour only.
 			h.WelcomePost = &TemplateWelcomePost{
 				Space: h.Spaces[0].Slug,
 				Title: " " + strings.Repeat("a", DiscussionTitleMaxCP+1) + " ",
