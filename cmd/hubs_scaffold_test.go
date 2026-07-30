@@ -1014,12 +1014,18 @@ func TestStepPolicies_NoGateWhenNothingDeclaresEnabled(t *testing.T) {
 	}
 }
 
-// TestStepPolicies_UnanimousFalseDisablesGate: an explicit, unanimous
-// `enabled:false` is a real declaration — enforcement OFF — and IS applied. Only
-// the ABSENCE of any declaration leaves the gate untouched.
-func TestStepPolicies_UnanimousFalseDisablesGate(t *testing.T) {
-	cl, paths, bodies := policyStepServer(t)
+// TestStepPolicies_UnanimousFalseSkipsTheGateLoudly: the gate write is
+// ENABLE-ONLY. The ratified applier contract (mio-page-catalog
+// catalog.schema.json) requires PATCH .../policies/gate "when enabled is true"
+// and says nothing about false, and acting on a false anyway would make every
+// resume of such a template DISABLE enforcement an operator turned on by hand —
+// the mirror of the reason an undeclared gate is left alone. Skipping is not
+// silent: it is narrated, and it names the verb that actually disables one.
+func TestStepPolicies_UnanimousFalseSkipsTheGateLoudly(t *testing.T) {
+	cl, paths, _ := policyStepServer(t)
+	var notes bytes.Buffer
 	sc := newStepSC(cl, "hub_1", "acme")
+	sc.noteW = &notes
 	tmpl := &catalog.HubTemplate{
 		ID: "community",
 		Policies: map[string]any{
@@ -1030,11 +1036,39 @@ func TestStepPolicies_UnanimousFalseDisablesGate(t *testing.T) {
 	if err := stepPolicies(sc, tmpl); err != nil {
 		t.Fatalf("stepPolicies: %v", err)
 	}
-	if len(*paths) != 3 || !strings.HasSuffix((*paths)[2], "/policies/gate") {
-		t.Fatalf("want a trailing gate PATCH, got %v", *paths)
+	for _, p := range *paths {
+		if strings.HasSuffix(p, "/policies/gate") {
+			t.Errorf("a declared enabled:false must NOT write the gate; got %v", *paths)
+		}
 	}
-	if gate := decodeHubAttrs(t, (*bodies)[2]); gate["enabled"] != false {
-		t.Errorf("gate PATCH body = %v, want enabled:false", gate)
+	if sc.policyGate != nil {
+		t.Errorf("sc.policyGate = %v, want nil — the result reports what was WRITTEN", *sc.policyGate)
+	}
+	for _, want := range []string{"enforcement gate NOT written", `"enabled": false`, "hubs policies gate"} {
+		if !strings.Contains(notes.String(), want) {
+			t.Errorf("skip note must contain %q; notes=%q", want, notes.String())
+		}
+	}
+}
+
+// TestStepPolicies_NoDeclarationSaysSo: the other skip case is narrated too, and
+// says something DIFFERENT — "no policy declares enabled" and "the template
+// declares false" are genuinely different situations, and conflating them into
+// one silence is how this bug hid for a release.
+func TestStepPolicies_NoDeclarationSaysSo(t *testing.T) {
+	cl, _, _ := policyStepServer(t)
+	var notes bytes.Buffer
+	sc := newStepSC(cl, "hub_1", "acme")
+	sc.noteW = &notes
+	tmpl := &catalog.HubTemplate{
+		ID:       "community",
+		Policies: map[string]any{"terms": map[string]any{"content": "TOS body"}},
+	}
+	if err := stepPolicies(sc, tmpl); err != nil {
+		t.Fatalf("stepPolicies: %v", err)
+	}
+	if !strings.Contains(notes.String(), `no policy declares "enabled"`) {
+		t.Errorf("the no-declaration case must say so on stderr; notes=%q", notes.String())
 	}
 }
 
@@ -1155,28 +1189,66 @@ func TestScaffoldResult_PolicyGateThreeStates(t *testing.T) {
 	}
 }
 
-// TestTemplatePolicyFields_AllConsumed is the guard that would have caught this
-// bug at build time: every field the PREFLIGHT allow-list accepts
-// (catalog.HubPolicyFieldKeys — which has carried "enabled" since the 2.1
-// artifact) must have a CONSUMER here, and this file must not claim to consume
-// a field preflight would reject. `enabled` sat on one side of that pair alone
-// for a whole release, which is exactly how a hub's ToS came to be written and
-// never enforced.
-func TestTemplatePolicyFields_AllConsumed(t *testing.T) {
-	accepted := catalog.HubPolicyFieldKeys()
-	for _, f := range accepted {
-		if !policyFieldConsumers[f] {
-			t.Errorf("catalog accepts policy field %q at preflight but nothing in cmd consumes it — it would be silently dropped (MIO-2567)", f)
-		}
+// policyFieldProbes gives each catalog-accepted policy field a value that, when
+// it is the ONLY thing a policy declares, must change what the scaffold sends.
+// Adding a field to catalog.HubPolicyFieldKeys without adding a probe here fails
+// the guard below by name.
+var policyFieldProbes = map[string]any{
+	"content":            "PROBE CONTENT",
+	"require_acceptance": true,
+	"required":           true,
+	"enabled":            true,
+}
+
+// recordPolicyStepRequests drives the REAL stepPolicies against a recording
+// server with a single `terms` policy carrying val, and returns the requests it
+// produced as comparable strings.
+func recordPolicyStepRequests(t *testing.T, val map[string]any) []string {
+	t.Helper()
+	cl, paths, bodies := policyStepServer(t)
+	sc := newStepSC(cl, "hub_1", "acme")
+	sc.noteW = io.Discard
+	if err := stepPolicies(sc, &catalog.HubTemplate{
+		ID: "community", Policies: map[string]any{"terms": val},
+	}); err != nil {
+		t.Fatalf("stepPolicies(%v): %v", val, err)
 	}
-	acceptedSet := map[string]bool{}
-	for _, f := range accepted {
-		acceptedSet[f] = true
+	out := make([]string, 0, len(*paths))
+	for i, p := range *paths {
+		out = append(out, p+" "+string((*bodies)[i]))
 	}
-	for f := range policyFieldConsumers {
-		if !acceptedSet[f] {
-			t.Errorf("cmd consumes policy field %q but preflight rejects it — a template carrying it never reaches the step", f)
+	return out
+}
+
+// TestTemplatePolicyFields_EachOneChangesTheRequests is the guard that would
+// have caught MIO-2567 at build time — and it asserts BEHAVIOUR, not
+// membership.
+//
+// The obvious version of this test compares the catalog's allow-list against a
+// second hand-maintained "consumed" list. That version is worthless: the
+// cheapest way to make it go green when it fails is to add the new key to both
+// lists, which leaves the field accepted at preflight and dropped at apply —
+// the exact bug. `enabled` shipped that way for a release.
+//
+// So the oracle here is the wire: for every field the PREFLIGHT accepts, declare
+// it alone on a policy, run the real step, and require the requests to differ
+// from a policy that declares nothing. A field nothing acts on cannot pass, and
+// no edit to any list can make it pass.
+func TestTemplatePolicyFields_EachOneChangesTheRequests(t *testing.T) {
+	baseline := recordPolicyStepRequests(t, map[string]any{})
+
+	for _, f := range catalog.HubPolicyFieldKeys() {
+		probe, ok := policyFieldProbes[f]
+		if !ok {
+			t.Errorf("catalog accepts policy field %q at preflight but this guard has no probe for it: add one to policyFieldProbes AND make the step act on the field, or the template's value is silently dropped (MIO-2567)", f)
+			continue
 		}
+		t.Run(f, func(t *testing.T) {
+			got := recordPolicyStepRequests(t, map[string]any{f: probe})
+			if reflect.DeepEqual(got, baseline) {
+				t.Errorf("declaring %q=%v changes NOTHING the scaffold sends — it is accepted at preflight and dropped at apply (MIO-2567).\nbaseline: %v\n   probe: %v", f, probe, baseline, got)
+			}
+		})
 	}
 }
 
@@ -1963,6 +2035,84 @@ func TestScaffold_ResumeAppliesGateExactlyOnce(t *testing.T) {
 	}
 	if gate := decodeHubAttrs(t, rec.policyGateBodies[0]); gate["enabled"] != true {
 		t.Errorf("resume gate PATCH body = %v, want enabled:true", gate)
+	}
+}
+
+// conflictingPoliciesCatalogBody rewrites the 2.1 fixture's community
+// hubTemplate to declare a contradictory pair of per-policy `enabled` values and
+// re-digests it, so a REAL scaffold run can be driven through the whole preflight
+// against a template only the preflight can reject.
+func conflictingPoliciesCatalogBody(t *testing.T) []byte {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(catalog21Body(t)))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("parse 2.1 catalog fixture: %v", err)
+	}
+	hts, _ := doc["hubTemplates"].([]any)
+	if len(hts) == 0 {
+		t.Fatal("2.1 catalog fixture has no hubTemplates[]")
+	}
+	ht, _ := hts[0].(map[string]any)
+	ht["policies"] = map[string]any{
+		"terms":          map[string]any{"required": true, "enabled": true},
+		"privacy_policy": map[string]any{"enabled": false},
+	}
+	meta, ok := doc["meta"].(map[string]any)
+	if !ok {
+		t.Fatal("2.1 catalog fixture has no meta object")
+	}
+	delete(meta, "digest")
+	digest, err := catalog.Digest(doc)
+	if err != nil {
+		t.Fatalf("recompute conflicting-policies catalog digest: %v", err)
+	}
+	meta["digest"] = digest
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal conflicting-policies catalog: %v", err)
+	}
+	return out
+}
+
+// TestScaffold_ConflictingPoliciesFailInPreflightNotMidPipeline: the policies
+// block is validated in the WRITE-FREE preflight, so a contradictory template
+// exits 2 having created NOTHING.
+//
+// This is the test the step-level one cannot be. Driving stepPolicies in
+// isolation proves only that the step itself writes nothing — but the step is
+// stage 5 of 9, so an error raised there still leaves a hub, its blobs, its
+// spaces and its onboarding defs written and unrollbackable. The assertion that
+// matters is on the whole command: exit 2, and the server saw no mutation at
+// all (MIO-2567 review).
+func TestScaffold_ConflictingPoliciesFailInPreflightNotMidPipeline(t *testing.T) {
+	srv, _, mutated := liveCatalogScaffoldServer(t, conflictingPoliciesCatalogBody(t))
+
+	// A REAL run (no --dry-run): dry-run would prove nothing, since it never
+	// writes anyway.
+	err := executeCLI(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x")...)
+
+	if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); err=%v", got, errs.ExitUsage, err)
+	}
+	if *mutated {
+		t.Error("a contradictory policies block must be rejected BEFORE any write — no hub, no blobs, no spaces (there is no rollback)")
+	}
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"privacy_policy", "terms", "single hub-level gate"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must name %q; err=%v", want, err)
+		}
+	}
+	// It must NOT be tagged as a pipeline-step failure: the whole point is that
+	// it never reached the pipeline.
+	if strings.Contains(err.Error(), `step "policies" failed`) {
+		t.Errorf("the error must come from preflight, not from pipeline stage 5; err=%v", err)
 	}
 }
 

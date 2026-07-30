@@ -160,6 +160,18 @@ func rebuildScaffoldPlan(sc *scaffoldContext, cat *catalog.Catalog, src catalog.
 	if verr := ht.Validate(cat); verr != nil {
 		return errs.Wrap(errs.ExitUsage, verr)
 	}
+	// Policies resolution belongs HERE, next to Validate, not in stepPolicies
+	// (MIO-2567 review). Validate already rejects an unknown policy FIELD from
+	// this same spot; the rest of the block — the policy key, each field's JSON
+	// type, and the per-policy `enabled` collapse — is just as pure a function of
+	// the template, and leaving it at pipeline stage 5 of 9 meant a contradictory
+	// template exited 2 only AFTER the hub, its blobs, its spaces and its
+	// onboarding defs had been written and could not be rolled back. Discarded on
+	// success: stepPolicies re-resolves at apply time (cheap, deterministic) so
+	// it stays runnable without a preflight.
+	if _, perr := resolveTemplatePolicies(&ht); perr != nil {
+		return perr
+	}
 	sc.hubTmpl = ht
 
 	plan, perr := buildScaffoldPlan(cat, ht)

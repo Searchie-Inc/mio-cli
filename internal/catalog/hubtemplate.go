@@ -44,6 +44,12 @@ var (
 	hubPolicyFieldKeys = map[string]bool{"content": true, "require_acceptance": true, "required": true, "enabled": true}
 )
 
+// HubPolicyFieldKey reports whether f is an accepted field inside a hubTemplate
+// policies value. Exported so the CONSUMER (cmd templateHubPolicy) enforces
+// THIS allow-list rather than keeping a second copy of it — two lists that must
+// be edited together are two lists that will eventually disagree.
+func HubPolicyFieldKey(f string) bool { return hubPolicyFieldKeys[f] }
+
 // HubPolicyFieldKeys returns the accepted field set for a hubTemplate policies
 // value, sorted.
 //
@@ -52,9 +58,11 @@ var (
 // on this allow-list — shipped in the community template, waved through by
 // Validate — while the scaffold's policy step read only content/
 // require_acceptance/required. The result was a hub whose ToS was written and
-// whose gate was never switched on. The cmd-side test pins every key here
-// against the set the scaffold actually consumes, so a field added to the
-// schema can never again be accepted and then silently dropped.
+// whose gate was never switched on. The cmd-side guard drives a template
+// declaring each key here through the real step and asserts the REQUESTS
+// change: membership in a second hand-maintained list proves nothing, because
+// adding the key to that list is also the cheapest way to make such a test go
+// green while the drop survives.
 func HubPolicyFieldKeys() []string {
 	keys := make([]string, 0, len(hubPolicyFieldKeys))
 	for k := range hubPolicyFieldKeys {
