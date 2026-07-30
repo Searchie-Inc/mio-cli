@@ -870,7 +870,7 @@ stderr, so a json stdout stays parseable.`,
   mio hubs scaffold --template community --name Acme --slug acme --primary-color '#B91C1C' --secondary-color '#F59E0B'
   mio hubs scaffold --template community --name Acme --slug acme --branding-json '{"primary":"#B91C1C","font_body":"Inter"}'
   mio hubs scaffold --template community --hub hub_abc123
-  HUB_ID=$(mio hubs scaffold --template community --name "My Community" --slug my-community --jq .hub_id)`,
+  HUB_ID=$(mio hubs scaffold --template community --name "My Community" --slug my-community -o plain --jq .hub_id)`,
 	Args: cobra.NoArgs,
 	RunE: runHubsScaffold,
 }

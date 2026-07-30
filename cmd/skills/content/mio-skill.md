@@ -342,9 +342,9 @@ mio pages catalog scaffold --template grid            > grid.json
 1/3 + 2/3. Three are content presets that arrive **already filled with placeholder
 `value`s** — the fastest way to see the contract in practice: `cta-band` (three
 tint-surfaced cards, each headline + text + button), `faq` (a full-width `accordion`
-of `text` items keyed by `settings.tab_label`), and `bound-cards` (three
-two `content-card`s bound to a `dataSource` plus a third column whose *button*
-carries the binding — fill in every `dataSource.id`).
+of `text` items keyed by `settings.tab_label`), and `bound-cards` (two
+`content-card`s bound to a `dataSource`, plus a third column whose *button* carries
+the binding — fill in every `dataSource.id`).
 `hero`, `grid` and `compact` carry variants too; `mio pages catalog templates`
 prints them all.
 
@@ -524,7 +524,7 @@ looks. An unlisted property is not read by the renderer. Properties are alphabet
 
 <!-- catalog-gen:node-settings -->
 **`accordion`** — accepts children
-- core: `defaultExpanded` *array* · `expansion` *string* `single|multiple`
+- core: `defaultExpanded` *array* of *string* · `expansion` *string* `single|multiple`
 
 **`button`** — no children
 - core: `action` *object* {params, type, value} · `actionFromScope` *string* · `href` *string* · `labelFrom` *string*
@@ -553,7 +553,7 @@ looks. An unlisted property is not read by the renderer. Properties are alphabet
 - presentational: `align` *string* `left|center|right` · `clamp` *number* · `fade` *boolean* · `icon` *string* · `marginBottom` *number* `0|1|2|3|4|6|8` · `muted` *boolean* · `optional` *boolean* · `ring` *object* {size, value} · `size` *string* `title|subtitle|body-big|body|body-small` · `tone` *string* `default|primary` · `weight` *number* `400|500|600|700`
 
 **`file-attachments`** — no children
-- core: `attachments` *array* · `contentId` *string*
+- core: `attachments` *array* of *object* · `contentId` *string*
 
 **`file-player`** — no children
 - core: `contentId` *string* · `fileId` *string* · `playlistId` *string*

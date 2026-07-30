@@ -457,7 +457,7 @@ Codex — and in [AGENTS.md](./AGENTS.md#page-tree-render-contract).
 
 Errors are rendered TTY-aware: on an interactive terminal you get a friendly one-line `Error: <detail>` plus a dimmed `(exit code N)`; when stderr is piped or otherwise non-interactive you get the machine-readable JSON:API `errors` array with the exit code echoed in `meta.exit_code`. Either way the process exit code is the same, so scripts can branch on the exit code (and, off a TTY, on the body).
 
-In that envelope, `errors[].status` is the **real HTTP status the API returned** — a 403 reads `"403"`, a 409 `"409"`, a 422 `"422"`, and so on. Exit codes stay deliberately coarse (401 and 403 both exit 3; 400, 409 and 422 all exit 2), so use `status` when you need the precise distinction and `meta.exit_code` when the coarse class is enough. For failures that never reached the network (bad flag, unreadable file, no API key) there is no HTTP status, and `status` falls back to the exit code's class.
+In that envelope — **from the release after `v0.12.1`; on `v0.12.1` and earlier `status` is reconstructed from the exit code, so a 403 reads `"401"` and a 409 or 422 reads `"400"` (MIO-2656)** — `errors[].status` is the **real HTTP status the API returned** — a 403 reads `"403"`, a 409 `"409"`, a 422 `"422"`, and so on. Exit codes stay deliberately coarse (401 and 403 both exit 3; 400, 409 and 422 all exit 2), so use `status` when you need the precise distinction and `meta.exit_code` when the coarse class is enough. For failures that never reached the network (bad flag, unreadable file, no API key) there is no HTTP status, and `status` falls back to the exit code's class.
 
 ---
 

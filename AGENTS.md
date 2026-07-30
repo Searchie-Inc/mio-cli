@@ -2,6 +2,8 @@
 
 This document is written for AI coding agents (Claude Code, Codex, etc.) that need to call `mio` programmatically. It covers auth, output format, the exit-code contract, destructive-op handling, and a compact command table.
 
+> **This file tracks `main`, not the released binary.** You are probably reading it on GitHub while running a separately installed `mio`, so a behaviour described here may not have shipped yet. Run `mio version` and, when a distinction matters, prefer `mio <cmd> --help` — that is generated from the binary you actually have. Behaviours known to be newer than the latest release carry an inline version gate. The bundled agent skill (`mio skills print`) has no such skew: it is embedded in the binary, so it always describes the binary it came from.
+
 ---
 
 ## Authentication
@@ -74,10 +76,13 @@ Branch on these stable codes. Do not parse stderr for error detection.
 | `6` | Rate limited (429) | Back off, then retry |
 | `7` | Upstream server error (5xx) | Transient — retry with backoff |
 
-These codes are intentionally coarse. When you need the exact HTTP status the API returned — 403 vs 401 (re-authenticating cannot help with a 403), or 409 vs 422 (a conflict may clear, a validation rejection will not) — read `errors[0].status` from the JSON:API envelope on stderr, which carries the API's real status verbatim. `errors[0].meta.exit_code` echoes the coarse code. Errors that never reached the network (bad flag, missing file, no API key) have no HTTP status, so their `status` is derived from the exit code instead.
+These codes are intentionally coarse. When you need the exact HTTP status the API returned — 403 vs 401 (re-authenticating cannot help with a 403), or 409 vs 422 (a conflict may clear, a validation rejection will not) — read `errors[0].status` from the JSON:API envelope on stderr. `errors[0].meta.exit_code` echoes the coarse code. Errors that never reached the network (bad flag, missing file, no API key) have no HTTP status, so their `status` is derived from the exit code instead.
+
+> **Version gate (MIO-2656).** `errors[0].status` carries the API's **real** status only from the release AFTER `v0.12.1`. On `v0.12.1` and earlier it is reconstructed from the exit code, so precisely the two discriminations above are impossible there: a 403 reports `"401"`, and a 409 or 422 both report `"400"` (also 503→`"500"`, and 405/415→`"500"`). Check with `mio version` before branching on it; exit codes are unchanged either way, so `meta.exit_code` is safe on every version.
 
 ```sh
-mio contacts retrieve <id> 2>err.json || jq -r '.errors[0].status' err.json   # e.g. "422"
+# On a post-v0.12.1 binary this prints "422"; on v0.12.1 and earlier, "400".
+mio contacts retrieve <id> 2>err.json || jq -r '.errors[0].status' err.json
 ```
 
 ---
@@ -325,7 +330,7 @@ frontend like this:
 | key | paints |
 |---|---|
 | `primary` | buttons, links, CTAs, brand accents |
-| `secondary` | **section headings (h1–h3) AND the base of every `surface.background:{"type":"tint"}` block** |
+| `secondary` | **the page's ink in light mode — every heading AND all body copy (`--hub-text: var(--hub-secondary)`) — and the page background in dark mode**; also the base of a light-mode `tint` surface |
 | `text` / `background` | body copy / page background — **only when the theme mode is `custom`**; in `light`/`dark` the theme layer clears both and derives them from `secondary` |
 | `header_color` / `header_accent` | top-nav background + accent (emitted raw, no contrast correction) |
 | `dark_mode` (bool) | **not** the theme selector — only flips the defaults for `background`/`text` when those are unset |
@@ -359,7 +364,7 @@ frontend like this:
   `system`) and their OS `prefers-color-scheme`. Writing `light`/`dark` anywhere on the
   hub is a no-op, and there is **no `settings.theme` key** either (the parsed
   `theme.mode` is derived from `settings.background.type`). `custom` IS honoured
-  unconditionally, via `--settings-json '{"background":{"type":"custom"}}"'`, and it is
+  unconditionally, via `--settings-json '{"background":{"type":"custom"}}'`, and it is
   the only mode in which `branding.background`/`branding.text` are read at all.
   `branding.dark_mode` selects nothing.
 

@@ -59,30 +59,64 @@ var BlockNames = []string{
 	"surface-gradient",
 }
 
-// knownKindTiers / knownPropKeys / knownSharedKeys are the catalog vocabulary this
-// renderer knows how to READ. They exist because of a structural weakness a review
-// found in the first version: the drift test's oracle IS this generator, so anything
-// Render silently ignores is invisible to the byte-comparison — `go generate` writes
-// the lossy output and the test passes. Probed cases that produced NO error and wrong
-// docs: a third settings tier on a kind (property silently absent), a `shape`
-// reference to a shared shape that is not rendered anywhere, and a kind whose
-// settings moved under `properties` (rendered as "no settings" for a kind that has
-// them).
+// The vocabulary this renderer knows how to read.
 //
-// So Render now asserts it CONSUMED every key it was handed, and fails loudly on
-// anything new. A catalog that grows a tier or a shape stops the build instead of
-// quietly dropping documentation. `_note` is a catalog-side annotation with no
-// authoring content, so it is explicitly consumed-and-ignored rather than unknown.
+// WHY: the drift test's oracle IS this generator, so anything Render silently
+// ignores is invisible to the byte-comparison — `go generate` writes the lossy
+// output and the test still passes. Every map below therefore backs an assertion
+// (assertSchemaFullyConsumed), not just a lookup.
+//
+// EXACTLY WHAT IS AND IS NOT COVERED — an earlier version of this comment claimed
+// Render "asserts it consumed every key it was handed", which was itself an
+// overclaim of the kind this file exists to prevent. The truth:
+//
+//	COVERED (unknown value ⇒ generation fails):
+//	  - settingsSchema top-level keys (must be kind:* or shared:*)
+//	  - a kind:* entry's tiers
+//	  - a property spec's keys
+//	  - a `shape` reference target, AND every shared:* shape's own name
+//	  - nodeKinds entry keys
+//
+//	RENDERED (appears in the docs): type, enum, default, properties, shape,
+//	  freeform, items, deprecated.
+//
+//	DELIBERATELY IGNORED (allowed, never rendered — listed separately so the
+//	distinction is visible rather than buried in one permissive whitelist):
+//	  - description / _note: catalog prose. The generated blocks carry names,
+//	    types, enums and defaults; the prose is long, changes wording often, and
+//	    would triple the doc. The catalog remains the place to read it.
+//	  - tier: only meaningful inside shared:structural, whose rendering already
+//	    groups by tier-equivalent sections.
+//	  - renderFallback: describes what the RENDERER substitutes for a kind it
+//	    cannot draw, not anything an author writes.
+//
+//	NOT COVERED (documented so nobody assumes otherwise): the contents of the
+//	  catalog outside nodeKinds/settingsSchema — templates[], pageTemplates[],
+//	  sectionTypes[], nestingRules, profiles. Those feed the id lists only, and a
+//	  new field on them is not silently mis-documented, just unused.
 var (
 	knownKindTiers = map[string]bool{"core": true, "presentational": true, "_note": true}
-	knownPropKeys  = map[string]bool{
-		"type": true, "enum": true, "default": true, "description": true,
-		"properties": true, "shape": true, "freeform": true, "tier": true,
-		"items": true, "deprecated": true,
+
+	// renderedPropKeys are emitted into the docs by specSuffix / valuesCell.
+	renderedPropKeys = map[string]bool{
+		"type": true, "enum": true, "default": true, "properties": true,
+		"shape": true, "freeform": true, "items": true, "deprecated": true,
 	}
-	// renderedShapes are the shared shapes this generator emits a block for. A
-	// `shape` reference to anything else would print a dangling pointer.
-	renderedShapes = map[string]bool{"surface": true, "background": true, "gradient": true}
+	// ignoredPropKeys are accepted and deliberately not rendered (see above).
+	ignoredPropKeys = map[string]bool{"description": true, "tier": true}
+
+	// renderedShapes are the shared shapes this generator documents somewhere: a
+	// `shape:` reference to anything else prints a dangling pointer, and a NEW
+	// shared:* shape nobody references would otherwise be dropped in silence.
+	// `structural` has no block of its own — it is rendered inside
+	// surface-properties — which is exactly why membership is tracked by name here
+	// rather than inferred from BlockNames.
+	renderedShapes = map[string]bool{
+		"surface": true, "background": true, "gradient": true, "structural": true,
+	}
+
+	// knownNodeKindKeys are the nodeKinds entry fields this generator understands.
+	knownNodeKindKeys = map[string]bool{"childRules": true, "renderFallback": true}
 )
 
 // blockRe matches one generated block and captures its name and current body.
@@ -209,6 +243,20 @@ func Apply(doc string, blocks map[string]string) (string, error) {
 // shared shape is dropped from the docs with no error and the drift test still
 // passes, because the test compares the doc against THIS renderer's output.
 func assertSchemaFullyConsumed(kinds, schema map[string]any) error {
+	// nodeKinds first — renderNodeKinds reads only childRules, so a new field there
+	// would change nothing in the docs and raise nothing.
+	for _, kind := range sortedKeys(kinds) {
+		m, ok := kinds[kind].(map[string]any)
+		if !ok {
+			return fmt.Errorf("docsgen: nodeKinds[%q] is not an object (%T)", kind, kinds[kind])
+		}
+		for _, k := range sortedKeys(m) {
+			if !knownNodeKindKeys[k] {
+				return fmt.Errorf("docsgen: nodeKinds[%q] declares unknown field %q — this generator reads only childRules, so it would be silently dropped from the docs", kind, k)
+			}
+		}
+	}
+
 	for _, key := range sortedKeys(schema) {
 		entry, ok := schema[key].(map[string]any)
 		if !ok {
@@ -236,6 +284,12 @@ func assertSchemaFullyConsumed(kinds, schema map[string]any) error {
 				}
 			}
 		case strings.HasPrefix(key, "shared:"):
+			// The reference direction alone is not enough: a brand-new shared shape
+			// that nothing references yet would render no block and raise nothing.
+			shape := strings.TrimPrefix(key, "shared:")
+			if !renderedShapes[shape] {
+				return fmt.Errorf("docsgen: settingsSchema declares shared shape %q, which this generator documents nowhere — it would be dropped in silence. Add a block for it (BlockNames + Render) or render it inside an existing one, then list it in renderedShapes", key)
+			}
 			props, ok := entry["properties"].(map[string]any)
 			if !ok {
 				return fmt.Errorf("docsgen: settingsSchema[%q] has no properties object", key)
@@ -259,9 +313,10 @@ func assertPropsConsumed(where string, props map[string]any) error {
 			return fmt.Errorf("docsgen: %s.%s is not an object (%T)", where, name, props[name])
 		}
 		for _, k := range sortedKeys(spec) {
-			if !knownPropKeys[k] {
-				return fmt.Errorf("docsgen: %s.%s declares unknown property key %q — this generator does not render it, so it would be silently dropped from the docs", where, name, k)
+			if renderedPropKeys[k] || ignoredPropKeys[k] {
+				continue
 			}
+			return fmt.Errorf("docsgen: %s.%s declares unknown property key %q — this generator neither renders nor knowingly ignores it, so it would be silently dropped from the docs. Render it (specSuffix/valuesCell + renderedPropKeys) or add it to ignoredPropKeys with a reason", where, name, k)
 		}
 		if shape, has := spec["shape"].(string); has && !renderedShapes[shape] {
 			return fmt.Errorf("docsgen: %s.%s references shared shape %q, which this generator renders no block for — the doc would print a pointer to nothing. Add a block for it to BlockNames", where, name, shape)
@@ -435,6 +490,9 @@ func propsBullets(props map[string]any) string {
 // specSuffix renders a property's type, enum and default compactly.
 func specSuffix(spec map[string]any) string {
 	parts := []string{typeWord(spec)}
+	if items := itemsWord(spec); items != "" {
+		parts = append(parts, items)
+	}
 	if vals := enumValues(spec); vals != "" {
 		parts = append(parts, "`"+vals+"`")
 	}
@@ -447,7 +505,45 @@ func specSuffix(spec map[string]any) string {
 	if b, _ := spec["freeform"].(bool); b {
 		parts = append(parts, "*(freeform — any other string is legal too)*")
 	}
+	if dep := deprecatedWord(spec); dep != "" {
+		parts = append(parts, dep)
+	}
 	return strings.Join(parts, " ")
+}
+
+// itemsWord renders an array property's element type, so an array does not
+// document as a bare *array* (catalog 0.14.1's `accordion.defaultExpanded` is the
+// live case).
+func itemsWord(spec map[string]any) string {
+	items, ok := spec["items"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	inner, _ := items["type"].(string)
+	if inner == "" {
+		return "of *unspecified* items"
+	}
+	if vals := enumValues(items); vals != "" {
+		return "of *" + inner + "* `" + vals + "`"
+	}
+	return "of *" + inner + "*"
+}
+
+// deprecatedWord flags a deprecated property. Documenting one as live is a real
+// harm — an author wires it up and it stops working on the next frontend release.
+func deprecatedWord(spec map[string]any) string {
+	switch t := spec["deprecated"].(type) {
+	case bool:
+		if t {
+			return "**DEPRECATED**"
+		}
+	case string:
+		if strings.TrimSpace(t) != "" {
+			return "**DEPRECATED** (" + t + ")"
+		}
+		return "**DEPRECATED**"
+	}
+	return ""
 }
 
 // typeWord renders a property's declared type, resolving a `shape` reference.
@@ -490,6 +586,9 @@ func nestedKeys(spec map[string]any) string {
 // the cell and silently mangles the table.
 func valuesCell(spec map[string]any) string {
 	var parts []string
+	if items := itemsWord(spec); items != "" {
+		parts = append(parts, items)
+	}
 	if vals := enumValues(spec); vals != "" {
 		parts = append(parts, "`"+strings.ReplaceAll(vals, "|", `\|`)+"`")
 	}
@@ -501,6 +600,9 @@ func valuesCell(spec map[string]any) string {
 	}
 	if b, _ := spec["freeform"].(bool); b {
 		parts = append(parts, "freeform")
+	}
+	if dep := deprecatedWord(spec); dep != "" {
+		parts = append(parts, dep)
 	}
 	if len(parts) == 0 {
 		return "—"

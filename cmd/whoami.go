@@ -46,7 +46,7 @@ This is the canonical "did my setup work?" command. Off a TTY it prints JSON
 (respecting --output) so agents can parse it.`,
 	Example: `  mio whoami
   mio whoami --output json
-  mio whoami --jq .team_id`,
+  mio whoami -o plain --jq .team_id`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
