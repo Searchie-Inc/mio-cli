@@ -230,16 +230,29 @@ theme key.
   path whose first segment picks the blob, applied after the merges:
   `mio hubs update hub_abc123 --unset settings.registration.enabled --unset branding.gradient`.
 
-### 3. Discussion spaces
+### 3. Discussion spaces (and a welcome post)
 
 ```bash
 mio community spaces create --hub hub_abc123 --name "General" --slug general
 mio community spaces create --hub hub_abc123 --name "Announcements" --slug announcements \
   --posting-permission admins_only
+
+SPACE_ID=$(mio community spaces list --hub hub_abc123 -o plain --jq '.[0].id')
+mio community discussions create --hub hub_abc123 --space-id "$SPACE_ID" \
+  --title "Welcome!" --body "Introduce yourself in the comments."
 ```
 
 `--access-level` is `public` or `restricted`; `--posting-permission` is
 `any_member`, `admins_only`, or `segment` (with `--segment-id`).
+
+`discussions create` posts as **you** — the author is derived server-side from your
+credentials (a team-owner key posts as the team owner's contact), and there is
+deliberately no flag to author as another member. It ignores the space's
+`posting-permission` (it is an admin write), publishes immediately unless you pass
+`--is-published=false`, and caps the title at 280 characters. Note `update` is
+moderation-only (`--is-pinned`/`--is-locked`/`--is-broadcast`): once posted, title
+and body belong to the author and no admin route can edit them, so get the copy
+right on `create`.
 
 ### 4. Playlists → items → publish to the hub
 
@@ -836,7 +849,7 @@ index at `mio gen-docs --dir ./docs`. Core groups:
 - **Hubs:** `mio hubs scaffold|templates` · `mio hubs create|retrieve|update|list` · `mio hubs policies update|gate` · `mio hubs navigation list|add|remove|reorder`
 - **Pages:** `mio pages create|list|retrieve|home` · `mio pages catalog templates|section-types|scaffold` · `mio pages tree get|set` · `mio pages publish` · `mio pages sections create|list|reorder`
 - **Media:** `mio media files upload|list|durable-url` · `mio media playlists create|set-cover` (+ `playlists items add|list|remove|reorder`) · `mio media hub-media publish` · `mio media hub-playlists publish` · `mio media search` · `mio media transcripts get|edit|revert`
-- **Community:** `mio community spaces create|list` · `mio community moderation ...`
+- **Community:** `mio community spaces create|list` · `mio community discussions create|list|update` · `mio community moderation ...`
 - **Contacts/members:** `mio contacts list|retrieve` · `mio contact-attributes ...` · `mio tags ...` · `mio hub-memberships add|set-role|ban` · `mio segments ...`
 - **Commerce:** `mio products ...` · `mio coupons ...` · `mio checkout ...`
 - **Automation/email:** `mio automations ...` · `mio email ...` · `mio webhook-endpoints ...`

@@ -304,7 +304,13 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/payment-accounts/onboarding-link", "onboarding_links"},
 		// team members write resource.
 		{"/api/teams/t1/members", "team_members"},
-		// Community admin spaces + discussions (MIO-811).
+		// Community admin spaces + discussions (MIO-811). The discussions
+		// COLLECTION row also covers the MIO-2262 admin welcome-post create
+		// (`community discussions create`, MIO-2808): its backend envelope
+		// DiscussionCreateResourceData pins type Literal["discussions"], which is
+		// exactly what the bare segment derives — so that path needs NO
+		// typeOverride, and this row is the regression guard that keeps it that way
+		// (a future hubs/discussions override would break the create with a 422).
 		{"/api/admin/teams/t1/hubs/h1/spaces", "spaces"},
 		{"/api/admin/teams/t1/hubs/h1/spaces/sp1", "spaces"},
 		{"/api/admin/teams/t1/hubs/h1/discussions", "discussions"},

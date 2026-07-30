@@ -12,7 +12,9 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // pinned21Digest is meta.digest of the 2.1 artifact (schemaVersion 2.1.0,
@@ -159,6 +161,51 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 		{"bad playlist visibility", func(h *HubTemplate) {
 			h.Playlists = []TemplatePlaylist{{Title: "Welcome", Key: "welcome", Visibility: "everyone"}}
 		}},
+		// welcomePost (MIO-2558). community declares none, so construct one: the
+		// scaffold's welcome-post step runs LAST, so a bad ref discovered there
+		// would fail a run that has already written everything else.
+		{"welcomePost missing title", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{Space: h.Spaces[0].Slug, Title: ""}
+		}},
+		{"welcomePost missing space", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{Space: "", Title: "Welcome!"}
+		}},
+		{"welcomePost space not in template", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{Space: "no-such-space", Title: "Welcome!"}
+		}},
+		// The endpoint's OWN reject conditions, mirrored from
+		// mio-backend app/community/discussion_text.py. Each of these would 422 at
+		// step 9 — after the hub, blobs, spaces, pages and publish have all been
+		// written — so preflight has to be the one that catches them.
+		{"welcomePost whitespace-only title", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{Space: h.Spaces[0].Slug, Title: "   "}
+		}},
+		{"welcomePost title with a NUL byte", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{Space: h.Spaces[0].Slug, Title: "Wel\x00come"}
+		}},
+		{"welcomePost title over 280 code points", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{
+				Space: h.Spaces[0].Slug,
+				Title: strings.Repeat("é", DiscussionTitleMaxCP+1), // multi-BYTE, single code point each
+			}
+		}},
+		{"welcomePost over-cap title survives padding", func(h *HubTemplate) {
+			// Padding an already-over-cap title does not sneak it past the check.
+			// NOTE this case cannot discriminate stripped-vs-raw measurement and no
+			// reject case can: stripped length is always ≤ raw, so anything that is
+			// over the cap stripped is over it raw too. Only the ACCEPT side can tell
+			// them apart — TestHubTemplateWelcomePost_TitleLengthIsCodePointsNotBytes
+			// owns that, and this case is here for the plain behaviour only.
+			h.WelcomePost = &TemplateWelcomePost{
+				Space: h.Spaces[0].Slug,
+				Title: " " + strings.Repeat("a", DiscussionTitleMaxCP+1) + " ",
+			}
+		}},
+		{"welcomePost body with a NUL byte", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{
+				Space: h.Spaces[0].Slug, Title: "Welcome!", Body: "hi\x00there",
+			}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,6 +222,99 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 			tc.mutate(&h)
 			if err := h.Validate(c); err == nil {
 				t.Error("Validate() = nil, want error")
+			}
+		})
+	}
+}
+
+// TestHubTemplateWelcomePost_TitleLengthIsCodePointsNotBytes is the ACCEPT side
+// of the 280 cap, and it is the only case that can tell the implementations
+// apart. A 281-character rejection passes under both `utf8.RuneCountInString`
+// and `len`, because a 281-é string is over the cap either way — so on its own it
+// pins nothing.
+//
+// These two must VALIDATE:
+//
+//   - 280 é = 280 code points but 560 BYTES. Green under a code-point count, red
+//     under len(). Python's len() and Pydantic's Field(max_length=280) both count
+//     code points, so a byte-based check here would reject templates the API
+//     accepts, with no other test noticing.
+//   - a title over the cap RAW but under it STRIPPED. Preflight measures what the
+//     scaffold will SEND (stepWelcomePost posts the trimmed title), so it must not
+//     be stricter than the endpoint about padding the request never carries.
+func TestHubTemplateWelcomePost_TitleLengthIsCodePointsNotBytes(t *testing.T) {
+	c := load21ForTest(t)
+	h, ok := c.HubTemplateByID("community")
+	if !ok {
+		t.Fatal("HubTemplateByID(community) not found")
+	}
+	for _, tc := range []struct {
+		name  string
+		title string
+	}{
+		{"at the cap in code points, double that in bytes", strings.Repeat("é", DiscussionTitleMaxCP)},
+		{"over the cap raw, at it once stripped", strings.Repeat("a", DiscussionTitleMaxCP) + "     "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h.WelcomePost = &TemplateWelcomePost{Space: h.Spaces[0].Slug, Title: tc.title}
+			if err := h.Validate(c); err != nil {
+				t.Errorf("Validate() = %v, want nil (%d code points, %d bytes — the cap is code points, measured stripped)",
+					err, utf8.RuneCountInString(strings.TrimSpace(tc.title)), len(tc.title))
+			}
+		})
+	}
+}
+
+// TestHubTemplateWelcomePost_ParseAndDefault pins the OPTIONAL welcomePost block
+// (MIO-2558): absent ⇒ nil (so the scaffold step no-ops, which is what every
+// shipped catalog gets — `community` at 0.14.1 declares no welcomePost), present
+// ⇒ parsed verbatim with is_published defaulting to the endpoint's own
+// server-side default of TRUE rather than the Go bool zero value (which would
+// scaffold an invisible draft).
+func TestHubTemplateWelcomePost_ParseAndDefault(t *testing.T) {
+	if h, ok := load21ForTest(t).HubTemplateByID("community"); !ok {
+		t.Fatal("HubTemplateByID(community) not found")
+	} else if h.WelcomePost != nil {
+		t.Errorf("community.WelcomePost = %+v, want nil — the shipped catalog declares none", h.WelcomePost)
+	}
+
+	for _, tc := range []struct {
+		name string
+		raw  Node
+		want TemplateWelcomePost
+	}{
+		{
+			name: "is_published omitted defaults to true",
+			raw:  Node{"space": "general", "title": "Welcome!", "body": "Say hi."},
+			want: TemplateWelcomePost{Space: "general", Title: "Welcome!", Body: "Say hi.", Published: true},
+		},
+		{
+			name: "is_published false is honored",
+			raw:  Node{"space": "general", "title": "Draft", "is_published": false},
+			want: TemplateWelcomePost{Space: "general", Title: "Draft", Published: false},
+		},
+		// A present-but-non-bool value must FAIL SAFE to the endpoint's default,
+		// not coerce to false: a comma-ok bool assertion turns each of these into
+		// `false`, scaffolding the invisible draft the default exists to prevent
+		// from a value that never said "draft".
+		{
+			name: "explicit null does not become a draft",
+			raw:  Node{"space": "general", "title": "Welcome!", "is_published": nil},
+			want: TemplateWelcomePost{Space: "general", Title: "Welcome!", Published: true},
+		},
+		{
+			name: "stringly-typed value does not become a draft",
+			raw:  Node{"space": "general", "title": "Welcome!", "is_published": "true"},
+			want: TemplateWelcomePost{Space: "general", Title: "Welcome!", Published: true},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := parseHubTemplate(Node{"id": "x", "welcomePost": tc.raw})
+			if h.WelcomePost == nil {
+				t.Fatal("WelcomePost = nil, want parsed")
+			}
+			if *h.WelcomePost != tc.want {
+				t.Errorf("WelcomePost = %+v, want %+v", *h.WelcomePost, tc.want)
 			}
 		})
 	}

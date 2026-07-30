@@ -18,8 +18,32 @@ import (
 )
 
 // decodeDataTypeAttrs returns data.type and data.attributes from a request body.
+// The two failure modes are reported SEPARATELY: unparseable bytes and a
+// well-formed body that simply is not a write envelope are different bugs, and a
+// single message covering both sent an earlier reader hunting for a JSON syntax
+// error in valid JSON.
 func decodeDataTypeAttrs(t *testing.T, body []byte) (string, map[string]any) {
 	t.Helper()
+	typ, attrs, ok := decodeDataTypeAttrsRaw(body)
+	if !ok {
+		t.Fatalf("request body is not valid JSON; body=%q", body)
+	}
+	if attrs == nil {
+		t.Fatalf("request body parsed but carries no data.attributes (not a JSON:API write envelope); body=%q", body)
+	}
+	return typ, attrs
+}
+
+// decodeDataTypeAttrsRaw is decodeDataTypeAttrs without the *testing.T: a stub
+// HTTP handler runs on the server's own goroutine, where t.Fatalf is not allowed,
+// so a stateful stub that has to READ the request body needs a decoder that
+// cannot fail the test from the wrong goroutine.
+//
+// ok reports whether the body PARSED; a nil attrs on ok==true means it parsed but
+// carried no data.attributes. Reading from a nil map is legal in Go, so a stub
+// can ignore the distinction — the wrapper above is what turns each case into its
+// own message.
+func decodeDataTypeAttrsRaw(body []byte) (string, map[string]any, bool) {
 	var doc struct {
 		Data struct {
 			Type       string         `json:"type"`
@@ -27,9 +51,9 @@ func decodeDataTypeAttrs(t *testing.T, body []byte) (string, map[string]any) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
-		t.Fatalf("request body is not valid JSON: %v; body=%q", err, body)
+		return "", nil, false
 	}
-	return doc.Data.Type, doc.Data.Attributes
+	return doc.Data.Type, doc.Data.Attributes, true
 }
 
 // TestMediaHubPlaylistsPublish_Body verifies the publish POST hits
