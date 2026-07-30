@@ -23,22 +23,24 @@ Run these to load context, then summarize what you found.
   | 2 | usage / 400 / 409 / 422 | | 6 | rate limited (429) |
   | 3 | auth (401/403) | | 7 | upstream 5xx |
 
-- **It ships its own agent skill.** `mio skills install` writes `cmd/skills/content/mio-skill.md` into an agent's skills directory, where an LLM executes it *literally*. Documentation defects here are runtime defects — the same weight as code.
+- **It ships its own agent skill.** The source is embedded from `cmd/skills/content/mio-skill.md`; `mio skills install` writes it into the target agent's skills directory (`--user` by default, `--project` for `./.claude` or `./.codex`, `--target claude|codex`), where an LLM executes it *literally*. Documentation defects here are runtime defects — the same weight as code.
 - **Docs surfaces** (`README.md`, `AGENTS.md`, `llms.txt`, `docs/internal/api-surface.md`) are hand-maintained and **not** test-enforced. Only the catalog-derived blocks of `mio-skill.md` are generated.
 
 Read `AGENTS.md` first — it is the densest description of actual behaviour.
 
-## 2. The gates (CI parity)
+## 2. The gates
 
 ```bash
 export PATH="$PATH:$(go env GOPATH)/bin"   # golangci-lint is NOT on PATH by default
 go build ./...
 go vet ./...
-gofmt -l cmd internal                      # prints nothing when clean
+gofmt -l .                                 # prints nothing when clean — `.`, not `cmd internal`: CI checks the root too
 golangci-lint run ./...                    # v2.12.2, matching ci.yml; expect "0 issues."
-XDG_CONFIG_HOME=$(mktemp -d) go test ./... -race -timeout 180s
+XDG_CONFIG_HOME=$(mktemp -d) go test ./... -race -timeout 120s
 go run ./internal/docsgen/cmd/skilldocs -file cmd/skills/content/mio-skill.md -check
 ```
+
+The first five mirror `.github/workflows/ci.yml`. `skilldocs -check` is **not** a separate CI step — CI covers it through `TestSkillDocIsGeneratedFromCatalog` inside `go test` — but running it directly gives a clearer message than the test failure does.
 
 CI installs golangci-lint with `go install …@v2.12.2` rather than using a release binary — prebuilt binaries refuse to lint a project targeting a newer Go.
 
@@ -71,7 +73,7 @@ XDG_CONFIG_HOME=$(mktemp -d) go run . <args>
 
 Sibling checkouts in `~/src` run days and dozens of commits stale, and are often parked on a feature branch. `git fetch origin` and read `origin/main` — never the working tree.
 
-This produced four confidently-wrong claims in one session, including "exactly eight leaf kinds" read from a mio-hub checkout 32 commits behind (`origin/main` had nine). `mio-page-catalog` moved 0.12.0 → 0.14.1 in about a day.
+This produced four confidently-wrong claims in one session, including a leaf-kind count read from a mio-hub checkout 32 commits behind. `mio-page-catalog` moved 0.12.0 → 0.14.1 in about two days (0.12.0 on 2026-07-28, 0.14.0 and 0.14.1 both on 2026-07-30) — a pin verified in the morning can be a minor version stale by evening.
 
 **`mio-backend` `origin/main` deploys straight to production on merge** — there is no staging lag. If it is on main, it is live.
 
@@ -140,7 +142,7 @@ git tag --sort=-v:refname | head -3
 git log --oneline $(git describe --tags --abbrev=0)..origin/main   # unreleased commits
 ```
 
-Releases are tag-driven: pushing a `v*` tag runs GoReleaser (5 platform binaries + the Homebrew tap). **Merging does not deploy** — cutting a release is a separate deliberate step, so check whether shipped work is actually in a user's hands before assuming it is.
+Releases are tag-driven: pushing a `v*` tag runs GoReleaser and publishes 5 platform archives + `checksums.txt` (darwin amd64/arm64, linux amd64/arm64, windows amd64). **The Homebrew tap is not live** — the `brews:` block in `.goreleaser.yaml` is commented out pending `Searchie-Inc/homebrew-tap`, and `README.md` says so; installation today is the curl script or a prebuilt binary. **Merging does not deploy** — cutting a release is a separate deliberate step, so check whether shipped work is actually in a user's hands before assuming it is.
 
 ## 7. Jira
 

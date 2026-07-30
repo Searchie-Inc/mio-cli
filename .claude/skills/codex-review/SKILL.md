@@ -30,17 +30,24 @@ Invoke the same way every time: `/codex-review`. The mode picks itself.
 Invoke via CLI (the MCP server is unreliable). Codex reviews; it never fixes — fixes are applied by Claude in this session.
 
 ```bash
-printf '%s' "$PROMPT" > /tmp/codex-prompt.txt
+BASE=main                                  # or the merge-base you are reviewing against
+PROMPT_FILE=$(mktemp -t codex-prompt.XXXXXX)   # never a fixed /tmp path — concurrent runs collide
+build_prompt > "$PROMPT_FILE"              # you assemble this: repo-context block + mode body + output format
+
+[ -s "$PROMPT_FILE" ] || { echo "ABORT: empty prompt — not a verdict"; exit 1; }
+
 timeout "$CODEX_TIMEOUT" codex exec -m gpt-5.6-sol -c model_reasoning_effort="xhigh" \
-  --sandbox read-only -C "$(pwd)" - < /tmp/codex-prompt.txt
+  --sandbox read-only -C "$(pwd)" - < "$PROMPT_FILE"
 ```
+
+**Prove the prompt is non-empty before the call.** An empty `PROMPT_FILE` is caught by Codex itself — it prints `No prompt provided via stdin.` and exits **1** (measured on v0.145.0) — so this guard buys a clear abort rather than a rescue. The guard that genuinely matters is the one on the **diff file** in the fallback path below, where the prompt is valid and only the *content* is empty: Codex has nothing to object to, reviews nothing, and returns an APPROVE.
 
 Resume the same session for follow-up rounds (preserves context, no diff re-upload):
 
 ```bash
 echo "Round 2 — fixes applied: ..." | timeout "$CODEX_TIMEOUT" codex exec resume --last \
-  -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -
-git status --porcelain   # MUST be clean — see the resume caveat below
+  -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -c sandbox_mode="read-only" -
+git status --porcelain   # confirm Codex wrote nothing
 ```
 
 | Flag | Purpose |
@@ -53,7 +60,7 @@ git status --porcelain   # MUST be clean — see the resume caveat below
 
 ### NEVER pass `--full-auto` (MIO-2836)
 
-`--full-auto` is deprecated and **silently overrides `--sandbox read-only` regardless of flag order**. Measured on v0.145.0:
+`--full-auto` **overrides an explicit `--sandbox read-only`, regardless of flag order**. Measured on v0.145.0:
 
 ```
 codex exec --sandbox read-only              -> approval: never  sandbox: read-only
@@ -62,21 +69,36 @@ codex exec --full-auto --sandbox read-only  -> approval: never  sandbox: workspa
 codex exec --sandbox read-only --full-auto  -> approval: never  sandbox: workspace-write [workdir, /tmp, $TMPDIR]
 ```
 
+It does print `warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.` — but that warning says nothing about it beating an explicit `--sandbox read-only`, which is the part that matters and the part that is easy to read past.
+
 This skill carried `--full-auto --sandbox read-only` until MIO-2836, so every review this repo has ever run gave Codex **write access to the working tree** while claiming a read-only guarantee. `--full-auto` buys nothing — autonomy comes from `exec`'s approval policy, not from the sandbox mode. If you find yourself re-adding it because "Codex isn't reading files", the cause is a missing `bubblewrap`, not the sandbox mode (see **Reliability** below).
 
 Confirm the header of any run you start: it must print `sandbox: read-only`.
 
-### `exec resume` cannot be sandboxed
+### `exec resume` rejects `--sandbox` — use `-c sandbox_mode` instead
+
+The flag is not accepted on resume:
 
 ```
 $ codex exec resume --last --sandbox read-only -
 error: unexpected argument '--sandbox' found
 ```
 
-Resume rounds always run **workspace-write** — the read-only guarantee is unenforceable there. So:
+But the underlying config key **is**, and resume already takes `-c`:
 
-- Run `git status --porcelain` after **every** resume round and confirm it is clean.
-- If a round must be strictly read-only, start a fresh `exec --sandbox read-only` session instead of resuming (you pay a diff re-upload).
+```
+codex exec resume --last -m gpt-5.6-sol -c model_reasoning_effort='xhigh' -c sandbox_mode='read-only' -
+  -> approval: never   sandbox: read-only
+
+codex exec resume --last -m gpt-5.6-sol -c model_reasoning_effort='xhigh' -
+  -> approval: never   sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+```
+
+So **pass `-c sandbox_mode="read-only"` on every resume round.** Without it the round silently runs workspace-write and the read-only guarantee applies only to round 1 — half a fix.
+
+Note the workspace-write default here is environment-dependent, not universal: it comes from `trust_level = "trusted"` for this repo in `~/.codex/config.toml`. A plain `codex exec -C /home/ubuntu/src/mio-cli` with no sandbox flag prints `workspace-write` for the same reason, and `--ignore-user-config` prints `read-only`. Don't rely on the ambient default either way — set it explicitly on every call.
+
+Still run `git status --porcelain` after each resume round. It costs nothing and it is the only check that catches a config change out from under you.
 
 ## Reliability — timeout and quota (read before every invocation)
 
@@ -84,13 +106,22 @@ Neither a hang nor a quota response is a verdict. Never let either silently pass
 
 **Timeout.** Always wrap in `timeout "$CODEX_TIMEOUT"` and run in the **foreground**. Never background-and-poll — that is how a stall goes unnoticed. Exit code `124` means the call was killed for hanging, not that the code is fine.
 
-On a `124`, the usual cause is Codex's sandbox stalling on file reads because `bubblewrap` is absent — a trivial prompt still returns, which masks it:
+On a `124`, first retry once — a hang is usually the sandbox doing many file reads, not a slow model.
+
+> A `bubblewrap`-absence diagnosis circulates for this (it is in mio-platform's copy, which predates the current CLI). It does **not** apply to codex-cli 0.145.0, which **bundles its own** static `bwrap` under `@openai/codex-linux-x64/vendor/…/codex-resources/bwrap`. Check `command -v bwrap` if you like, but do not `sudo apt-get install` on that theory — verify the sandbox is actually the stall point first.
+
+If it still hangs, fall back to a single pre-captured diff file and tell Codex to read **only** that file:
 
 ```bash
-command -v bwrap >/dev/null || sudo apt-get install -y bubblewrap   # then retry once, keeping full autonomy
+BASE=${BASE:?set BASE to the base ref first}          # unset -> "..HEAD" resolves to HEAD..HEAD -> EMPTY diff
+DIFF_FILE=$(mktemp -t codex-review.XXXXXX.diff)
+git diff "$BASE"...HEAD > "$DIFF_FILE"
+[ -s "$DIFF_FILE" ] || { echo "ABORT: empty diff — inconclusive, NOT an approval"; exit 1; }
 ```
 
-If it still hangs, fall back to a single pre-captured diff file (`git diff "$BASE"..HEAD > /tmp/codex-review.diff`) and tell Codex to read **only** that file. This is narrower — it sees the changed lines but not the surrounding code or tests — so **say in the report that the round saw the diff only**. If even that times out, the round is **inconclusive**: surface it, do not force-approve.
+**Both guards are load-bearing, and this is the dangerous path.** With `BASE` unset, `git diff "$BASE"..HEAD` resolves to `HEAD..HEAD`, writes a **0-byte file, and exits 0** (measured). Codex then receives a perfectly valid prompt pointing at an empty file, has nothing to object to, and returns an APPROVE having reviewed nothing. Unlike an empty *prompt* — which Codex rejects with exit 1 — an empty *diff* fails completely silently. That is a gate that cannot fail, in the fallback path taken exactly when the gate is under most stress.
+
+This mode is narrower — Codex sees the changed lines but not the surrounding code or tests — so **say in the report that the round saw the diff only**. If even that times out, the round is **inconclusive**: surface it, do not force-approve.
 
 **Quota.** A quota or credit response is a retry, not a REQUEST CHANGES. Detect case-insensitively on `out of credits`, `usage limit`, `quota`, `rate limit`, `429`, `too many requests`, `try again`, `resets at`. Codex usually reports when it returns — parse that and sleep until then rather than polling blindly, then retry the same round. Echo each wait with a timestamp so the pause is visible in the transcript.
 
@@ -306,7 +337,8 @@ Triage findings exactly as for Codex (Critical → fix now with a regression tes
 
 - **Never force-approve.** REQUEST CHANGES after round 3 → hand back to the user.
 - Never skip/bypass `go vet`, `golangci-lint`, or tests to make a fix pass — fix the root cause.
-- **`--sandbox read-only`, never `--full-auto`.** Codex reviews; Claude applies fixes. Confirm the run header prints `sandbox: read-only`, and `git status --porcelain` after every resume round (resume cannot be sandboxed).
+- **`--sandbox read-only`, never `--full-auto`** on `exec`; **`-c sandbox_mode="read-only"`** on `resume` (which rejects the flag). Codex reviews; Claude applies fixes. Confirm the run header prints `sandbox: read-only`.
+- **An empty input is not a clean review.** Prove any diff file is non-empty before the call: an unset `$BASE` yields a 0-byte diff with exit 0, and Codex will happily review it and APPROVE. (An empty *prompt* is safer — Codex rejects it with exit 1 — but guard both.)
 - **A timeout or a quota response is not a verdict.** Retry, fall back, or switch to a blind review — never let either silently pass or fail the gate.
 - Base branch is `main`, never `master`.
 - **`.claude/rules/verifying-guards.md` applies to every fix round.** Any guard you add or change to close a finding must be broken and observed failing before you claim it works. A fix round is the highest-risk code in the repo: it ships with a comment asserting coverage nobody has tested. Seven unfailable guards reached (or nearly reached) `main` in a single week; reading caught none of them.
@@ -318,8 +350,10 @@ Triage findings exactly as for Codex (Critical → fix now with a regression tes
 - [ ] build / vet / gofmt / golangci-lint / `go test -race` all green before Round 1
 - [ ] Mode auto-detected correctly (or overridden)
 - [ ] Codex invoked with `--sandbox read-only` and **no `--full-auto`**; run header confirmed `sandbox: read-only`
+- [ ] **Diff file proven non-empty** in fallback mode — an empty one is reviewed silently and comes back APPROVE
+- [ ] `BASE` explicitly set before any `git diff "$BASE"…` — unset yields a 0-byte diff with exit 0
 - [ ] Every invocation wrapped in `timeout "$CODEX_TIMEOUT"` and run in the foreground
-- [ ] `git status --porcelain` clean after each resume round (resume ignores `--sandbox`)
+- [ ] Resume rounds passed `-c sandbox_mode="read-only"`; `git status --porcelain` clean afterwards
 - [ ] Critical findings fixed with a regression test verified RED against the bug
 - [ ] **Every guard added or changed this round mutation-tested** — implementation broken, guard observed failing by name, mutation reverted (`.claude/rules/verifying-guards.md`)
 - [ ] After any non-trivial rebase, at least one mutation re-run — auto-merge can silently produce an unfailable test with nobody writing one
