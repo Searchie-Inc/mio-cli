@@ -219,6 +219,8 @@ Cross-cutting observations: 1-3 sentences.
 - Never skip/bypass `go vet`, `golangci-lint`, or tests to make a fix pass — fix the root cause.
 - Read-only sandbox for Codex — it must never modify the tree; Claude applies fixes.
 - Base branch is `main`, never `master`.
+- **`.claude/rules/verifying-guards.md` applies to every fix round.** Any guard you add or change to close a finding must be broken and observed failing before you claim it works. A fix round is the highest-risk code in the repo: it ships with a comment asserting coverage nobody has tested. Seven unfailable guards reached (or nearly reached) `main` in a single week; reading caught none of them.
+- **If Codex is unavailable, a blind review is the substitute — not skipping.** Spawn a reviewer with no prior context: give it the diff, the primary sources and the repo conventions, and explicitly *not* the PR body's claims, your reasoning, or a list of what to check. Steering it toward a known weak spot forfeits the only thing that makes its agreement worth anything.
 
 ## Checklist before declaring a review done
 
@@ -227,6 +229,8 @@ Cross-cutting observations: 1-3 sentences.
 - [ ] Mode auto-detected correctly (or overridden)
 - [ ] Codex invoked with `--sandbox read-only`
 - [ ] Critical findings fixed with a regression test verified RED against the bug
+- [ ] **Every guard added or changed this round mutation-tested** — implementation broken, guard observed failing by name, mutation reverted (`.claude/rules/verifying-guards.md`)
+- [ ] After any non-trivial rebase, at least one mutation re-run — auto-merge can silently produce an unfailable test with nobody writing one
 - [ ] Important findings fixed or explicitly deferred with justification
 - [ ] Round 2+ used `codex exec resume --last`
 - [ ] Final verdict APPROVE (or escalated at the 3-round cap); fixes committed
