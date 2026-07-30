@@ -36,7 +36,7 @@ import (
 // scaffoldStepNames is the ordered pipeline the dry-run plan must name, in order.
 var scaffoldStepNames = []string{
 	"hub", "blobs", "spaces", "onboarding", "policies",
-	"playlists", "pages", "publish", "backend-gated",
+	"playlists", "pages", "publish", "welcome-post",
 }
 
 // humanScaffold pins a scaffold invocation to the PROSE surface (the plan /
@@ -1814,35 +1814,209 @@ func TestStepPublish_FalseRecordsSkipNote(t *testing.T) {
 	}
 }
 
-// ─── Task 20: stepBackendGated ────────────────────────────────────────────────
+// ─── Task 20 / MIO-2558: stepWelcomePost ──────────────────────────────────────
+//
+// Was `stepBackendGated`, a skip-with-note for two backend tickets. Both shipped
+// (MIO-2540 in 6565362d — server-side only, nothing for the CLI to do; MIO-2262
+// in 0da17745 — the admin create-discussion endpoint), so the step now POSTs the
+// template's welcome post and these tests pin that contract instead of the note.
 
-// TestStepBackendGated_FiresNoRequest: the backend-gated step (welcome post +
-// auto-admin) is not CLI-doable yet, so it must fire no request at all.
-func TestStepBackendGated_FiresNoRequest(t *testing.T) {
-	srv, fired := firedGuardServer(t)
-	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	if err := stepBackendGated(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
-		t.Fatalf("stepBackendGated: %v", err)
-	}
-	if *fired {
-		t.Error("backend-gated step must fire NO request (no CLI endpoint exists yet)")
+// templateWithWelcomePost is the minimal hub template the welcome-post tests
+// drive: one space, and a welcomePost referencing it by slug.
+func templateWithWelcomePost() *catalog.HubTemplate {
+	return &catalog.HubTemplate{
+		ID:     "community",
+		Spaces: []catalog.TemplateSpace{{Name: "General", Slug: "general"}},
+		WelcomePost: &catalog.TemplateWelcomePost{
+			Space: "general", Title: "Welcome!", Body: "Say hi.", Published: true,
+		},
 	}
 }
 
-// TestStepBackendGated_RecordsSkipNoteWithTickets: the skip note names both
-// backend tickets (MIO-2262 welcome post, MIO-2540 auto-admin) so an operator
-// knows exactly what is deferred and why.
-func TestStepBackendGated_RecordsSkipNoteWithTickets(t *testing.T) {
-	sc, plan := newDryRunStepSC(client.New("http://unused", "k"))
-	if err := stepBackendGated(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
-		t.Fatalf("stepBackendGated dry-run: %v", err)
+// TestStepWelcomePost_NoTemplateDeclaration_FiresNoRequest: a template with no
+// welcomePost — the shape of EVERY catalog shipped so far, `community` at 0.14.1
+// included — must converge to a no-op. The CLI holds no templates, so it must
+// never invent welcome-post copy.
+func TestStepWelcomePost_NoTemplateDeclaration_FiresNoRequest(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	if err := stepWelcomePost(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
+		t.Fatalf("stepWelcomePost: %v", err)
 	}
-	if len(*plan) != 1 || (*plan)[0].step != "backend-gated" {
-		t.Fatalf("plan = %v, want one `backend-gated` entry", *plan)
+	if *fired {
+		t.Error("a template with no welcomePost must fire NO request")
+	}
+	if sc.welcomePostID != "" {
+		t.Errorf("welcomePostID = %q, want empty", sc.welcomePostID)
+	}
+}
+
+// TestStepWelcomePost_CreatesOnceInResolvedSpace: with a welcomePost declared,
+// the step resolves the space SLUG to the hub's real space id, pre-checks the
+// discussions list for the title, and POSTs the create envelope — carrying the
+// endpoint's four attributes and NO author field.
+func TestStepWelcomePost_CreatesOnceInResolvedSpace(t *testing.T) {
+	var posts int
+	var postPath string
+	var postBody []byte
+	var listQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodPost:
+			posts++
+			postPath = r.URL.Path
+			postBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"disc_new","type":"discussions","attributes":{"title":"Welcome!"}}}`))
+		case strings.HasSuffix(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"sp_gen","type":"spaces","attributes":{"slug":"general"}}]}`))
+		default: // discussions list — empty, so nothing to adopt
+			listQuery = r.URL.RawQuery
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	if err := stepWelcomePost(sc, templateWithWelcomePost()); err != nil {
+		t.Fatalf("stepWelcomePost: %v", err)
+	}
+	if posts != 1 {
+		t.Fatalf("POSTs = %d, want exactly 1", posts)
+	}
+	if want := "/api/v1/admin/teams/t_team1/hubs/hub_1/discussions"; postPath != want {
+		t.Errorf("POST path = %q, want %q", postPath, want)
+	}
+	// The pre-check must be SCOPED to the resolved space id, not the slug.
+	if !strings.Contains(listQuery, "filter%5Bspace_id%5D=sp_gen") {
+		t.Errorf("discussions list query = %q, want filter[space_id]=sp_gen", listQuery)
+	}
+	typ, attrs := decodeDataTypeAttrs(t, postBody)
+	if typ != "discussions" {
+		t.Errorf("type = %q, want discussions", typ)
+	}
+	want := map[string]any{
+		"space_id":     "sp_gen", // the SLUG resolved to the hub's real id
+		"title":        "Welcome!",
+		"body":         "Say hi.",
+		"is_published": true,
+	}
+	if !reflect.DeepEqual(attrs, want) {
+		t.Errorf("attributes = %v, want %v (no author field — it is server-derived)", attrs, want)
+	}
+	if sc.welcomePostID != "disc_new" {
+		t.Errorf("welcomePostID = %q, want disc_new", sc.welcomePostID)
+	}
+}
+
+// TestStepWelcomePost_ResumeSkipsExistingTitle: the endpoint has no upsert and
+// its schema carries no meta field, so the only available idempotency key is the
+// TITLE within the target space. A resume must adopt the existing post's id and
+// POST nothing — the "re-run never creates a second welcome post" contract.
+func TestStepWelcomePost_ResumeSkipsExistingTitle(t *testing.T) {
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodPost:
+			posts++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"disc_dupe","type":"discussions","attributes":{}}}`))
+		case strings.HasSuffix(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"sp_gen","type":"spaces","attributes":{"slug":"general"}}]}`))
+		default: // discussions list — the earlier run's welcome post is here
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"disc_prev","type":"discussions","attributes":{"title":"Welcome!"}}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	if err := stepWelcomePost(sc, templateWithWelcomePost()); err != nil {
+		t.Fatalf("stepWelcomePost: %v", err)
+	}
+	if posts != 0 {
+		t.Errorf("POSTs = %d, want 0 — a re-run must not create a second welcome post", posts)
+	}
+	if sc.welcomePostID != "disc_prev" {
+		t.Errorf("welcomePostID = %q, want disc_prev (the existing post is adopted)", sc.welcomePostID)
+	}
+}
+
+// TestStepWelcomePost_ExhaustiveTitleLookupFindsPage2: the welcome post is a
+// hub's OLDEST discussion and the admin list is ordered last_activity_at DESC,
+// so in an active community it sits on the last page. The pre-check must follow
+// this endpoint's own cursor envelope — a BARE meta.next_cursor/meta.has_more,
+// NOT the meta.page.* shape the spaces lookup reads — or a resume duplicates it.
+func TestStepWelcomePost_ExhaustiveTitleLookupFindsPage2(t *testing.T) {
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodPost:
+			posts++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"disc_dupe","type":"discussions","attributes":{}}}`))
+		case strings.HasSuffix(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"sp_gen","type":"spaces","attributes":{"slug":"general"}}]}`))
+		case r.URL.Query().Get("page[after]") == "":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"disc_other","type":"discussions","attributes":{"title":"Chatter"}}],` +
+				`"meta":{"has_more":true,"next_cursor":"2026-07-29T00:00:00Z|disc_other"}}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"disc_prev","type":"discussions","attributes":{"title":"Welcome!"}}],` +
+				`"meta":{"has_more":false,"next_cursor":null}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	if err := stepWelcomePost(sc, templateWithWelcomePost()); err != nil {
+		t.Fatalf("stepWelcomePost: %v", err)
+	}
+	if posts != 0 {
+		t.Errorf("POSTs = %d, want 0 — the page-2 match must be found", posts)
+	}
+	if sc.welcomePostID != "disc_prev" {
+		t.Errorf("welcomePostID = %q, want disc_prev", sc.welcomePostID)
+	}
+}
+
+// TestStepWelcomePost_DryRunRecordsPlanEntry: --dry-run must show the step in
+// the plan (naming the post and its target space) and fire nothing.
+func TestStepWelcomePost_DryRunRecordsPlanEntry(t *testing.T) {
+	sc, plan := newDryRunStepSC(client.New("http://unused", "k"))
+	if err := stepWelcomePost(sc, templateWithWelcomePost()); err != nil {
+		t.Fatalf("stepWelcomePost dry-run: %v", err)
+	}
+	if len(*plan) != 1 || (*plan)[0].step != "welcome-post" {
+		t.Fatalf("plan = %v, want one `welcome-post` entry", *plan)
 	}
 	detail := (*plan)[0].detail
-	if !strings.Contains(detail, "MIO-2262") || !strings.Contains(detail, "MIO-2540") {
-		t.Errorf("skip detail = %q, want it to name MIO-2262 and MIO-2540", detail)
+	if !strings.Contains(detail, "Welcome!") || !strings.Contains(detail, "general") {
+		t.Errorf("plan detail = %q, want it to name the post title and target space", detail)
+	}
+}
+
+// TestStepWelcomePost_DryRunNoDeclarationSaysSo: the no-op branch still records a
+// plan entry — the plan names every step, and an operator reading it must be able
+// to tell "nothing to post" from "step missing".
+func TestStepWelcomePost_DryRunNoDeclarationSaysSo(t *testing.T) {
+	sc, plan := newDryRunStepSC(client.New("http://unused", "k"))
+	if err := stepWelcomePost(sc, &catalog.HubTemplate{ID: "community"}); err != nil {
+		t.Fatalf("stepWelcomePost dry-run: %v", err)
+	}
+	if len(*plan) != 1 || (*plan)[0].step != "welcome-post" {
+		t.Fatalf("plan = %v, want one `welcome-post` entry", *plan)
+	}
+	if !strings.Contains((*plan)[0].detail, "no welcome post in template") {
+		t.Errorf("plan detail = %q, want the no-declaration note", (*plan)[0].detail)
 	}
 }
 
@@ -1864,6 +2038,10 @@ type scaffoldCapture struct {
 	// captured separately from the policy-content PATCHes because the reported
 	// bug was exactly that the content write happened and this one did not.
 	policyGateBodies [][]byte
+	// discussionPosts are the bodies POSTed to .../discussions — the welcome-post
+	// step's writes (MIO-2558). Empty on a run whose template declares none, which
+	// is every catalog shipped so far.
+	discussionPosts [][]byte
 }
 
 // fullScaffoldServer answers every request a full CREATE-mode scaffold run of the
@@ -1873,12 +2051,11 @@ func fullScaffoldServer(t *testing.T) (*httptest.Server, *scaffoldCapture) {
 	return fullScaffoldServerFor(t, "hub_new", true)
 }
 
-// fullScaffoldServerFor answers every request a full scaffold run of the community
-// template makes for the given hub id, reporting the hub's is_private on the hub
-// GET (so resume-mode tests can seed an already-published hub): the hub create +
-// retrieve, empty collection lists (so every idempotency pre-check creates on a
-// fresh hub), generic created children, the homepage tree PUT — and it CAPTURES
-// every PATCH to the hub itself (blobs + publish).
+// fullScaffoldServerFor serves the checked-in 2.1 catalog for a given hub id;
+// fullScaffoldServerWithCatalog (below) takes the catalog BODY, for tests that
+// need a template shape the shipped fixture does not carry — MIO-2567's
+// policy-gate variants and MIO-2558's welcomePost both do. Both funnel into
+// fullScaffoldServerAll so there is one stub, not one per ticket.
 func fullScaffoldServerFor(t *testing.T, hubID string, isPrivate bool) (*httptest.Server, *scaffoldCapture) {
 	t.Helper()
 	return fullScaffoldServerAll(t, hubID, isPrivate, catalog21Body(t))
@@ -1934,6 +2111,11 @@ func fullScaffoldServerAll(t *testing.T, hubID string, isPrivate bool, catBody [
 			// W2b op probe (Task 9): absent on this backend — the full-run tests
 			// pin the CLIENT-SIDE pipeline, so the probe 404s and falls back.
 			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/discussions"): // welcome post (MIO-2558)
+			body, _ := io.ReadAll(r.Body)
+			rec.discussionPosts = append(rec.discussionPosts, body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"disc_new","type":"discussions","attributes":{"title":"Welcome!"}}}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/hubs"): // hub create
 			w.WriteHeader(http.StatusCreated)
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"hubs","attributes":{"slug":"my-community","is_private":true}}}`, hubID)
@@ -2645,6 +2827,108 @@ func noHubTemplatesCatalogBody(t *testing.T) []byte {
 		t.Fatalf("marshal no-hubTemplates catalog: %v", err)
 	}
 	return out
+}
+
+// welcomePostCatalogBody synthesizes a digest-valid catalog whose `community`
+// hub template DOES declare a welcomePost (MIO-2558). No shipped catalog carries
+// one — the CLI holds no templates, so the wiring can only be exercised against a
+// synthesized artifact — and it is derived from the checked-in 2.1 fixture rather
+// than hand-written so it stays a real catalog in every other respect. Same
+// re-digest dance as noHubTemplatesCatalogBody: mutate, drop meta.digest,
+// recompute, put it back, or the mutating resolve fails closed.
+func welcomePostCatalogBody(t *testing.T) []byte {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(catalog21Body(t)))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("parse 2.1 catalog fixture: %v", err)
+	}
+	hubTemplates, ok := doc["hubTemplates"].([]any)
+	if !ok || len(hubTemplates) == 0 {
+		t.Fatal("2.1 catalog fixture has no hubTemplates[]")
+	}
+	ht, ok := hubTemplates[0].(map[string]any)
+	if !ok {
+		t.Fatal("hubTemplates[0] is not an object")
+	}
+	ht["welcomePost"] = map[string]any{
+		"space": "general", // the community template's first space
+		"title": "Welcome!",
+		"body":  "Say hi in the comments.",
+	}
+	meta, ok := doc["meta"].(map[string]any)
+	if !ok {
+		t.Fatal("2.1 catalog fixture has no meta object")
+	}
+	delete(meta, "digest")
+	digest, err := catalog.Digest(doc)
+	if err != nil {
+		t.Fatalf("recompute welcomePost catalog digest: %v", err)
+	}
+	meta["digest"] = digest
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal welcomePost catalog: %v", err)
+	}
+	return out
+}
+
+// TestScaffold_WelcomePostWiredEndToEnd: a template declaring a welcomePost makes
+// the full CLI run POST it exactly once, into the space the run created, and
+// report its id on the machine-readable result. This is the WIRING (runHubsScaffold
+// → pipeline → step), on top of the step-level contract tests above.
+func TestScaffold_WelcomePostWiredEndToEnd(t *testing.T) {
+	srv, rec := fullScaffoldServerWithCatalog(t, welcomePostCatalogBody(t))
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--output", "json")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(rec.discussionPosts) != 1 {
+		t.Fatalf("discussion POSTs = %d, want exactly 1", len(rec.discussionPosts))
+	}
+	typ, attrs := decodeDataTypeAttrs(t, rec.discussionPosts[0])
+	if typ != "discussions" {
+		t.Errorf("type = %q, want discussions", typ)
+	}
+	// space_id is the id the stub minted for the created space, NOT the slug —
+	// proof the template's slug ref was resolved through the pipeline.
+	want := map[string]any{
+		"space_id":     "res_new",
+		"title":        "Welcome!",
+		"body":         "Say hi in the comments.",
+		"is_published": true, // template omits is_published → the endpoint's default
+	}
+	if !reflect.DeepEqual(attrs, want) {
+		t.Errorf("welcome post attributes = %v, want %v", attrs, want)
+	}
+	if got := decodeSoleJSON(t, res.Stdout); got["welcome_post_id"] != "disc_new" {
+		t.Errorf("welcome_post_id = %v, want disc_new; result=%v", got["welcome_post_id"], got)
+	}
+}
+
+// TestScaffold_NoWelcomePostDeclared_NoDiscussionWrite: the shipped `community`
+// template declares no welcomePost, so a normal run must POST no discussion at
+// all and report welcome_post_id as JSON null (never "").
+func TestScaffold_NoWelcomePostDeclared_NoDiscussionWrite(t *testing.T) {
+	srv, rec := fullScaffoldServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--output", "json")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(rec.discussionPosts) != 0 {
+		t.Errorf("discussion POSTs = %d, want 0 — the template declares no welcome post", len(rec.discussionPosts))
+	}
+	got := decodeSoleJSON(t, res.Stdout)
+	if v, present := got["welcome_post_id"]; !present || v != nil {
+		t.Errorf("welcome_post_id = %v (present=%v), want an explicit null", v, present)
+	}
 }
 
 // catalogRoute is a newMockServer handler serving the raw catalog body on

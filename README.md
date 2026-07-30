@@ -389,6 +389,7 @@ Scripts and agents can branch on these stable codes.
 | `media hub-playlists` | `publish`, `list`, `unpublish` — publish playlists to a hub (`--playlist-id`) |
 | `media attachments` | `list`, `show`, `update`, `delete` |
 | `media transcripts` | `get`, `vtt`, `content`, `versions`, `edit`, `revert` |
+| `community discussions` | `list`, `create`, `retrieve`, `update`, `delete` — hub-scoped admin verbs. `create` takes `--space-id` and `--title` (plus `--body`, and `--is-published=false` for a draft) and posts as *you*: the author is derived server-side from your credentials, so there is no flag to author as someone else. `update` sets moderation state only (`--is-pinned`/`--is-locked`/`--is-broadcast`) — title and body are the author's |
 | `products` | `create`, `list`, `retrieve`, `update`, `delete`; `prices create/list/retrieve/update/delete` |
 | `checkout` | `orders list/retrieve`; `subscriptions list/retrieve/cancel`; `payments list/retrieve/refund`; `webhooks list/retrieve/replay`; `accounts list/retrieve/onboarding-link` (onboarding-link is web/JWT-only — see [Troubleshooting](#troubleshooting)); `stripe-sync import/import-status/adopt-product` |
 | `email` | `drip-campaigns create/list/retrieve/update/delete/activate/pause` (create/update now accept `--enrollment-mode`, `--trigger-event-type`, `--segment-id`, `--segment-check-interval-minutes`, `--allow-reenrollment`); `steps create/list/update/delete`; `templates create/list/retrieve/update/delete/preview`; `config set/get/delete/test`; `enrollments list/exit`; `stats get` |

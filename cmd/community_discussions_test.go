@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
@@ -126,6 +127,125 @@ func TestCommunityDiscussionsUpdate_RemovedFlagsRejected(t *testing.T) {
 		}
 		if *gotMethod != "" {
 			t.Errorf("%v fired a request (%s), want none", extra, *gotMethod)
+		}
+	}
+}
+
+// MIO-2808: `community discussions create` — the CLI half of mio-backend #544
+// (0da17745), the impersonation-free admin welcome-post endpoint
+// POST /api/admin/teams/{team_id}/hubs/{hub_id}/discussions.
+
+// TestCommunityDiscussionsCreate_PostsEnvelopeToCollection pins the whole wire
+// contract: POST to the COLLECTION path, JSON:API type "discussions" (derived
+// from the path — the backend schema's type Literal), and exactly the four
+// attributes the create schema accepts.
+func TestCommunityDiscussionsCreate_PostsEnvelopeToCollection(t *testing.T) {
+	srv, gotMethod, gotPath, gotBody := captureHubRequest(t, http.StatusCreated)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"community", "discussions", "create",
+			"--space-id", "space_abc", "--title", "Welcome!", "--body", "Say hi.",
+			"--is-published=false")...)
+
+	if res.Code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", res.Code, res.Stderr)
+	}
+	if *gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", *gotMethod)
+	}
+	if want := "/api/v1/admin/teams/t_team1/hubs/hub_123/discussions"; *gotPath != want {
+		t.Errorf("path = %q, want %q (collection, no id)", *gotPath, want)
+	}
+	typ, attrs := decodeDataTypeAttrs(t, *gotBody)
+	if typ != "discussions" {
+		t.Errorf("type = %q, want discussions", typ)
+	}
+	want := map[string]any{
+		"space_id":     "space_abc",
+		"title":        "Welcome!",
+		"body":         "Say hi.",
+		"is_published": false,
+	}
+	if !reflect.DeepEqual(attrs, want) {
+		t.Errorf("attributes = %v, want %v", attrs, want)
+	}
+}
+
+// TestCommunityDiscussionsCreate_OnlyChangedFlagsSerialized: an unset --body /
+// --is-published must NOT be sent. is_published in particular defaults to TRUE
+// server-side, so shipping the flag's Go zero value would silently turn every
+// minimal create into a draft.
+func TestCommunityDiscussionsCreate_OnlyChangedFlagsSerialized(t *testing.T) {
+	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"community", "discussions", "create",
+			"--space-id", "space_abc", "--title", "Welcome!")...)
+
+	if res.Code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", res.Code, res.Stderr)
+	}
+	_, attrs := decodeDataTypeAttrs(t, *gotBody)
+	want := map[string]any{"space_id": "space_abc", "title": "Welcome!"}
+	if !reflect.DeepEqual(attrs, want) {
+		t.Errorf("attributes = %v, want exactly %v (unset flags are not serialized)", attrs, want)
+	}
+}
+
+// TestCommunityDiscussionsCreate_MissingRequiredFlags_UsageNoRequest: a missing
+// --space-id or --title is ExitUsage BEFORE auth/team/hub resolution, so no HTTP
+// fires at all — asserted with a team NAME that would otherwise force a
+// resolving GET.
+func TestCommunityDiscussionsCreate_MissingRequiredFlags_UsageNoRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"no flags at all", nil},
+		{"title without space", []string{"--title", "Welcome!"}},
+		{"space without title", []string{"--space-id", "space_abc"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, gotMethod, _, _ := captureHubRequest(t, http.StatusCreated)
+			args := append([]string{
+				"community", "discussions", "create",
+				"--team", "acme-name", // NOT id-shaped → would trigger a ResolveTeam GET
+				"--hub", "hub_123",
+			}, tc.args...)
+
+			res := runContract(t, baseEnv(srv.URL), args...)
+			if res.Code != errs.ExitUsage {
+				t.Fatalf("exit code = %d, want %d (ExitUsage); stderr=%s", res.Code, errs.ExitUsage, res.Stderr)
+			}
+			if *gotMethod != "" {
+				t.Errorf("a request fired (%s) — the usage error must precede team resolution", *gotMethod)
+			}
+		})
+	}
+}
+
+// TestCommunityDiscussionsCreate_NoAuthorFlag: the author is server-derived by
+// design (MIO-2262). Offering --author-contact-id would re-open the exact
+// impersonation surface that got v1 of the endpoint reverted — and there is no
+// wire field to carry it (the request schema is extra="forbid"), so the flag must
+// not exist and must fire no request.
+func TestCommunityDiscussionsCreate_NoAuthorFlag(t *testing.T) {
+	for _, flag := range []string{"--author-contact-id", "--author-contact", "--author"} {
+		srv, gotMethod, _, _ := captureHubRequest(t, http.StatusCreated)
+
+		res := runContract(t, baseEnv(srv.URL),
+			withTeam("t_team1", "--hub", "hub_123",
+				"community", "discussions", "create",
+				"--space-id", "space_abc", "--title", "Welcome!",
+				flag, "contact_xyz")...)
+
+		if res.Code != errs.ExitUsage {
+			t.Errorf("%s exit = %d, want %d (unknown flag)", flag, res.Code, errs.ExitUsage)
+		}
+		if *gotMethod != "" {
+			t.Errorf("%s fired a request (%s), want none", flag, *gotMethod)
 		}
 	}
 }

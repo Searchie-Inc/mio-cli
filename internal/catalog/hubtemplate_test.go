@@ -159,6 +159,18 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 		{"bad playlist visibility", func(h *HubTemplate) {
 			h.Playlists = []TemplatePlaylist{{Title: "Welcome", Key: "welcome", Visibility: "everyone"}}
 		}},
+		// welcomePost (MIO-2558). community declares none, so construct one: the
+		// scaffold's welcome-post step runs LAST, so a bad ref discovered there
+		// would fail a run that has already written everything else.
+		{"welcomePost missing title", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{Space: h.Spaces[0].Slug, Title: ""}
+		}},
+		{"welcomePost missing space", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{Space: "", Title: "Welcome!"}
+		}},
+		{"welcomePost space not in template", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{Space: "no-such-space", Title: "Welcome!"}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,6 +187,47 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 			tc.mutate(&h)
 			if err := h.Validate(c); err == nil {
 				t.Error("Validate() = nil, want error")
+			}
+		})
+	}
+}
+
+// TestHubTemplateWelcomePost_ParseAndDefault pins the OPTIONAL welcomePost block
+// (MIO-2558): absent ⇒ nil (so the scaffold step no-ops, which is what every
+// shipped catalog gets — `community` at 0.14.1 declares no welcomePost), present
+// ⇒ parsed verbatim with is_published defaulting to the endpoint's own
+// server-side default of TRUE rather than the Go bool zero value (which would
+// scaffold an invisible draft).
+func TestHubTemplateWelcomePost_ParseAndDefault(t *testing.T) {
+	if h, ok := load21ForTest(t).HubTemplateByID("community"); !ok {
+		t.Fatal("HubTemplateByID(community) not found")
+	} else if h.WelcomePost != nil {
+		t.Errorf("community.WelcomePost = %+v, want nil — the shipped catalog declares none", h.WelcomePost)
+	}
+
+	for _, tc := range []struct {
+		name string
+		raw  Node
+		want TemplateWelcomePost
+	}{
+		{
+			name: "is_published omitted defaults to true",
+			raw:  Node{"space": "general", "title": "Welcome!", "body": "Say hi."},
+			want: TemplateWelcomePost{Space: "general", Title: "Welcome!", Body: "Say hi.", Published: true},
+		},
+		{
+			name: "is_published false is honored",
+			raw:  Node{"space": "general", "title": "Draft", "is_published": false},
+			want: TemplateWelcomePost{Space: "general", Title: "Draft", Published: false},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := parseHubTemplate(Node{"id": "x", "welcomePost": tc.raw})
+			if h.WelcomePost == nil {
+				t.Fatal("WelcomePost = nil, want parsed")
+			}
+			if *h.WelcomePost != tc.want {
+				t.Errorf("WelcomePost = %+v, want %+v", *h.WelcomePost, tc.want)
 			}
 		})
 	}

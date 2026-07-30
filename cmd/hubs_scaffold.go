@@ -114,6 +114,12 @@ type scaffoldContext struct {
 	// ToS is written but nothing enforces it" is invisible in every other field.
 	policyGate *bool
 
+	// welcomePostID is the id of the template's welcome discussion as far as this
+	// run knows it (MIO-2558): the one stepWelcomePost created, or the one its
+	// title pre-check ADOPTED from an earlier run. "" when the template declares
+	// no welcomePost — which is every catalog shipped so far.
+	welcomePostID string
+
 	// publish is the --publish intent (Task 21 registers the flag; read
 	// existence-guarded in runHubsScaffold, so it defaults false until then). When
 	// false the publish step is a skip-with-note and the hub stays private.
@@ -211,7 +217,11 @@ var scaffoldPipeline = []scaffoldStep{
 	{"playlists", stepPlaylists},
 	{"pages", stepPages},
 	{"publish", stepPublish},
-	{"backend-gated", stepBackendGated},
+	// Renamed from "backend-gated" by MIO-2558: both things that step deferred
+	// have shipped, and it now POSTs the template's welcome post. Leaving the old
+	// name would have put "step \"backend-gated\" failed" on a failed POST and
+	// described a mutating step as a deferral in the --dry-run plan.
+	{"welcome-post", stepWelcomePost},
 }
 
 // stepHub creates the hub (create mode) or records that an existing one is being
@@ -414,12 +424,15 @@ func stepSpaces(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	detail := fmt.Sprintf("GET+POST %s — create missing space(s) [%s] (skip-if-slug-exists, exhaustive)",
 		spacesPath(sc.teamID, sc.hubIDOrPlaceholder(), ""), strings.Join(slugs, ", "))
 	return sc.step("spaces", detail, func() error {
-		existing, err := sc.existingSpaceSlugs()
+		existing, err := sc.existingSpacesBySlug()
 		if err != nil {
 			return err
 		}
 		for _, s := range t.Spaces {
-			if existing[s.Slug] {
+			// Keyed on PRESENCE, not on a non-empty id: the map records every slug
+			// the listing exposed, and a (hypothetical) space the API returned
+			// without an id must still count as existing rather than be re-created.
+			if _, exists := existing[s.Slug]; exists {
 				continue // already present — skip (idempotent resume)
 			}
 			attrs, berr := buildSpaceAttrs(templateSpaceInput(s))
@@ -447,10 +460,16 @@ func (sc *scaffoldContext) hubIDOrPlaceholder() string {
 	return "<hub_id>"
 }
 
-// existingSpaceSlugs returns the set of slugs of every space the admin spaces
-// list exposes for the hub, following the backend's pagination cursor to
+// existingSpacesBySlug returns slug→id for every space the admin spaces list
+// exposes for the hub, following the backend's pagination cursor to
 // exhaustion so the skip-if-exists pre-check cannot miss a space and create a
 // duplicate (design §Idempotency; the list exposes no server-side slug filter).
+//
+// It carries the IDs, not just the slugs, because the welcome-post step
+// (MIO-2558) has to turn a template space SLUG into the hub's real space id, and
+// on a resume the space it targets was created by an earlier run — so
+// sc.spaceIDsBySlug (deliberately "what THIS run created", see stepSpaces) is
+// empty for it. One walk, two callers, no second pagination loop to keep in sync.
 //
 // Cursor convention (verified): the mio-backend standard pagination envelope
 // (app/infrastructure/pagination.py) carries the next page's cursor at
@@ -466,8 +485,8 @@ func (sc *scaffoldContext) hubIDOrPlaceholder() string {
 // paging; until then, exhaustiveness is bounded by that first page (see the
 // caller's concern note). The seen-cursor set + maxPages bound are a stall guard:
 // a buggy server returning a stable/looping non-empty cursor can never spin here.
-func (sc *scaffoldContext) existingSpaceSlugs() (map[string]bool, error) {
-	slugs := map[string]bool{}
+func (sc *scaffoldContext) existingSpacesBySlug() (map[string]string, error) {
+	slugs := map[string]string{}
 	seen := map[string]bool{}
 	query := url.Values{}
 	const maxPages = 1000 // hard ceiling (~20k spaces at page_size 20); a hub never has that many
@@ -478,7 +497,7 @@ func (sc *scaffoldContext) existingSpaceSlugs() (map[string]bool, error) {
 		}
 		for _, r := range col.Data {
 			if s, ok := r.Attributes["slug"].(string); ok && s != "" {
-				slugs[s] = true
+				slugs[s] = r.ID
 			}
 		}
 		next := nextPageCursor(col)
@@ -1061,16 +1080,151 @@ func stepPublish(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	})
 }
 
-// stepBackendGated is the terminal skip-with-note: the welcome discussion post
-// (backend MIO-2262 admin create-discussion) and the auto-assign-admin flow
-// (backend MIO-2540) are not CLI-doable — no endpoint exists yet — so this step
-// fires NO request and records exactly what is deferred and why, so an operator
-// (or a future revision) knows precisely which endpoints to wire in when they land
-// (design §Apply pipeline step 9, MIO-2543 Task 20).
-func stepBackendGated(sc *scaffoldContext, _ *catalog.HubTemplate) error {
-	return sc.step("backend-gated",
-		"welcome post (MIO-2262) and auto-admin (MIO-2540) skipped — need backend endpoints; wire in when they land",
-		func() error { return nil })
+// stepWelcomePost is the terminal step: it lands the template's welcome
+// discussion in one of the hub's own spaces (design §Apply pipeline step 9,
+// MIO-2543 Task 20, finished under MIO-2558).
+//
+// This step used to be `backend-gated`, a skip-with-note deferring two items to
+// mio-backend. BOTH have since shipped to production, so the note was stale in
+// both halves and this step now does real work for one of them:
+//
+//   - MIO-2540 (auto-assign the hub creator as owner-admin on create) landed in
+//     6565362d and is server-side ONLY — the backend does it as part of the hub
+//     create this pipeline already fires. There is nothing for the CLI to wire,
+//     which is why nothing here mentions it any more: a note about a step that
+//     silently already happens is worse than no note.
+//   - MIO-2262 (0da17745) added POST .../hubs/{hub_id}/discussions, the
+//     impersonation-free admin welcome-post route. That is the one below, driven
+//     through the CLI's own `community discussions create` path shape.
+//
+// IDEMPOTENCY — the create endpoint has no upsert and no natural key, and its
+// request schema (extra="forbid": space_id/title/body/is_published) has no meta
+// field, so the pages step's provenance-marker trick is not available here. The
+// pre-check is therefore a TITLE match within the target space, using the admin
+// list's filter[space_id]: found ⇒ skip and adopt that id. That list includes
+// soft-deleted rows, deliberately — a welcome post the operator DELETED must not
+// be resurrected by the next resume, the same "never fight the operator"
+// direction the pages step takes with edited drafts.
+func stepWelcomePost(sc *scaffoldContext, t *catalog.HubTemplate) error {
+	wp := t.WelcomePost
+	if wp == nil {
+		// No catalog ships a welcomePost yet (`community` at 0.14.1 has no such
+		// key), so this is the branch every real run takes today. The CLI holds no
+		// templates (spec §0) and must not invent post copy, so the step converges
+		// to a clean no-op rather than posting something nobody authored.
+		return sc.step("welcome-post", "no welcome post in template", func() error { return nil })
+	}
+	detail := fmt.Sprintf("GET+POST %s — create welcome discussion %q in space %q (skip-if-title-exists)",
+		discussionsAdminPath(sc.teamID, sc.hubIDOrPlaceholder(), ""), wp.Title, wp.Space)
+	return sc.step("welcome-post", detail, func() error {
+		// The space this run just created is already in hand (stepSpaces records
+		// what it creates), so the common create-mode path costs no extra request
+		// and cannot be tripped by read-after-write lag on a freshly-created space.
+		// Only a RESUME — where the space predates this invocation and
+		// spaceIDsBySlug is therefore empty for it — pays for the listing.
+		spaceID := sc.spaceIDsBySlug[wp.Space]
+		if spaceID == "" {
+			spaces, lerr := sc.existingSpacesBySlug()
+			if lerr != nil {
+				return lerr
+			}
+			spaceID = spaces[wp.Space]
+		}
+		if spaceID == "" {
+			// Unreachable on a healthy run: the template validator proves the slug is
+			// one of spaces[], and stepSpaces converged them onto the hub. Reaching
+			// here means the space vanished between the two steps (or was created
+			// without an id), so fail loud rather than post into the wrong space.
+			return errs.New(errs.ExitGeneric,
+				"welcome post: space %q was not found on hub %s (it should have been created by the spaces step)",
+				wp.Space, sc.hubID)
+		}
+
+		existingID, ferr := sc.discussionIDByTitle(spaceID, wp.Title)
+		if ferr != nil {
+			return ferr
+		}
+		if existingID != "" {
+			sc.welcomePostID = existingID // adopt the earlier run's post
+			sc.notef("welcome post: %q already exists in space %q — skipped", wp.Title, wp.Space)
+			return nil
+		}
+
+		attrs := map[string]any{
+			"space_id": spaceID,
+			"title":    wp.Title,
+			// is_published is sent unconditionally: TemplateWelcomePost.Published
+			// already carries the endpoint's own default (true) for a template that
+			// omits the key, so this is always a value the template meant.
+			"is_published": wp.Published,
+		}
+		if wp.Body != "" {
+			attrs["body"] = wp.Body
+		}
+		res, cerr := sc.cl.Create(sc.ctx, discussionsAdminPath(sc.teamID, sc.hubID, ""), attrs)
+		if cerr != nil {
+			return cerr
+		}
+		sc.welcomePostID = res.ID
+		return nil
+	})
+}
+
+// discussionIDByTitle returns the id of the first discussion in spaceID whose
+// title matches exactly, or "" when there is none. It walks the admin
+// discussions list to exhaustion, because a hub's welcome post is its OLDEST
+// discussion and the list is ordered last_activity_at DESC — in an active
+// community it is the last row on the last page, so a first-page-only check
+// would re-create it on every resume.
+//
+// CURSOR SHAPE (verified against mio-backend app/community/routers/
+// discussions_admin.py::_list_response, read 2026-07-29): this endpoint does NOT
+// use the standard meta.page envelope the spaces/contact-attribute lookups read
+// via nextPageCursor. It emits a BARE top-level meta.next_cursor gated by
+// meta.has_more, with the cursor itself a "<last_activity_at ISO-8601>|<id>"
+// pair echoed back as page[after]. Reusing nextPageCursor here would read
+// meta.page.next_cursor, find nothing, and silently stop after page 1 — hence
+// the separate reader below. page[size] is asked at the backend's clamp ceiling
+// (100) to bound the walk.
+func (sc *scaffoldContext) discussionIDByTitle(spaceID, title string) (string, error) {
+	seen := map[string]bool{}
+	cursor := ""
+	const maxPages = 1000 // hard ceiling (100k discussions at page_size 100); a stall guard, not a real bound
+	for page := 0; page < maxPages; page++ {
+		query := url.Values{}
+		query.Set("filter[space_id]", spaceID)
+		query.Set("page[size]", "100")
+		if cursor != "" {
+			query.Set("page[after]", cursor)
+		}
+		col, err := sc.cl.List(sc.ctx, discussionsAdminPath(sc.teamID, sc.hubID, ""), query)
+		if err != nil {
+			return "", err
+		}
+		for _, r := range col.Data {
+			if s, ok := r.Attributes["title"].(string); ok && s == title {
+				return r.ID, nil
+			}
+		}
+		next := discussionsNextCursor(col)
+		if next == "" || seen[next] {
+			break // no more pages, or a repeated cursor (buggy server) — stop
+		}
+		seen[next] = true
+		cursor = next
+	}
+	return "", nil
+}
+
+// discussionsNextCursor reads the admin discussions list's own pagination
+// envelope: a top-level meta.next_cursor gated by meta.has_more (NOT the
+// meta.page.* shape nextPageCursor handles). "" means there is no next page.
+func discussionsNextCursor(col *client.Collection) string {
+	if hasMore, present := col.Meta["has_more"].(bool); present && !hasMore {
+		return ""
+	}
+	cur, _ := col.Meta["next_cursor"].(string)
+	return cur
 }
 
 // scaffoldAfterResolve, when non-nil, is invoked with the fully-resolved
@@ -1443,6 +1597,10 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 //     tell apart: content present, `policies_enabled` reading true off the
 //     FE-facing derivation, and the member endpoint still answering
 //     tos_acceptance_required:false;
+//   - welcome_post_id (MIO-2558) is ADDITIVE, like every field before it: the id
+//     of the template's welcome discussion as this run knows it — created, or
+//     adopted by the title pre-check on a resume — and null when the template
+//     declares no welcomePost (the case for every catalog shipped so far);
 //   - branding_overrides (MIO-2604) reports the RESOLVED override layer — the
 //     palette flags and --branding-json keys, CASCADE INCLUDED — so a caller can
 //     see what the CLI actually sent (notably the header_color it derived from
@@ -1503,6 +1661,7 @@ func scaffoldResult(sc *scaffoldContext, templateID string) map[string]any {
 		"catalog_revision":      nil,
 		"branding_overrides":    sc.branding.resolved(),
 		"homepage_page_id":      nilIfEmpty(scaffoldHomepageID(sc)),
+		"welcome_post_id":       nilIfEmpty(sc.welcomePostID),
 		"pages":                 pages,
 		"spaces":                spaces,
 		"onboarding_attributes": onboarding,

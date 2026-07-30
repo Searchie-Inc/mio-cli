@@ -421,7 +421,7 @@ func provenanceMarkerFields(attrs map[string]any) (appID, state string, appliedD
 
 // findHubPage walks the hub's page list EXHAUSTIVELY — same
 // meta.page.next_cursor convention + seen-cursor/maxPages stall guard as the
-// other steps' lookups (see existingSpaceSlugs) — and returns the first page
+// other steps' lookups (see existingSpacesBySlug) — and returns the first page
 // matching match. Every page lookup ("by slug" for the recovery decision; "by
 // is_homepage" for the homepage-hazard pre-check) shares this single walker so
 // the cursor loop is never duplicated.

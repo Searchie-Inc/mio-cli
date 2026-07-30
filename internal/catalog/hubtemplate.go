@@ -97,6 +97,33 @@ type TemplatePlaylist struct {
 	FileIDs                []string
 }
 
+// TemplateWelcomePost is the optional `welcomePost` block: the first discussion
+// a scaffolded community lands in one of its own spaces (MIO-2558), authored via
+// the admin welcome-post endpoint (MIO-2262). Space is a SLUG referencing this
+// template's own spaces[] — the scaffold resolves it to the hub's real space id
+// at apply time, so the manifest stays id-free and reusable.
+//
+// The four fields ARE the endpoint's whole attribute set (its request schema is
+// extra="forbid"); notably there is no author field, because the author is
+// derived server-side from the caller's credentials.
+//
+// Title/Body are LITERAL: {{hub_name}}/{{hub_slug}} interpolation is a closed
+// contract whose scanned locations are exhaustively specified (MIO-2573 §4.3:
+// leaf values on headline/text/button nodes, page titles, nav labels — "nothing
+// else"), and it is implemented three times over in Go/TS/Python against a
+// shared corpus. A welcome post is not one of those locations, so a token here
+// would be stored verbatim — exactly like the equally literal spaces[].name,
+// playlists[].title and policies[].content. Widening §4.3 is a catalog-spec
+// change, not something the CLI may do unilaterally.
+type TemplateWelcomePost struct {
+	Space, Title, Body string
+	// Published mirrors the endpoint's is_published, whose server-side default is
+	// TRUE. A template that omits the key therefore means "publish it" — hence the
+	// explicit default below rather than the bool zero value, which would silently
+	// scaffold every welcome post as an invisible draft.
+	Published bool
+}
+
 // HubTemplate is one hubTemplates[] entry: a declarative full-experience hub
 // definition. The four map[string]any blobs mirror the hub's untyped JSONB
 // blobs; the typed slices carry the per-resource inputs each pipeline step
@@ -108,6 +135,12 @@ type HubTemplate struct {
 	Onboarding                               []TemplateAttrDef
 	Playlists                                []TemplatePlaylist
 	Pages                                    []PageRef
+	// WelcomePost is nil when the template declares no `welcomePost` — which is
+	// the case for every catalog shipped so far, including `community` at catalog
+	// 0.14.1 (its keys are branding/id/label/lifecycle/navigation/onboarding/
+	// pages/playlists/policies/settings/spaces). The scaffold step is then a
+	// clean no-op: the CLI holds no templates and must not invent post copy.
+	WelcomePost *TemplateWelcomePost
 }
 
 // parseHubTemplate maps one raw hubTemplates[] entry onto the typed model.
@@ -162,6 +195,21 @@ func parseHubTemplate(n Node) HubTemplate {
 			FileIDs:    strSlice(m["file_ids"]),
 		})
 	}
+	// welcomePost (MIO-2558): OPTIONAL, so an absent key leaves WelcomePost nil
+	// and the scaffold's welcome-post step a no-op. is_published defaults to the
+	// endpoint's own server-side default (true) when the key is absent.
+	if wp := asNode(n["welcomePost"]); wp != nil {
+		post := &TemplateWelcomePost{
+			Space:     str(wp["space"]),
+			Title:     str(wp["title"]),
+			Body:      str(wp["body"]),
+			Published: true,
+		}
+		if v, ok := wp["is_published"]; ok {
+			post.Published = boolVal(v)
+		}
+		h.WelcomePost = post
+	}
 	for _, v := range slice(n["pages"]) {
 		m, ok := v.(map[string]any)
 		if !ok {
@@ -183,7 +231,9 @@ func parseHubTemplate(n Node) HubTemplate {
 // depend on: pages non-empty with unique non-empty slugs (the backend reserves
 // "home"), a valid privacy on every page, every pageTemplate resolving to a
 // page template in c, and exactly one homepage; space/onboarding slugs unique
-// and non-empty with enum-valid attributes; every policies value an object
+// and non-empty with enum-valid attributes; an optional welcomePost carrying a
+// title and a space slug that names one of this template's own spaces; every
+// policies value an object
 // whose fields are within hubPolicyFieldKeys (a typo must fail preflight, not
 // silently reset policy content); playlist titles non-empty and keys unique
 // and non-empty with enum-valid visibility. Slug/key uniqueness matters
@@ -262,6 +312,24 @@ func (h HubTemplate) Validate(c *Catalog) error {
 			if !hubPolicyFieldKeys[f] {
 				return fmt.Errorf("hub template %q: policies[%q] unknown field %q (allowed: content, require_acceptance, required, enabled)", h.ID, k, f)
 			}
+		}
+	}
+	// welcomePost (MIO-2558). Both checks exist because the welcome-post step runs
+	// LAST, after the hub, its blobs, spaces, pages and the publish PATCH have all
+	// been written: a dangling space ref or a missing title discovered there fails
+	// a run that has already mutated everything else. Preflight is write-free, so
+	// catching it here costs nothing and rolls back nothing.
+	if wp := h.WelcomePost; wp != nil {
+		if wp.Title == "" {
+			return fmt.Errorf("hub template %q: welcomePost missing title", h.ID)
+		}
+		if wp.Space == "" {
+			return fmt.Errorf("hub template %q: welcomePost missing space (the slug of one of this template's spaces)", h.ID)
+		}
+		// The step converges on the hub's REAL spaces, so the ref must name a space
+		// the template itself declares — the only one the scaffold guarantees exists.
+		if !seenSpaceSlugs[wp.Space] {
+			return fmt.Errorf("hub template %q: welcomePost space %q is not one of this template's spaces", h.ID, wp.Space)
 		}
 	}
 	seenPlaylistKeys := map[string]bool{}

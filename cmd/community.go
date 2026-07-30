@@ -15,6 +15,7 @@ package cmd
 // discussions (admin, hub-scoped):
 //
 //	list     GET    /api/admin/teams/{team_id}/hubs/{hub_id}/discussions
+//	create   POST   /api/admin/teams/{team_id}/hubs/{hub_id}/discussions
 //	retrieve GET    /api/admin/teams/{team_id}/hubs/{hub_id}/discussions/{id}
 //	update   PATCH  /api/admin/teams/{team_id}/hubs/{hub_id}/discussions/{id}
 //	delete   DELETE /api/admin/teams/{team_id}/hubs/{hub_id}/discussions/{id}
@@ -53,6 +54,7 @@ func init() {
 	// community discussions <action>
 	communityDiscussionsCmd.AddCommand(
 		communityDiscussionsListCmd,
+		communityDiscussionsCreateCmd,
 		communityDiscussionsRetrieveCmd,
 		communityDiscussionsUpdateCmd,
 		communityDiscussionsDeleteCmd,
@@ -298,7 +300,7 @@ func init() {
 var communityDiscussionsCmd = &cobra.Command{
 	Use:   "discussions",
 	Short: "Manage community discussions.",
-	Long:  "List, retrieve, update and delete discussion posts within a hub. Requires team-admin privileges.",
+	Long:  "List, create, retrieve, update and delete discussion posts within a hub. Requires team-admin privileges.",
 }
 
 // discussionsAdminPath returns .../discussions[/{id}].
@@ -310,10 +312,33 @@ func discussionsAdminPath(teamID, hubID, id string) string {
 	return base
 }
 
-// Note: there is deliberately no `discussions create` — admins must not post on
-// a member's behalf via the CLI/API (MIO-2262 → Won't Do; the endpoint was
-// dropped in mio-backend #487). Authoring a discussion as a specific member
-// stays a seeder-only, in-process capability.
+// AUTHORSHIP (MIO-2262, and why `create` carries no author flag).
+//
+// v1 of the admin create-discussion endpoint took an `author_contact_id` and was
+// reverted for exactly that reason: it let anyone holding a team-owner key post
+// as any member. This file used to carry a note saying the verb was Won't-Do.
+// That note is now WRONG — mio-backend #544 (0da17745, merged 2026-07-22, live in
+// production) landed the endpoint back in an impersonation-free shape:
+//
+//	POST /api/admin/teams/{team_id}/hubs/{hub_id}/discussions
+//	{"data":{"type":"discussions","attributes":{
+//	    "space_id":…, "title":…, "body"?:…, "is_published"?:bool}}}
+//
+// The author is ALWAYS derived server-side from the authenticated actor
+// (contact JWT → that contact; user JWT / team-bound API key → the team owner's
+// contact via resolve_team_owner_contact), and the request schema is
+// extra="forbid", so a smuggled author_contact_id is a 422 rather than a silent
+// ignore. Mirroring that here, the CLI verb has NO --author-contact-id flag:
+// offering one would only manufacture the impersonation surface the endpoint was
+// rebuilt to remove, and there is no wire field to put it in.
+//
+// Authoring a discussion as some OTHER specific member stays a seeder-only,
+// in-process capability — there is still no HTTP surface for it.
+//
+// Note the name collision when searching for prior art: mio-backend ships its own
+// internal ops CLI whose verb is spelled `mio community discussions create` too
+// (cli/commands/community.py) — a Click command running in-process against the
+// database. This one is the HTTP client.
 
 // ---- discussions list -------------------------------------------------------
 
@@ -349,6 +374,59 @@ var communityDiscussionsListCmd = &cobra.Command{
 			return err
 		}
 		return c.render(cmd, col)
+	},
+}
+
+// ---- discussions create -----------------------------------------------------
+
+var communityDiscussionsCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create a discussion in a hub space (authored as you).",
+	Long: `Create a discussion post in one of the hub's spaces — the admin welcome-post
+route (MIO-2262).
+
+The AUTHOR is derived server-side from your credentials (a team-owner key posts
+as the team owner's contact); there is deliberately no flag to author as someone
+else. The post lands in the target space regardless of that space's
+posting_permission, because the backend treats this route as an admin write.
+
+--space-id and --title are required. Omitting --is-published publishes the post
+immediately (the backend default); pass --is-published=false to leave a draft.`,
+	Example: `  mio community discussions create --hub hub_abc123 --space-id space_abc --title "Welcome!"
+  mio community discussions create --hub hub_abc123 --space-id space_abc --title "Welcome!" --body "Say hi in the comments."
+  mio community discussions create --hub hub_abc123 --space-id space_abc --title "Draft" --is-published=false`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Validate before resolving auth/team/hub so a bad invocation fires no
+		// request (repo contract) — same pre-auth discipline `spaces create` follows.
+		attrs := map[string]any{}
+		setStringFlag(cmd, attrs, "space-id")
+		setStringFlag(cmd, attrs, "title")
+		setStringFlag(cmd, attrs, "body")
+		setBoolFlag(cmd, attrs, "is-published")
+
+		if _, ok := attrs["space_id"]; !ok {
+			return errs.New(errs.ExitUsage, "--space-id is required to create a discussion")
+		}
+		if _, ok := attrs["title"]; !ok {
+			return errs.New(errs.ExitUsage, "--title is required to create a discussion")
+		}
+		// PRESENCE is all the CLI checks. The blank/NUL/280-code-point title
+		// contract lives in ONE place server-side (app/community/discussion_text.py,
+		// shared by the endpoint's schema and the backend's own ops CLI); mirroring
+		// it here would be a second copy free to drift, and the conduit rule says a
+		// value the API accepts must reach it. So `--title ""` is a 422, not a
+		// client-side rejection — exactly how `spaces create --name ""` behaves.
+
+		c, teamID, hubID, err := communityContext(cmd)
+		if err != nil {
+			return err
+		}
+		res, err := c.client.Create(c.ctx, discussionsAdminPath(teamID, hubID, ""), attrs)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
 	},
 }
 
@@ -448,6 +526,15 @@ func init() {
 		cmd.Flags().Bool("is-locked", false, "Lock (true) or unlock (false) the discussion.")
 		cmd.Flags().Bool("is-broadcast", false, "Mark (true) or unmark (false) the discussion as a broadcast announcement.")
 	}
+
+	// create (MIO-2262). These four ARE the endpoint's whole attribute set — its
+	// schema is extra="forbid" — and there is no author flag by design (see the
+	// AUTHORSHIP note above). The moderation booleans live on `update` only: the
+	// create schema has no is_pinned/is_locked/is_broadcast field.
+	communityDiscussionsCreateCmd.Flags().String("space-id", "", "Id of the space to post in (required).")
+	communityDiscussionsCreateCmd.Flags().String("title", "", "Discussion title, max 280 characters (required).")
+	communityDiscussionsCreateCmd.Flags().String("body", "", "Markdown body of the post.")
+	communityDiscussionsCreateCmd.Flags().Bool("is-published", true, "Publish immediately (default). Pass --is-published=false to save a draft.")
 
 	addPaginationFlags(communityDiscussionsListCmd)
 	communityDiscussionsListCmd.Flags().String("filter-status", "", "Filter by status (e.g. published, draft).")
