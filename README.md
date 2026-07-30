@@ -374,7 +374,7 @@ Scripts and agents can branch on these stable codes.
 | `teams` | `create`, `list`, `retrieve`, `update`, `delete`, `switch` (server-side switch + updates local context); `members list/add/remove` |
 | `users` | `me`, `list`, `retrieve`, `update` |
 | `roles` | `create`, `list`, `retrieve`, `update`, `delete`; `permissions list` |
-| `hubs` | `create`, `list`, `retrieve`, `update`, `delete`; `navigation list/add/remove/reorder` (edit the menu item-by-item); `policies update`; `scaffold` (one-command full-experience hub from a template live-fetched from the backend catalog; provenance-guarded resume on re-runs), `templates` (list the backend catalog's hub templates) |
+| `hubs` | `create`, `list`, `retrieve`, `update`, `delete`; `navigation list/add/remove/reorder` (edit the menu item-by-item); `policies update` (the document) and `policies gate` (the hub-level enforcement switch — a policy written without the gate is never presented); `scaffold` (one-command full-experience hub from a template live-fetched from the backend catalog; provenance-guarded resume on re-runs; writes the template's policies AND flips the gate they declare), `templates` (list the backend catalog's hub templates) |
 | `contacts` | `create`, `list`, `retrieve`, `update`, `delete`, `restore` |
 | `contact-attributes` | `create/list/retrieve/update/delete` defs; `options` sub-group; `hub-config` sub-group; `values get/set` |
 | `tags` | `create`, `list`, `retrieve`, `update`, `delete`, `assign`, `assign-bulk`, `remove` |

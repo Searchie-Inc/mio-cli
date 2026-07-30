@@ -1253,10 +1253,7 @@ positionally; omit it to use the ambient hub (--hub, or current_hub in config).
 			return err
 		}
 
-		// Enveloped PATCH: the backend HubPolicyGateEnvelope pins data.type to
-		// "hub_policy_gate" (derived from the .../policies/gate tail).
-		res, err := c.client.Action(c.ctx, "PATCH",
-			hubsPoliciesGatePath(teamID, hubID), map[string]any{"enabled": enabled})
+		res, err := applyHubPolicyGate(c.ctx, c.client, teamID, hubID, enabled)
 		if err != nil {
 			return err
 		}
@@ -1266,6 +1263,22 @@ positionally; omit it to use the ambient hub (--hub, or current_hub in config).
 		}
 		return c.render(cmd, res)
 	},
+}
+
+// applyHubPolicyGate flips the hub-level policy enforcement gate
+// (settings.policies.enabled) via PATCH /api/teams/{team_id}/hubs/{hub_id}/policies/gate.
+// Enveloped: the backend HubPolicyGateEnvelope pins data.type to
+// "hub_policy_gate" (derived from the .../policies/gate tail).
+//
+// Extracted from the `hubs policies gate` RunE so the scaffold's policies step
+// can fire the SAME request (MIO-2567) — the sibling of applyHubPolicies, and
+// for the same reason: it is a pure builder that takes no *cobra.Command, so
+// the flag ergonomics stay with the verb and the write is shared rather than
+// re-implemented. The gate is HUB-LEVEL and SINGULAR — one boolean per hub, not
+// one per policy — and this endpoint is the only writer of it (the generic hub
+// PATCH pops `policies` out of an incoming settings blob, app/hubs/service.py).
+func applyHubPolicyGate(ctx context.Context, cl *client.Client, teamID, hubID string, enabled bool) (*client.Resource, error) {
+	return cl.Action(ctx, "PATCH", hubsPoliciesGatePath(teamID, hubID), map[string]any{"enabled": enabled})
 }
 
 func init() {
