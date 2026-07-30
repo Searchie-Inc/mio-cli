@@ -26,8 +26,6 @@
           "id": "#2",
           "kind": "image",
           "settings": {
-            "aspectRatio": "16:9",
-            "objectFit": "cover",
             "radius": "m",
             "outline": true
           }
@@ -44,7 +42,6 @@
               "id": "#4",
               "kind": "headline",
               "settings": {
-                "level": 2,
                 "weight": 700
               }
             },

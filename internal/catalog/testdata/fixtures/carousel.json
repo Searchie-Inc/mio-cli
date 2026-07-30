@@ -13,10 +13,7 @@
     {
       "id": "#1",
       "kind": "carousel",
-      "settings": {
-        "slidesPerView": 1,
-        "show_dots": true
-      },
+      "settings": {},
       "children": [
         {
           "id": "#2",
@@ -110,7 +107,6 @@
                   "id": "#11",
                   "kind": "button",
                   "settings": {
-                    "size": "md",
                     "icon": "play-filled",
                     "actionFromScope": "action"
                   },

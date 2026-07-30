@@ -44,8 +44,9 @@ func TestSectionType_KnownVsUnknown(t *testing.T) {
 
 func TestLoad_Counts(t *testing.T) {
 	c := loadForTest(t)
-	if got := len(c.Templates); got != 8 {
-		t.Errorf("section templates = %d, want 8", got)
+	// 9 section templates as of the 0.14.1 pin (testimonials added in 0.13.0).
+	if got := len(c.Templates); got != 9 {
+		t.Errorf("section templates = %d, want 9", got)
 	}
 	if got := len(c.PageTemplates); got != 13 {
 		t.Errorf("page templates = %d, want 13", got)
@@ -60,10 +61,11 @@ func TestLoad_Counts(t *testing.T) {
 
 func TestWritableSectionTypes_MatchesCatalog(t *testing.T) {
 	c := loadForTest(t)
-	// The 7 writable=true section types (the imperative `sections create --type`
+	// The 8 writable=true section types (the imperative `sections create --type`
 	// allow-list), sorted for a stable help string. cta/text/video were removed
-	// entirely in 0.12.0 (mio-page-catalog#19).
-	want := []string{"carousel", "compact", "content-grid", "feature", "grid", "row", "search"}
+	// entirely in 0.12.0 (mio-page-catalog#19). testimonials added (writable) in
+	// 0.13.0.
+	want := []string{"carousel", "compact", "content-grid", "feature", "grid", "row", "search", "testimonials"}
 	got := c.WritableSectionTypes()
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("WritableSectionTypes() = %v, want %v", got, want)
@@ -148,7 +150,8 @@ func TestRecommendedTemplates_ForHomepage_OrderedByRecommendation(t *testing.T) 
 	}
 	// Section templates whose applicablePageTypes include "homepage", ordered by
 	// recommendation.order. content-card (applicablePageTypes: []) is excluded.
-	want := []string{"hero", "carousel", "grid", "content-grid", "row", "search-bar", "compact"}
+	// testimonials (order 90) added in 0.13.0.
+	want := []string{"hero", "carousel", "grid", "content-grid", "row", "search-bar", "compact", "testimonials"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Errorf("RecommendedTemplates(homepage) = %v, want %v", ids, want)
 	}

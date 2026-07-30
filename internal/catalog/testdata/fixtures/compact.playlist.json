@@ -38,8 +38,7 @@
               "settings": {
                 "valueFrom": "progressPercent",
                 "size": 76,
-                "mobileSize": 60,
-                "showLabel": true
+                "mobileSize": 60
               }
             },
             {

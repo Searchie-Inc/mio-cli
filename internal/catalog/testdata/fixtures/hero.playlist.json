@@ -64,11 +64,7 @@
                   "kind": "progress-ring",
                   "settings": {
                     "valueFrom": "progressPercent",
-                    "size": 16,
-                    "strokeWidth": 2,
-                    "fillColor": "primary",
-                    "trackColor": "border",
-                    "showLabel": false
+                    "size": 16
                   }
                 },
                 {
