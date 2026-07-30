@@ -541,8 +541,10 @@ func init() {
 	// declare — it accepts filter[space_id] and filter[is_broadcast] only, and
 	// FastAPI drops undeclared query params silently, so this filters NOTHING and
 	// returns the full list rather than erroring. Pre-existing (it predates
-	// MIO-2808); the help text says so rather than the flag being removed, since
-	// removing it would break any script that passes it. Filter client-side on
+	// MIO-2808) and tracked as MIO-2816, which also covers the mirror-image gap:
+	// filter[is_broadcast] IS accepted by the endpoint and has no flag here. The
+	// help text says so rather than the flag being removed, since removing it
+	// would break any script that passes it. Filter client-side on
 	// .attributes.status instead.
 	communityDiscussionsListCmd.Flags().String("filter-status", "",
 		"IGNORED by the API (it accepts no status filter) — filter client-side on .attributes.status: published, scheduled or draft.")

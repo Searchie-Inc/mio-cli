@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // pinned21Digest is meta.digest of the 2.1 artifact (schemaVersion 2.1.0,
@@ -188,6 +189,14 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 				Title: strings.Repeat("é", DiscussionTitleMaxCP+1), // multi-BYTE, single code point each
 			}
 		}},
+		{"welcomePost title over the cap once stripped", func(h *HubTemplate) {
+			// Whitespace does not buy headroom: the padding is stripped before the
+			// count, so this is 281 counted characters, not 279 plus two spaces.
+			h.WelcomePost = &TemplateWelcomePost{
+				Space: h.Spaces[0].Slug,
+				Title: " " + strings.Repeat("a", DiscussionTitleMaxCP+1) + " ",
+			}
+		}},
 		{"welcomePost body with a NUL byte", func(h *HubTemplate) {
 			h.WelcomePost = &TemplateWelcomePost{
 				Space: h.Spaces[0].Slug, Title: "Welcome!", Body: "hi\x00there",
@@ -209,6 +218,44 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 			tc.mutate(&h)
 			if err := h.Validate(c); err == nil {
 				t.Error("Validate() = nil, want error")
+			}
+		})
+	}
+}
+
+// TestHubTemplateWelcomePost_TitleLengthIsCodePointsNotBytes is the ACCEPT side
+// of the 280 cap, and it is the only case that can tell the implementations
+// apart. A 281-character rejection passes under both `utf8.RuneCountInString`
+// and `len`, because a 281-é string is over the cap either way — so on its own it
+// pins nothing.
+//
+// These two must VALIDATE:
+//
+//   - 280 é = 280 code points but 560 BYTES. Green under a code-point count, red
+//     under len(). Python's len() and Pydantic's Field(max_length=280) both count
+//     code points, so a byte-based check here would reject templates the API
+//     accepts, with no other test noticing.
+//   - a title over the cap RAW but under it STRIPPED. Preflight measures what the
+//     scaffold will SEND (stepWelcomePost posts the trimmed title), so it must not
+//     be stricter than the endpoint about padding the request never carries.
+func TestHubTemplateWelcomePost_TitleLengthIsCodePointsNotBytes(t *testing.T) {
+	c := load21ForTest(t)
+	h, ok := c.HubTemplateByID("community")
+	if !ok {
+		t.Fatal("HubTemplateByID(community) not found")
+	}
+	for _, tc := range []struct {
+		name  string
+		title string
+	}{
+		{"at the cap in code points, double that in bytes", strings.Repeat("é", DiscussionTitleMaxCP)},
+		{"over the cap raw, at it once stripped", strings.Repeat("a", DiscussionTitleMaxCP) + "     "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h.WelcomePost = &TemplateWelcomePost{Space: h.Spaces[0].Slug, Title: tc.title}
+			if err := h.Validate(c); err != nil {
+				t.Errorf("Validate() = %v, want nil (%d code points, %d bytes — the cap is code points, measured stripped)",
+					err, utf8.RuneCountInString(strings.TrimSpace(tc.title)), len(tc.title))
 			}
 		})
 	}

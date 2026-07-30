@@ -101,9 +101,12 @@ type TemplatePlaylist struct {
 
 // DiscussionTitleMaxCP mirrors mio-backend's DISCUSSION_TITLE_MAX_LENGTH
 // (app/community/discussion_text.py) — the cap the create endpoint enforces
-// twice over, via Field(max_length=280) and normalize_discussion_title. It is
-// measured on the RAW (unstripped) value there, so it is measured that way here
-// too; see the reject conditions on HubTemplate.Validate.
+// twice over, via Field(max_length=280) and normalize_discussion_title. Both
+// count CODE POINTS (Python len() over a str), never bytes.
+//
+// The backend applies it to the RAW value because that is what it receives;
+// HubTemplate.Validate applies it to the STRIPPED one because that is what the
+// scaffold sends. See the reject conditions there for why the two differ.
 const DiscussionTitleMaxCP = 280
 
 // TemplateWelcomePost is the optional `welcomePost` block: the first discussion
@@ -374,20 +377,33 @@ func (h HubTemplate) Validate(c *Catalog) error {
 	// the whole point of preflight is that a malformed template fails before, not
 	// after, the hub exists. Mirrored from mio-backend
 	// app/community/discussion_text.py (normalize_discussion_title +
-	// validate_discussion_body, read 2026-07-29) — blank-after-strip, NUL, and a
-	// RAW (unstripped, code-point) length over the cap for the title; NUL for the
-	// optional body, which has no length cap and is never stripped there.
+	// validate_discussion_body, read 2026-07-29) — blank-after-strip, NUL, and an
+	// over-cap length for the title; NUL for the optional body, which has no
+	// length cap and is never stripped there.
+	//
+	// The length is measured on the STRIPPED title, deliberately diverging from the
+	// backend helper, which measures the RAW one. The backend measures what it
+	// RECEIVES; this validates what the scaffold will SEND, and stepWelcomePost
+	// posts strings.TrimSpace(Title) precisely so the request matches what the
+	// server stores. Measuring raw here would fail preflight on a 285-raw /
+	// 275-stripped title whose actual request body — 275 characters — the API
+	// accepts, i.e. it would be stricter than the endpoint for no reason.
+	//
+	// It is a CODE-POINT count, not len(): Python's len() and Pydantic's
+	// Field(max_length=280) both count code points, so a byte-based check would
+	// reject titles the API accepts (280 accented characters are 560 bytes).
 	if wp := h.WelcomePost; wp != nil {
+		title := strings.TrimSpace(wp.Title)
 		switch {
 		case wp.Title == "":
 			return fmt.Errorf("hub template %q: welcomePost missing title", h.ID)
-		case strings.TrimSpace(wp.Title) == "":
+		case title == "":
 			return fmt.Errorf("hub template %q: welcomePost title is whitespace-only (the API rejects it)", h.ID)
 		case strings.ContainsRune(wp.Title, 0):
 			return fmt.Errorf("hub template %q: welcomePost title contains a NUL byte", h.ID)
-		case utf8.RuneCountInString(wp.Title) > DiscussionTitleMaxCP:
+		case utf8.RuneCountInString(title) > DiscussionTitleMaxCP:
 			return fmt.Errorf("hub template %q: welcomePost title is %d code points, over the %d-character limit",
-				h.ID, utf8.RuneCountInString(wp.Title), DiscussionTitleMaxCP)
+				h.ID, utf8.RuneCountInString(title), DiscussionTitleMaxCP)
 		case strings.ContainsRune(wp.Body, 0):
 			return fmt.Errorf("hub template %q: welcomePost body contains a NUL byte", h.ID)
 		case wp.Space == "":

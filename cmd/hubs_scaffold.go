@@ -525,8 +525,16 @@ func (sc *scaffoldContext) existingSpacesBySlug() (map[string]string, error) {
 // nextPageCursor extracts the cursor for the NEXT page from a collection per the
 // mio-backend pagination envelope: meta.page.next_cursor, gated by
 // meta.page.has_more (an explicit has_more:false stops paging). It returns "" when
-// there is no next page (including when the response carries no pagination meta,
-// as the admin spaces list does today).
+// there is no next page, including when the response carries no pagination meta
+// at all.
+//
+// That last clause used to name the admin spaces list as the example of a
+// meta-less response. It is NOT one — admin_list_spaces returns
+// _paginated_list_response → build_page_meta and emits the full
+// meta.page.{size,has_more,next_cursor} (re-verified on mio-backend origin/main,
+// 2026-07-29; see the CORRECTION on existingSpacesBySlug, which is where that
+// same false claim was retracted). The fallback branch is generic defensiveness,
+// not a description of any endpoint this CLI actually walks.
 func nextPageCursor(col *client.Collection) string {
 	page, ok := col.Meta["page"].(map[string]any)
 	if !ok {
@@ -1274,10 +1282,25 @@ func discussionSoftDeleted(r client.Resource) bool {
 // the separate reader below. page[size] is asked at the backend's clamp ceiling
 // (100) to bound the walk.
 //
-// Known backend bound, not worked around: _build_cursor returns None when the
-// page's last row has a NULL last_activity_at, so such a page ends the walk even
-// with has_more true. DiscussionsRepository.create sets last_activity_at=now on
-// every insert, so this is unreachable for anything this CLI could have posted.
+// TRUNCATION IS AN ERROR, NOT AN END-OF-LIST. _list_response computes
+// `has_more = len(discussions) == page_size` independently of the cursor, while
+// _build_cursor returns None when the page's LAST row has a NULL
+// last_activity_at — so {has_more: true, next_cursor: null} is a producible
+// envelope that means "there are more pages and I cannot give you one". Reading
+// that as end-of-list would return "no match" and the caller would POST a second
+// welcome post; refusing outright is strictly better, because a failed scaffold
+// is recoverable by re-running and a duplicate welcome post is not.
+//
+// An earlier revision of this comment dismissed the case as unreachable "for
+// anything this CLI could have posted". That reasoning was wrong twice over: the
+// truncating row is whichever row lands LAST on a page, not the welcome post, and
+// last_activity_at is nullable with no server default (the backend's own readers
+// COALESCE it defensively for legacy rows). Worth noting the exposure GREW when
+// this walk moved off filter[space_id]: list_for_space sorts -last_activity,
+// where Postgres puts NULLs first and the keyset excludes them from page 2 on, so
+// truncation needed ~a full page of NULL rows in one space; list_for_hub orders
+// by id DESC with no NULL predicate, so ONE such row at any page boundary
+// anywhere in the hub ends the walk.
 func (sc *scaffoldContext) findDiscussionByTitle(spaceID, title string) (*client.Resource, error) {
 	seen := map[string]bool{}
 	cursor := ""
@@ -1302,7 +1325,10 @@ func (sc *scaffoldContext) findDiscussionByTitle(spaceID, title string) (*client
 				return &col.Data[i], nil
 			}
 		}
-		next := discussionsNextCursor(col)
+		next, nerr := discussionsNextCursor(col)
+		if nerr != nil {
+			return nil, nerr
+		}
 		if next == "" || seen[next] {
 			break // no more pages, or a repeated cursor (buggy server) — stop
 		}
@@ -1314,13 +1340,28 @@ func (sc *scaffoldContext) findDiscussionByTitle(spaceID, title string) (*client
 
 // discussionsNextCursor reads the admin discussions list's own pagination
 // envelope: a top-level meta.next_cursor gated by meta.has_more (NOT the
-// meta.page.* shape nextPageCursor handles). "" means there is no next page.
-func discussionsNextCursor(col *client.Collection) string {
-	if hasMore, present := col.Meta["has_more"].(bool); present && !hasMore {
-		return ""
-	}
+// meta.page.* shape nextPageCursor handles). "" with a nil error means there is
+// no next page.
+//
+// It ERRORS on has_more:true with no cursor — the truncation case documented on
+// findDiscussionByTitle. Returning "" there would silently convert "I have more
+// pages but cannot address them" into "that was everything", and the one caller
+// creates a discussion when it finds nothing.
+func discussionsNextCursor(col *client.Collection) (string, error) {
+	hasMore, present := col.Meta["has_more"].(bool)
 	cur, _ := col.Meta["next_cursor"].(string)
-	return cur
+	if present && hasMore && cur == "" {
+		return "", errs.New(errs.ExitGeneric,
+			"discussions list: the server reports more pages (meta.has_more=true) but returned no meta.next_cursor, "+
+				"so the scan cannot be completed; refusing to continue rather than risk creating a duplicate welcome post "+
+				"(this happens when the last row of a page has a null last_activity_at)")
+	}
+	if present && !hasMore {
+		return "", nil
+	}
+	// No has_more at all (a response carrying no pagination meta): a bare cursor
+	// is still followed, an absent one ends the walk.
+	return cur, nil
 }
 
 // scaffoldAfterResolve, when non-nil, is invoked with the fully-resolved

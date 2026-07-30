@@ -1877,7 +1877,8 @@ func (s *welcomePostStub) serveDiscussions(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/vnd.api+json")
 	if r.Method == http.MethodPost {
 		body, _ := io.ReadAll(r.Body)
-		_, attrs := decodeDataTypeAttrsRaw(body)
+		_, attrs, _ := decodeDataTypeAttrsRaw(body) // nil-map reads are safe; the test asserts on the body
+
 		s.posts++
 		s.postBodies = append(s.postBodies, body)
 		s.nextDiscID++
@@ -2132,6 +2133,83 @@ func TestStepWelcomePost_ExhaustiveTitleLookupFindsPage2(t *testing.T) {
 	}
 	if sc.welcomePostID != "disc_prev" {
 		t.Errorf("welcomePostID = %q, want disc_prev", sc.welcomePostID)
+	}
+}
+
+// TestStepWelcomePost_TruncatedWalkFailsRatherThanDuplicating: the server can
+// answer {has_more:true, next_cursor:null} — _list_response computes has_more
+// from the row count while _build_cursor returns None when the page's last row
+// has a null last_activity_at. Reading that as end-of-list makes the scan report
+// "no match" and the step POST a SECOND welcome post. The step must fail instead:
+// a failed scaffold is re-runnable, a duplicate welcome post is not.
+func TestStepWelcomePost_TruncatedWalkFailsRatherThanDuplicating(t *testing.T) {
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodPost:
+			posts++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"disc_dupe","type":"discussions","attributes":{}}}`))
+		case strings.HasSuffix(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(oneSpaceBody))
+		default:
+			// A full page whose last row has no last_activity_at: more pages exist,
+			// but the server cannot name one.
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"disc_other","type":"discussions","attributes":{"title":"Chatter","space_id":"sp_gen"}}],` +
+				`"meta":{"has_more":true,"next_cursor":null}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	err := stepWelcomePost(sc, templateWithWelcomePost())
+	if err == nil {
+		t.Fatal("a truncated scan must fail the step, not fall through to a create")
+	}
+	if posts != 0 {
+		t.Errorf("POSTs = %d, want 0 — the step must not create after an incomplete scan", posts)
+	}
+	if !strings.Contains(err.Error(), "has_more") {
+		t.Errorf("error = %v, want it to name the truncation cause", err)
+	}
+	if sc.welcomePostID != "" || sc.welcomePostStatus != "" {
+		t.Errorf("welcomePost = %q/%q, want both empty on failure", sc.welcomePostID, sc.welcomePostStatus)
+	}
+}
+
+// TestStepWelcomePost_AdoptsMemberAuthoredPaddedTitle pins the one place the
+// pre-check is deliberately WIDER than server equality: the stored title is
+// compared stripped as well as the template's.
+//
+// This matters because the MEMBER write path does not strip — discussions_member
+// .py passes the raw title straight through to create_discussion, so only posts
+// written through the admin endpoint are stored stripped. A member-authored
+// "  Welcome!  " is therefore adopted and the scaffold never posts its own. That
+// is the deliberate direction (never create a near-duplicate the operator has to
+// clean up), and it errs toward under-creating, but it is a real behaviour and
+// belongs in a test rather than in an untested TrimSpace.
+func TestStepWelcomePost_AdoptsMemberAuthoredPaddedTitle(t *testing.T) {
+	srv, stub := newWelcomePostServer(t, oneSpaceBody)
+	stub.rows = []map[string]any{{
+		"id": "disc_member", "type": "discussions",
+		"attributes": map[string]any{
+			// Raw, unstripped — the shape only the member path can produce.
+			"title": "  Welcome!  ", "space_id": "sp_gen", "deleted_at": nil,
+		},
+	}}
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	if err := stepWelcomePost(sc, templateWithWelcomePost()); err != nil {
+		t.Fatalf("stepWelcomePost: %v", err)
+	}
+	if stub.posts != 0 {
+		t.Errorf("POSTs = %d, want 0 — a stored title that matches once stripped is adopted", stub.posts)
+	}
+	if sc.welcomePostID != "disc_member" || sc.welcomePostStatus != welcomePostAdopted {
+		t.Errorf("welcomePost = %q/%q, want disc_member/adopted", sc.welcomePostID, sc.welcomePostStatus)
 	}
 }
 
