@@ -47,7 +47,7 @@ timeout "$CODEX_TIMEOUT" codex exec -m gpt-5.6-sol -c model_reasoning_effort="xh
 
 **Prove the prompt is non-empty before the call.** An empty `PROMPT_FILE` is caught by Codex itself — it prints `No prompt provided via stdin.` and exits **1** (measured on v0.145.0) — so this guard buys a clear abort rather than a rescue. The guard that genuinely matters is the one on the **diff file** in the fallback path below, where the prompt is valid and only the *content* is empty: Codex has nothing to object to, reviews nothing, and returns an APPROVE.
 
-Resume the same session for follow-up rounds (preserves context, no diff re-upload). **Run it from the repo root, and check the `workdir:` line in the run header.** `resume` takes no `-C` (`error: unexpected argument '-C' found`) and it does **not** refuse an unexpected directory — measured from a temp dir, it starts the session with `workdir: /tmp/tmp.XXXX` and proceeds. Codex is then sandboxed to an empty directory and can read none of the repo, with no loud failure. There is no guard for this but your own eyes on the header:
+Resume the same session for follow-up rounds (preserves context, no diff re-upload). **Run it from the repo root, and check the `workdir:` line in the run header.** `resume` takes no `-C` (`error: unexpected argument '-C' found`) and it does **not** refuse an unexpected directory — measured from a temp dir, it starts the session with `workdir: /tmp/tmp.XXXX` and proceeds. Codex's relative paths and `git` commands then resolve inside that empty directory, so it explores nothing and reports on nothing, with no loud failure. (Reads are not themselves confined to the workdir under `read-only` — the damage is the wrong working directory, not a read barrier.) There is no guard for this but your own eyes on the header — which applies equally to the `-C "$(pwd)"` on the Round-1 call above:
 
 ```bash
 echo "Round 2 — fixes applied: ..." | timeout "$CODEX_TIMEOUT" codex exec resume --last \
@@ -155,7 +155,7 @@ A single-file `$ARGUMENTS` forces COMMIT mode.
 
 ### 2. Gather context — and get the gates green FIRST
 
-Codex needs a passing build to give useful signal. Before Round 1, confirm all green — this is the same block as `cli-prime` §2, and the two prefixes are not optional:
+Codex needs a passing build to give useful signal. Before Round 1, confirm all green. This mirrors `cli-prime` §2 (which additionally runs the `skilldocs -check`, covered here by `go test`), and the two prefixes are not optional:
 
 ```bash
 export PATH="$PATH:$(go env GOPATH)/bin"   # golangci-lint is NOT on PATH by default
@@ -168,7 +168,18 @@ XDG_CONFIG_HOME=$(mktemp -d) go test ./... -race -timeout 120s
 
 **Without `XDG_CONFIG_HOME`, two tests fail from the developer's real credentials** — `TestContract_ExitCodes_NoCredentials` and `TestWiring_SingleHubAutoDefault`. They are environmental, not regressions. Do not "fix those first" and above all do not change their assertions; isolate and they are green. See `cli-prime` §3.1.
 
-Then collect: `git log <base>...HEAD --oneline`, `git diff <base>...HEAD --stat`, `git diff --name-only <base>...HEAD`, and the pass count. Use `...` consistently — `..` and `...` describe different change sets once `main` advances past the branch point, so mixing them makes the stat summary and the reviewed diff disagree. For PHASE/BRANCH also gather design docs (`docs/`) and reference files that show the convention this work should follow (e.g. `cmd/pages.go` for a hub-scoped resource, `cmd/products.go` as the reference resource).
+Then collect: `git log <base>..HEAD --oneline`, `git diff <base>...HEAD --stat`, `git diff --name-only <base>...HEAD`, and the pass count.
+
+**Note the deliberate pairing: two dots for `log`, three for `diff`.** The token means different things to the two commands, so "be consistent" is exactly the wrong instinct:
+
+| | `A..B` | `A...B` |
+|---|---|---|
+| `git log` | commits on B not on A ← **what you want** | *symmetric difference* — also lists commits on A not on B |
+| `git diff` | A's tip vs B's tip | merge-base(A,B) vs B ← **what you want** |
+
+Once `main` advances past the branch point, `git log main...HEAD` starts listing unrelated `main` commits. That inflates both the commit count and the distinct-ticket count in Step 1, which silently promotes a PHASE review to BRANCH. Step 1's counters use `..` for exactly this reason — leave them alone.
+
+For PHASE/BRANCH also gather design docs (`docs/`) and reference files that show the convention this work should follow (e.g. `cmd/pages.go` for a hub-scoped resource, `cmd/products.go` as the reference resource).
 
 ### 3. Build the prompt
 
