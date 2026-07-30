@@ -23,7 +23,13 @@ mio config set current_team <team-uuid>   # a UUID (see 'mio teams list'); drop 
   `mio config set team …` / `hub …` exit `2` with
   `unknown config key "team" (valid: [current_team current_hub api_base])` (MIO-2568).
 - **Auth resolution (first wins):** `--api-key` flag → `MIO_API_KEY` env → key stored by `mio login`. No key ⇒ exit `3`.
-- **Output:** JSON when piped/non-interactive (agent default), table on a TTY. Force with `--output json`. Filter inline with `--jq '<expr>'` (no external `jq` needed), e.g. `HUB_ID=$(mio hubs list --jq '.[0].id')`. Use `--raw` for the unflattened JSON:API envelope (`meta`/`links`/`included`).
+- **Output:** JSON when piped/non-interactive (agent default), table on a TTY. Force with `--output json`. Filter inline with `--jq '<expr>'` (no external `jq` needed). Use `--raw` for the unflattened JSON:API envelope (`meta`/`links`/`included`).
+- **Capturing a STRING id? Add `-o plain` (MIO-2792).** `--jq` renders through the JSON formatter, so a string result comes back **JSON-quoted** and `$(…)` captures the quotes: `HUB_ID=$(mio hubs list --jq '.[0].id')` yields `"019f…"`, which then 404s when you pass it to the next command. `-o plain` prints the bare scalar:
+  ```bash
+  HUB_ID=$(mio hubs list -o plain --jq '.[0].id')     # 019f…    ← use this
+  V=$(mio pages tree get "$PAGE_ID" --jq .draft_version)  # 3 — numbers are unquoted either way
+  ```
+  Numeric captures (`draft_version`, counts) are safe without it; every string capture needs it.
 - **Exit codes (stable contract):** `0` ok · `1` error · `2` bad args (400/409/422) · `3` auth (401/403) · `4` not found · `5` needs `--yes` in a non-TTY · `6` rate limited (429) · `7` server (5xx). They are deliberately coarse; when you need the exact status the API returned (403 vs 401, 409 vs 422), read `errors[0].status` from the JSON:API envelope on stderr — it carries the real HTTP status verbatim, while `errors[0].meta.exit_code` echoes the coarse code (MIO-2656).
 - **Destructive ops** (`delete`/`cancel`/`refund`) require `--yes`/`-y` in a non-interactive shell or they exit `5`.
 - Info/hints print to **stderr**, so machine-readable stdout stays clean. `--jq .id` on a create gives you the new id for the next step.
@@ -43,7 +49,7 @@ mio hubs scaffold --template community --name "Acme" --slug acme \
   --logo-url https://cdn.example.com/logo.png \
   --dry-run                                          # prints the ordered plan, changes nothing
 HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
-  --primary-color '#B91C1C' --publish --jq .hub_id)  # --publish goes live; default is private
+  --primary-color '#B91C1C' --publish -o plain --jq .hub_id)  # --publish goes live; default is private
 ```
 
 - Branding flags **merge** over the template's palette — a key you don't name keeps
@@ -102,7 +108,7 @@ mio hubs update hub_abc123 \
 | key | what it actually paints |
 |---|---|
 | `primary` | buttons, links, CTAs, brand accents |
-| `secondary` | **section headings (h1–h3) AND the base of every `surface.background:{"type":"tint"}` block** |
+| `secondary` | **the page's ink in light mode (all headings + body copy) and the page background in dark mode**; also the base of a `tint` surface in light mode |
 | `text` | body copy — **only in `custom` theme mode** (see below) |
 | `background` | page background — **only in `custom` theme mode** (see below) |
 | `header_color` / `header_accent` | top-nav background + accent (emitted raw — no contrast correction) |
@@ -112,10 +118,10 @@ mio hubs update hub_abc123 \
 
 - **Foot-gun: `secondary` is not a decorative accent — it is the page's ink.** In
   `light` mode the frontend sets `--hub-text: var(--hub-secondary)`, so `secondary`
-  colors every heading *and* all body copy, *and* it is the base of every `tint`
-  surface. (In `dark` mode it becomes the page **background** instead.) Set it light
-  and every heading and paragraph goes invisible on a white page — the most common
-  branding mistake by a distance. Pick a dark, high-contrast value.
+  colors every heading *and* all body copy, and (in light mode) it is the base a `tint`
+  surface is derived from. In `dark` mode it becomes the page **background** instead.
+  Set it light and every heading and paragraph goes invisible on a white page — the
+  most common branding mistake by a distance. Pick a dark, high-contrast value.
 - **Color values must be 6-digit hex** (`#0F766E`) — for all six color keys
   (`primary`, `secondary`, `background`, `text`, `header_color`, `header_accent`).
   The frontend's branding parser tests them against `/^#[0-9a-fA-F]{6}$/` and silently
@@ -123,30 +129,36 @@ mio hubs update hub_abc123 \
   colors, `rgb()`/`hsl()` and gradients all render as "not what you asked for" with a
   `200` on the wire. The CLI does not validate values (conduit rule) — this is a
   render contract, not an API one.
-- **`logo_url`/`favicon_url` are the exception to "stored verbatim".** The rest of
-  the branding blob has no server schema, but these two are validated server-side:
-  an absolute `https://` URL is required, and `data:`/`javascript:` URLs are rejected
-  (MIO-2658). A `data:` SVG logo fails — upload the asset and use a durable URL.
-- **Dark/light — the theme selector lives in `settings`, not `branding`.** The
-  frontend reads **`settings.background.type`** (`light` | `dark` | `custom`, default
-  `light`) and that is what the theme layer renders from. `background` is on the CLI's
-  settings-key allowlist, so this works today with no warning:
+- **Every `*_url` branding key is validated server-side — and strictly.** The rest of
+  the blob is stored verbatim, but the backend applies a URL rule to **any** key whose
+  name ends in `_url`, case-insensitively, present or future (MIO-2658). On the CLI's
+  allowlist that is `logo_url`, `favicon_url`, `social_image_url`,
+  `custom_login_logo_url` and `custom_font_url`. Each must be `null` or a **string**
+  (a list or object raises) and, if a string, an **absolute `https://` URL**. Rejected:
+  any other scheme — including plain `http://`, `data:` and `javascript:` — plus
+  protocol-relative `//host/x`, relative paths, whitespace or control characters (raw
+  *or* once percent-decoded), backslashes, embedded `user:pass@` credentials,
+  percent-encoding anywhere in the host, and an invalid port. So a `data:` SVG logo
+  fails: upload the asset and use a durable URL. This is a `422`, not a silent drop —
+  the one branding write that fails loudly.
 
-  ```bash
-  mio hubs update hub_abc123 --settings-json '{"background":{"type":"dark"}}'
-  ```
+#### Light, dark and `custom` — a hub cannot choose light or dark
 
-  There is **no `settings.theme` key** — writing one is a silent no-op. (The
-  frontend's parsed `theme.mode` is *derived* from `settings.background.type`; nothing
-  reads a raw `settings.theme`.)
-- **`branding.text` and `branding.background` are ignored unless the mode is
-  `custom`.** The theme layer only emits `--hub-text`/`--hub-background` from those two
-  keys when `settings.background.type == "custom"`; in `light` and `dark` it explicitly
-  clears them and derives both from `secondary` (light: background white, text
-  `secondary`; dark: background `secondary`, text white). So setting
-  `branding.background:"#ffffff"` on a default (`light`) hub changes nothing — it was
-  already white — and setting `branding.text` there does nothing at all. To control
-  both directly, ask for `custom`:
+This is the most misunderstood part of hub theming, so read it before writing any
+theme key.
+
+- **No hub setting selects light or dark.** The frontend resolves the mode as
+  `if (hubMode === 'custom') return 'custom'` and otherwise falls through to the
+  **viewer's** `mio-hub-theme` cookie (default `'system'`) and their OS
+  `prefers-color-scheme`. The hub's own mode is consulted for exactly one value:
+  `custom`. Writing `light` or `dark` anywhere is a **no-op** — the viewer decides.
+- **There is no `settings.theme` key either.** Writing one is a silent no-op; the
+  frontend's parsed `theme.mode` is *derived* from `settings.background.type`, and
+  nothing reads a raw `settings.theme`.
+- **`custom` is the one thing a hub can force**, via `settings.background.type`
+  (`background` is already on the CLI's settings-key allowlist, so this needs no
+  warning suppression). It is also the **only** mode in which `branding.background`
+  and `branding.text` do anything at all:
 
   ```bash
   mio hubs update hub_abc123 \
@@ -154,14 +166,16 @@ mio hubs update hub_abc123 \
     --branding-json '{"background":"#FFFDF7","text":"#1A1A1A"}'
   ```
 
-  In `custom` mode `text` is additionally AA-contrast-clamped against `background`, so
-  a low-contrast pair is corrected rather than honoured exactly.
+  In `light`/`dark` the theme layer explicitly clears `--hub-background`/`--hub-text`
+  and derives both from `secondary` (light: white background, text `secondary`; dark:
+  background `secondary`, white text) — so setting `branding.text` on a non-`custom`
+  hub does nothing. In `custom` mode `text` is AA-contrast-clamped against
+  `background`, so a low-contrast pair is corrected rather than honoured exactly.
 - **`branding.dark_mode` selects nothing.** It only flips the *defaults* the branding
-  parser uses for `background`/`text` when those are absent or invalid — and in
-  `light`/`dark` mode those values are discarded anyway. Where it disagrees with the
-  settings-derived mode the frontend logs a dev-only warning and the settings mode
-  wins. Set the mode in `settings.background.type`; keep `dark_mode` consistent with it
-  for the benefit of any backend consumer that still reads it.
+  parser uses for `background`/`text` when those are absent or invalid — values that
+  `light`/`dark` mode then discards anyway. Keep it consistent with your intent for the
+  benefit of backend consumers that still read it, but do not expect it to change what
+  a viewer sees.
 
 #### Menus and nav icons
 
@@ -267,7 +281,7 @@ values, set the draft, then publish.
 
 ```bash
 PAGE_ID=$(mio pages create --hub hub_abc123 --title "Welcome" --slug welcome \
-  --privacy public --is-home --jq .id)
+  --privacy public --is-home -o plain --jq .id)   # -o plain: a bare id, not "…" (MIO-2792)
 mio pages catalog scaffold --template page-homepage > tree.json   # JSON to stdout; catalog note goes to stderr
 # ...edit tree.json: fill headline/text/button VALUES, drop in durable image URLs...
 mio pages tree set "$PAGE_ID" --hub hub_abc123 --file tree.json  # first tree: --if-match defaults to 0
@@ -329,7 +343,8 @@ mio pages catalog scaffold --template grid            > grid.json
 `value`s** — the fastest way to see the contract in practice: `cta-band` (three
 tint-surfaced cards, each headline + text + button), `faq` (a full-width `accordion`
 of `text` items keyed by `settings.tab_label`), and `bound-cards` (three
-`content-card`s bound to a `dataSource` — you must fill the `dataSource.id`s).
+two `content-card`s bound to a `dataSource` plus a third column whose *button*
+carries the binding — fill in every `dataSource.id`).
 `hero`, `grid` and `compact` carry variants too; `mio pages catalog templates`
 prints them all.
 
@@ -371,12 +386,16 @@ shape, which is why the scaffold→set pipe needs no transform.
 
 #### Hand-added nodes need ids you mint yourself
 
-`tree set` rejects a tree with `Every tree node must have an 'id' key`. The CLI has
-no id-minting helper: `pages catalog scaffold` mints fresh UUIDv7 ids for every node
-it emits, so **prefer splicing scaffolded subtrees over hand-writing nodes**. When
-you must add one by hand, generate a UUID per node (`uuidgen | tr 'A-Z' 'a-z'`,
-`python3 -c 'import uuid;print(uuid.uuid4())'`) — ids must be unique within the
-tree, and literal outline markers like `"root"`/`"hero"` are not valid node ids.
+`tree set` rejects a tree with `Every tree node must have an 'id' key` — required on
+every node at every depth, though the backend's validator treats the **root**'s id as
+optional. Nothing validates the id's FORMAT: the catalog's own starters ship
+`id:"root"`, `id:"hero"` and friends, and those are accepted. The CLI has no
+id-minting helper, so **prefer splicing scaffolded subtrees over hand-writing nodes**
+— `pages catalog scaffold` mints a fresh UUIDv7 for every node it emits. When you do
+add one by hand, generate a UUID (`uuidgen | tr 'A-Z' 'a-z'`,
+`python3 -c 'import uuid;print(uuid.uuid4())'`) rather than reusing a template's
+outline marker: ids must be **unique within the tree**, and splicing two scaffolded
+subtrees that both call a node `"root"` is the realistic way to collide.
 
 ### 7. Publish the hub
 
@@ -384,10 +403,30 @@ tree, and literal outline markers like `"root"`/`"hero"` are not valid node ids.
 mio hubs update hub_abc123 --published
 ```
 
-Now reachable by members at your hub-frontend host + slug. **`--published`
-auto-enables Registration + Moderation** as a side effect (v0.9.0 behaviour — older
-docs claiming they stay off are stale) — set them deliberately afterward if that's
-not what you want.
+Now reachable by members at your hub-frontend host + slug.
+
+**`--published` on `hubs update` enables nothing else. Set registration explicitly.**
+The registration and moderation defaults are injected by `HubService.create()` only —
+`update()` has no such code — so flipping `is_private` later does **not** turn
+self-registration on. Concretely:
+
+| | `hubs create` | `hubs update --published` |
+|---|---|---|
+| `settings.registration.enabled` | defaulted to `true` **only when the hub is created public** (`--published` at create time), and never over an explicit value | **untouched** |
+| `meta.moderation.enabled` | defaulted to `true` for **every** hub, private included — it is not a publish side-effect at all | **untouched** |
+
+So the safe sequence for a hub you created private and are publishing now is:
+
+```bash
+mio hubs update hub_abc123 --published --registration-enabled
+mio hubs retrieve hub_abc123 --jq .registration_enabled   # verify: expect true
+```
+
+> This corrects the previous version of this document, which said `--published`
+> auto-enables both. MIO-2539 asked for that behaviour to be documented; **the
+> ticket's premise was wrong** — the behaviour does not exist on `update`, and
+> moderation was never tied to publishing. An agent that trusted the old text shipped
+> a public hub with self-registration **off**.
 
 ## The page-tree render contract
 
@@ -421,6 +460,10 @@ A section node is the same envelope plus a `template` and children:
   it into the surface wrapper.
 - **`settings` should always be present** (`{}` minimum). There is no defaults
   cascade — every value that must render has to be inlined on its own node.
+- **Hard limits the write enforces (422, not a silent drop):** the tree is capped at
+  **500 elements** counting every child including malformed ones, `root` must carry a
+  `children` array (even an empty one), and `children`/`settings`/`dataSource`, when
+  present, must be array/object/object respectively.
 - **Exactly one `level:1` headline per page.** Extra level-1 headlines are demoted to
   `<h2>` (they still render, but the page's `<h1>` is whichever came first).
 
@@ -453,23 +496,28 @@ authoring one gets you a blank node. Use `headline` with `level: 3` instead of
 `spacer`.
 
 **Button `action` is `{"type": …, "value": …}`**, and its `value` is always
-canonical — no scheme prefix, no `#`:
+canonical for its `type` — no `mailto:`, no leading `#`:
 
 ```json
 {"kind":"button","value":"Browse the library",
  "settings":{"size":"lg","action":{"type":"url","value":"https://example.com/x"}}}
 ```
 
-`email` takes a bare address, `scroll` a bare anchor id, `page` a system page type /
-UUID / hub-relative path, `playlist` a playlist id. A malformed or missing action
-renders a non-navigating button. `settings.href` is a deprecated alias.
+Per `type`: **`url` takes a FULL URL including its scheme** (`https:`, `http:`,
+`tel:`, `sms:`) and is passed through untouched, so a schemeless `example.com/x` yields
+a non-navigating button; `email` takes a bare address (the renderer adds `mailto:`);
+`scroll` a bare anchor id (it adds the `#`); `page` a system page type, a content-page
+UUID, or a `/`-prefixed hub path; `playlist` a playlist id. Optional
+`action.params` is a string map merged onto the resolved href. A malformed or missing
+action renders a non-navigating button. `settings.href` is a deprecated alias.
 
 ### Every kind's settings — generated from the catalog
 
 Property names, types, enums and defaults below come straight from the embedded
 catalog's `settingsSchema` (`go generate ./...` rewrites this block; a test fails the
-build if it drifts). The backend serves the **same** catalog pin, so
-`GET /api/page-builder/catalog` agrees with this — you do not need to re-check it.
+build if it drifts). This is the pin the CLI ships; the backend
+pins the catalog separately, so on an unfamiliar backend confirm with
+`mio pages catalog templates` (its stderr names the source and version).
 `core` settings change what the node *is*; `presentational` settings change how it
 looks. An unlisted property is not read by the renderer. Properties are alphabetical
 — Go maps lose the catalog's declaration order.
@@ -575,10 +623,20 @@ section templates are:
 `compact` · `content-card` · `testimonials`
 <!-- /catalog-gen -->
 
-Of those, exactly seven — everything except `content-card` (a card recipe) and
-`testimonials` — opt the node into the surface renderer: `hero`, `carousel`, `grid`,
-`content-grid`, `row`, `search-bar`, `compact`. Any other `template` string lays out
-plain. `compact` is the frontend name for the legacy "scroll" strip.
+Carrying a `template` also decides whether the node gets wrapped in the surface
+renderer, and that set is **narrower than the template list** — a template opts in by
+declaring a `surface` property in the catalog (presence is enough; even `{}` counts).
+These do:
+
+<!-- catalog-gen:surface-templates -->
+`hero` · `carousel` · `grid` · `content-grid` · `row` · `search-bar` ·
+`compact` · `testimonials`
+<!-- /catalog-gen -->
+
+`content-card` is the only section template that does **not** — it is a card recipe,
+not a page section. Any other `template` string lays out plain, with no surface.
+(`compact` is the frontend's name for the legacy "scroll" strip; there is no `scroll`
+section type — `compact`'s catalog *label* is "Scroll", its id is not.)
 
 **A section must carry its `template`** — the CLI rejects a blank/non-string one up
 front, but an *absent* one just means the node renders without its section surface.
@@ -586,7 +644,8 @@ front, but an *absent* one just means the node renders without its section surfa
 ### `settings.surface` — generated from the catalog
 
 <!-- catalog-gen:surface-properties -->
-`settings.surface` accepts:
+`settings.surface` accepts these keys, all optional — an omitted key means
+"no override", and this is the complete set the resolver reads:
 
 - `background` *object → shared:background*
 - `borderRadius` *string* `none|sm|md|lg|full|hub-s|hub-m` *(freeform — any other string is legal too)*
@@ -657,8 +716,21 @@ unrecognized `background.token` renders no background at all.
 
 ### Vocabulary — generated from the catalog
 
-Every node kind the catalog knows, split by whether it accepts children. Anything
-not listed here is an unknown node: the API takes it, the renderer drops it.
+Every node kind the catalog knows, split by whether it accepts children. A kind not
+listed here and not a system kind (below) is unknown: the API stores it, the renderer
+drops it.
+
+**System kinds are real but not yours to author.** The frontend registry renders ten
+kinds the catalog deliberately omits — `login-form`, `register-form`,
+`onboarding-form`, `account-profile-form`, `account-activity-feed`,
+`member-directory-list`, `discussion-list`, `notification-feed`, `achievement-list`,
+`leaderboard`. They are `SystemKind`s, require `system: true`, and the **page-type
+route injects them**; the catalog's own page templates hand you only the slots around
+them (`page-login`'s starter is `editable-top` + `editable-bottom` with no form node
+in between). The backend's tree validator checks shape, not kinds, so one WOULD be
+stored — but you would be hand-authoring an undocumented contract into a page whose
+route already supplies it. Scaffold the matching `page-*` template and fill the
+editable slots instead.
 
 <!-- catalog-gen:node-kinds -->
 Containers (`childRules` accepts children):
@@ -711,7 +783,7 @@ each one against the tree you just published:
 - **An untyped `header`/`footer` menu item**, or a `mobile` item whose `icon` is not
   one of the eight whitelisted names, is dropped by the navigation parser.
 - **`section_count` is your "did it apply" signal.** `mio pages publish` returns a
-  `page-publishes` resource with `section_count` and `gate_count`. If `section_count`
+  `page_publishes` resource with `section_count` and `gate_count`. If `section_count`
   is lower than the number of sections you authored, the renderer rejected some —
   inspect the tree; don't infer success from the `200`.
 - **Homepage content-grids need STATIC cards, not a data-source binding.** The
@@ -733,7 +805,7 @@ each one against the tree you just published:
 Read the global id from the flattened output first:
 
 ```bash
-CID=$(mio contacts retrieve ctt_abc123 --jq .contact_id)
+CID=$(mio contacts retrieve ctt_abc123 -o plain --jq .contact_id)
 mio hub-memberships add "$CID" --hub hub_abc123
 ```
 

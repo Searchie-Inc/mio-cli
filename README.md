@@ -334,7 +334,8 @@ mio contacts retrieve <id> --jq '.email'
 mio products list --jq '.[].id'
 
 # Chain into shell variable
-HUB_ID=$(mio hubs list --jq '.[0].id')
+# -o plain when CAPTURING a string id: --jq alone renders it JSON-quoted (MIO-2792).
+HUB_ID=$(mio hubs list -o plain --jq '.[0].id')
 mio content list --hub "$HUB_ID"
 ```
 

@@ -42,14 +42,15 @@ Or rely on the implicit default when piped — both are equivalent when not on a
 Use `--jq` to filter inline without shelling out to `jq`:
 
 ```sh
-# Extract one field
+# Extract one field (add -o plain when CAPTURING a string — --jq alone JSON-quotes it)
 mio contacts retrieve <id> --jq '.email'
+EMAIL=$(mio contacts retrieve <id> -o plain --jq '.email')
 
 # Pluck IDs from a list
 mio products list --jq '.[].id'
 
 # Capture into a variable
-HUB_ID=$(mio hubs list --jq '.[0].id')
+HUB_ID=$(mio hubs list -o plain --jq '.[0].id')   # -o plain: --jq alone JSON-quotes a string (MIO-2792)
 ```
 
 Use `--raw` to get the unflattened JSON:API envelope if you need `meta`, `links`, or `included` fields.
@@ -277,7 +278,9 @@ by `TestSkillDocIsGeneratedFromCatalog`. Do not transcribe those lists here; the
 moved three catalog minors in a day.
 
 **Button action** is `{"type": …, "value": …}` with `type` ∈ `url` | `page` |
-`email` | `scroll` | `playlist`; `value` is canonical (no scheme prefix, no `#`).
+`email` | `scroll` | `playlist`; `value` is canonical **for its type** — `url` takes a
+FULL URL *including* the scheme (a schemeless value is passed through and does not
+navigate), while `email` takes a bare address and `scroll` a bare anchor id.
 
 **`settings.surface`** is `{"padding", "background", "gradient"}`:
 
@@ -310,7 +313,7 @@ Two traps worth stating plainly:
 **Vocabulary** comes from the catalog, not from this file — `mio pages catalog
 templates` and `mio pages catalog section-types` print the truth for the backend you
 are talking to. The skill's copies of those lists are guarded against catalog drift
-by `TestSkillDoc_CatalogVocabularyMatchesEmbeddedCatalog`.
+by `TestSkillDocIsGeneratedFromCatalog`.
 
 ---
 
@@ -331,8 +334,9 @@ frontend like this:
   page's ink. In `light` mode `--hub-text: var(--hub-secondary)`, so it colors every
   heading *and* all body copy, and it is the base of every `tint` surface; in `dark`
   mode it becomes the page background. Set it light and the whole page goes invisible.
-- **To control `background`/`text` directly, ask for `custom`**:
+- **To control `background`/`text` at all, ask for `custom`**:
   `--settings-json '{"background":{"type":"custom"}}'` alongside the branding keys. In
+  `light`/`dark` the theme layer clears both and derives them from `secondary`. In
   `custom` mode `text` is AA-contrast-clamped against `background`, so a low-contrast
   pair is corrected rather than honoured exactly.
 - Color values must be **6-digit hex** for all six color keys (`primary`, `secondary`,
@@ -341,17 +345,23 @@ frontend like this:
   3- and 8-digit hex, named colors, `rgb()`/`hsl()` and gradients all render wrong with
   a `200` on the wire. The CLI does not validate values (conduit rule) — this is the
   frontend's render contract, not the API's.
-- **`logo_url` / `favicon_url` are the exception to "stored verbatim"** — they are
-  validated server-side (absolute `https://` required; `data:`/`javascript:`
-  rejected, MIO-2658). Everything else in the blob round-trips unchecked.
-- **Theme selection lives in `settings`, not `branding`**: the frontend reads
-  `settings.background.type` (`light`|`dark`|`custom`, default `light`), and
-  `background` is already on the settings-key allowlist —
-  `--settings-json '{"background":{"type":"dark"}}'` works with no warning. There is
-  **no `settings.theme` key**; writing one is a silent no-op (the frontend's parsed
-  `theme.mode` is *derived* from `settings.background.type`). Where
-  `branding.dark_mode` disagrees, the frontend logs a dev-only warning and the
-  settings-derived mode wins.
+- **Every `*_url` branding key is validated server-side** — the rule applies to ANY key
+  ending `_url` (case-insensitive, present or future); on the CLI's allowlist that is
+  `logo_url`, `favicon_url`, `social_image_url`, `custom_login_logo_url` and
+  `custom_font_url` (MIO-2658). Each must be `null` or a string, and a string must be an
+  absolute `https://` URL: plain `http://`, `data:`, `javascript:`, protocol-relative,
+  relative paths, whitespace/control characters (raw or percent-decoded), backslashes,
+  `user:pass@` credentials, percent-encoded hosts and bad ports are all rejected (422).
+  Non-`_url` keys round-trip unchecked.
+- **A hub cannot select light or dark — only `custom`.** `resolveThemeMode()` consults
+  the hub's mode for exactly one value: `if (hubMode === 'custom') return 'custom'`.
+  Otherwise light vs dark comes from the **viewer's** `mio-hub-theme` cookie (default
+  `system`) and their OS `prefers-color-scheme`. Writing `light`/`dark` anywhere on the
+  hub is a no-op, and there is **no `settings.theme` key** either (the parsed
+  `theme.mode` is derived from `settings.background.type`). `custom` IS honoured
+  unconditionally, via `--settings-json '{"background":{"type":"custom"}}"'`, and it is
+  the only mode in which `branding.background`/`branding.text` are read at all.
+  `branding.dark_mode` selects nothing.
 
 **Navigation `icon` values are two different vocabularies** (MIO-2675), neither
 validated by the CLI:

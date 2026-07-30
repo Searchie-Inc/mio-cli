@@ -50,6 +50,7 @@ var BlockNames = []string{
 	"node-kinds",
 	"section-types",
 	"section-templates",
+	"surface-templates",
 	"page-templates",
 	"row-variants",
 	"node-settings",
@@ -57,6 +58,32 @@ var BlockNames = []string{
 	"surface-background",
 	"surface-gradient",
 }
+
+// knownKindTiers / knownPropKeys / knownSharedKeys are the catalog vocabulary this
+// renderer knows how to READ. They exist because of a structural weakness a review
+// found in the first version: the drift test's oracle IS this generator, so anything
+// Render silently ignores is invisible to the byte-comparison — `go generate` writes
+// the lossy output and the test passes. Probed cases that produced NO error and wrong
+// docs: a third settings tier on a kind (property silently absent), a `shape`
+// reference to a shared shape that is not rendered anywhere, and a kind whose
+// settings moved under `properties` (rendered as "no settings" for a kind that has
+// them).
+//
+// So Render now asserts it CONSUMED every key it was handed, and fails loudly on
+// anything new. A catalog that grows a tier or a shape stops the build instead of
+// quietly dropping documentation. `_note` is a catalog-side annotation with no
+// authoring content, so it is explicitly consumed-and-ignored rather than unknown.
+var (
+	knownKindTiers = map[string]bool{"core": true, "presentational": true, "_note": true}
+	knownPropKeys  = map[string]bool{
+		"type": true, "enum": true, "default": true, "description": true,
+		"properties": true, "shape": true, "freeform": true, "tier": true,
+		"items": true, "deprecated": true,
+	}
+	// renderedShapes are the shared shapes this generator emits a block for. A
+	// `shape` reference to anything else would print a dangling pointer.
+	renderedShapes = map[string]bool{"surface": true, "background": true, "gradient": true}
+)
 
 // blockRe matches one generated block and captures its name and current body.
 var blockRe = regexp.MustCompile(`(?s)<!-- catalog-gen:([a-z-]+) -->\n(.*?)<!-- /catalog-gen -->`)
@@ -75,6 +102,12 @@ func Render(cat *catalog.Catalog) (map[string]string, error) {
 		return nil, err
 	}
 
+	// Fail before rendering anything if the catalog carries settings vocabulary this
+	// generator would silently drop (see knownKindTiers above).
+	if err := assertSchemaFullyConsumed(kinds, schema); err != nil {
+		return nil, err
+	}
+
 	out := map[string]string{}
 
 	out["node-kinds"] = renderNodeKinds(kinds)
@@ -90,6 +123,12 @@ func Render(cat *catalog.Catalog) (map[string]string, error) {
 		sectionTemplates = append(sectionTemplates, t.ID)
 	}
 	out["section-templates"] = inlineList(sectionTemplates)
+
+	surfaceTemplates, err := surfaceDeclaringTemplates(raw)
+	if err != nil {
+		return nil, err
+	}
+	out["surface-templates"] = inlineList(surfaceTemplates)
 
 	pageTemplates := make([]string, 0, len(cat.PageTemplates))
 	for _, t := range cat.PageTemplates {
@@ -161,6 +200,111 @@ func Apply(doc string, blocks map[string]string) (string, error) {
 		if !seen[name] {
 			return "", fmt.Errorf("docsgen: markdown has no <!-- catalog-gen:%s --> block; every generated section must stay marked", name)
 		}
+	}
+	return out, nil
+}
+
+// assertSchemaFullyConsumed refuses to generate when the catalog declares settings
+// vocabulary this renderer does not read. Without it, a new tier / property key /
+// shared shape is dropped from the docs with no error and the drift test still
+// passes, because the test compares the doc against THIS renderer's output.
+func assertSchemaFullyConsumed(kinds, schema map[string]any) error {
+	for _, key := range sortedKeys(schema) {
+		entry, ok := schema[key].(map[string]any)
+		if !ok {
+			return fmt.Errorf("docsgen: settingsSchema[%q] is not an object (%T)", key, schema[key])
+		}
+		switch {
+		case strings.HasPrefix(key, "kind:"):
+			kind := strings.TrimPrefix(key, "kind:")
+			if _, declared := kinds[kind]; !declared {
+				return fmt.Errorf("docsgen: settingsSchema has %q but nodeKinds does not declare %q; the doc would document settings for a kind it never lists", key, kind)
+			}
+			for _, tier := range sortedKeys(entry) {
+				if !knownKindTiers[tier] {
+					return fmt.Errorf("docsgen: settingsSchema[%q] declares unknown settings tier %q — this generator renders only core and presentational, so those properties would be silently omitted. Teach renderNodeSettings about it, then regenerate", key, tier)
+				}
+				if tier == "_note" {
+					continue
+				}
+				props, ok := entry[tier].(map[string]any)
+				if !ok {
+					return fmt.Errorf("docsgen: settingsSchema[%q].%s is not an object (%T)", key, tier, entry[tier])
+				}
+				if err := assertPropsConsumed(key+"."+tier, props); err != nil {
+					return err
+				}
+			}
+		case strings.HasPrefix(key, "shared:"):
+			props, ok := entry["properties"].(map[string]any)
+			if !ok {
+				return fmt.Errorf("docsgen: settingsSchema[%q] has no properties object", key)
+			}
+			if err := assertPropsConsumed(key, props); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("docsgen: settingsSchema key %q is neither kind:* nor shared:* — this generator would ignore it entirely", key)
+		}
+	}
+	return nil
+}
+
+// assertPropsConsumed checks one property map: every property key must be one this
+// renderer reads, and a `shape` reference must point at a shape we actually render.
+func assertPropsConsumed(where string, props map[string]any) error {
+	for _, name := range sortedKeys(props) {
+		spec, ok := props[name].(map[string]any)
+		if !ok {
+			return fmt.Errorf("docsgen: %s.%s is not an object (%T)", where, name, props[name])
+		}
+		for _, k := range sortedKeys(spec) {
+			if !knownPropKeys[k] {
+				return fmt.Errorf("docsgen: %s.%s declares unknown property key %q — this generator does not render it, so it would be silently dropped from the docs", where, name, k)
+			}
+		}
+		if shape, has := spec["shape"].(string); has && !renderedShapes[shape] {
+			return fmt.Errorf("docsgen: %s.%s references shared shape %q, which this generator renders no block for — the doc would print a pointer to nothing. Add a block for it to BlockNames", where, name, shape)
+		}
+		if nested, has := spec["properties"].(map[string]any); has {
+			if err := assertPropsConsumed(where+"."+name, nested); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// surfaceDeclaringTemplates returns the ids of every templates[]/pageTemplates[]
+// entry that DECLARES a `surface` property. Presence opts in — even `{}` — and
+// absence opts out. This mirrors mio-hub's generated
+// src/lib/page-tree/catalog/surface-manifest.ts (SURFACE_TEMPLATE_IDS), which is
+// derived from this same catalog by the same rule, so the set is machine-derivable
+// rather than a hand-counted list. Order follows the catalog's own array order.
+func surfaceDeclaringTemplates(raw map[string]any) ([]string, error) {
+	var out []string
+	for _, group := range []string{"templates", "pageTemplates"} {
+		entries, ok := raw[group].([]any)
+		if !ok {
+			return nil, fmt.Errorf("docsgen: catalog %q is not an array (%T)", group, raw[group])
+		}
+		for _, e := range entries {
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, declares := m["surface"]; !declares {
+				continue
+			}
+			id, _ := m["id"].(string)
+			if id == "" {
+				return nil, fmt.Errorf("docsgen: a %s entry declares `surface` but has no id", group)
+			}
+			out = append(out, id)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("docsgen: no template declares a `surface` property; the surface-wrapping set would be documented as empty")
 	}
 	return out, nil
 }
@@ -244,7 +388,7 @@ func renderSurfaceProperties(schema map[string]any) (string, error) {
 	}
 
 	var b strings.Builder
-	b.WriteString("`settings.surface` accepts:\n\n")
+	b.WriteString("`settings.surface` accepts these keys, all optional — an omitted key means\n\"no override\", and this is the complete set the resolver reads:\n\n")
 	b.WriteString(propsBullets(surface))
 	b.WriteString("\nPlus three keys the validator unions onto **every** node's settings, whatever its kind:\n\n")
 	b.WriteString(propsBullets(structural))

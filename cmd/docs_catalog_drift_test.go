@@ -37,17 +37,22 @@ import (
 )
 
 // skillDocPath is the on-disk source of the //go:embed'd skillBody. The test reads
-// the file (not skillBody) so its failure can name the path to regenerate, and
-// asserts the two agree so a stale build cache cannot mask a diff.
+// the FILE rather than skillBody so its failure message can name the path to
+// regenerate.
+//
+// It deliberately does NOT assert `onDisk == skillBody`: //go:embed is
+// content-addressed, so the toolchain cannot hand a test a skillBody that disagrees
+// with the file it just compiled from. A previous version of this test made that
+// assertion and documented it as guarding "a stale build cache" — it guarded
+// nothing, which is precisely the manufactured confidence this file exists to
+// prevent. Reading the file is still the right call (the failure can then say "run
+// go generate ./..." against a real path), just not for that reason.
 const skillDocPath = "skills/content/mio-skill.md"
 
 func TestSkillDocIsGeneratedFromCatalog(t *testing.T) {
 	onDisk, err := os.ReadFile(skillDocPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", skillDocPath, err)
-	}
-	if string(onDisk) != skillBody {
-		t.Fatalf("%s on disk differs from the //go:embed'd skillBody — rebuild before trusting this test", skillDocPath)
 	}
 
 	cat, err := catalog.Load()
