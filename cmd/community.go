@@ -537,7 +537,15 @@ func init() {
 	communityDiscussionsCreateCmd.Flags().Bool("is-published", true, "Publish immediately (default). Pass --is-published=false to save a draft.")
 
 	addPaginationFlags(communityDiscussionsListCmd)
-	communityDiscussionsListCmd.Flags().String("filter-status", "", "Filter by status (e.g. published, draft).")
+	// --filter-status sends filter[status], which admin_list_discussions does NOT
+	// declare — it accepts filter[space_id] and filter[is_broadcast] only, and
+	// FastAPI drops undeclared query params silently, so this filters NOTHING and
+	// returns the full list rather than erroring. Pre-existing (it predates
+	// MIO-2808); the help text says so rather than the flag being removed, since
+	// removing it would break any script that passes it. Filter client-side on
+	// .attributes.status instead.
+	communityDiscussionsListCmd.Flags().String("filter-status", "",
+		"IGNORED by the API (it accepts no status filter) — filter client-side on .attributes.status: published, scheduled or draft.")
 	communityDiscussionsListCmd.Flags().String("filter-space", "", "Filter by space id.")
 
 }

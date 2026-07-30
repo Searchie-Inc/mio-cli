@@ -19,6 +19,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
+	"unicode/utf8"
 )
 
 // Allowed enum sets, verified against the CLI's own command validators so a
@@ -97,6 +99,13 @@ type TemplatePlaylist struct {
 	FileIDs                []string
 }
 
+// DiscussionTitleMaxCP mirrors mio-backend's DISCUSSION_TITLE_MAX_LENGTH
+// (app/community/discussion_text.py) — the cap the create endpoint enforces
+// twice over, via Field(max_length=280) and normalize_discussion_title. It is
+// measured on the RAW (unstripped) value there, so it is measured that way here
+// too; see the reject conditions on HubTemplate.Validate.
+const DiscussionTitleMaxCP = 280
+
 // TemplateWelcomePost is the optional `welcomePost` block: the first discussion
 // a scaffolded community lands in one of its own spaces (MIO-2558), authored via
 // the admin welcome-post endpoint (MIO-2262). Space is a SLUG referencing this
@@ -106,6 +115,17 @@ type TemplatePlaylist struct {
 // The four fields ARE the endpoint's whole attribute set (its request schema is
 // extra="forbid"); notably there is no author field, because the author is
 // derived server-side from the caller's credentials.
+//
+// NOT RATIFIED CATALOG VOCABULARY (read this before relying on the key name).
+// `welcomePost` does not appear in mio-page-catalog's catalog.schema.json —
+// $defs/hubTemplate declares no such property, nothing in that repo mentions it,
+// and neither the TS reference applier nor the backend's W2b
+// scaffold-from-template op implements it. It parses today only because
+// $defs/hubTemplate is additionalProperties:true. A catalog-side ticket to
+// ratify the shape is being filed off the MIO-2558 review; if it lands with a
+// different key or field spelling, BOTH this parser and stepWelcomePost must
+// move with it, or the step silently no-ops forever (which is also why the
+// no-declaration branch is a plan-VISIBLE entry rather than a silent skip).
 //
 // Title/Body are LITERAL: {{hub_name}}/{{hub_slug}} interpolation is a closed
 // contract whose scanned locations are exhaustively specified (MIO-2573 §4.3:
@@ -119,8 +139,13 @@ type TemplateWelcomePost struct {
 	Space, Title, Body string
 	// Published mirrors the endpoint's is_published, whose server-side default is
 	// TRUE. A template that omits the key therefore means "publish it" — hence the
-	// explicit default below rather than the bool zero value, which would silently
-	// scaffold every welcome post as an invisible draft.
+	// explicit default at parse time rather than the bool zero value, which would
+	// silently scaffold every welcome post as an invisible draft. A present but
+	// NON-BOOL value (null, "true", 1) is treated as absent for the same reason:
+	// coercing it through a comma-ok bool assertion yields false and lands exactly
+	// the invisible draft the default exists to prevent. Type-policing a
+	// schema-validated artifact belongs to the catalog's own validator, so this
+	// stays a tolerant parse (the package-wide convention) that fails SAFE.
 	Published bool
 }
 
@@ -205,8 +230,11 @@ func parseHubTemplate(n Node) HubTemplate {
 			Body:      str(wp["body"]),
 			Published: true,
 		}
-		if v, ok := wp["is_published"]; ok {
-			post.Published = boolVal(v)
+		// Only a REAL bool moves this off the endpoint's own default. boolVal's
+		// comma-ok assertion turns null/"true"/1 into false, which would scaffold an
+		// invisible draft from a value that never said "draft" — fail safe instead.
+		if b, ok := wp["is_published"].(bool); ok {
+			post.Published = b
 		}
 		h.WelcomePost = post
 	}
@@ -231,9 +259,10 @@ func parseHubTemplate(n Node) HubTemplate {
 // depend on: pages non-empty with unique non-empty slugs (the backend reserves
 // "home"), a valid privacy on every page, every pageTemplate resolving to a
 // page template in c, and exactly one homepage; space/onboarding slugs unique
-// and non-empty with enum-valid attributes; an optional welcomePost carrying a
-// title and a space slug that names one of this template's own spaces; every
-// policies value an object
+// and non-empty with enum-valid attributes; an optional welcomePost whose title
+// clears the endpoint's own reject conditions (non-blank, NUL-free, ≤280 raw
+// code points), whose body is NUL-free, and whose space slug names one of this
+// template's own spaces; every policies value an object
 // whose fields are within hubPolicyFieldKeys (a typo must fail preflight, not
 // silently reset policy content); playlist titles non-empty and keys unique
 // and non-empty with enum-valid visibility. Slug/key uniqueness matters
@@ -314,21 +343,40 @@ func (h HubTemplate) Validate(c *Catalog) error {
 			}
 		}
 	}
-	// welcomePost (MIO-2558). Both checks exist because the welcome-post step runs
+	// welcomePost (MIO-2558). These checks exist because the welcome-post step runs
 	// LAST, after the hub, its blobs, spaces, pages and the publish PATCH have all
-	// been written: a dangling space ref or a missing title discovered there fails
-	// a run that has already mutated everything else. Preflight is write-free, so
-	// catching it here costs nothing and rolls back nothing.
+	// been written: anything the endpoint would 422 on, discovered there, fails a
+	// run that has already mutated everything else and cannot roll back. Preflight
+	// is write-free, so catching it here costs nothing and rolls back nothing.
+	//
+	// This mirrors the ENDPOINT's reject conditions deliberately, and that is not a
+	// breach of the conduit rule (`cmd/community.go`: don't second-guess the API on
+	// the user's --title). Different input, different rule: a template constant is
+	// an artifact this code already validates field-by-field before writing, and
+	// the whole point of preflight is that a malformed template fails before, not
+	// after, the hub exists. Mirrored from mio-backend
+	// app/community/discussion_text.py (normalize_discussion_title +
+	// validate_discussion_body, read 2026-07-29) — blank-after-strip, NUL, and a
+	// RAW (unstripped, code-point) length over the cap for the title; NUL for the
+	// optional body, which has no length cap and is never stripped there.
 	if wp := h.WelcomePost; wp != nil {
-		if wp.Title == "" {
+		switch {
+		case wp.Title == "":
 			return fmt.Errorf("hub template %q: welcomePost missing title", h.ID)
-		}
-		if wp.Space == "" {
+		case strings.TrimSpace(wp.Title) == "":
+			return fmt.Errorf("hub template %q: welcomePost title is whitespace-only (the API rejects it)", h.ID)
+		case strings.ContainsRune(wp.Title, 0):
+			return fmt.Errorf("hub template %q: welcomePost title contains a NUL byte", h.ID)
+		case utf8.RuneCountInString(wp.Title) > DiscussionTitleMaxCP:
+			return fmt.Errorf("hub template %q: welcomePost title is %d code points, over the %d-character limit",
+				h.ID, utf8.RuneCountInString(wp.Title), DiscussionTitleMaxCP)
+		case strings.ContainsRune(wp.Body, 0):
+			return fmt.Errorf("hub template %q: welcomePost body contains a NUL byte", h.ID)
+		case wp.Space == "":
 			return fmt.Errorf("hub template %q: welcomePost missing space (the slug of one of this template's spaces)", h.ID)
-		}
 		// The step converges on the hub's REAL spaces, so the ref must name a space
 		// the template itself declares — the only one the scaffold guarantees exists.
-		if !seenSpaceSlugs[wp.Space] {
+		case !seenSpaceSlugs[wp.Space]:
 			return fmt.Errorf("hub template %q: welcomePost space %q is not one of this template's spaces", h.ID, wp.Space)
 		}
 	}

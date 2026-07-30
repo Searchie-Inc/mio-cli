@@ -118,7 +118,12 @@ type scaffoldContext struct {
 	// run knows it (MIO-2558): the one stepWelcomePost created, or the one its
 	// title pre-check ADOPTED from an earlier run. "" when the template declares
 	// no welcomePost — which is every catalog shipped so far.
-	welcomePostID string
+	//
+	// welcomePostStatus says WHICH of those happened (created / adopted /
+	// adopted_deleted), because the two are materially different outcomes that an
+	// id alone cannot distinguish — a resume that adopted a post the operator had
+	// deleted looks identical to one that just posted a fresh welcome.
+	welcomePostID, welcomePostStatus string
 
 	// publish is the --publish intent (Task 21 registers the flag; read
 	// existence-guarded in runHubsScaffold, so it defaults false until then). When
@@ -477,13 +482,19 @@ func (sc *scaffoldContext) hubIDOrPlaceholder() string {
 // appears in links.next. nextPageCursor reads that PROVEN field, NOT a bare
 // meta.next (which is only a synthetic test-fixture shape, never emitted here).
 //
-// NOTE (verified against mio-backend spaces_admin.py + services/spaces.py): the
-// admin spaces list currently emits NO pagination meta — admin_list_spaces calls
-// list_spaces_for_hub and _list_response drops the cursor — so nextPageCursor
-// returns "" and this stops after one page today. Following the documented cursor
-// keeps the pre-check exhaustive-by-construction the moment the endpoint starts
-// paging; until then, exhaustiveness is bounded by that first page (see the
-// caller's concern note). The seen-cursor set + maxPages bound are a stall guard:
+// CORRECTION (MIO-2558, re-verified against mio-backend origin/main
+// spaces_admin.py, 2026-07-29): an earlier revision of this comment claimed the
+// admin spaces list "emits NO pagination meta … so nextPageCursor returns "" and
+// this stops after one page today". That is FALSE and was worth catching, because
+// this helper now has a second load-bearing caller (the welcome-post step's space
+// resolution). admin_list_spaces returns _paginated_list_response →
+// build_page_meta, which emits meta.page.{size,has_more,next_cursor} plus
+// links.{self,next}; it fetches page_size+1 to compute has_more honestly, and
+// page[after] is an OPAQUE encoded cursor (decode_cursor) that an empty value
+// 422s rather than silently restarting at page 1. The CODE was always right — it
+// follows the documented cursor — so nothing changes here but the comment: this
+// walk is genuinely exhaustive, not exhaustive-by-construction-someday.
+// The seen-cursor set + maxPages bound are a stall guard:
 // a buggy server returning a stable/looping non-empty cursor can never spin here.
 func (sc *scaffoldContext) existingSpacesBySlug() (map[string]string, error) {
 	slugs := map[string]string{}
@@ -1100,11 +1111,34 @@ func stepPublish(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 // IDEMPOTENCY — the create endpoint has no upsert and no natural key, and its
 // request schema (extra="forbid": space_id/title/body/is_published) has no meta
 // field, so the pages step's provenance-marker trick is not available here. The
-// pre-check is therefore a TITLE match within the target space, using the admin
-// list's filter[space_id]: found ⇒ skip and adopt that id. That list includes
-// soft-deleted rows, deliberately — a welcome post the operator DELETED must not
-// be resurrected by the next resume, the same "never fight the operator"
-// direction the pages step takes with edited drafts.
+// pre-check is therefore a TITLE match within the target space: found ⇒ skip and
+// adopt that id, so a resume never lands a second post.
+//
+// The title is compared — and posted — STRIPPED, because that is what the server
+// stores: normalize_discussion_title (app/community/discussion_text.py) returns
+// title.strip() as the canonical form. Matching the template's raw string against
+// the stored one would mean a template title with any leading/trailing space
+// never matches its own earlier post, and EVERY resume posts another copy — the
+// exact failure this pre-check exists to prevent.
+//
+// The scan reads the admin list UNFILTERED and matches space_id client-side
+// rather than passing filter[space_id]. That looks like the more expensive
+// choice and is the correct one: the filtered branch runs through
+// DiscussionsRepository.list_for_space, which appends
+// `Discussion.is_removed.is_(False)` UNCONDITIONALLY (repositories/discussions.py
+// :534, "Always hide soft-removed content"), so a moderation-REMOVED welcome post
+// is invisible to it and every resume would duplicate. list_for_hub — the
+// unfiltered branch — filters only deleted_at, and the router passes
+// include_deleted=True, so it is the one view that sees drafts, soft-deleted AND
+// removed rows. Cost: the walk covers the whole hub rather than one space.
+//
+// A match that is soft-deleted or removed is still adopted, deliberately: a
+// welcome post the operator deleted or a moderator removed must not be
+// resurrected by the next resume — the same "never fight the operator" direction
+// the pages step takes with edited drafts. Because "adopted something the members
+// cannot see" is a materially different outcome from "posted a fresh one", the
+// run reports which happened (welcome_post_status) instead of leaving a caller to
+// infer it from an id.
 func stepWelcomePost(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	wp := t.WelcomePost
 	if wp == nil {
@@ -1114,8 +1148,11 @@ func stepWelcomePost(sc *scaffoldContext, t *catalog.HubTemplate) error {
 		// to a clean no-op rather than posting something nobody authored.
 		return sc.step("welcome-post", "no welcome post in template", func() error { return nil })
 	}
+	// Strip once, here, so the plan detail, the pre-check and the POST body all
+	// name the same string the server will store.
+	title := strings.TrimSpace(wp.Title)
 	detail := fmt.Sprintf("GET+POST %s — create welcome discussion %q in space %q (skip-if-title-exists)",
-		discussionsAdminPath(sc.teamID, sc.hubIDOrPlaceholder(), ""), wp.Title, wp.Space)
+		discussionsAdminPath(sc.teamID, sc.hubIDOrPlaceholder(), ""), title, wp.Space)
 	return sc.step("welcome-post", detail, func() error {
 		// The space this run just created is already in hand (stepSpaces records
 		// what it creates), so the common create-mode path costs no extra request
@@ -1140,19 +1177,26 @@ func stepWelcomePost(sc *scaffoldContext, t *catalog.HubTemplate) error {
 				wp.Space, sc.hubID)
 		}
 
-		existingID, ferr := sc.discussionIDByTitle(spaceID, wp.Title)
+		existing, ferr := sc.findDiscussionByTitle(spaceID, title)
 		if ferr != nil {
 			return ferr
 		}
-		if existingID != "" {
-			sc.welcomePostID = existingID // adopt the earlier run's post
-			sc.notef("welcome post: %q already exists in space %q — skipped", wp.Title, wp.Space)
+		if existing != nil {
+			sc.welcomePostID = existing.ID // adopt the earlier run's post
+			sc.welcomePostStatus = welcomePostAdopted
+			if discussionSoftDeleted(*existing) {
+				sc.welcomePostStatus = welcomePostAdoptedDeleted
+				sc.notef("welcome post: %q already exists in space %q but is soft-deleted — left deleted (id %s)",
+					title, wp.Space, existing.ID)
+				return nil
+			}
+			sc.notef("welcome post: %q already exists in space %q — skipped (id %s)", title, wp.Space, existing.ID)
 			return nil
 		}
 
 		attrs := map[string]any{
 			"space_id": spaceID,
-			"title":    wp.Title,
+			"title":    title,
 			// is_published is sent unconditionally: TemplateWelcomePost.Published
 			// already carries the endpoint's own default (true) for a template that
 			// omits the key, so this is always a value the template meant.
@@ -1166,16 +1210,51 @@ func stepWelcomePost(sc *scaffoldContext, t *catalog.HubTemplate) error {
 			return cerr
 		}
 		sc.welcomePostID = res.ID
+		sc.welcomePostStatus = welcomePostCreated
 		return nil
 	})
 }
 
-// discussionIDByTitle returns the id of the first discussion in spaceID whose
-// title matches exactly, or "" when there is none. It walks the admin
-// discussions list to exhaustion, because a hub's welcome post is its OLDEST
-// discussion and the list is ordered last_activity_at DESC — in an active
-// community it is the last row on the last page, so a first-page-only check
-// would re-create it on every resume.
+// welcomePostStatus values for the machine result (MIO-2558). They answer the one
+// question an id alone cannot: did THIS run post the welcome discussion, or did it
+// find one already there — and if so, is that one still visible?
+//
+// There is deliberately no "adopted_removed": moderation removal is NOT
+// observable over this endpoint. _discussion_to_resource
+// (routers/discussions_admin.py) serializes deleted_at but never is_removed, and
+// its computed `status` is only published/scheduled/draft, so the CLI cannot tell
+// a removed row from a live one. The unfiltered scan still SEES that row (which is
+// the point — it stops the duplicate); it just cannot label it.
+const (
+	welcomePostCreated        = "created"
+	welcomePostAdopted        = "adopted"
+	welcomePostAdoptedDeleted = "adopted_deleted"
+)
+
+// discussionSoftDeleted reports whether an admin-listed discussion carries a
+// non-null deleted_at. Adopted rather than replaced — never fight the operator —
+// but the caller is told which it got.
+func discussionSoftDeleted(r client.Resource) bool {
+	v, ok := r.Attributes["deleted_at"]
+	return ok && v != nil
+}
+
+// findDiscussionByTitle returns the first discussion in spaceID whose stored
+// title equals title (compare STRIPPED — see stepWelcomePost), or nil when there
+// is none. It walks the admin discussions list to exhaustion, because a hub's
+// welcome post is its OLDEST discussion and both admin orderings put oldest last
+// (last_activity_at DESC in the filtered branch, id DESC — UUIDv7, i.e. creation
+// order — in the unfiltered one). In an active community it is therefore the last
+// row on the last page, and a first-page-only check would re-create it on every
+// resume.
+//
+// NO filter[space_id] — the match on space is client-side, off the serialized
+// space_id attribute. That is not an oversight: the filtered branch runs
+// list_for_space, which appends `Discussion.is_removed.is_(False)`
+// unconditionally, so a moderation-removed post is invisible to it and the resume
+// duplicates. The unfiltered branch (list_for_hub, include_deleted=True from the
+// router) is the only view carrying drafts, soft-deleted AND removed rows. The
+// price is scanning the hub rather than one space.
 //
 // CURSOR SHAPE (verified against mio-backend app/community/routers/
 // discussions_admin.py::_list_response, read 2026-07-29): this endpoint does NOT
@@ -1186,24 +1265,33 @@ func stepWelcomePost(sc *scaffoldContext, t *catalog.HubTemplate) error {
 // meta.page.next_cursor, find nothing, and silently stop after page 1 — hence
 // the separate reader below. page[size] is asked at the backend's clamp ceiling
 // (100) to bound the walk.
-func (sc *scaffoldContext) discussionIDByTitle(spaceID, title string) (string, error) {
+//
+// Known backend bound, not worked around: _build_cursor returns None when the
+// page's last row has a NULL last_activity_at, so such a page ends the walk even
+// with has_more true. DiscussionsRepository.create sets last_activity_at=now on
+// every insert, so this is unreachable for anything this CLI could have posted.
+func (sc *scaffoldContext) findDiscussionByTitle(spaceID, title string) (*client.Resource, error) {
 	seen := map[string]bool{}
 	cursor := ""
 	const maxPages = 1000 // hard ceiling (100k discussions at page_size 100); a stall guard, not a real bound
 	for page := 0; page < maxPages; page++ {
 		query := url.Values{}
-		query.Set("filter[space_id]", spaceID)
 		query.Set("page[size]", "100")
 		if cursor != "" {
 			query.Set("page[after]", cursor)
 		}
 		col, err := sc.cl.List(sc.ctx, discussionsAdminPath(sc.teamID, sc.hubID, ""), query)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		for _, r := range col.Data {
-			if s, ok := r.Attributes["title"].(string); ok && s == title {
-				return r.ID, nil
+		for i, r := range col.Data {
+			if s, _ := r.Attributes["space_id"].(string); s != spaceID {
+				continue
+			}
+			// Compare stripped on BOTH sides: the server stores title.strip(), but a
+			// row written by anything other than this endpoint need not be stripped.
+			if s, ok := r.Attributes["title"].(string); ok && strings.TrimSpace(s) == title {
+				return &col.Data[i], nil
 			}
 		}
 		next := discussionsNextCursor(col)
@@ -1213,7 +1301,7 @@ func (sc *scaffoldContext) discussionIDByTitle(spaceID, title string) (string, e
 		seen[next] = true
 		cursor = next
 	}
-	return "", nil
+	return nil, nil
 }
 
 // discussionsNextCursor reads the admin discussions list's own pagination
@@ -1534,6 +1622,22 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 	}
 	fmt.Fprintf(w, "  Includes: %s.\n", strings.Join(parts, ", "))
 
+	// Welcome post (MIO-2558), printed ONLY when the template declares one — so the
+	// summary of a run against every catalog shipped so far stays byte-for-byte
+	// what it always was (TestScaffold_TableSummaryUnchanged), exactly like the
+	// branding-overrides line below. Without it a created welcome post is the one
+	// thing the run wrote that the human surface never mentions.
+	if t.WelcomePost != nil {
+		switch sc.welcomePostStatus {
+		case welcomePostCreated:
+			fmt.Fprintf(w, "  Welcome post: created %q (id %s).\n", strings.TrimSpace(t.WelcomePost.Title), sc.welcomePostID)
+		case welcomePostAdopted:
+			fmt.Fprintf(w, "  Welcome post: already present (id %s) — not re-posted.\n", sc.welcomePostID)
+		case welcomePostAdoptedDeleted:
+			fmt.Fprintf(w, "  Welcome post: already present but SOFT-DELETED (id %s) — left deleted, not re-posted.\n", sc.welcomePostID)
+		}
+	}
+
 	// Branding overrides (MIO-2604), printed ONLY when the operator passed some —
 	// so the summary of an override-free run stays byte-for-byte what it always
 	// was (TestScaffold_TableSummaryUnchanged). When they did, the line is the one
@@ -1597,10 +1701,12 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 //     tell apart: content present, `policies_enabled` reading true off the
 //     FE-facing derivation, and the member endpoint still answering
 //     tos_acceptance_required:false;
-//   - welcome_post_id (MIO-2558) is ADDITIVE, like every field before it: the id
-//     of the template's welcome discussion as this run knows it — created, or
-//     adopted by the title pre-check on a resume — and null when the template
-//     declares no welcomePost (the case for every catalog shipped so far);
+//   - welcome_post_id + welcome_post_status (MIO-2558) are ADDITIVE, like every
+//     field before them: the id of the template's welcome discussion as this run
+//     knows it, and whether the run "created" it, "adopted" one already there, or
+//     adopted one that is soft-deleted ("adopted_deleted") — a distinction the id
+//     alone cannot carry. Both null when the template declares no welcomePost (the
+//     case for every catalog shipped so far);
 //   - branding_overrides (MIO-2604) reports the RESOLVED override layer — the
 //     palette flags and --branding-json keys, CASCADE INCLUDED — so a caller can
 //     see what the CLI actually sent (notably the header_color it derived from
@@ -1662,6 +1768,7 @@ func scaffoldResult(sc *scaffoldContext, templateID string) map[string]any {
 		"branding_overrides":    sc.branding.resolved(),
 		"homepage_page_id":      nilIfEmpty(scaffoldHomepageID(sc)),
 		"welcome_post_id":       nilIfEmpty(sc.welcomePostID),
+		"welcome_post_status":   nilIfEmpty(sc.welcomePostStatus),
 		"pages":                 pages,
 		"spaces":                spaces,
 		"onboarding_attributes": onboarding,

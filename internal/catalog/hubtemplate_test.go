@@ -12,6 +12,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -171,6 +172,27 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 		{"welcomePost space not in template", func(h *HubTemplate) {
 			h.WelcomePost = &TemplateWelcomePost{Space: "no-such-space", Title: "Welcome!"}
 		}},
+		// The endpoint's OWN reject conditions, mirrored from
+		// mio-backend app/community/discussion_text.py. Each of these would 422 at
+		// step 9 — after the hub, blobs, spaces, pages and publish have all been
+		// written — so preflight has to be the one that catches them.
+		{"welcomePost whitespace-only title", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{Space: h.Spaces[0].Slug, Title: "   "}
+		}},
+		{"welcomePost title with a NUL byte", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{Space: h.Spaces[0].Slug, Title: "Wel\x00come"}
+		}},
+		{"welcomePost title over 280 code points", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{
+				Space: h.Spaces[0].Slug,
+				Title: strings.Repeat("é", DiscussionTitleMaxCP+1), // multi-BYTE, single code point each
+			}
+		}},
+		{"welcomePost body with a NUL byte", func(h *HubTemplate) {
+			h.WelcomePost = &TemplateWelcomePost{
+				Space: h.Spaces[0].Slug, Title: "Welcome!", Body: "hi\x00there",
+			}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -219,6 +241,20 @@ func TestHubTemplateWelcomePost_ParseAndDefault(t *testing.T) {
 			name: "is_published false is honored",
 			raw:  Node{"space": "general", "title": "Draft", "is_published": false},
 			want: TemplateWelcomePost{Space: "general", Title: "Draft", Published: false},
+		},
+		// A present-but-non-bool value must FAIL SAFE to the endpoint's default,
+		// not coerce to false: a comma-ok bool assertion turns each of these into
+		// `false`, scaffolding the invisible draft the default exists to prevent
+		// from a value that never said "draft".
+		{
+			name: "explicit null does not become a draft",
+			raw:  Node{"space": "general", "title": "Welcome!", "is_published": nil},
+			want: TemplateWelcomePost{Space: "general", Title: "Welcome!", Published: true},
+		},
+		{
+			name: "stringly-typed value does not become a draft",
+			raw:  Node{"space": "general", "title": "Welcome!", "is_published": "true"},
+			want: TemplateWelcomePost{Space: "general", Title: "Welcome!", Published: true},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

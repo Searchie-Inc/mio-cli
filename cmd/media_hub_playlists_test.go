@@ -20,6 +20,19 @@ import (
 // decodeDataTypeAttrs returns data.type and data.attributes from a request body.
 func decodeDataTypeAttrs(t *testing.T, body []byte) (string, map[string]any) {
 	t.Helper()
+	typ, attrs := decodeDataTypeAttrsRaw(body)
+	if attrs == nil {
+		t.Fatalf("request body is not a JSON:API write envelope; body=%q", body)
+	}
+	return typ, attrs
+}
+
+// decodeDataTypeAttrsRaw is decodeDataTypeAttrs without the *testing.T: a stub
+// HTTP handler runs on the server's own goroutine, where t.Fatalf is not allowed,
+// so a stateful stub that has to READ the request body needs a decoder that
+// simply returns nil on garbage. Callers on the test goroutine keep the
+// fail-fast wrapper above.
+func decodeDataTypeAttrsRaw(body []byte) (string, map[string]any) {
 	var doc struct {
 		Data struct {
 			Type       string         `json:"type"`
@@ -27,7 +40,10 @@ func decodeDataTypeAttrs(t *testing.T, body []byte) (string, map[string]any) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
-		t.Fatalf("request body is not valid JSON: %v; body=%q", err, body)
+		return "", nil
+	}
+	if doc.Data.Attributes == nil {
+		doc.Data.Attributes = map[string]any{}
 	}
 	return doc.Data.Type, doc.Data.Attributes
 }
