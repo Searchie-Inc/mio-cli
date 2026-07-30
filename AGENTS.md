@@ -2,6 +2,8 @@
 
 This document is written for AI coding agents (Claude Code, Codex, etc.) that need to call `mio` programmatically. It covers auth, output format, the exit-code contract, destructive-op handling, and a compact command table.
 
+> **This file tracks `main`, not the released binary.** You are probably reading it on GitHub while running a separately installed `mio`, so a behaviour described here may not have shipped yet. Run `mio version` and, when a distinction matters, prefer `mio <cmd> --help` — that is generated from the binary you actually have. Behaviours known to be newer than the latest release carry an inline version gate. The bundled agent skill (`mio skills print`) has no such skew: it is embedded in the binary, so it always describes the binary it came from.
+
 ---
 
 ## Authentication
@@ -42,14 +44,15 @@ Or rely on the implicit default when piped — both are equivalent when not on a
 Use `--jq` to filter inline without shelling out to `jq`:
 
 ```sh
-# Extract one field
+# Extract one field (add -o plain when CAPTURING a string — --jq alone JSON-quotes it)
 mio contacts retrieve <id> --jq '.email'
+EMAIL=$(mio contacts retrieve <id> -o plain --jq '.email')
 
 # Pluck IDs from a list
 mio products list --jq '.[].id'
 
 # Capture into a variable
-HUB_ID=$(mio hubs list --jq '.[0].id')
+HUB_ID=$(mio hubs list -o plain --jq '.[0].id')   # -o plain: --jq alone JSON-quotes a string (MIO-2792)
 ```
 
 Use `--raw` to get the unflattened JSON:API envelope if you need `meta`, `links`, or `included` fields.
@@ -73,10 +76,14 @@ Branch on these stable codes. Do not parse stderr for error detection.
 | `6` | Rate limited (429) | Back off, then retry |
 | `7` | Upstream server error (5xx) | Transient — retry with backoff |
 
-These codes are intentionally coarse. When you need the exact HTTP status the API returned — 403 vs 401 (re-authenticating cannot help with a 403), or 409 vs 422 (a conflict may clear, a validation rejection will not) — read `errors[0].status` from the JSON:API envelope on stderr, which carries the API's real status verbatim. `errors[0].meta.exit_code` echoes the coarse code. Errors that never reached the network (bad flag, missing file, no API key) have no HTTP status, so their `status` is derived from the exit code instead.
+These codes are intentionally coarse. When you need the exact HTTP status the API returned — 403 vs 401 (re-authenticating cannot help with a 403), or 409 vs 422 (a conflict may clear, a validation rejection will not) — read `errors[0].status` from the JSON:API envelope on stderr. `errors[0].meta.exit_code` echoes the coarse code. Errors that never reached the network (bad flag, missing file, no API key) have no HTTP status, so their `status` is derived from the exit code instead.
+
+> **Version gate (MIO-2656).** `errors[0].status` carries the API's **real** status only from the release AFTER `v0.12.1`. On `v0.12.1` and earlier it is reconstructed from the exit code, so precisely the two discriminations above are impossible there: a 403 reports `"401"`, and a 409 or 422 both report `"400"` (also 503→`"500"`, and 405/415→`"500"`). Check with `mio version` before branching on it; exit codes are unchanged either way, so `meta.exit_code` is safe on every version.
 
 ```sh
-mio contacts retrieve <id> 2>err.json || jq -r '.errors[0].status' err.json   # e.g. "422"
+# Substitute a real id. For a 422-class rejection a post-v0.12.1 binary prints
+# "422" here, while v0.12.1 and earlier print "400"; a bad id prints "404" on both.
+mio contacts retrieve <id> 2>err.json || jq -r '.errors[0].status' err.json
 ```
 
 ---
@@ -140,7 +147,7 @@ Every implemented resource and its verbs.
 | `hubs` | `create` `list` `retrieve` `update` `delete` `scaffold` `templates` |
 | `hubs navigation` | `list` `add` `remove` `reorder` — edit the menu item-by-item (RMW the `navigation` blob; header/footer/mobile buckets; items addressed by zero-based index). `add` takes `--item-json` (any bucket/type) or the url convenience `--type url --href --label` (header/footer only — mobile items use `--item-json`, `{id,label,route,icon}`); `remove --index`; `reorder --order 2,0,1` |
 | `hubs policies` | `update` |
-| `hubs scaffold` | Build a full-experience hub in one idempotent command from a hub template in the target backend's LIVE catalog (`--template <id>` — the CLI embeds none; `--catalog <file>` is the digest-verified escape hatch, fail-closed on mismatch, and there is no `--offline`): branding/favicon, menu, registration, discussion spaces, onboarding schema, policies, playlists, pages. The whole plan is validated before any write (`--name` ≤255 code points; `{{hub_name}}`/`{{hub_slug}}` interpolation — unknown tokens rejected, capped post-substitution). Pages: probes the backend `scaffold-from-template` op, falling back client-side on 404/405 (op absent or path shadowed on older backends: create with a `meta.template_provenance` marker → tree set → publish → mark applied), interpolating with the hub's actual title/slug. Re-runs with `--hub <id>` resume safely; an edited or foreign page at a template slug (or any pre-existing homepage) exits 2 — never overwritten. `--dry-run` previews the plan (including the palette it would apply); `--publish` (default off) goes live; `--name`/`--slug` create a new hub; `--favicon-url`/`--logo-url`/`--registration-enabled` override the template. **Branding (MIO-2604):** `--primary-color`/`--secondary-color`/`--text-color`/`--background-color`/`--header-color`/`--header-accent`/`--social-image-url` (plus `--branding-json` for a whole object) all MERGE over the template's `branding` block, so a key you don't name keeps the template's value; precedence is template → `--branding-json` → scalar flags. `--primary-color` also fills `header_color` unless YOU gave a header color (`--header-color`, or a `header_color` key in `--branding-json`) — the template's own value does not suppress it. Values are passed through unvalidated (branding is opaque JSONB server-side); the KEYS are strict-checked pre-auth against the MIO-2515 allowlist, so a typo exits 2 with no request. Honors `--output` like every other command: json (the default off a TTY) returns `{hub_id, hub_slug, hub_name, hub_path, published, template_id, catalog_revision, branding_overrides, homepage_page_id, pages[], spaces[], onboarding_attributes[], playlists[], policies[]}` — `branding_overrides` is the resolved override layer, cascade included (`{}` when none) — so `HUB_ID=$(mio hubs scaffold … --jq .hub_id)` works; all progress narration goes to stderr, and a step that fails after the hub exists names the created hub id in the error (nothing is rolled back). |
+| `hubs scaffold` | Build a full-experience hub in one idempotent command from a hub template in the target backend's LIVE catalog (`--template <id>` — the CLI embeds none; `--catalog <file>` is the digest-verified escape hatch, fail-closed on mismatch, and there is no `--offline`): branding/favicon, menu, registration, discussion spaces, onboarding schema, policies, playlists, pages. The whole plan is validated before any write (`--name` ≤255 code points; `{{hub_name}}`/`{{hub_slug}}` interpolation — unknown tokens rejected, capped post-substitution). Pages: probes the backend `scaffold-from-template` op, falling back client-side on 404/405 (op absent or path shadowed on older backends: create with a `meta.template_provenance` marker → tree set → publish → mark applied), interpolating with the hub's actual title/slug. Re-runs with `--hub <id>` resume safely; an edited or foreign page at a template slug (or any pre-existing homepage) exits 2 — never overwritten. `--dry-run` previews the plan (including the palette it would apply); `--publish` (default off) goes live; `--name`/`--slug` create a new hub; `--favicon-url`/`--logo-url`/`--registration-enabled` override the template. **Version gate: `--primary-color` and friends, and the machine-readable `--output json` result, are NOT in `v0.12.1`** — on that binary they exit 2 with `unknown flag`. Check `mio version`. **Branding (MIO-2604):** `--primary-color`/`--secondary-color`/`--text-color`/`--background-color`/`--header-color`/`--header-accent`/`--social-image-url` (plus `--branding-json` for a whole object) all MERGE over the template's `branding` block, so a key you don't name keeps the template's value; precedence is template → `--branding-json` → scalar flags. `--primary-color` also fills `header_color` unless YOU gave a header color (`--header-color`, or a `header_color` key in `--branding-json`) — the template's own value does not suppress it. Values are passed through unvalidated (branding is opaque JSONB server-side); the KEYS are strict-checked pre-auth against the MIO-2515 allowlist, so a typo exits 2 with no request. Honors `--output` like every other command: json (the default off a TTY) returns `{hub_id, hub_slug, hub_name, hub_path, published, template_id, catalog_revision, branding_overrides, homepage_page_id, pages[], spaces[], onboarding_attributes[], playlists[], policies[]}` — `branding_overrides` is the resolved override layer, cascade included (`{}` when none) — so `HUB_ID=$(mio hubs scaffold … -o plain --jq .hub_id)` works (`-o plain`: `--jq` alone JSON-quotes a string, MIO-2792); all progress narration goes to stderr, and a step that fails after the hub exists names the created hub id in the error (nothing is rolled back). |
 | `hubs templates` | `list` the hub templates from the target backend's catalog (needs credentials, not a team — shows exactly what a scaffold against that backend would apply) |
 | `contacts` | `create` `list` `retrieve` `update` `delete` `restore` |
 | `contact-attributes` | `create` `list` `retrieve` `update` `delete` |
@@ -150,10 +157,10 @@ Every implemented resource and its verbs.
 | `tags` | `create` `list` `retrieve` `update` `delete` `assign` `assign-bulk` `remove` |
 | `segments` | `create` `list` `retrieve` `update` `delete` `search` `members` `count` |
 | `content` | `create` `list` `retrieve` `children` `update` `delete` `restore` `reorder` |
-| `pages` | `create` `list` `retrieve` (add `--tree` for raw node tree) `update` `delete` `home` `publish` |
+| `pages` | `create` (`--privacy public\|members\|private` — **defaults to `members`**, so omitting it ships a login-walled page) `list` `retrieve` (add `--tree` for raw node tree) `update` `delete` `home` `publish` |
 | `pages sections` | `create` (`--type` validated against the catalog writable set) `list` `update` `delete` `reorder` |
-| `pages tree` | `get` `set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit for the first tree on a draft-less page, defaults to `0`) |
-| `pages catalog` | `scaffold` (`--template`/`--variant` → a node-tree for `pages tree set`) `templates` (`--page-type`) `section-types` (`--writable-only`) |
+| `pages tree` | `get` `set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit for the first tree on a draft-less page, defaults to `0`). `get` returns `{tree, draft_version}`; `set` wants `{root}` — unwrap and re-wrap (see Page-Tree Render Contract) |
+| `pages catalog` | `scaffold` (`--template`/`--variant` → a node-tree for `pages tree set`) `templates` (`--page-type`) `section-types` (`--writable-only`). **There is no `pages catalog list`** |
 | `media files` | `list` `retrieve` `durable-url` (non-expiring hub-scoped image URL; `--hub` `--preset` `--publish`) `update` `delete` `upload` (create → presigned PUT → finalize, auto-multipart) `replace` `finalize` `transcode` `register-synthetic` |
 | `media files cards` | `get` `set` (`--cards` JSON array/@file) |
 | `media files chapters` | `get` `set` (`--chapters` JSON array/@file) |
@@ -189,6 +196,9 @@ Every implemented resource and its verbs.
 
 - **`pages publish` requires `--if-match <draft_version>`** — read the `draft_version` attribute from a prior `pages retrieve`, then pass it as `--if-match`. The backend uses it as an optimistic-concurrency guard and will return 409 if the draft has changed since you read it.
 - **`pages tree set` `--if-match` is OPTIONAL (defaults to `0`) — publish's is not.** `pages tree get` 404s on a page that has no draft yet, so the very FIRST tree set has no `draft_version` to echo back: omit `--if-match` and it defaults to `0`, which the backend accepts only while the page is still at `draft_version 0` (a fresh page starts there). For every subsequent set pass the current `draft_version`. The default does NOT bypass optimistic concurrency: a defaulted (or stale) `0` against a page that already has a draft returns a 409 conflict, so you can never silently clobber an existing draft.
+- **`pages tree get` and `pages tree set` do NOT share a shape, and the fix is a RE-WRAP.** `get` answers `{"id": …, "tree": <the root NODE, bare>, "draft_version": N}` — the backend deliberately unwraps before answering (`bare_node = resolved.get("root", resolved)`; its DTO documents `tree` as "the resolved draft tree ROOT node — bare (not wrapped in `{root: ...}`)"). `set --file` rejects anything without a top-level `root` (`Tree must have a 'root' key at the top level.`). So `--jq .tree` alone produces a file `tree set` refuses: use `--jq '{root: .tree}'` and keep the `draft_version` for `--if-match`. `pages catalog scaffold` already emits the *set* shape.
+- **A page created by `hubs scaffold` already has a draft.** Its `draft_version` is `1`, not `0`, so the first tree write YOU make against it needs `--if-match 1` — the `0` default is only correct for a page that has never had a draft. Always read it back: `mio pages tree get <page_id> --jq .draft_version`.
+- **`pages create --privacy` defaults to `members`.** A page created without `--privacy public` is behind the login wall, which is how a hub ships looking public and isn't. `hubs scaffold` sets it (MIO-2563); the manual page path does not. Also: `home` is a reserved slug (rejected) and an omitted `--slug` fails with `Field required` — use a real slug and mark the homepage with `--is-home`.
 - **`pages retrieve --tree`** returns a `page-trees` resource (raw published node tree) instead of page metadata. Use this for admin editor access.
 - **Scaffold real pages via the tree door, not imperative sections.** `pages catalog scaffold --template <id>` emits the same node-tree artifact the visual builder produces (a Go port of the reference applier mints fresh UUIDv7 ids). It is emit-only — pipe a PAGE template's `{"root":…}` output straight into `pages tree set`:
   ```sh
@@ -213,7 +223,8 @@ Every implemented resource and its verbs.
 
 - **Contact name flags are kebab-case**, like every other resource: `--first-name`, `--last-name`. `--email`, `--phone`, `--status` are also available. (The legacy underscore spellings `--first_name`/`--last_name` still work as hidden, deprecated aliases for back-compat, but new scripts should use the kebab form.)
 - **`products prices` takes the product id as a positional argument**, not `--product`:
-  `mio products prices create <product_id> --amount 4900 --currency usd --interval month`.
+  `mio products prices create <product_id> --amount 4900 --currency usd --type recurring --interval month --interval-count 1`.
+  `--amount`, `--currency` and `--type` (`one_time`|`recurring`) are all required; `--interval` **and** `--interval-count` are required when `--type=recurring`. The optional label flag is `--name` (there is no `--nickname`), alongside `--description` and `--is-active`.
 - **`segments search --conditions` takes the full condition tree** (the backend write shape), not a flat list. Prefix with `@` to read from a file. There is no `--match` flag.
   ```sh
   mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
@@ -221,6 +232,156 @@ Every implemented resource and its verbs.
   ```
 - **Generate the full reference** for any command set with `mio gen-docs --dir ./docs` (one Markdown file per command).
 - **`checkout accounts onboarding-link` always fails (exit 3, `ExitAuth`)** — the backend rejects API-key principals on this route so a leaked team API key can't attach an attacker's Stripe payout account (MIO-2655). This CLI is API-key-only (see Authentication above — any JWT is discarded right after `mio login` mints the stored key), so the command can never succeed here; it fails fast client-side with no HTTP request. Connect a Stripe account via the member.dev dashboard instead. (MIO-2717)
+
+---
+
+## Page-Tree Render Contract
+
+The API validates a page tree's **structure**, not its **renderability**. The shapes
+below return `200` and then render nothing, with no error anywhere (MIO-2539,
+MIO-2663, MIO-2664). The embedded agent skill (`mio skills print`) carries the full
+authoring recipe; this is the reference.
+
+**Node envelope** — `value` is a sibling of `settings`, *not* `settings.value`:
+
+```json
+{ "id": "<uuid>", "kind": "headline",
+  "value": "Welcome", "settings": { "level": 1, "weight": 700 } }
+```
+
+A section node is the same envelope plus a `template` and `children`:
+
+```json
+{ "id": "<uuid>", "kind": "container", "template": "row",
+  "settings": { "maxWidth": "content", "padding": 0,
+                "surface": { "padding": "section", "background": { "type": "tint" } } },
+  "children": [ ] }
+```
+
+- The renderer dispatches on **`kind`**, never `type`. `template` marks a node as a
+  section (publish-time conversion + surface wrapping).
+- `value` in `settings.value` is the highest-frequency silent drop. The sole node
+  kind that legitimately reads `settings.value` is `progress-ring` (a number).
+- No defaults cascade — inline every rendering value on its own node. Exactly one
+  `level:1` headline per page (the rest are demoted to `<h2>`).
+- `settings.weight` must be a **number** (`700`), never `"bold"`; `pages tree set`
+  rejects both that and a blank/non-string `template` client-side, before any HTTP.
+
+**Value-bearing kinds** — the nine the renderer reads a top-level `value` from:
+`headline` `text` `image` `video` `button` `icon` `divider` `progress-ring` `quote`.
+`quote`'s `value` is an **object** (`{quote, name?, profession?, avatarUrl?,
+avatarFallback?}`) and renders nothing unless `quote` is a non-empty string;
+`progress-ring` is the one kind that reads `settings.value` instead. `subheadline`,
+`paragraph`, `embed`, `html`, `spacer`, `stat`, `input` and `section` are **not** node
+kinds — use `headline` with `level:3`, `text`, and container `gap` respectively.
+`content-grid` is a *template* id, not a kind. There is **no `sidebar` kind**: a
+sidebar is a `row` whose `stack` children carry `settings.width`.
+
+**The full node-kind and settings vocabulary is generated**, not hand-listed — see
+the skill (`mio skills print`), whose `<!-- catalog-gen:… -->` blocks are rendered
+from the embedded catalog's `settingsSchema` by `go generate ./...` and byte-pinned
+by `TestSkillDocIsGeneratedFromCatalog`. Do not transcribe those lists here; they
+moved three catalog minors in a day.
+
+**Button action** is `{"type": …, "value": …}` with `type` ∈ `url` | `page` |
+`email` | `scroll` | `playlist`; `value` is canonical **for its type** — `url` takes a
+FULL URL *including* the scheme (a schemeless value is passed through and does not
+navigate), while `email` takes a bare address and `scroll` a bare anchor id.
+
+**`settings.surface`** is `{"padding", "background", "gradient"}`:
+
+| `background` | renders |
+|---|---|
+| `{"type":"tint"}` | light tint of branding `secondary` — the only value scaffolds emit |
+| `{"type":"color","token":"primary\|secondary\|accent\|muted\|background"}` | solid theme color; `primary` also stamps `data-bg="primary"` (bold band + primary-button auto-inversion) |
+| `{"type":"custom-color","value":"#rrggbb"}` | solid inline color (invalid hex → nothing) |
+| `{"type":"gradient"}` | gradient, configured by the **sibling** `surface.gradient` |
+| `{"type":"image","url":"<durable-url>","blur":true}` | image layer; the `secondary` scrim is **always** composed over it (not authorable), `blur` only adds a further layer |
+| `{"type":"none"}` | nothing |
+
+`thumbnail` is **not** a valid value — the catalog excludes it deliberately ("declared
+as a TODO in hub types, implemented nowhere, used by no recipe"), so authoring it hits
+the off-enum path below.
+
+Two traps worth stating plainly:
+
+1. **An off-enum `background.type` is accepted on publish and renders a transparent
+   row with no error** — the renderer resolves an unknown discriminant to no class and
+   no style. The catalog documents its own limitation too: the enum constrains `type`,
+   but every variant field is optional and nothing checks that you supplied the one
+   your `type` needs, so `{"type":"custom-color"}` with no `value` also renders nothing.
+2. **The gradient config is a SIBLING of `background` (`surface.gradient`), not
+   nested inside it.** Nesting is ignored and you silently get the default `split`
+   gradient. `gradient.type` ∈ `monochrome` | `analogous` | `complementary` |
+   `triadic` | `split` | `warm-shift` | `custom`; `custom` requires `customStart` +
+   `customEnd` (6-digit hex) or it falls back to `split`.
+
+**Vocabulary** comes from the catalog, not from this file — `mio pages catalog
+templates` and `mio pages catalog section-types` print the truth for the backend you
+are talking to. The skill's copies of those lists are guarded against catalog drift
+by `TestSkillDocIsGeneratedFromCatalog`.
+
+---
+
+## Hub Branding and Navigation Contract
+
+**Branding keys** (`--branding-json`, `hubs scaffold --*-color`) map onto the
+frontend like this:
+
+| key | paints |
+|---|---|
+| `primary` | buttons, links, CTAs, brand accents |
+| `secondary` | **the page's ink in light mode — every heading AND all body copy (`--hub-text: var(--hub-secondary)`) — and the page background in dark mode**; also the base of a light-mode `tint` surface |
+| `text` / `background` | body copy / page background — **only when the theme mode is `custom`**; in `light`/`dark` the theme layer clears both and derives them from `secondary` |
+| `header_color` / `header_accent` | top-nav background + accent (emitted raw, no contrast correction) |
+| `dark_mode` (bool) | **not** the theme selector — only flips the defaults for `background`/`text` when those are unset |
+
+- **`secondary` is the classic mistake**: it is not a decorative accent, it is the
+  page's ink. In `light` mode `--hub-text: var(--hub-secondary)`, so it colors every
+  heading *and* all body copy, and it is the base of every `tint` surface; in `dark`
+  mode it becomes the page background. Set it light and the whole page goes invisible.
+- **To control `background`/`text` at all, ask for `custom`**:
+  `--settings-json '{"background":{"type":"custom"}}'` alongside the branding keys. In
+  `light`/`dark` the theme layer clears both and derives them from `secondary`. In
+  `custom` mode `text` is AA-contrast-clamped against `background`, so a low-contrast
+  pair is corrected rather than honoured exactly.
+- Color values must be **6-digit hex** for all six color keys (`primary`, `secondary`,
+  `background`, `text`, `header_color`, `header_accent`). The frontend parser tests
+  `/^#[0-9a-fA-F]{6}$/` and silently substitutes its own default on anything else, so
+  3- and 8-digit hex, named colors, `rgb()`/`hsl()` and gradients all render wrong with
+  a `200` on the wire. The CLI does not validate values (conduit rule) — this is the
+  frontend's render contract, not the API's.
+- **Every `*_url` branding key is validated server-side** — the rule applies to ANY key
+  ending `_url` (case-insensitive, present or future); on the CLI's allowlist that is
+  `logo_url`, `favicon_url`, `social_image_url`, `custom_login_logo_url` and
+  `custom_font_url` (MIO-2658). Each must be `null` or a string, and a string must be an
+  absolute `https://` URL: plain `http://`, `data:`, `javascript:`, protocol-relative,
+  relative paths, whitespace/control characters (raw or percent-decoded), backslashes,
+  `user:pass@` credentials, percent-encoded hosts and bad ports are all rejected (422).
+  Non-`_url` keys round-trip unchecked.
+- **A hub cannot select light or dark — only `custom`.** `resolveThemeMode()` consults
+  the hub's mode for exactly one value: `if (hubMode === 'custom') return 'custom'`.
+  Otherwise light vs dark comes from the **viewer's** `mio-hub-theme` cookie (default
+  `system`) and their OS `prefers-color-scheme`. Writing `light`/`dark` anywhere on the
+  hub is a no-op, and there is **no `settings.theme` key** either (the parsed
+  `theme.mode` is derived from `settings.background.type`). `custom` IS honoured
+  unconditionally, via `--settings-json '{"background":{"type":"custom"}}'`, and it is
+  the only mode in which `branding.background`/`branding.text` are read at all.
+  `branding.dark_mode` selects nothing.
+
+**Navigation `icon` values are two different vocabularies** (MIO-2675), neither
+validated by the CLI:
+
+- `header`/`footer` accept any id from the hub frontend's icon sprite (~205 ids;
+  `ICON_NAMES` in mio-hub `src/components/ui/icon.tsx` is generated alongside
+  `public/icons/sprite.svg` and is authoritative). `icon` is optional — an unknown
+  name drops the icon, not the item. **`info` and `globe` do not exist** (hence the
+  blank glyphs); use `information`/`information-circle` and `earth`/`global`.
+- `mobile` accepts an **8-value whitelist** and `icon` is **mandatory** — an off-list
+  icon drops the whole tab: `Home` `Bell` `User` `Users` `MessageSquare`
+  `MessageCircle` `Search` `content` (frontend component names, not sprite ids;
+  the lowercase `content` is deliberate). Under 3 valid tabs and the frontend
+  replaces the list with its defaults; over 5 and it truncates.
 
 ---
 
@@ -236,7 +397,7 @@ export MIO_API_KEY="${MIO_API_KEY:?MIO_API_KEY must be set}"   # mio_sk_live_…
 CONTACTS=$(mio contacts list --output json)
 
 # Filter with --jq
-FIRST_ID=$(mio contacts list --jq '.[0].id')
+FIRST_ID=$(mio contacts list -o plain --jq '.[0].id')   # -o plain: string ids need it (MIO-2792)
 
 # Delete safely in a script (destructive ops need --yes off a TTY)
 mio contacts delete "$FIRST_ID" --yes

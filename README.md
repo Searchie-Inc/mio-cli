@@ -4,6 +4,8 @@ The official command-line interface for [Membership.io](https://membership.io).
 
 `mio` is agent-first: JSON output by default when piped, environment-variable auth, and stable exit codes so scripts and AI agents can branch deterministically.
 
+> **This README tracks `main`, not the released binary.** If you installed `mio` from a release, a feature described here may not be in it yet — run `mio version`, and prefer `mio <cmd> --help`, which always comes from the binary you actually have. Behaviours newer than the latest release are called out inline.
+
 ---
 
 ## Prerequisites
@@ -239,6 +241,8 @@ mio hubs update <hub-id> --unset branding.favicon_url,settings.customCss
 mio hubs update <hub-id> --navigation-json '{"header":[{"type":"url","label":"Home","href":"/my-hub/","position":0}]}'
 
 # Build a whole branded hub in ONE command from a template (see `mio hubs templates`).
+# VERSION GATE: the --*-color palette flags and the machine-readable --output json
+# result are NOT in v0.12.1 — on that binary they exit 2 with "unknown flag".
 # The branding flags MERGE over the template's palette — a key you don't name keeps
 # the template's value. --primary-color also fills header_color unless you give a
 # header color yourself (--header-color, or a header_color key in --branding-json).
@@ -251,11 +255,32 @@ mio hubs scaffold --template community --name "Acme" --slug acme \
 # Preview first — the plan names the palette it would apply, and changes nothing.
 mio hubs scaffold --template community --name "Acme" --slug acme --primary-color '#B91C1C' --dry-run
 
+# Pages & page trees
+# --privacy defaults to `members`: omit it and the page is behind the login wall.
+# `home` is a RESERVED slug — use a real one and mark the homepage with --is-home.
+mio pages create --hub <hub-id> --title "Welcome" --slug welcome --privacy public --is-home
+# Discover the page-builder catalog. (There is no `pages catalog list`.)
+mio pages catalog templates --page-type homepage
+mio pages catalog section-types --writable-only
+# Scaffold a tree, fill in the values, set the draft, publish.
+mio pages catalog scaffold --template page-homepage > tree.json
+mio pages catalog scaffold --template row --variant 3eq > cols.json   # a section to splice in
+mio pages tree set <page-id> --hub <hub-id> --file tree.json          # first tree: --if-match defaults to 0
+mio pages publish <page-id> --hub <hub-id> --if-match 1
+# `tree get` hands back the BARE root node; `tree set --file` wants {"root": ...}.
+# The round trip is a RE-wrap, not an unwrap.
+V=$(mio pages tree get <page-id> --hub <hub-id> --jq .draft_version)
+mio pages tree get <page-id> --hub <hub-id> --jq '{root: .tree}' > tree.json
+
 # Products & prices  (the product id is a positional argument, not a flag)
 mio products list
 mio products create --name "Pro Plan" --description "Full access"
 mio products prices list <product-id>
-mio products prices create <product-id> --amount 4900 --currency usd --interval month
+# --amount, --currency and --type are required; --interval AND --interval-count are
+# required when --type=recurring. The label flag is --name (there is no --nickname).
+mio products prices create <product-id> --amount 4900 --currency usd \
+  --type recurring --interval month --interval-count 1 --name "Monthly"
+mio products prices create <product-id> --amount 19900 --currency usd --type one_time
 
 # Segments — preview who matches a condition tree (does not save)
 mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
@@ -313,7 +338,8 @@ mio contacts retrieve <id> --jq '.email'
 mio products list --jq '.[].id'
 
 # Chain into shell variable
-HUB_ID=$(mio hubs list --jq '.[0].id')
+# -o plain when CAPTURING a string id: --jq alone renders it JSON-quoted (MIO-2792).
+HUB_ID=$(mio hubs list -o plain --jq '.[0].id')
 mio content list --hub "$HUB_ID"
 ```
 
@@ -354,7 +380,7 @@ Scripts and agents can branch on these stable codes.
 | `tags` | `create`, `list`, `retrieve`, `update`, `delete`, `assign`, `assign-bulk`, `remove` |
 | `segments` | `create`, `list`, `retrieve`, `update`, `delete`, `search`, `members`, `count` |
 | `content` | `create`, `list`, `retrieve`, `children`, `update`, `delete`, `restore`, `reorder` |
-| `pages` | `create`, `list`, `retrieve` (add `--tree` for raw published node tree), `update`, `delete`, `home`, `publish` (requires `--if-match <draft_version>`); `tree get/set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit it for the first tree on a draft-less page, it defaults to `0`); `sections create/list/update/delete/reorder` |
+| `pages` | `create` (`--privacy public\|members\|private`, **default `members`**), `list`, `retrieve` (add `--tree` for raw published node tree), `update`, `delete`, `home`, `publish` (requires `--if-match <draft_version>`); `tree get/set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit it for the first tree on a draft-less page, it defaults to `0`); `sections create/list/update/delete/reorder`; `catalog templates/section-types/scaffold` (the page-builder catalog — no `catalog list` verb exists) |
 | `media files` | `list`, `retrieve`, `durable-url` (non-expiring hub-scoped image URL for page trees), `update`, `delete`; ingest from the CLI: `upload` (create → presigned S3 PUT → finalize; auto-multipart), `replace`, `finalize`, `transcode`, `register-synthetic`; `cards get/set`, `chapters get/set` |
 | `media folders` | `list`, `create`, `retrieve`, `update`, `delete`, `move` (`--parent-id`/`--to-root`) |
 | `media search` | hybrid search over the team's transcripts (`--query`, `--hub-id`, `--limit`) |
@@ -391,6 +417,36 @@ Multiple named profiles are supported via `--profile`.
 
 ---
 
+## Building a hub — and the silent-drop traps
+
+`mio hubs scaffold` builds a whole branded hub in one command and is the recommended
+starting point. When you customize it — or build a hub by hand — you are authoring
+against the hub frontend's render contract, and the API validates a page tree's
+**structure**, not its **renderability**. These all return `200` and then render
+nothing, with no error:
+
+- **A node's text lives in `value` at the TOP LEVEL of the node, not `settings.value`.**
+  This is the most common one by a distance. (`progress-ring` is the only kind that
+  genuinely reads `settings.value`; `quote`'s `value` is an object, not a string.)
+- `settings.weight` must be a **number** (`700`), never `"bold"`.
+- A section node must carry a non-empty **`template`** (`hero`, `carousel`, `row`, …).
+- An off-enum **`surface.background.type`** renders a transparent row. The valid set
+  is `tint` · `color` (+`token`) · `custom-color` (+`value`) · `gradient` · `image`
+  (+`url`) · `none` — `thumbnail` is deliberately **not** one of them.
+- The **gradient config is a sibling** of `background` — `surface.gradient`, not
+  `surface.background.gradient`. Nesting it silently yields the default gradient.
+- A `header`/`footer` menu item without a **`type`** is dropped; a `mobile` tab whose
+  `icon` is outside the 8-name whitelist is dropped.
+- `mio pages publish` returns **`section_count`** — compare it against the number of
+  sections you authored. That, not the `200`, is the "did it apply" signal.
+
+`mio pages tree set` catches the numeric-`weight` and blank-`template` cases
+client-side (exit `2`, no HTTP). The rest are documented in full in the bundled agent
+skill — `mio skills print`, or `mio skills install` to drop it into Claude Code /
+Codex — and in [AGENTS.md](./AGENTS.md#page-tree-render-contract).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -405,7 +461,7 @@ Multiple named profiles are supported via `--profile`.
 
 Errors are rendered TTY-aware: on an interactive terminal you get a friendly one-line `Error: <detail>` plus a dimmed `(exit code N)`; when stderr is piped or otherwise non-interactive you get the machine-readable JSON:API `errors` array with the exit code echoed in `meta.exit_code`. Either way the process exit code is the same, so scripts can branch on the exit code (and, off a TTY, on the body).
 
-In that envelope, `errors[].status` is the **real HTTP status the API returned** — a 403 reads `"403"`, a 409 `"409"`, a 422 `"422"`, and so on. Exit codes stay deliberately coarse (401 and 403 both exit 3; 400, 409 and 422 all exit 2), so use `status` when you need the precise distinction and `meta.exit_code` when the coarse class is enough. For failures that never reached the network (bad flag, unreadable file, no API key) there is no HTTP status, and `status` falls back to the exit code's class.
+In that envelope — **from the release after `v0.12.1`; on `v0.12.1` and earlier `status` is reconstructed from the exit code, so a 403 reads `"401"` and a 409 or 422 reads `"400"` (MIO-2656)** — `errors[].status` is the **real HTTP status the API returned** — a 403 reads `"403"`, a 409 `"409"`, a 422 `"422"`, and so on. Exit codes stay deliberately coarse (401 and 403 both exit 3; 400, 409 and 422 all exit 2), so use `status` when you need the precise distinction and `meta.exit_code` when the coarse class is enough. For failures that never reached the network (bad flag, unreadable file, no API key) there is no HTTP status, and `status` falls back to the exit code's class.
 
 ---
 

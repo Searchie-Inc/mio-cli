@@ -24,6 +24,11 @@ import (
 // both consume the identical SKILL.md frontmatter format, so only the install
 // location differs per target.
 //
+// The skill's catalog-derived sections (node-kind settings, the surface
+// background/gradient enums, the vocabulary lists) are GENERATED from the embedded
+// page-builder catalog — see internal/docsgen. Re-run after any catalog re-pin:
+//
+//go:generate go run ../internal/docsgen/cmd/skilldocs -file skills/content/mio-skill.md
 //go:embed skills/content/mio-skill.md
 var skillBody string
 
