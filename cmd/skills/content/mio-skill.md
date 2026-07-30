@@ -55,9 +55,27 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
 - Branding flags **merge** over the template's palette — a key you don't name keeps
   the template's value. `--primary-color` also fills `header_color` unless you gave
   one yourself. `--branding-json` takes a whole object; scalar flags win over it.
-- **Re-runs are safe**: `mio hubs scaffold --template community --hub "$HUB_ID"`
+- **Re-runs are safe for PAGES**: `mio hubs scaffold --template community --hub "$HUB_ID"`
   resumes. A page you edited, or a foreign page at a template slug, exits `2` and is
-  **never** overwritten.
+  **never** overwritten. Spaces, onboarding attributes and playlists skip if they
+  already exist. **Legal policy CONTENT is the exception — see the next bullet.**
+- **Legal policies come with their enforcement switch, and a resume rewrites them.**
+  The scaffold writes each policy document *and* flips the hub-level gate
+  (`settings.policies.enabled`) when the template declares `enabled: true`;
+  `policy_gate` in the JSON result reports what it applied (`null` = none written,
+  so the hub's setting stands). Writing a ToS without the gate is a hub where nobody
+  is ever asked to accept it: the member endpoint reports
+  `tos_acceptance_required:false` and `POST …/tos/accept` returns a 404 (an
+  enumeration-safe mask, not a missing route). Enforcement is one flag per hub, not
+  one per policy.
+  **The catch:** the policy write always sends `content`, and the `community`
+  template carries none — so **every resume reverts that hub's ToS and Privacy text
+  to the backend default**, and because the ToS is acceptance-gated it also bumps the
+  version, **re-prompting every member who had already accepted**. If you customized
+  the legal text, re-apply it after any resume:
+  `mio hubs policies update "$HUB_ID" --policy-type tos --content @tos.md --require-acceptance`.
+  **Not in `v0.13.0` or earlier** — on those binaries the gate is never written at
+  all, so fix a scaffolded hub with `mio hubs policies gate "$HUB_ID" --enabled`.
 - The public URL is not returned by the API (no domain field exists) — combine
   `hub_slug` with your hub-frontend host yourself.
 - **After a scaffold, its pages already carry a draft** (`draft_version` ≥ 1, in

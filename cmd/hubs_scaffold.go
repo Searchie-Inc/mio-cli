@@ -106,6 +106,14 @@ type scaffoldContext struct {
 	// ids actually observed land here, so a recorded id is always a real one.
 	pageIDsBySlug map[string]string
 
+	// policyGate is the hub-level policy-enforcement gate this run resolved from
+	// the template's per-policy `enabled` declarations (MIO-2567): non-nil only
+	// when at least one policy declared one, in which case stepPolicies PATCHed
+	// .../policies/gate with it. nil means the template stated no intent and the
+	// hub's gate was left untouched. The machine result reports it, because "the
+	// ToS is written but nothing enforces it" is invisible in every other field.
+	policyGate *bool
+
 	// publish is the --publish intent (Task 21 registers the flag; read
 	// existence-guarded in runHubsScaffold, so it defaults false until then). When
 	// false the publish step is a skip-with-note and the hub stays private.
@@ -650,38 +658,230 @@ var policyTypeAliases = map[string]string{
 	"privacy_policy":   "privacy_policy",
 }
 
+// templatePolicies is the fully RESOLVED policies block: the ordered
+// per-policy PATCH bodies stepPolicies sends, and the hub-level enforcement
+// gate collapsed out of their `enabled` declarations.
+type templatePolicies struct {
+	keys     []string    // template keys, sorted (deterministic apply + message order)
+	policies []hubPolicy // one PATCH body per key, in keys order
+	// gate is the collapsed per-policy `enabled`: nil when no policy declared
+	// one. See resolveTemplatePolicies for the collapse and scaffoldPolicyGate
+	// for why only a true is ever WRITTEN.
+	gate *bool
+}
+
+// resolveTemplatePolicies parses + validates a template's whole policies block
+// and collapses its per-policy `enabled` onto the single hub-level gate. It is
+// a PURE function of the template: no context, no HTTP, no ordering
+// requirements.
+//
+// That purity is the point. It is called from rebuildScaffoldPlan — the
+// WRITE-FREE preflight, beside HubTemplate.Validate — so a malformed policies
+// block fails before the hub is created, not at pipeline stage 5 of 9 with a
+// hub and its blobs, spaces and onboarding defs already written and no
+// rollback (MIO-2567 review). stepPolicies calls it again at apply time so the
+// step stays self-contained for the unit-driven contexts that never run
+// preflight; it is cheap and deterministic, so running it twice is free.
+func resolveTemplatePolicies(t *catalog.HubTemplate) (templatePolicies, error) {
+	out := templatePolicies{keys: make([]string, 0, len(t.Policies))}
+	if len(t.Policies) == 0 {
+		return out, nil
+	}
+	for k := range t.Policies {
+		out.keys = append(out.keys, k)
+	}
+	sort.Strings(out.keys)
+
+	out.policies = make([]hubPolicy, 0, len(out.keys))
+	for _, key := range out.keys {
+		pol, err := templateHubPolicy(key, t.Policies[key])
+		if err != nil {
+			return templatePolicies{}, err
+		}
+		out.policies = append(out.policies, pol)
+	}
+	gate, err := scaffoldPolicyGate(t.Policies, out.keys)
+	if err != nil {
+		return templatePolicies{}, err
+	}
+	out.gate = gate
+	return out, nil
+}
+
 // stepPolicies applies the template's legal policies via the shared
 // applyHubPolicies helper — one PATCH per policy, keys sorted for deterministic
-// ordering (design §Apply pipeline step 5, MIO-2543 Task 16). An empty/nil
-// Policies map is a clean no-op.
+// ordering (design §Apply pipeline step 5, MIO-2543 Task 16) — and then, when
+// the template declares enforcement, flips the hub-level policy gate through
+// the same PATCH .../policies/gate the `hubs policies gate` verb uses
+// (MIO-2567). An empty/nil Policies map is a clean no-op.
+//
+// TWO WRITES, ONE STEP. The gate is recorded as its own plan entry (so
+// --dry-run names it) but stays under the "policies" step name rather than
+// becoming a tenth pipeline stage: it is the enforcement half of the same
+// declaration, it has nothing to do when the template carries no policies, and
+// the ordered step-name list is a published contract (the dry-run plan surfaces
+// it). It MUST run after the content PATCHes — enabling the gate first would
+// briefly require members to accept the default document the template is about
+// to replace.
+//
+// RESUME CAVEAT (MIO-2567 review, and read the CONTENT SEMANTICS note on
+// templateHubPolicy): applyHubPolicies always sends `content`, so a template
+// that omits it RESETS that policy to the backend default on every apply — and
+// for a TOS with require_acceptance that also normalizes the version, which
+// RE-PROMPTS every member who had already accepted. The shipped community
+// template omits content, so a resume onto a hub whose ToS an operator edited
+// by hand reverts the text and re-prompts. That reset predates this change; what
+// this change does is make it MEMBER-VISIBLE, because the gate it now flips is
+// what turns re-prompting on. It is called out on every operator-facing surface
+// rather than only here.
 func stepPolicies(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	if len(t.Policies) == 0 {
 		return sc.step("policies", "no policies in template", func() error { return nil })
 	}
-	keys := make([]string, 0, len(t.Policies))
-	for k := range t.Policies {
-		keys = append(keys, k)
+	// Re-resolve rather than read a context field: the unit-driven step tests
+	// build a scaffoldContext directly and never run preflight, and a step that
+	// silently no-ops without it would be a worse trap than the double parse.
+	res, err := resolveTemplatePolicies(t)
+	if err != nil {
+		return err
 	}
-	sort.Strings(keys)
+
 	detail := fmt.Sprintf("PATCH %s — set policy(ies) [%s]",
-		hubsPoliciesPath(sc.teamID, sc.hubIDOrPlaceholder()), strings.Join(keys, ", "))
-	return sc.step("policies", detail, func() error {
-		for _, key := range keys {
-			pol, err := templateHubPolicy(key, t.Policies[key])
-			if err != nil {
-				return err
-			}
-			if _, err := applyHubPolicies(sc.ctx, sc.cl, sc.teamID, sc.hubID, pol); err != nil {
-				return err
+		hubsPoliciesPath(sc.teamID, sc.hubIDOrPlaceholder()), strings.Join(res.keys, ", "))
+	if serr := sc.step("policies", detail, func() error {
+		for _, pol := range res.policies {
+			if _, aerr := applyHubPolicies(sc.ctx, sc.cl, sc.teamID, sc.hubID, pol); aerr != nil {
+				return aerr
 			}
 		}
+		return nil
+	}); serr != nil {
+		return serr
+	}
+
+	// ENABLE-ONLY (see scaffoldPolicyGate). Nothing declared, or a declaration
+	// that resolves to false: no gate request — but SAY SO, on the plan and on a
+	// real run's stderr, exactly as stepPublish narrates its own skip. The whole
+	// point of this ticket is that "documents written, enforcement unknown" must
+	// never again be a state you can only discover from a member's 404.
+	if res.gate == nil || !*res.gate {
+		reason := policyGateSkipReason(res.gate)
+		return sc.step("policies",
+			"skipped — "+reason+"; enforcement gate not written (the hub's current setting stands)",
+			func() error {
+				sc.notef("policies: %s — enforcement gate NOT written; the hub's current setting stands (check or set it with `mio hubs policies gate %s --enabled`).",
+					reason, sc.hubID)
+				return nil
+			})
+	}
+
+	gateDetail := fmt.Sprintf("PATCH %s — enable policy enforcement (settings.policies.enabled=true, collapsed from the template's per-policy enabled)",
+		hubsPoliciesGatePath(sc.teamID, sc.hubIDOrPlaceholder()))
+	return sc.step("policies", gateDetail, func() error {
+		if _, gerr := applyHubPolicyGate(sc.ctx, sc.cl, sc.teamID, sc.hubID, true); gerr != nil {
+			return gerr
+		}
+		sc.policyGate = res.gate
+		// Narrate it (stderr, like every other progress note). The prose summary is
+		// a byte-exact golden and stays untouched, but a real run must not flip a
+		// member-facing enforcement switch in complete silence — "the ToS is there
+		// and nothing enforces it" was invisible for a whole release precisely
+		// because nothing on any surface said either way.
+		sc.notef("policies: enforcement gate set to enabled=true (settings.policies.enabled).")
 		return nil
 	})
 }
 
+// policyGateSkipReason explains, in the operator's words, why no gate write
+// happened — the two cases are genuinely different and conflating them is how
+// this bug hid.
+func policyGateSkipReason(gate *bool) string {
+	if gate == nil {
+		return "no policy declares \"enabled\""
+	}
+	return "the template declares \"enabled\": false, which the applier contract does not act on"
+}
+
+// scaffoldPolicyGate collapses the template's PER-POLICY `enabled` declarations
+// onto the ONE hub-level enforcement gate the backend actually stores, over
+// keys in the caller's deterministic order. It returns nil when no policy
+// declares `enabled`.
+//
+// WHY A COLLAPSE (verified against mio-backend origin/main, MIO-2567): there is
+// no per-policy enabled field in the stored shape. `_policies_enabled()`
+// (app/hubs/service.py) reads exactly settings.policies.enabled, by identity
+// (`is True`), and PATCH .../policies/gate → update_policy_gate() is its only
+// writer; update_policy() writes content + version into
+// settings.policies.{tos,privacy_policy} and never an enabled. So a template
+// saying "terms enforced, privacy not" is describing a granularity the platform
+// has never had.
+//
+// WHY A CONFLICT ERRORS: the collapse is lossy, and picking a winner silently is
+// the exact failure mode this ticket exists to remove. `true` beating `false`
+// would enforce a policy the author declared off; `false` beating `true` would
+// ship the hub QA reported. Neither can be inferred, so the template is wrong
+// and says so — from the WRITE-FREE preflight (ExitUsage), naming both keys.
+//
+// WHY ONLY A TRUE IS WRITTEN: the caller applies a resolved true and skips a
+// resolved false. That is the ratified applier contract — mio-page-catalog
+// catalog.schema.json describes a per-policy `enabled: true` as declaring
+// "template INTENT only" and requires the applier to "call PATCH
+// .../policies/gate when enabled is true", saying nothing about false. Acting
+// on a false anyway would mean every resume of such a template DISABLES
+// enforcement an operator had turned on by hand — the mirror image of the
+// reason an UNDECLARED gate is left alone. Skipping it is not a silent drop: it
+// is narrated on stderr and documented, and `hubs policies gate --enabled=false`
+// is the verb that exists for actually disabling one.
+//
+// NOT a gate source: settings.policies.enabled, which the same community
+// template also carries. The scaffold sends the settings blob through the
+// generic hub PATCH, where the backend pops `policies` wholesale
+// (service.py: `incoming.pop("policies", None)`), so that key is inert — a
+// reading the ratified schema states outright ("a settings-blob PATCH does not
+// enforce"). Re-routing a settings key to a different endpoint would be the CLI
+// second-guessing the API rather than conducting it, and it would repair
+// `enabled` while leaving its siblings (`show`, `tos`, `privacy_policy`) just as
+// inert — a new asymmetry in place of the old one.
+func scaffoldPolicyGate(policies map[string]any, keys []string) (*bool, error) {
+	var gate *bool
+	var declaredBy string
+	for _, key := range keys {
+		val, _ := policies[key].(map[string]any) // shape already checked by templateHubPolicy
+		raw, present := val["enabled"]
+		if !present {
+			continue
+		}
+		enabled, ok := raw.(bool)
+		if !ok {
+			// The backend gate is identity-checked (`is True`), so a stringly-typed
+			// "true" would never enforce anything. Reject it rather than let it read
+			// as "no declaration".
+			return nil, errs.New(errs.ExitUsage,
+				"policy %q: \"enabled\" must be a JSON boolean, got %T", key, raw)
+		}
+		if gate != nil && *gate != enabled {
+			return nil, errs.New(errs.ExitUsage,
+				"policies[%q].enabled=%t conflicts with policies[%q].enabled=%t: policy enforcement is a single hub-level gate (settings.policies.enabled), not per-policy — make every policy that declares \"enabled\" agree",
+				declaredBy, *gate, key, enabled)
+		}
+		gate, declaredBy = &enabled, key
+	}
+	return gate, nil
+}
+
 // templateHubPolicy maps one template policy entry (key + value) onto the
 // hubPolicy the shared applyHubPolicies consumes. The key resolves to the backend
-// policy_type via policyTypeAliases (an unknown key ERRORS — never a silent drop).
+// policy_type via policyTypeAliases (an unknown key ERRORS — never a silent drop),
+// and so does everything INSIDE the value: a non-object, a field outside
+// catalog.HubPolicyFieldKey, or a field of the wrong JSON type is an ExitUsage
+// error (MIO-2567 closed that asymmetry — the key rule and the field rule are
+// now the same rule). catalog.HubTemplate.Validate rejects unknown fields at
+// preflight too; this is the second line, and the only one for a value that
+// never came through the catalog.
+//
+// `enabled` is READ HERE ONLY to be accepted, not applied: it is not part of the
+// policies PATCH body (the backend stores no per-policy enabled) — it is
+// collapsed onto the hub-level gate by scaffoldPolicyGate.
 //
 // CONTENT SEMANTICS (template authors take note): a template policy that OMITS
 // "content" does NOT mean "leave the existing policy content unchanged" — it maps
@@ -698,15 +898,54 @@ func templateHubPolicy(key string, raw any) (hubPolicy, error) {
 		return hubPolicy{}, errs.New(errs.ExitUsage,
 			"invalid policy %q: must be one of tos, terms, privacy, privacy_policy", key)
 	}
+	val, ok := raw.(map[string]any)
+	if !ok {
+		return hubPolicy{}, errs.New(errs.ExitUsage,
+			"policy %q must be an object, got %T", key, raw)
+	}
+	for f := range val {
+		// ONE allow-list, the catalog's — the same set HubTemplate.Validate
+		// enforces at preflight. A second copy here would be a copy to keep in
+		// sync, and the whole bug was a field that lived on one list and in no
+		// consumer.
+		if !catalog.HubPolicyFieldKey(f) {
+			return hubPolicy{}, errs.New(errs.ExitUsage,
+				"policy %q: unknown field %q (allowed: %s)", key, f,
+				strings.Join(catalog.HubPolicyFieldKeys(), ", "))
+		}
+	}
+
 	p := hubPolicy{PolicyType: policyType}
-	val, _ := raw.(map[string]any)
-	if c, ok := val["content"].(string); ok {
-		content := c
+	if c, present := val["content"]; present {
+		content, ok := c.(string)
+		if !ok {
+			// A non-string content would otherwise leave p.Content nil, and
+			// applyHubPolicies sends nil as JSON null — silently RESETTING the policy
+			// to the backend default instead of applying what the template says.
+			return hubPolicy{}, errs.New(errs.ExitUsage,
+				"policy %q: \"content\" must be a string, got %T", key, c)
+		}
 		p.Content = &content
 	}
-	if ra, ok := val["require_acceptance"].(bool); ok {
-		p.RequireAcceptance = &ra
-	} else if ra, ok := val["required"].(bool); ok {
+	// "require_acceptance" is canonical; "required" is the friendly alias a
+	// template may read better with. Either alone wins; both present and
+	// DISAGREEING is a template contradiction with no defensible winner, so it
+	// errors rather than letting the canonical name quietly beat the alias.
+	for _, f := range []string{"require_acceptance", "required"} {
+		v, present := val[f]
+		if !present {
+			continue
+		}
+		ra, ok := v.(bool)
+		if !ok {
+			return hubPolicy{}, errs.New(errs.ExitUsage,
+				"policy %q: %q must be a JSON boolean, got %T", key, f, v)
+		}
+		if p.RequireAcceptance != nil && *p.RequireAcceptance != ra {
+			return hubPolicy{}, errs.New(errs.ExitUsage,
+				"policy %q: \"require_acceptance\"=%t contradicts its alias \"required\"=%t — set one, or make them agree",
+				key, *p.RequireAcceptance, ra)
+		}
 		p.RequireAcceptance = &ra
 	}
 	return p, nil
@@ -1192,6 +1431,18 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 //   - every key is emitted unconditionally, empty arrays included: a machine
 //     contract whose keys come and go with the template is not one an agent can
 //     write `.spaces | length` against;
+//   - policy_gate (MIO-2567) reports the hub-level enforcement gate this run
+//     WROTE. The write is enable-only (see scaffoldPolicyGate), so the pipeline
+//     produces exactly two values: true when it turned enforcement on, and null
+//     when it wrote no gate at all — which covers BOTH "no policy declared
+//     enabled" and "the declaration resolved to false", the two cases whose
+//     shared outcome is that the hub's existing setting stands. It is the one
+//     field that
+//     distinguishes "the ToS document exists" (policies[]) from "members are
+//     actually asked to accept it", which is precisely the pair QA could not
+//     tell apart: content present, `policies_enabled` reading true off the
+//     FE-facing derivation, and the member endpoint still answering
+//     tos_acceptance_required:false;
 //   - branding_overrides (MIO-2604) reports the RESOLVED override layer — the
 //     palette flags and --branding-json keys, CASCADE INCLUDED — so a caller can
 //     see what the CLI actually sent (notably the header_color it derived from
@@ -1257,6 +1508,7 @@ func scaffoldResult(sc *scaffoldContext, templateID string) map[string]any {
 		"onboarding_attributes": onboarding,
 		"playlists":             playlists,
 		"policies":              policies,
+		"policy_gate":           policyGateResult(sc.policyGate),
 	}
 	// The catalog revision the template was sourced from — the provenance the
 	// stderr "catalog: …" line carries for a human, so a machine run can record
@@ -1293,6 +1545,29 @@ func hubPublicPath(slug string) string {
 		return ""
 	}
 	return "/" + slug
+}
+
+// policyGateResult renders the gate this run WROTE for the machine result: the
+// written boolean, or JSON null when no gate was written at all.
+//
+// The contract `jq .policy_gate` reads is TWO-valued, because the write is
+// enable-only: true (this run turned enforcement on) and null (it did not
+// touch the gate — no declaration, or a declaration that resolved to false).
+// What must never happen is the null collapsing into false: "this run left the
+// hub's enforcement alone" and "enforcement is off" are different statements,
+// and answering the second for the first is the shape of the original bug.
+//
+// The *bool is kept rather than a plain bool because a resolved false is a real
+// state the resolver can produce — it is simply not written today — so the
+// encoding stays honest if the ratified applier contract ever gains a disable
+// case. The output layer would round-trip a bare *bool to the same JSON; this
+// states the contract where a reader can see it, as nilIfEmpty does for unknown
+// ids (MIO-2567).
+func policyGateResult(gate *bool) any {
+	if gate == nil {
+		return nil
+	}
+	return *gate
 }
 
 // nilIfEmpty maps "" onto a JSON null so an unknown id is DISTINGUISHABLE from a

@@ -179,7 +179,9 @@ func rebuildScaffoldPlan(sc *scaffoldContext, cat *catalog.Catalog, src catalog.
 //     pin hint);
 //  4. hub-template invariants (Validate against the same catalog);
 //  5. the instantiated page plan + a preliminary interpolation of the whole
-//     plan.
+//     plan;
+//  6. the policies block — key, per-field JSON types, and the per-policy
+//     `enabled` collapse (MIO-2567; Validate covers only the field NAMES).
 //
 // On success it leaves sc.cat / sc.hubTmpl / sc.pagePlan
 // populated for the apply pipeline.
@@ -208,5 +210,29 @@ func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID strin
 	if sc.hubID != "" {
 		prelimName, prelimSlug = sc.hubName, sc.hubSlug
 	}
-	return rebuildScaffoldPlan(sc, cat, src, templateID, prelimName, prelimSlug)
+	if rerr := rebuildScaffoldPlan(sc, cat, src, templateID, prelimName, prelimSlug); rerr != nil {
+		return rerr
+	}
+
+	// 6. The policies block — the policy KEY, each field's JSON type, and the
+	//    per-policy `enabled` collapse. Pure functions of the template, like every
+	//    check above, and this is the last moment they are free: leaving them in
+	//    stepPolicies (pipeline stage 5 of 9) meant a contradictory template exited
+	//    2 only AFTER the hub, its blobs, its spaces and its onboarding defs were
+	//    written and could not be rolled back (MIO-2567 review). HubTemplate.Validate
+	//    covers only the field NAMES, so these two classes are caught nowhere else.
+	//
+	//    DELIBERATELY NOT in rebuildScaffoldPlan, beside Validate, even though that
+	//    is where it reads most naturally: rebuildScaffoldPlan has a SECOND caller,
+	//    retryServerOpAfterRefetch (hubs_scaffold_op.go), which re-resolves the
+	//    catalog at stage 7 after a backend-op 409 — with the hub, blobs, spaces,
+	//    onboarding, policies and playlists all already written. Validating policies
+	//    there would abort a pages retry over a policies block this run has already
+	//    applied successfully, recreating the exact unrollbackable failure this move
+	//    exists to prevent. The retry needs the page plan rebuilt, nothing else.
+	//
+	//    Discarded on success: stepPolicies re-resolves at apply time (cheap,
+	//    deterministic) so the step stays runnable without a preflight.
+	_, perr := resolveTemplatePolicies(&sc.hubTmpl)
+	return perr
 }

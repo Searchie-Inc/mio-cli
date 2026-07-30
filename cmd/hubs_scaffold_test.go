@@ -907,6 +907,391 @@ func TestStepPolicies_UnknownKeyErrorsNoRequest(t *testing.T) {
 	}
 }
 
+// ─── MIO-2567: the policy ENFORCEMENT gate ───────────────────────────────────
+//
+// The reported bug: a scaffolded + published community hub wrote a full ToS and
+// Privacy Policy, `hub.policies_enabled` read true off the FE-facing derivation
+// — and a freshly registered member still got `tos_acceptance_required:false`
+// with `POST .../tos/accept` answering the enumeration-safe 404, because
+// settings.policies.enabled was never written. The pipeline PATCHed
+// .../policies and nothing ever PATCHed .../policies/gate, while the template's
+// per-policy `enabled:true` was dropped on the floor by templateHubPolicy.
+
+// policyStepServer records every PATCH (path + body) a policies step fires and
+// answers each with a generic resource, so a test can assert the ORDER and
+// SHAPE of the content writes and the gate write together.
+func policyStepServer(t *testing.T) (*client.Client, *[]string, *[][]byte) {
+	t.Helper()
+	var paths []string
+	var bodies [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if r.Method != http.MethodGet {
+			b, _ := io.ReadAll(r.Body)
+			paths = append(paths, r.URL.Path)
+			bodies = append(bodies, b)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"pol_1","type":"hub_policies","attributes":{}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return client.New(srv.URL, "k"), &paths, &bodies
+}
+
+// TestStepPolicies_GateFiresLastWhenTemplateDeclaresEnabled: the shipped
+// community shape — terms {required, enabled}, privacy_policy {enabled} — writes
+// both policy documents and THEN flips the hub-level gate exactly once, with
+// enabled:true, to .../policies/gate. Gate LAST: enabling before the content
+// lands would briefly demand acceptance of the default document the template is
+// about to replace.
+func TestStepPolicies_GateFiresLastWhenTemplateDeclaresEnabled(t *testing.T) {
+	cl, paths, bodies := policyStepServer(t)
+	sc := newStepSC(cl, "hub_1", "acme")
+	tmpl := &catalog.HubTemplate{
+		ID: "community",
+		Policies: map[string]any{
+			"terms":          map[string]any{"required": true, "enabled": true},
+			"privacy_policy": map[string]any{"enabled": true},
+		},
+	}
+	if err := stepPolicies(sc, tmpl); err != nil {
+		t.Fatalf("stepPolicies: %v", err)
+	}
+	if len(*paths) != 3 {
+		t.Fatalf("want 3 PATCHes (2 policies + 1 gate), got %d: %v", len(*paths), *paths)
+	}
+	for _, p := range (*paths)[:2] {
+		if !strings.HasSuffix(p, "/hubs/hub_1/policies") {
+			t.Errorf("content PATCH path = %q, want .../hubs/hub_1/policies", p)
+		}
+	}
+	if got := (*paths)[2]; !strings.HasSuffix(got, "/hubs/hub_1/policies/gate") {
+		t.Errorf("gate PATCH path = %q, want .../hubs/hub_1/policies/gate (fired LAST)", got)
+	}
+	gate := decodeHubAttrs(t, (*bodies)[2])
+	if gate["enabled"] != true {
+		t.Errorf("gate PATCH body = %v, want enabled:true", gate)
+	}
+	// The per-policy `enabled` is NOT part of the policies PATCH body: the backend
+	// stores no per-policy enabled (update_policy writes content + version only).
+	for i, b := range (*bodies)[:2] {
+		if _, ok := decodeHubAttrs(t, b)["enabled"]; ok {
+			t.Errorf("content PATCH %d carries an `enabled` attribute; the gate is the only place it belongs: %s", i, b)
+		}
+	}
+	if sc.policyGate == nil || !*sc.policyGate {
+		t.Errorf("sc.policyGate = %v, want a non-nil true (the machine result reports it)", sc.policyGate)
+	}
+}
+
+// TestStepPolicies_NoGateWhenNothingDeclaresEnabled: a template that states no
+// enforcement intent writes its policy documents and leaves the hub's gate
+// ALONE — no .../policies/gate request at all. Writing a false here would
+// silently disable enforcement an operator had turned on by hand.
+func TestStepPolicies_NoGateWhenNothingDeclaresEnabled(t *testing.T) {
+	cl, paths, _ := policyStepServer(t)
+	sc := newStepSC(cl, "hub_1", "acme")
+	tmpl := &catalog.HubTemplate{
+		ID: "community",
+		Policies: map[string]any{
+			"terms":   map[string]any{"content": "TOS body", "required": true},
+			"privacy": map[string]any{"content": "Privacy body"},
+		},
+	}
+	if err := stepPolicies(sc, tmpl); err != nil {
+		t.Fatalf("stepPolicies: %v", err)
+	}
+	for _, p := range *paths {
+		if strings.HasSuffix(p, "/policies/gate") {
+			t.Errorf("no policy declared `enabled` — the gate must NOT be written; got %v", *paths)
+		}
+	}
+	if len(*paths) != 2 {
+		t.Errorf("want exactly the 2 content PATCHes, got %d: %v", len(*paths), *paths)
+	}
+	if sc.policyGate != nil {
+		t.Errorf("sc.policyGate = %v, want nil (no declaration ⇒ gate not managed)", *sc.policyGate)
+	}
+}
+
+// TestStepPolicies_UnanimousFalseSkipsTheGateLoudly: the gate write is
+// ENABLE-ONLY. The ratified applier contract (mio-page-catalog
+// catalog.schema.json) requires PATCH .../policies/gate "when enabled is true"
+// and says nothing about false, and acting on a false anyway would make every
+// resume of such a template DISABLE enforcement an operator turned on by hand —
+// the mirror of the reason an undeclared gate is left alone. Skipping is not
+// silent: it is narrated, and it names the verb that actually disables one.
+func TestStepPolicies_UnanimousFalseSkipsTheGateLoudly(t *testing.T) {
+	cl, paths, _ := policyStepServer(t)
+	var notes bytes.Buffer
+	sc := newStepSC(cl, "hub_1", "acme")
+	sc.noteW = &notes
+	tmpl := &catalog.HubTemplate{
+		ID: "community",
+		Policies: map[string]any{
+			"terms":          map[string]any{"enabled": false},
+			"privacy_policy": map[string]any{"enabled": false},
+		},
+	}
+	if err := stepPolicies(sc, tmpl); err != nil {
+		t.Fatalf("stepPolicies: %v", err)
+	}
+	for _, p := range *paths {
+		if strings.HasSuffix(p, "/policies/gate") {
+			t.Errorf("a declared enabled:false must NOT write the gate; got %v", *paths)
+		}
+	}
+	if sc.policyGate != nil {
+		t.Errorf("sc.policyGate = %v, want nil — the result reports what was WRITTEN", *sc.policyGate)
+	}
+	for _, want := range []string{"enforcement gate NOT written", `"enabled": false`, "hubs policies gate"} {
+		if !strings.Contains(notes.String(), want) {
+			t.Errorf("skip note must contain %q; notes=%q", want, notes.String())
+		}
+	}
+}
+
+// TestStepPolicies_NoDeclarationSaysSo: the other skip case is narrated too, and
+// says something DIFFERENT — "no policy declares enabled" and "the template
+// declares false" are genuinely different situations, and conflating them into
+// one silence is how this bug hid for a release.
+func TestStepPolicies_NoDeclarationSaysSo(t *testing.T) {
+	cl, _, _ := policyStepServer(t)
+	var notes bytes.Buffer
+	sc := newStepSC(cl, "hub_1", "acme")
+	sc.noteW = &notes
+	tmpl := &catalog.HubTemplate{
+		ID:       "community",
+		Policies: map[string]any{"terms": map[string]any{"content": "TOS body"}},
+	}
+	if err := stepPolicies(sc, tmpl); err != nil {
+		t.Fatalf("stepPolicies: %v", err)
+	}
+	if !strings.Contains(notes.String(), `no policy declares "enabled"`) {
+		t.Errorf("the no-declaration case must say so on stderr; notes=%q", notes.String())
+	}
+
+	// …and the PLAN says it too, the way stepPublish's skip does — a --dry-run
+	// that is silent about enforcement is the same ambiguity one surface over.
+	var plan []planEntry
+	dry := newStepSC(cl, "hub_1", "acme")
+	dry.dryRun, dry.plan = true, &plan
+	if err := stepPolicies(dry, tmpl); err != nil {
+		t.Fatalf("stepPolicies dry-run: %v", err)
+	}
+	var joined []string
+	for _, e := range plan {
+		joined = append(joined, e.step+" — "+e.detail)
+	}
+	if len(plan) != 2 || !strings.Contains(plan[1].detail, "enforcement gate not written") {
+		t.Errorf("dry-run plan must record the gate skip; plan=%v", joined)
+	}
+}
+
+// TestStepPolicies_ConflictingEnabledErrorsBeforeAnyWrite: policy enforcement is
+// ONE hub-level flag (settings.policies.enabled), so a template asking for
+// per-policy enforcement is describing a granularity the backend has never had.
+// The collapse is lossy and no winner is inferable, so it is a pre-write
+// ExitUsage naming both keys — never a silent OR, never a silent drop.
+func TestStepPolicies_ConflictingEnabledErrorsBeforeAnyWrite(t *testing.T) {
+	cl, paths, _ := policyStepServer(t)
+	sc := newStepSC(cl, "hub_1", "acme")
+	tmpl := &catalog.HubTemplate{
+		ID: "community",
+		Policies: map[string]any{
+			"terms":          map[string]any{"enabled": true},
+			"privacy_policy": map[string]any{"enabled": false},
+		},
+	}
+	err := stepPolicies(sc, tmpl)
+	if err == nil {
+		t.Fatal("conflicting per-policy `enabled` must ERROR")
+	}
+	if errs.CodeOf(err) != errs.ExitUsage {
+		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
+	}
+	for _, want := range []string{"privacy_policy", "terms", "single hub-level gate"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q must name %q", err, want)
+		}
+	}
+	if len(*paths) != 0 {
+		t.Errorf("a conflicting template must fire NO write at all, got %v", *paths)
+	}
+}
+
+// TestStepPolicies_NonBooleanEnabledErrors: the backend gate is identity-checked
+// (`_policies_enabled` requires the JSON boolean true), so a stringly-typed
+// "true" would enforce nothing. It must fail loud rather than read as "no
+// declaration" and reproduce the original bug.
+func TestStepPolicies_NonBooleanEnabledErrors(t *testing.T) {
+	cl, paths, _ := policyStepServer(t)
+	sc := newStepSC(cl, "hub_1", "acme")
+	tmpl := &catalog.HubTemplate{
+		ID:       "community",
+		Policies: map[string]any{"terms": map[string]any{"enabled": "true"}},
+	}
+	err := stepPolicies(sc, tmpl)
+	if err == nil {
+		t.Fatal(`policies.terms.enabled = "true" (string) must ERROR`)
+	}
+	if errs.CodeOf(err) != errs.ExitUsage {
+		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
+	}
+	if len(*paths) != 0 {
+		t.Errorf("must fire no write, got %v", *paths)
+	}
+}
+
+// TestTemplateHubPolicy_UnknownFieldIsLoud closes the asymmetry MIO-2567 named:
+// an unknown policy KEY errored ("never a silent drop") while an unknown FIELD
+// inside a policy value was dropped in silence — the same file, opposite rules.
+// A wrong-typed field is the same class: a non-string content would leave
+// Content nil, and applyHubPolicies sends nil as JSON null, silently RESETTING
+// the policy to the backend default.
+func TestTemplateHubPolicy_UnknownFieldIsLoud(t *testing.T) {
+	cases := []struct {
+		name string
+		val  any
+		want string
+	}{
+		{"unknown field", map[string]any{"require_acceptence": true}, "unknown field"},
+		{"non-object value", "yes", "must be an object"},
+		{"non-string content", map[string]any{"content": 42}, `"content" must be a string`},
+		{"non-boolean required", map[string]any{"required": "yes"}, `must be a JSON boolean`},
+		{"alias contradiction", map[string]any{"require_acceptance": true, "required": false}, "contradicts its alias"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := templateHubPolicy("terms", tc.val)
+			if err == nil {
+				t.Fatalf("templateHubPolicy(%v) must ERROR", tc.val)
+			}
+			if errs.CodeOf(err) != errs.ExitUsage {
+				t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q must contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestScaffold_PolicyGateResultMatchesWhatWasWritten pins the `policy_gate`
+// contract against the REAL pipeline, one full command run per template shape.
+//
+// It replaces a version that hand-built a scaffoldContext and asserted three
+// states including `false` — a value the enable-only pipeline cannot produce, so
+// the test asserted a contract that did not exist. Pinning an unreachable state
+// is the same class of mistake as a guard whose oracle is the thing it
+// validates: it passes forever and proves nothing about the command. The oracle
+// here is what the command actually prints, and the assertion pairs it with
+// whether the gate PATCH was really sent.
+func TestScaffold_PolicyGateResultMatchesWhatWasWritten(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		policies  any
+		want      any
+		wantWrite bool
+	}{
+		{"declares enabled:true", map[string]any{
+			"terms": map[string]any{"required": true, "enabled": true}}, true, true},
+		{"declares enabled:false", map[string]any{
+			"terms": map[string]any{"required": true, "enabled": false}}, nil, false},
+		{"declares no enabled", map[string]any{
+			"terms": map[string]any{"required": true}}, nil, false},
+		{"no policies block at all", nil, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, rec := fullScaffoldServerWithCatalog(t, catalogWithPolicies(t, tc.policies))
+
+			res := runContract(t, scaffoldEnv(t, srv.URL),
+				withTeam("t_team1", "hubs", "scaffold",
+					"--template", "community", "--name", "X", "--slug", "x")...)
+			if res.Code != errs.ExitOK {
+				t.Fatalf("exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+			}
+
+			got := decodeSoleJSON(t, res.Stdout)
+			v, ok := got["policy_gate"]
+			if !ok {
+				t.Fatal("policy_gate must be emitted unconditionally, like every other result key")
+			}
+			if v != tc.want {
+				t.Errorf("policy_gate = %#v, want %#v", v, tc.want)
+			}
+			// The field means "what this run WROTE", so it must agree with the wire.
+			if wrote := len(rec.policyGateBodies) > 0; wrote != tc.wantWrite {
+				t.Errorf("gate PATCH sent = %t, want %t (policy_gate reports the WRITE, not the declaration); bodies=%d",
+					wrote, tc.wantWrite, len(rec.policyGateBodies))
+			}
+		})
+	}
+}
+
+// policyFieldProbes gives each catalog-accepted policy field a value that, when
+// it is the ONLY thing a policy declares, must change what the scaffold sends.
+// Adding a field to catalog.HubPolicyFieldKeys without adding a probe here fails
+// the guard below by name.
+var policyFieldProbes = map[string]any{
+	"content":            "PROBE CONTENT",
+	"require_acceptance": true,
+	"required":           true,
+	"enabled":            true,
+}
+
+// recordPolicyStepRequests drives the REAL stepPolicies against a recording
+// server with a single `terms` policy carrying val, and returns the requests it
+// produced as comparable strings.
+func recordPolicyStepRequests(t *testing.T, val map[string]any) []string {
+	t.Helper()
+	cl, paths, bodies := policyStepServer(t)
+	sc := newStepSC(cl, "hub_1", "acme")
+	sc.noteW = io.Discard
+	if err := stepPolicies(sc, &catalog.HubTemplate{
+		ID: "community", Policies: map[string]any{"terms": val},
+	}); err != nil {
+		t.Fatalf("stepPolicies(%v): %v", val, err)
+	}
+	out := make([]string, 0, len(*paths))
+	for i, p := range *paths {
+		out = append(out, p+" "+string((*bodies)[i]))
+	}
+	return out
+}
+
+// TestTemplatePolicyFields_EachOneChangesTheRequests is the guard that would
+// have caught MIO-2567 at build time — and it asserts BEHAVIOUR, not
+// membership.
+//
+// The obvious version of this test compares the catalog's allow-list against a
+// second hand-maintained "consumed" list. That version is worthless: the
+// cheapest way to make it go green when it fails is to add the new key to both
+// lists, which leaves the field accepted at preflight and dropped at apply —
+// the exact bug. `enabled` shipped that way for a release.
+//
+// So the oracle here is the wire: for every field the PREFLIGHT accepts, declare
+// it alone on a policy, run the real step, and require the requests to differ
+// from a policy that declares nothing. A field nothing acts on cannot pass, and
+// no edit to any list can make it pass.
+func TestTemplatePolicyFields_EachOneChangesTheRequests(t *testing.T) {
+	baseline := recordPolicyStepRequests(t, map[string]any{})
+
+	for _, f := range catalog.HubPolicyFieldKeys() {
+		probe, ok := policyFieldProbes[f]
+		if !ok {
+			t.Errorf("catalog accepts policy field %q at preflight but this guard has no probe for it: add one to policyFieldProbes AND make the step act on the field, or the template's value is silently dropped (MIO-2567)", f)
+			continue
+		}
+		t.Run(f, func(t *testing.T) {
+			got := recordPolicyStepRequests(t, map[string]any{f: probe})
+			if reflect.DeepEqual(got, baseline) {
+				t.Errorf("declaring %q=%v changes NOTHING the scaffold sends — it is accepted at preflight and dropped at apply (MIO-2567).\nbaseline: %v\n   probe: %v", f, probe, baseline, got)
+			}
+		})
+	}
+}
+
 // ─── Task 17: stepPlaylists (O1 = option c) ───────────────────────────────────
 
 // TestStepPlaylists_EmptyHubCreatesItemsAndPublishes: on a hub with NO published
@@ -1474,6 +1859,11 @@ func TestStepBackendGated_RecordsSkipNoteWithTickets(t *testing.T) {
 type scaffoldCapture struct {
 	hubID          string
 	hubPatchBodies [][]byte
+	// policyGateBodies records every PATCH .../policies/gate the run fires
+	// (MIO-2567) — the write that turns settings.policies.enabled on. It is
+	// captured separately from the policy-content PATCHes because the reported
+	// bug was exactly that the content write happened and this one did not.
+	policyGateBodies [][]byte
 }
 
 // fullScaffoldServer answers every request a full CREATE-mode scaffold run of the
@@ -1491,8 +1881,21 @@ func fullScaffoldServer(t *testing.T) (*httptest.Server, *scaffoldCapture) {
 // every PATCH to the hub itself (blobs + publish).
 func fullScaffoldServerFor(t *testing.T, hubID string, isPrivate bool) (*httptest.Server, *scaffoldCapture) {
 	t.Helper()
+	return fullScaffoldServerAll(t, hubID, isPrivate, catalog21Body(t))
+}
+
+// fullScaffoldServerWithCatalog is fullScaffoldServer serving a CUSTOM catalog
+// body, so a CLI-level test can drive a full run against a hub-template shape
+// the shipped 2.1 fixture does not carry (MIO-2567: the policy-gate result
+// contract, one run per template shape).
+func fullScaffoldServerWithCatalog(t *testing.T, catBody []byte) (*httptest.Server, *scaffoldCapture) {
+	t.Helper()
+	return fullScaffoldServerAll(t, "hub_new", true, catBody)
+}
+
+func fullScaffoldServerAll(t *testing.T, hubID string, isPrivate bool, catBody []byte) (*httptest.Server, *scaffoldCapture) {
+	t.Helper()
 	rec := &scaffoldCapture{hubID: hubID}
-	catBody := catalog21Body(t)
 	// Match the hub itself by SUFFIX: the client emits paths under /api/v1/... , so
 	// an exact "/api/teams/…/hubs/<id>" compare would never match. The hub's own
 	// sub-collections all carry a further segment (/spaces, /pages, …), so only the
@@ -1510,6 +1913,11 @@ func fullScaffoldServerFor(t *testing.T, hubID string, isPrivate bool) (*httptes
 			rec.hubPatchBodies = append(rec.hubPatchBodies, body)
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"hubs","attributes":{"slug":"my-community","is_private":false}}}`, hubID)
+		case r.Method == http.MethodPatch && strings.HasSuffix(path, "/policies/gate"): // policy GATE PATCH (MIO-2567)
+			body, _ := io.ReadAll(r.Body)
+			rec.policyGateBodies = append(rec.policyGateBodies, body)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"hub_new","type":"hub_policy_gate","attributes":{"enabled":true}}}`))
 		case r.Method == http.MethodPatch && strings.HasSuffix(path, "/policies"): // policy PATCH
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"pol_1","type":"hub_policies","attributes":{}}}`))
@@ -1625,6 +2033,174 @@ func TestScaffold_ResumePublishedHubSummaryLive(t *testing.T) {
 	}
 	if strings.Contains(res.Stdout, "PRIVATE") {
 		t.Errorf("resume onto an already-public hub must NOT report PRIVATE / a publish instruction; stdout=%q", res.Stdout)
+	}
+}
+
+// TestScaffold_CommunityTemplateEnablesPolicyGate is the end-to-end proof of the
+// MIO-2567 acceptance criterion, one layer below the live repro: a full
+// CREATE-mode run of the SHIPPED community template (whose policies block is
+// `terms{required,enabled} + privacy_policy{enabled}`) fires exactly one
+// PATCH .../policies/gate carrying enabled:true. Before the fix the pipeline
+// never touched that endpoint, so a freshly registered member saw
+// tos_acceptance_required:false and POST .../tos/accept answered 404.
+func TestScaffold_CommunityTemplateEnablesPolicyGate(t *testing.T) {
+	srv, rec := fullScaffoldServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--publish")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(rec.policyGateBodies) != 1 {
+		t.Fatalf("want exactly 1 PATCH .../policies/gate, got %d", len(rec.policyGateBodies))
+	}
+	if gate := decodeHubAttrs(t, rec.policyGateBodies[0]); gate["enabled"] != true {
+		t.Errorf("gate PATCH body = %v, want enabled:true", gate)
+	}
+	// …and the machine result says so, so an agent can verify enforcement without
+	// a second call to an endpoint that has no admin READ (MIO-2574 additive key).
+	if got := decodeSoleJSON(t, res.Stdout)["policy_gate"]; got != true {
+		t.Errorf("result.policy_gate = %v, want true", got)
+	}
+	// …and a human sees it too: the note goes to STDERR, so the byte-exact prose
+	// summary on stdout is untouched and a `| jq` pipeline still parses.
+	if !strings.Contains(res.Stderr, "enforcement gate set to enabled=true") {
+		t.Errorf("the run must narrate the gate write on stderr; stderr=%q", res.Stderr)
+	}
+}
+
+// TestScaffold_ResumeAppliesGateExactlyOnce: the gate write is part of an
+// idempotent, resumable pipeline — a resume onto an existing hub re-asserts the
+// template's declared enforcement exactly once, with the same value, never a
+// flip-flop or a doubled write. (The backend's update_policy_gate is itself a
+// no-op when the stored state already matches.)
+func TestScaffold_ResumeAppliesGateExactlyOnce(t *testing.T) {
+	srv, rec := fullScaffoldServerFor(t, "hub_pub", false)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold", "--hub", "hub_pub", "--template", "community")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("resume scaffold exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(rec.policyGateBodies) != 1 {
+		t.Fatalf("resume must fire exactly 1 gate PATCH, got %d", len(rec.policyGateBodies))
+	}
+	if gate := decodeHubAttrs(t, rec.policyGateBodies[0]); gate["enabled"] != true {
+		t.Errorf("resume gate PATCH body = %v, want enabled:true", gate)
+	}
+}
+
+// catalogWithPolicies rewrites the 2.1 fixture's community hubTemplate to carry
+// the given policies block (nil DELETES the key entirely) and re-digests it, so
+// a REAL scaffold run can be driven end-to-end against a template shape the
+// shipped catalog does not contain. Digest-valid, so it passes the same
+// verification the live artifact does.
+func catalogWithPolicies(t *testing.T, policies any) []byte {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(catalog21Body(t)))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("parse 2.1 catalog fixture: %v", err)
+	}
+	hts, _ := doc["hubTemplates"].([]any)
+	if len(hts) == 0 {
+		t.Fatal("2.1 catalog fixture has no hubTemplates[]")
+	}
+	ht, _ := hts[0].(map[string]any)
+	if policies == nil {
+		delete(ht, "policies")
+	} else {
+		ht["policies"] = policies
+	}
+	meta, ok := doc["meta"].(map[string]any)
+	if !ok {
+		t.Fatal("2.1 catalog fixture has no meta object")
+	}
+	delete(meta, "digest")
+	digest, err := catalog.Digest(doc)
+	if err != nil {
+		t.Fatalf("recompute catalog digest: %v", err)
+	}
+	meta["digest"] = digest
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal catalog: %v", err)
+	}
+	return out
+}
+
+// conflictingPoliciesCatalogBody is the shape only the preflight can reject: a
+// contradictory pair of per-policy `enabled` values.
+func conflictingPoliciesCatalogBody(t *testing.T) []byte {
+	t.Helper()
+	return catalogWithPolicies(t, map[string]any{
+		"terms":          map[string]any{"required": true, "enabled": true},
+		"privacy_policy": map[string]any{"enabled": false},
+	})
+}
+
+// TestScaffold_ConflictingPoliciesFailInPreflightNotMidPipeline: the policies
+// block is validated in the WRITE-FREE preflight, so a contradictory template
+// exits 2 having created NOTHING.
+//
+// This is the test the step-level one cannot be. Driving stepPolicies in
+// isolation proves only that the step itself writes nothing — but the step is
+// stage 5 of 9, so an error raised there still leaves a hub, its blobs, its
+// spaces and its onboarding defs written and unrollbackable. The assertion that
+// matters is on the whole command: exit 2, and the server saw no mutation at
+// all (MIO-2567 review).
+func TestScaffold_ConflictingPoliciesFailInPreflightNotMidPipeline(t *testing.T) {
+	srv, _, mutated := liveCatalogScaffoldServer(t, conflictingPoliciesCatalogBody(t))
+
+	// A REAL run (no --dry-run): dry-run would prove nothing, since it never
+	// writes anyway.
+	err := executeCLI(t, scaffoldEnv(t, srv.URL),
+		withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x")...)
+
+	if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); err=%v", got, errs.ExitUsage, err)
+	}
+	if *mutated {
+		t.Error("a contradictory policies block must be rejected BEFORE any write — no hub, no blobs, no spaces (there is no rollback)")
+	}
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"privacy_policy", "terms", "single hub-level gate"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must name %q; err=%v", want, err)
+		}
+	}
+	// It must NOT be tagged as a pipeline-step failure: the whole point is that
+	// it never reached the pipeline.
+	if strings.Contains(err.Error(), `step "policies" failed`) {
+		t.Errorf("the error must come from preflight, not from pipeline stage 5; err=%v", err)
+	}
+}
+
+// TestScaffold_DryRunPlanNamesPolicyGate: the gate is a real write, so the
+// dry-run plan must name it — under the `policies` step (it is the enforcement
+// half of the same declaration, not a tenth pipeline stage) and with no
+// mutating HTTP.
+func TestScaffold_DryRunPlanNamesPolicyGate(t *testing.T) {
+	srv, mutated := mutationGuardServer(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL),
+		humanScaffold(withTeam("t_team1", "hubs", "scaffold",
+			"--template", "community", "--name", "X", "--slug", "x", "--dry-run"))...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("dry-run exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if *mutated {
+		t.Error("dry-run must fire NO mutating request — including the gate PATCH")
+	}
+	for _, want := range []string{"/policies/gate", "enable policy enforcement", "settings.policies.enabled=true"} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Errorf("dry-run plan must name %q; stdout:\n%s", want, res.Stdout)
+		}
 	}
 }
 
