@@ -4,6 +4,8 @@ The official command-line interface for [Membership.io](https://membership.io).
 
 `mio` is agent-first: JSON output by default when piped, environment-variable auth, and stable exit codes so scripts and AI agents can branch deterministically.
 
+> **This README tracks `main`, not the released binary.** If you installed `mio` from a release, a feature described here may not be in it yet — run `mio version`, and prefer `mio <cmd> --help`, which always comes from the binary you actually have. Behaviours newer than the latest release are called out inline.
+
 ---
 
 ## Prerequisites
@@ -239,6 +241,8 @@ mio hubs update <hub-id> --unset branding.favicon_url,settings.customCss
 mio hubs update <hub-id> --navigation-json '{"header":[{"type":"url","label":"Home","href":"/my-hub/","position":0}]}'
 
 # Build a whole branded hub in ONE command from a template (see `mio hubs templates`).
+# VERSION GATE: the --*-color palette flags and the machine-readable --output json
+# result are NOT in v0.12.1 — on that binary they exit 2 with "unknown flag".
 # The branding flags MERGE over the template's palette — a key you don't name keeps
 # the template's value. --primary-color also fills header_color unless you give a
 # header color yourself (--header-color, or a header_color key in --branding-json).

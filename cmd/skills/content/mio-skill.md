@@ -655,7 +655,7 @@ front, but an *absent* one just means the node renders without its section surfa
 - `shadow` *string* `none|sm|md|lg|xl`
 - `visibility` *object* {desktop, mobile}
 
-Plus three keys the validator unions onto **every** node's settings, whatever its kind:
+Plus 3 key(s) the validator unions onto **every** node's settings, whatever its kind:
 
 - `slot` *string*
 - `surface` *object → shared:surface*

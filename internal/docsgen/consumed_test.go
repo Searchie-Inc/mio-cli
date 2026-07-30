@@ -41,7 +41,7 @@ func TestRenderRefusesUnconsumedVocabulary(t *testing.T) {
 				props := schemaOf(raw)["kind:text"].(map[string]any)["presentational"].(map[string]any)
 				props["animation"] = map[string]any{"type": "object", "shape": "animation"}
 			},
-			wantErrSubstring: "renders no block for",
+			wantErrSubstring: "no section a reader can follow",
 			wasSilent:        "the doc printed `*object → shared:animation*`, a pointer to nothing",
 		},
 		{
@@ -141,55 +141,86 @@ func schemaOf(raw map[string]any) map[string]any {
 	return raw["settingsSchema"].(map[string]any)
 }
 
+// renderProbes supplies, for EVERY key in renderedPropKeys, a mutation that should
+// visibly change the generated output. The map is asserted to cover renderedPropKeys
+// exactly, so a key cannot be whitelisted without a probe — an earlier version of
+// this test hand-listed two of eight cases and left the other six unexercised, which
+// is the same "looks covered, isn't" failure it was written to prevent.
+var renderProbes = map[string]struct {
+	set      func(spec map[string]any)
+	wantText string
+}{
+	"deprecated": {func(s map[string]any) { s["deprecated"] = "use size" }, "use size"},
+	"items": {func(s map[string]any) {
+		s["type"] = "array"
+		delete(s, "enum")
+		delete(s, "default")
+		s["items"] = map[string]any{"type": "string"}
+	}, "of *string*"},
+	"type":    {func(s map[string]any) { s["type"] = "string"; delete(s, "enum") }, "*string*"},
+	"enum":    {func(s map[string]any) { s["enum"] = []any{"alpha", "beta"} }, "alpha|beta"},
+	"default": {func(s map[string]any) { s["default"] = "sentinel-default" }, "sentinel-default"},
+	"properties": {func(s map[string]any) {
+		s["type"] = "object"
+		delete(s, "enum")
+		delete(s, "default")
+		s["properties"] = map[string]any{"probeKey": map[string]any{"type": "string"}}
+	}, "probeKey"},
+	"shape": {func(s map[string]any) {
+		s["type"] = "object"
+		delete(s, "enum")
+		delete(s, "default")
+		s["shape"] = "surface"
+	}, "shared:surface"},
+	"freeform": {func(s map[string]any) { s["type"] = "string"; delete(s, "enum"); s["freeform"] = true }, "freeform"},
+}
+
 // TestRenderedPropKeysActuallyRender closes the gap that made the whitelist a lie:
 // a key listed in renderedPropKeys but never emitted is indistinguishable, from the
 // drift test's point of view, from a key that is silently dropped. `deprecated` and
 // `items` were both in that state — whitelisted, never rendered — which is why a
 // deprecated property could be advertised as live and an array documented as a bare
-// *array*. This asserts each rendered key changes the output.
+// *array*.
 func TestRenderedPropKeysActuallyRender(t *testing.T) {
-	cases := []struct {
-		key      string
-		set      func(spec map[string]any)
-		wantText string
-	}{
-		{"deprecated", func(s map[string]any) { s["deprecated"] = true }, "DEPRECATED"},
-		{"deprecated-with-reason", func(s map[string]any) { s["deprecated"] = "use size" }, "use size"},
-		{"items", func(s map[string]any) {
-			s["type"] = "array"
-			delete(s, "enum")
-			delete(s, "default")
-			s["items"] = map[string]any{"type": "string"}
-		}, "of *string*"},
+	// The probe table must track the whitelist in BOTH directions.
+	for key := range renderedPropKeys {
+		if _, probed := renderProbes[key]; !probed {
+			t.Errorf("renderedPropKeys contains %q with no probe in renderProbes — add one, or the key can be whitelisted without ever being rendered", key)
+		}
+	}
+	for key := range renderProbes {
+		if !renderedPropKeys[key] {
+			t.Errorf("renderProbes probes %q, which is not in renderedPropKeys — stale probe", key)
+		}
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.key, func(t *testing.T) {
-			base, err := catalog.Load()
-			if err != nil {
-				t.Fatalf("catalog.Load: %v", err)
-			}
-			before, err := Render(base)
-			if err != nil {
-				t.Fatalf("Render baseline: %v", err)
-			}
+	base, err := catalog.Load()
+	if err != nil {
+		t.Fatalf("catalog.Load: %v", err)
+	}
+	before, err := Render(base)
+	if err != nil {
+		t.Fatalf("Render baseline: %v", err)
+	}
 
+	for key, probe := range renderProbes {
+		t.Run(key, func(t *testing.T) {
 			cat, err := catalog.Load()
 			if err != nil {
 				t.Fatalf("catalog.Load: %v", err)
 			}
 			spec := schemaOf(cat.Raw())["kind:headline"].(map[string]any)["core"].(map[string]any)["level"].(map[string]any)
-			tc.set(spec)
+			probe.set(spec)
 
 			after, err := Render(cat)
 			if err != nil {
-				t.Fatalf("Render after setting %s: %v", tc.key, err)
+				t.Fatalf("Render after setting %s: %v", key, err)
 			}
 			if before["node-settings"] == after["node-settings"] {
-				t.Fatalf("setting %q produced BYTE-IDENTICAL output — it is whitelisted but never rendered, so the docs would keep describing the property as if it were unset", tc.key)
+				t.Fatalf("setting %q produced BYTE-IDENTICAL output — it is whitelisted but never rendered, so the docs would keep describing the property as if it were unset", key)
 			}
-			if !strings.Contains(after["node-settings"], tc.wantText) {
-				t.Errorf("rendered block after setting %q does not contain %q", tc.key, tc.wantText)
+			if !strings.Contains(after["node-settings"], probe.wantText) {
+				t.Errorf("rendered block after setting %q does not contain %q", key, probe.wantText)
 			}
 		})
 	}

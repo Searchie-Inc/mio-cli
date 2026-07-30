@@ -72,28 +72,38 @@ var BlockNames = []string{
 //
 //	COVERED (unknown value ⇒ generation fails):
 //	  - settingsSchema top-level keys (must be kind:* or shared:*)
-//	  - a kind:* entry's tiers
-//	  - a property spec's keys
-//	  - a `shape` reference target, AND every shared:* shape's own name
-//	  - nodeKinds entry keys
+//	  - a kind:* entry's TIERS (knownKindTiers — `_note` is accepted here and not
+//	    rendered; it is a tier key, not a property key)
+//	  - a shared:* entry's own TOP-LEVEL fields (knownSharedEntryKeys)
+//	  - a property spec's keys, recursively through `properties` AND `items`
+//	  - a `shape` REFERENCE target (shapeRefTargets) and, separately, every
+//	    shared:* shape's own NAME (documentedShapes)
+//	  - nodeKinds entry FIELDS (knownNodeKindKeys — `renderFallback` is accepted
+//	    here and not rendered; it is a nodeKinds key, not a property key)
 //
 //	RENDERED (appears in the docs): type, enum, default, properties, shape,
-//	  freeform, items, deprecated.
+//	  freeform, items, deprecated. TestRenderedPropKeysActuallyRender probes EVERY
+//	  member of renderedPropKeys, so a key cannot be whitelisted without a
+//	  rendering — that gap is what let `items` and `deprecated` sit accepted but
+//	  invisible.
 //
-//	DELIBERATELY IGNORED (allowed, never rendered — listed separately so the
-//	distinction is visible rather than buried in one permissive whitelist):
-//	  - description / _note: catalog prose. The generated blocks carry names,
-//	    types, enums and defaults; the prose is long, changes wording often, and
-//	    would triple the doc. The catalog remains the place to read it.
+//	DELIBERATELY IGNORED — PROPERTY keys accepted and never rendered, listed
+//	separately so the distinction is visible rather than buried in one permissive
+//	whitelist:
+//	  - description: catalog prose. The generated blocks carry names, types, enums
+//	    and defaults; the prose is long, reworded often, and would triple the doc.
+//	    The catalog remains the place to read it.
 //	  - tier: only meaningful inside shared:structural, whose rendering already
-//	    groups by tier-equivalent sections.
-//	  - renderFallback: describes what the RENDERER substitutes for a kind it
-//	    cannot draw, not anything an author writes.
+//	    groups by the equivalent sections.
 //
-//	NOT COVERED (documented so nobody assumes otherwise): the contents of the
-//	  catalog outside nodeKinds/settingsSchema — templates[], pageTemplates[],
-//	  sectionTypes[], nestingRules, profiles. Those feed the id lists only, and a
-//	  new field on them is not silently mis-documented, just unused.
+//	NOT COVERED — stated so the list above is not read as a blanket guarantee:
+//	  - the catalog outside nodeKinds/settingsSchema: templates[],
+//	    pageTemplates[], sectionTypes[], nestingRules, profiles. Those feed the id
+//	    lists and the surface-declaring set; a new FIELD on them is unused rather
+//	    than mis-documented.
+//	  - the VALUES inside a rendered key (an enum member's spelling, a default's
+//	    type). Those flow through to the output, so the byte-comparison catches a
+//	    change; nothing asserts they are sane.
 var (
 	knownKindTiers = map[string]bool{"core": true, "presentational": true, "_note": true}
 
@@ -105,18 +115,34 @@ var (
 	// ignoredPropKeys are accepted and deliberately not rendered (see above).
 	ignoredPropKeys = map[string]bool{"description": true, "tier": true}
 
-	// renderedShapes are the shared shapes this generator documents somewhere: a
-	// `shape:` reference to anything else prints a dangling pointer, and a NEW
-	// shared:* shape nobody references would otherwise be dropped in silence.
-	// `structural` has no block of its own — it is rendered inside
-	// surface-properties — which is exactly why membership is tracked by name here
-	// rather than inferred from BlockNames.
-	renderedShapes = map[string]bool{
+	// TWO SHAPE CONTRACTS, deliberately separate. Collapsing them into one map (as
+	// an earlier version did) relaxed the reference check the moment `structural`
+	// was added for the other purpose: `shape:"structural"` started printing
+	// `*object → shared:structural*`, a pointer to a section that does not exist —
+	// the exact dangling pointer that check was written to prevent.
+	//
+	// documentedShapes: shared:* entries this generator documents SOMEWHERE, so a
+	// brand-new shape nobody references is not dropped in silence. `structural` is
+	// here because it is rendered inside surface-properties.
+	documentedShapes = map[string]bool{
 		"surface": true, "background": true, "gradient": true, "structural": true,
+	}
+	// shapeRefTargets: shapes a `shape:` reference may point AT, i.e. those with a
+	// section a reader can actually follow. `structural` has none of its own.
+	shapeRefTargets = map[string]bool{
+		"surface": true, "background": true, "gradient": true,
 	}
 
 	// knownNodeKindKeys are the nodeKinds entry fields this generator understands.
 	knownNodeKindKeys = map[string]bool{"childRules": true, "renderFallback": true}
+
+	// knownSharedEntryKeys are the TOP-LEVEL fields of a shared:* entry. Without
+	// this the shared branch read only `properties`, so a future
+	// `shared:surface.variants` would be dropped with no error — the same silent
+	// path already closed for nodeKinds, one level up.
+	knownSharedEntryKeys = map[string]bool{
+		"type": true, "description": true, "properties": true,
+	}
 )
 
 // blockRe matches one generated block and captures its name and current body.
@@ -287,8 +313,13 @@ func assertSchemaFullyConsumed(kinds, schema map[string]any) error {
 			// The reference direction alone is not enough: a brand-new shared shape
 			// that nothing references yet would render no block and raise nothing.
 			shape := strings.TrimPrefix(key, "shared:")
-			if !renderedShapes[shape] {
-				return fmt.Errorf("docsgen: settingsSchema declares shared shape %q, which this generator documents nowhere — it would be dropped in silence. Add a block for it (BlockNames + Render) or render it inside an existing one, then list it in renderedShapes", key)
+			if !documentedShapes[shape] {
+				return fmt.Errorf("docsgen: settingsSchema declares shared shape %q, which this generator documents nowhere — it would be dropped in silence. Add a block for it (BlockNames + Render) or render it inside an existing one, then list it in documentedShapes", key)
+			}
+			for _, k := range sortedKeys(entry) {
+				if !knownSharedEntryKeys[k] {
+					return fmt.Errorf("docsgen: settingsSchema[%q] declares unknown top-level field %q — the shared branch reads only `properties`, so it would be silently dropped from the docs", key, k)
+				}
 			}
 			props, ok := entry["properties"].(map[string]any)
 			if !ok {
@@ -318,11 +349,18 @@ func assertPropsConsumed(where string, props map[string]any) error {
 			}
 			return fmt.Errorf("docsgen: %s.%s declares unknown property key %q — this generator neither renders nor knowingly ignores it, so it would be silently dropped from the docs. Render it (specSuffix/valuesCell + renderedPropKeys) or add it to ignoredPropKeys with a reason", where, name, k)
 		}
-		if shape, has := spec["shape"].(string); has && !renderedShapes[shape] {
-			return fmt.Errorf("docsgen: %s.%s references shared shape %q, which this generator renders no block for — the doc would print a pointer to nothing. Add a block for it to BlockNames", where, name, shape)
+		if shape, has := spec["shape"].(string); has && !shapeRefTargets[shape] {
+			return fmt.Errorf("docsgen: %s.%s references shared shape %q, which this generator renders no section a reader can follow — the doc would print a pointer to nothing. Add a block for it to BlockNames and list it in shapeRefTargets", where, name, shape)
 		}
 		if nested, has := spec["properties"].(map[string]any); has {
 			if err := assertPropsConsumed(where+"."+name, nested); err != nil {
+				return err
+			}
+		}
+		// `items` is a property spec in its own right and is now RENDERED
+		// (itemsWord), so its keys need the same consumption check as any other.
+		if items, has := spec["items"].(map[string]any); has {
+			if err := assertPropsConsumed(where+"."+name, map[string]any{"items": items}); err != nil {
 				return err
 			}
 		}
@@ -445,7 +483,9 @@ func renderSurfaceProperties(schema map[string]any) (string, error) {
 	var b strings.Builder
 	b.WriteString("`settings.surface` accepts these keys, all optional — an omitted key means\n\"no override\", and this is the complete set the resolver reads:\n\n")
 	b.WriteString(propsBullets(surface))
-	b.WriteString("\nPlus three keys the validator unions onto **every** node's settings, whatever its kind:\n\n")
+	// The count is DERIVED, not spelled: a hardcoded "three" beside a generated
+	// list is the same rot this file exists to prevent.
+	fmt.Fprintf(&b, "\nPlus %d key(s) the validator unions onto **every** node's settings, whatever its kind:\n\n", len(structural))
 	b.WriteString(propsBullets(structural))
 	return b.String(), nil
 }
