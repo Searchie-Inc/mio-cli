@@ -179,7 +179,9 @@ func rebuildScaffoldPlan(sc *scaffoldContext, cat *catalog.Catalog, src catalog.
 //     pin hint);
 //  4. hub-template invariants (Validate against the same catalog);
 //  5. the instantiated page plan + a preliminary interpolation of the whole
-//     plan.
+//     plan;
+//  6. the policies block — key, per-field JSON types, and the per-policy
+//     `enabled` collapse (MIO-2567; Validate covers only the field NAMES).
 //
 // On success it leaves sc.cat / sc.hubTmpl / sc.pagePlan
 // populated for the apply pipeline.
