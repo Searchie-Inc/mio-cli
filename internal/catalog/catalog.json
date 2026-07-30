@@ -1,9 +1,9 @@
 {
   "meta": {
     "schemaVersion": "2.1.0",
-    "catalogVersion": "0.12.0",
-    "revision": 13,
-    "digest": "sha256:e5c963249b232535a6b157c9ff561cf00e10e180040e6d9e07b51ba274d09dde",
+    "catalogVersion": "0.14.1",
+    "revision": 16,
+    "digest": "sha256:32a5cf74c7a13a4899ad255cd84a2577110fb78dce801cbe53cc3234348d0a15",
     "createdAt": "2026-07-14T00:00:00Z"
   },
   "nodeKinds": {
@@ -75,6 +75,9 @@
       "childRules": "none"
     },
     "search-bar": {
+      "childRules": "none"
+    },
+    "quote": {
       "childRules": "none"
     }
   },
@@ -161,7 +164,7 @@
       "id": "testimonials",
       "lifecycle": "active",
       "anonSafe": false,
-      "writable": false,
+      "writable": true,
       "compiledFrom": [
         "testimonials"
       ]
@@ -187,7 +190,838 @@
       ]
     }
   },
-  "settingsSchema": {},
+  "settingsSchema": {
+    "shared:background": {
+      "type": "object",
+      "description": "Flattened TemplateSurface Background discriminated union (src/lib/page-tree/types.ts). Validation limitation: enum applies to `type`; all variant fields are optional and the validator cannot enforce which fields are required per `type` value. `thumbnail` is excluded per the honesty policy (decision 4) — declared as a TODO in hub types, implemented nowhere, used by no recipe.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "none",
+            "color",
+            "custom-color",
+            "tint",
+            "image",
+            "gradient"
+          ],
+          "description": "Discriminant. `none` = no override (most common). `color` = theme token (see `token`). `custom-color` = explicit hex (see `value`). `tint` = themed secondary tint band, no extra fields. `image` = image URL (see `url`/`blur`); the renderer ALWAYS composes a secondary-tint scrim over the image (MIO-492 amendment) — this is not authorable. `gradient` = resolves via the sibling `gradient` setting on the same surface."
+        },
+        "token": {
+          "type": "string",
+          "enum": ["primary", "secondary", "muted", "accent", "background"],
+          "description": "Used when type='color'. Theme token name, resolved via BG_TOKEN_CLASS (node-surface.tsx) to a Tailwind bg-* class. An unrecognized token renders no background (dev console.warn)."
+        },
+        "value": {
+          "type": "string",
+          "description": "Used when type='custom-color'. Explicit hex value (e.g. '#FF5722'), validated via hexToRgb before use."
+        },
+        "url": {
+          "type": "string",
+          "description": "Used when type='image'. Validated same-origin-relative or absolute http(s) URL; CSS-delimiter characters are rejected (isValidImageUrl, node-surface.tsx). An invalid URL renders no image layer."
+        },
+        "blur": {
+          "type": "boolean",
+          "description": "Used when type='image'. Opt-in additional 25px backdrop blur layer on top of the always-on scrim."
+        }
+      }
+    },
+    "shared:gradient": {
+      "type": "object",
+      "description": "Paired with shared:background when type='gradient' (src/lib/page-tree/types.ts Gradient, src/lib/theme/types.ts GradientType).",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "complementary",
+            "analogous",
+            "triadic",
+            "monochrome",
+            "split",
+            "warm-shift",
+            "custom"
+          ],
+          "description": "When not 'custom', resolves against the hub theme's primary color via computeGradient(). When 'custom', customStart/customEnd are used directly."
+        },
+        "customStart": {
+          "type": "string",
+          "description": "Used when type='custom'. Hex start stop, validated via hexToRgb. An invalid/missing pair falls back to 'split' against the hub theme."
+        },
+        "customEnd": {
+          "type": "string",
+          "description": "Used when type='custom'. Hex end stop, validated via hexToRgb."
+        }
+      }
+    },
+    "shared:surface": {
+      "type": "object",
+      "description": "TemplateSurface (src/lib/page-tree/types.ts). Nested under a kind's own `surface` settings key (see kind:stack, kind:content-card, and the section-root template-level surface consumed via TemplateSurface). Resolved by useNodeSurface() (src/components/primitives/node-surface.tsx).",
+      "properties": {
+        "background": {
+          "type": "object",
+          "shape": "background",
+          "description": "See shared:background."
+        },
+        "gradient": {
+          "type": "object",
+          "shape": "gradient",
+          "description": "See shared:gradient. Only consulted when background.type='gradient'."
+        },
+        "padding": {
+          "type": "string",
+          "freeform": true,
+          "enum": ["none", "sm", "md", "lg", "xl", "section"],
+          "description": "Named spacing token (PADDING_CLASS, node-surface.tsx) OR a raw CSS escape-hatch string (e.g. '15px', '1.25rem') — freeform:true means the enum lists the KNOWN named tokens but any other string value is also legal (rendered as an inline style), not a validation error. 'section' contributes VERTICAL inset only (py-hub-section) and is only visually complete on a maxWidth:'content' container root (see kind:container.maxWidth)."
+        },
+        "borderRadius": {
+          "type": "string",
+          "freeform": true,
+          "enum": ["none", "sm", "md", "lg", "full", "hub-s", "hub-m"],
+          "description": "Named radius token (RADIUS_CLASS, node-surface.tsx) OR a raw CSS escape-hatch string (e.g. '12px', '50%') — freeform:true, same semantics as padding above."
+        },
+        "shadow": {
+          "type": "string",
+          "enum": ["none", "sm", "md", "lg", "xl"],
+          "description": "Named shadow token (SHADOW_CLASS, node-surface.tsx). NO raw-CSS escape hatch (legacy parity, discrete sizes only) — unlike padding/borderRadius, an unrecognized value is NOT a freeform fallback, it resolves to no shadow class."
+        },
+        "visibility": {
+          "type": "object",
+          "description": "Responsive show/hide. Section-root-only concern — TemplateSurface applies it directly; useNodeSurface() (the resolver shared by non-section-root surfaces like stack/content-card) does NOT read this field at all.",
+          "properties": {
+            "mobile": {
+              "type": "boolean",
+              "description": "false hides on max-md (Tailwind max-md:hidden). Unset/true = visible."
+            },
+            "desktop": {
+              "type": "boolean",
+              "description": "false hides on md+ (Tailwind md:hidden). Unset/true = visible."
+            }
+          }
+        },
+        "minHeight": {
+          "type": "number",
+          "enum": [500, 440],
+          "description": "Section-root-only concern (like visibility). Literal whitelist, NO raw-CSS escape hatch — a fixed DS design token, not free-form author input (MIN_HEIGHT_CLASS, template-surface.tsx). 500 = unconditional min-h-[500px] (search-bar band). 440 = @[660px]/hub:min-h-[440px], gated to >=660px container width (testimonials carousel band, MIO-2678) — mobile takes natural height."
+        }
+      }
+    },
+    "shared:structural": {
+      "type": "object",
+      "description": "NOT referenced via {type:'object',shape:'structural'} from a kind descriptor like the other shared shapes. This is a validator-level ADDITIVE allowlist: every node's settings object is validated against `kind:<its-kind>` UNIONED with these three keys — tab_label/slot are read generically off ANY child node's settings by an ANCESTOR container (tabs.tsx, accordion.tsx, find-by-slot.ts), independent of the child's own kind, and are not part of any single kind's own *Settings TS interface; surface is read generically off ANY node's settings by renderer.tsx's <TemplateSurface> wrapper, gated on that node's `template` annotation naming a templates[]/pageTemplates[] entry that itself declares a `surface` property (the surface-declaring template set), independent of the node's own kind. This is an extension beyond the design spec's literal decision-1 text (which only names shared:surface as a referenced shape); documented here because the real catalog already uses tab_label/slot on stack/text/tabs nodes and surface on section-root container nodes (see Task A1 defaults-audit notes + MIO-2685 review round 1), and excluding any of the three would make the validator reject existing recipes.",
+      "properties": {
+        "tab_label": {
+          "tier": "core",
+          "type": "string",
+          "description": "Read by tabs.tsx and accordion.tsx off a DIRECT CHILD's own settings (getLabel()) to label that child's tab/accordion trigger — independent of the child's own kind. Falls back to 'Tab N' / index-based label when absent or non-string."
+        },
+        "slot": {
+          "tier": "core",
+          "type": "string",
+          "description": "Read by find-by-slot.ts (src/lib/page-tree/data-binding/find-by-slot.ts) to locate a node by a named slot, for patch/cascade addressing — independent of the node's own kind."
+        },
+        "surface": {
+          "tier": "presentational",
+          "type": "object",
+          "shape": "surface",
+          "description": "Read generically off ANY node's settings by renderer.tsx's <TemplateSurface> wrapper (renderer.tsx:150-162), gated on node.template being in the surface-declaring template set, independent of the node's own kind. Kinds that ALSO read it at the node tint tier declare it themselves (kind:stack, kind:content-card)."
+        }
+      }
+    },
+    "kind:stack": {
+      "core": {},
+      "presentational": {
+        "gap": {
+          "type": "number",
+          "enum": [0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 6, 8, 12],
+          "description": "Flex-column gap step."
+        },
+        "align": {
+          "type": "string",
+          "enum": ["start", "center", "end", "stretch"],
+          "description": "Cross-axis alignment (items-*)."
+        },
+        "width": {
+          "type": "string",
+          "enum": ["full", "1/2", "1/3", "1/4", "2/3", "3/4"],
+          "description": "Row/columns unification (MIO-2137): makes this stack behave as a responsive COLUMN inside a `row` — full-width on mobile, its flex-grow ratio at/above the hub 660px container-query breakpoint. Requires an ancestor declaring @container/hub."
+        },
+        "surface": {
+          "type": "object",
+          "shape": "surface",
+          "description": "Column-level visual surface (MIO-2335) — same TemplateSurface vocabulary as section roots, at the 'node' tint tier. `visibility` is NOT honoured here (section-root-only concern)."
+        },
+        "mobileGap": {
+          "type": "number",
+          "enum": [1.5, 3, 6],
+          "description": "Opt-in mobile-narrower gap step (DS playlist header content column)."
+        },
+        "grow": {
+          "type": "boolean",
+          "description": "Opt-in min-w-0 flex-1 so this stack fills the remaining width of a plain flex row beside a fixed-size sibling."
+        },
+        "px": {
+          "type": "number",
+          "enum": [0.5],
+          "description": "Opt-in 2px horizontal optical inset (px-0.5)."
+        }
+      }
+    },
+    "kind:row": {
+      "core": {},
+      "presentational": {
+        "gap": {
+          "type": "number",
+          "enum": [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 12, "section"],
+          "description": "Flex-row gap step, plus the 'section' sentinel (gap-hub-section-gap, row.tsx:92) — matches RowSettings.gap's mixed union; under the enum-subsumes-type rule the type field is not load-bearing here."
+        },
+        "align": {
+          "type": "string",
+          "enum": ["start", "center", "end", "stretch"],
+          "description": "Cross-axis alignment (items-*)."
+        },
+        "justify": {
+          "type": "string",
+          "enum": ["start", "center", "end", "between", "around"],
+          "description": "Main-axis distribution (justify-*)."
+        },
+        "responsive": {
+          "type": "boolean",
+          "description": "Opt-in DS responsive-intent row: stacks below the container's 660px, becomes a row (vertically centered) at/above it. Requires an ancestor declaring @container/hub."
+        },
+        "split": {
+          "type": "boolean",
+          "description": "Opt-in [&>*]:flex-1 [&>*]:min-w-0 so direct children divide the row evenly (DS 50/50 split)."
+        },
+        "wrap": {
+          "type": "boolean",
+          "description": "Opt-in flex-wrap, used by the unified `row` section's body so 1-4 column stack children wrap."
+        },
+        "fullWidth": {
+          "type": "boolean",
+          "description": "Opt-in w-full so the row fills its parent's width even inside an items-start flex column."
+        },
+        "mobileGap": {
+          "type": "number",
+          "enum": [1.5, 3, 6],
+          "description": "Opt-in mobile-narrower gap step."
+        },
+        "maxWidth": {
+          "type": "number",
+          "enum": [800],
+          "description": "Opt-in max-width cap (DS playlist header sections)."
+        }
+      }
+    },
+    "kind:grid": {
+      "core": {},
+      "presentational": {
+        "cols": {
+          "type": "number",
+          "enum": [1, 2, 3, 4, 6, 12],
+          "description": "Column count (legacy variant only)."
+        },
+        "gap": {
+          "type": "number",
+          "enum": [1, 2, 3, 4, 6, 8, 12],
+          "description": "Grid gap step (legacy variant only)."
+        },
+        "variant": {
+          "type": "string",
+          "enum": ["legacy", "ds-content", "responsive"],
+          "description": "Layout variant. 'legacy' = flat grid with configurable cols/gap (default). 'ds-content' = DS-aligned content-page grid with its own section band + containment. 'responsive' = DS grid-section column progression (1->3@660->4@1024) WITHOUT its own section band — relies on an ancestor's TemplateSurface for the @container/hub context."
+        }
+      }
+    },
+    "kind:carousel": {
+      "core": {
+        "slidesPerView": {
+          "type": "number",
+          "default": 1,
+          "description": "Slides visible per view (drives static SLIDE_BASIS flex-basis classes; the primitive supports 1-4 with static Tailwind classes)."
+        },
+        "loop": {
+          "type": "boolean",
+          "default": true,
+          "description": "Embla infinite-loop mode."
+        }
+      },
+      "presentational": {
+        "show_dots": {
+          "type": "boolean",
+          "default": true,
+          "description": "Dot pagination indicator visibility."
+        },
+        "autoplay": {
+          "type": "boolean",
+          "default": false,
+          "description": "Embla autoplay plugin toggle."
+        },
+        "interval_ms": {
+          "type": "number",
+          "description": "Autoplay interval in milliseconds. Only meaningful when autoplay=true."
+        },
+        "bleed": {
+          "type": "boolean",
+          "description": "MIO-2678 full-bleed opt-in — the viewport spans the full section width; each slide's content and the controls row carry the section gutter internally instead of a wrapping container."
+        }
+      }
+    },
+    "kind:horizontal-scroll": {
+      "core": {},
+      "presentational": {
+        "gap": {
+          "type": "number",
+          "enum": [2, 4, 6, 8],
+          "description": "Inter-item gap step."
+        },
+        "snap": {
+          "type": "string",
+          "enum": ["none", "start", "center"],
+          "default": "start",
+          "description": "CSS scroll-snap-align mode."
+        },
+        "itemWidth": {
+          "type": "string",
+          "enum": ["auto", "card"],
+          "description": "'card' fixes each item wrapper to a DS card width (~300px, the `compact` scroll recipe). 'auto' (default) leaves sizing to the child's own layout."
+        }
+      }
+    },
+    "kind:tabs": {
+      "_note": "The Tabs component reads NO settings of its own (PRIMITIVE_DEFAULTS explicitly documents this: \"tabs — the component reads no settings at all\"). Its per-child tab label comes from shared:structural's tab_label on each CHILD's own settings, not from a tabs-kind setting.",
+      "core": {},
+      "presentational": {}
+    },
+    "kind:container": {
+      "_note": "No PRIMITIVE_DEFAULTS entry (container: {}) — the DS-intended maxWidth:'content' default has NO inline `??` fallback in container.tsx, deliberately undeclared per that file's own comment (would change rendering the moment MIO-2358 wires cascade layer 1).",
+      "core": {},
+      "presentational": {
+        "padding": {
+          "type": "number",
+          "enum": [0, 2, 4, 6, 8, 12, 16],
+          "description": "Padding scale."
+        },
+        "background": {
+          "type": "string",
+          "enum": ["default", "muted", "accent"],
+          "description": "Simple background token — UNRELATED to shared:background/TemplateSurface; this is container.tsx's own small enum."
+        },
+        "rounded": {
+          "type": "boolean",
+          "description": "Opt-in rounded corners."
+        },
+        "maxWidth": {
+          "type": "string",
+          "enum": ["content", "search", "4xl", "6xl", "7xl"],
+          "description": "Content-width cap + gutter. 'content' is the DS gutter-outside-cap idiom (MIO-2128) that pairs with shared:surface.padding='section' on an ancestor surface."
+        }
+      }
+    },
+    "kind:content-card": {
+      "core": {
+        "actionFromScope": {
+          "type": "string",
+          "description": "Names a scope key (a data-source-injected Action object) that becomes this card's stretched-link navigation target when the content-node/playlist-target-derived href doesn't resolve."
+        }
+      },
+      "presentational": {
+        "surface": {
+          "type": "object",
+          "shape": "surface",
+          "description": "Generic-card-body visual surface (MIO-2335), 'node' tint tier, applied to the outer role=group wrapper. Only affects the generic (NodeRenderer) card body — NOT the delegated HubPlaylistCard path (hub_playlists scope), which supplies its own chrome."
+        }
+      }
+    },
+    "kind:accordion": {
+      "core": {
+        "expansion": {
+          "type": "string",
+          "enum": ["single", "multiple"],
+          "description": "Single vs multiple simultaneously-open panels."
+        },
+        "defaultExpanded": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Node ids expanded by default."
+        }
+      },
+      "presentational": {}
+    },
+    "kind:video": {
+      "core": {
+        "embed_type": {
+          "type": "string",
+          "enum": ["native", "iframe"],
+          "default": "native",
+          "description": "'native' renders an HTML5 <video>; 'iframe' renders a sandboxed <iframe> gated through isAllowedEmbedUrl (an unlisted host renders an inline error, not the iframe)."
+        }
+      },
+      "presentational": {
+        "controls": {
+          "type": "boolean",
+          "default": true,
+          "description": "Native <video controls> attribute."
+        },
+        "autoplay": {
+          "type": "boolean",
+          "default": false,
+          "description": "Autoplay toggle."
+        },
+        "loop": {
+          "type": "boolean",
+          "default": false,
+          "description": "Loop toggle."
+        },
+        "muted": {
+          "type": "boolean",
+          "default": true,
+          "description": "Muted toggle."
+        }
+      }
+    },
+    "kind:divider": {
+      "core": {},
+      "presentational": {
+        "spacing": {
+          "type": "number",
+          "enum": [2, 4, 6, 8],
+          "default": 4,
+          "description": "Vertical margin scale (my-*)."
+        }
+      }
+    },
+    "kind:progress-ring": {
+      "core": {
+        "value": {
+          "type": "number",
+          "description": "Static 0-100 progress value."
+        },
+        "valueFrom": {
+          "type": "string",
+          "description": "Names a scope key holding a numeric 0-100 progress value (MIO-2248); takes priority over the static `value` when the scope value coerces to a finite number."
+        },
+        "label": {
+          "type": "string",
+          "description": "Accessible name for the progressbar role. Defaults to 'Progress'."
+        }
+      },
+      "presentational": {
+        "size": {
+          "type": "number",
+          "default": 64,
+          "description": "Pixel diameter. DS ring sizes are 16 | 24 | 48 | 64 | 76, but the underlying type is an unconstrained number (ui/progress accepts any value) — not a hard enum."
+        },
+        "mobileSize": {
+          "type": "number",
+          "description": "Opt-in mobile pixel diameter — when set, renders TWO ring hosts that container-query-swap (>=660px shows `size`, <660px shows `mobileSize`), matching the DS's dual-ring pattern rather than one ring that resizes."
+        },
+        "variant": {
+          "type": "string",
+          "enum": ["default", "white"],
+          "description": "Surface variant. 'default' = light. 'white' = for dark/colourful surfaces."
+        },
+        "disabled": {
+          "type": "boolean",
+          "description": "Dims the ring."
+        }
+      }
+    },
+    "kind:headline": {
+      "core": {
+        "level": {
+          "type": "number",
+          "enum": [1, 2, 3, 4, 5, 6],
+          "default": 2,
+          "description": "Heading level 1-6, drives both the rendered tag and the DS type-scale size mapping (SIZE_BY_LEVEL)."
+        }
+      },
+      "presentational": {
+        "align": {
+          "type": "string",
+          "enum": ["left", "center", "right"],
+          "default": "left",
+          "description": "Text alignment."
+        },
+        "weight": {
+          "type": "number",
+          "enum": [400, 500, 600, 700],
+          "default": 400,
+          "description": "Font weight. MIO-985 Thread B: default headlines are font-normal (400), not the old font-semibold."
+        }
+      }
+    },
+    "kind:text": {
+      "core": {},
+      "presentational": {
+        "align": {
+          "type": "string",
+          "enum": ["left", "center", "right"],
+          "default": "left",
+          "description": "Text alignment."
+        },
+        "size": {
+          "type": "string",
+          "enum": ["body", "small"],
+          "description": "2-size DS scale (MIO-985 Thread B)."
+        },
+        "weight": {
+          "type": "number",
+          "enum": [400, 500, 600, 700],
+          "description": "Opt-in font-weight. Unset = normal."
+        },
+        "clamp": {
+          "type": "number",
+          "description": "Opt-in line clamp (DS HubDescription maxLines). Unconstrained number type, but only small integers 1-6 are honoured — any other value is defensively ignored by the renderer (no error, silent no-op), not enforced as a hard enum."
+        },
+        "marginBottom": {
+          "type": "number",
+          "enum": [0, 1, 2, 3, 4, 6, 8],
+          "description": "Opt-in bottom margin (mb-* scale)."
+        },
+        "muted": {
+          "type": "boolean",
+          "description": "Opt-in muted-text override (text-foreground/75). Only applies on the non-clamped render path — the clamped path already renders muted unconditionally."
+        },
+        "tone": {
+          "type": "string",
+          "enum": ["primary"],
+          "description": "Opt-in color tone. 'primary' applies text-primary and wins over `muted` when both are set."
+        }
+      }
+    },
+    "kind:image": {
+      "_note": "EXCLUDES `width`/`height` from ImageSettings — the hub interface comment states they are 'presently no-ops' (no longer forwarded to the rendered <img>, ui/thumbnail owns that element with no sizing passthrough), kept on the TS contract only for BE-served-data forward-compat parsing, not for authoring. Per the honesty policy, a key with no rendering effect does not enter the vocabulary.",
+      "core": {
+        "alt": {
+          "type": "string",
+          "description": "Accessible alt text."
+        }
+      },
+      "presentational": {
+        "lightbox": {
+          "type": "boolean",
+          "description": "Opt-in click-to-expand lightbox."
+        },
+        "aspectRatio": {
+          "type": "string",
+          "enum": ["16:9", "4:3", "1:1", "auto"],
+          "default": "16:9",
+          "description": "Fixed aspect preset, mapped to ui/thumbnail's `aspect` prop. '4:3' has no direct thumbnail preset — mapped to 'preview' plus an override class."
+        },
+        "objectFit": {
+          "type": "string",
+          "enum": ["cover", "contain"],
+          "default": "cover",
+          "description": "'contain' takes priority over aspectRatio and always resolves to ui/thumbnail's natural (shrink-wrap) mode."
+        },
+        "radius": {
+          "type": "string",
+          "enum": ["control", "control-l", "m"],
+          "description": "DS thumbnail radius preset (ui/thumbnail `radius`)."
+        },
+        "outline": {
+          "type": "boolean",
+          "description": "Opt-in shadow-hub-xs outline."
+        }
+      }
+    },
+    "kind:button": {
+      "core": {
+        "action": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["page", "url", "email", "scroll", "playlist"],
+              "description": "Action['type'] (src/lib/page-tree/action.ts)."
+            },
+            "value": {
+              "type": "string",
+              "description": "Canonical value — no scheme/# prefix. Meaning depends on `type` (bare email address, bare anchor id, full URL, system-page-type/UUID/path, or playlist id)."
+            },
+            "params": {
+              "type": "object",
+              "description": "Optional string-keyed query params merged onto the resolved href."
+            }
+          },
+          "description": "Canonical navigation target object."
+        },
+        "href": {
+          "type": "string",
+          "description": "@deprecated legacy alias for `action` (a bare URL string). Still read as a fallback."
+        },
+        "actionFromScope": {
+          "type": "string",
+          "description": "Names a scope key (a data-source-injected Action object) used INSTEAD of the static action/href when the scope value resolves to a valid Action."
+        },
+        "labelFrom": {
+          "type": "string",
+          "description": "Names a scope key whose STRING value replaces the static label (node.value) when present and non-empty."
+        }
+      },
+      "presentational": {
+        "variant": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "secondary",
+            "ghost-light",
+            "overlay-light",
+            "destructive",
+            "link",
+            "muted",
+            "ghost-dark",
+            "overlay-dark"
+          ],
+          "default": "primary",
+          "description": "Visual style, forwarded 1:1 to ui/button's variant prop."
+        },
+        "size": {
+          "type": "string",
+          "enum": ["sm", "md", "lg"],
+          "default": "md",
+          "description": "Leaf-facing size name, mapped to ui/button size tokens (sm->sm, md->default, lg->lg)."
+        },
+        "newTab": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opens the resolved href in a new tab."
+        },
+        "icon": {
+          "type": "string",
+          "description": "Leading icon (hub sprite name), rendered before the label."
+        },
+        "iconRight": {
+          "type": "string",
+          "description": "Trailing icon (hub sprite name), rendered after the label."
+        },
+        "disabled": {
+          "type": "boolean",
+          "description": "Renders a non-interactive disabled button: no Link/anchor wrapper, no action/onClick. Used for locked/drip-scheduled CTAs."
+        }
+      }
+    },
+    "kind:icon": {
+      "core": {},
+      "presentational": {
+        "size": {
+          "type": "number",
+          "enum": [16, 20, 24, 32, 48],
+          "default": 24,
+          "description": "Pixel size, mapped to the nearest ui/icon-valid size (12|14|16|20|24|32) via toIconSize()."
+        },
+        "color": {
+          "type": "string",
+          "enum": ["default", "primary", "muted"],
+          "default": "default",
+          "description": "Color token."
+        },
+        "strokeWidth": {
+          "type": "number",
+          "description": "Opt-in stroke-width override, passed straight to ui/icon. Unset preserves that component's own default (1.5)."
+        }
+      }
+    },
+    "kind:field": {
+      "core": {
+        "name": {
+          "type": "string",
+          "description": "Required. The scope key this field reads (scope[name])."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["title", "subtitle", "meta", "body"],
+          "description": "Semantic role within the parent template — the cascade resolver applies role-specific defaults (e.g. title gets heading-weight styling), all overridable via the explicit settings below."
+        },
+        "actionFromScope": {
+          "type": "string",
+          "description": "Title hover-chevron affordance — names a scope key (an Action object) that, when valid, wraps this field's text in a Link plus a decorative hover chevron."
+        }
+      },
+      "presentational": {
+        "size": {
+          "type": "string",
+          "enum": ["title", "subtitle", "body-big", "body", "body-small"],
+          "description": "Explicit size override. Falls back to the role default, then 'body'."
+        },
+        "weight": {
+          "type": "number",
+          "enum": [400, 500, 600, 700],
+          "description": "Explicit font-weight override. Falls back to the role default (title only), then unset."
+        },
+        "align": {
+          "type": "string",
+          "enum": ["left", "center", "right"],
+          "description": "Text alignment."
+        },
+        "muted": {
+          "type": "boolean",
+          "description": "Explicit muted-text override (text-foreground/75). Falls back to the role default."
+        },
+        "tone": {
+          "type": "string",
+          "enum": ["default", "primary"],
+          "description": "Opt-in color tone. 'primary' wins over `muted` when both are set. 'default' is the explicit no-tone path — same rendered result as leaving `tone` unset."
+        },
+        "clamp": {
+          "type": "number",
+          "description": "Opt-in line clamp, routes through ui/expandable-text. Only integers 1-6 are honoured; other values are defensively ignored (no error)."
+        },
+        "marginBottom": {
+          "type": "number",
+          "enum": [0, 1, 2, 3, 4, 6, 8],
+          "description": "Opt-in bottom margin (mb-* scale)."
+        },
+        "icon": {
+          "type": "string",
+          "description": "Opt-in leading hub sprite glyph name (DS meta-chip spec). Loosely typed string (not IconName) — an unknown name safely renders an empty <use> reference rather than crashing."
+        },
+        "ring": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number",
+              "description": "Defaults to 100 (the completed-chip shape) when omitted."
+            },
+            "size": {
+              "type": "number",
+              "description": "Defaults to 16 (the completed-chip shape) when omitted."
+            }
+          },
+          "description": "Opt-in leading progress-ring chip (DS 'Completed' chip spec) instead of `icon`. Mutually exclusive with `icon` in practice — if both set, `ring` wins."
+        },
+        "fade": {
+          "type": "boolean",
+          "description": "Opt-in single-line horizontal fade-truncate. Ignored on the clamped render path — clamp wins if both are set."
+        },
+        "optional": {
+          "type": "boolean",
+          "description": "When true and the bound scope value is nullish, renders null in EVERY environment (no dev '[missing: name]' marker)."
+        }
+      }
+    },
+    "kind:media-slot": {
+      "core": {
+        "name": {
+          "type": "string",
+          "description": "Required. The scope key this slot reads (scope[name])."
+        },
+        "alt": {
+          "type": "string",
+          "description": "Accessible alt text."
+        },
+        "preset": {
+          "type": "string",
+          "enum": [
+            "thumbnail-160",
+            "medium-720",
+            "large-1440",
+            "webp-medium"
+          ],
+          "description": "Opt-in poster preset — when set AND scope.poster_variants is a non-empty object, resolves the URL via the pickPoster fallback chain instead of reading a ready scope[name] URL."
+        }
+      },
+      "presentational": {
+        "aspectRatio": {
+          "type": "string",
+          "enum": ["16:9", "4:3", "1:1", "auto"],
+          "description": "Same styling contract as kind:image's aspectRatio."
+        },
+        "objectFit": {
+          "type": "string",
+          "enum": ["cover", "contain"],
+          "description": "Same styling contract as kind:image's objectFit."
+        },
+        "radius": {
+          "type": "string",
+          "enum": ["control", "control-l", "m"],
+          "description": "Same styling contract as kind:image's radius."
+        },
+        "outline": {
+          "type": "boolean",
+          "description": "Same styling contract as kind:image's outline."
+        },
+        "width": {
+          "type": "number",
+          "description": "Opt-in FIXED pixel width for a small tile beside a growing flex sibling. Height derives from the existing aspectRatio class, not set separately."
+        },
+        "progressBar": {
+          "type": "boolean",
+          "description": "Opt-in in-progress watch-progress bar overlay, reading scope.progressPercent. Do NOT also set on a contentCardChild()'s media-slot (content-card.tsx already renders its own bar) — would double-render."
+        }
+      }
+    },
+    "kind:cta-slot": {
+      "core": {
+        "name": {
+          "type": "string",
+          "description": "Required. The scope key this slot reads (scope[name]), expected shape {label, href?, action?}."
+        }
+      },
+      "presentational": {
+        "variant": {
+          "type": "string",
+          "enum": ["primary", "secondary"],
+          "default": "primary",
+          "description": "Visual style, forwarded to buttonVariants()."
+        }
+      }
+    },
+    "kind:file-player": {
+      "core": {
+        "contentId": {
+          "type": "string",
+          "description": "Content-node id to load."
+        },
+        "fileId": {
+          "type": "string",
+          "description": "File id to load (alternative binding path to contentId)."
+        },
+        "playlistId": {
+          "type": "string",
+          "description": "Playlist id context for the player's up-next/queue behavior."
+        }
+      },
+      "presentational": {}
+    },
+    "kind:file-attachments": {
+      "core": {
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Attachment list to render (src/lib/api/content/types.ts Attachment — an API-owned shape; items are represented opaquely here, not re-declared, since Attachment is not a page-tree settings type)."
+        },
+        "contentId": {
+          "type": "string",
+          "description": "Content-node id, used to build download hrefs for legacy (non-file_id) attachments."
+        }
+      },
+      "presentational": {}
+    },
+    "kind:search-bar": {
+      "core": {
+        "placeholder": {
+          "type": "string",
+          "description": "Passes through to the spotlight trigger's label. Non-string values are left undefined (SearchSpotlightTrigger's own fallback applies)."
+        }
+      },
+      "presentational": {}
+    },
+    "kind:quote": {
+      "core": {},
+      "presentational": {
+        "showAvatar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the member's photo beside their name; off centres name+profession under the quote."
+        }
+      }
+    }
+  },
   "templates": [
     {
       "id": "hero",
@@ -237,8 +1071,6 @@
                 "id": "media",
                 "kind": "image",
                 "settings": {
-                  "aspectRatio": "16:9",
-                  "objectFit": "cover",
                   "radius": "m",
                   "outline": true
                 }
@@ -255,7 +1087,6 @@
                     "id": "headline",
                     "kind": "headline",
                     "settings": {
-                      "level": 2,
                       "weight": 700
                     }
                   },
@@ -348,11 +1179,7 @@
                           "kind": "progress-ring",
                           "settings": {
                             "valueFrom": "progressPercent",
-                            "size": 16,
-                            "strokeWidth": 2,
-                            "fillColor": "primary",
-                            "trackColor": "border",
-                            "showLabel": false
+                            "size": 16
                           }
                         },
                         {
@@ -572,12 +1399,6 @@
             }
           ]
         }
-      },
-      "defaults": {
-        "image": {
-          "aspectRatio": "16:9",
-          "objectFit": "cover"
-        }
       }
     },
     {
@@ -616,10 +1437,7 @@
           {
             "id": "carousel-body",
             "kind": "carousel",
-            "settings": {
-              "slidesPerView": 1,
-              "show_dots": true
-            },
+            "settings": {},
             "children": [
               {
                 "id": "carousel-item-slide",
@@ -713,7 +1531,6 @@
                         "id": "carousel-item-play",
                         "kind": "button",
                         "settings": {
-                          "size": "md",
                           "icon": "play-filled",
                           "actionFromScope": "action"
                         },
@@ -726,12 +1543,6 @@
             ]
           }
         ]
-      },
-      "defaults": {
-        "carousel": {
-          "slidesPerView": 1,
-          "show_dots": true
-        }
       }
     },
     {
@@ -778,7 +1589,6 @@
                 "id": "title",
                 "kind": "headline",
                 "settings": {
-                  "level": 2,
                   "weight": 700
                 }
               },
@@ -875,8 +1685,7 @@
                       "settings": {
                         "valueFrom": "progressPercent",
                         "size": 76,
-                        "mobileSize": 60,
-                        "showLabel": true
+                        "mobileSize": 60
                       }
                     },
                     {
@@ -1479,7 +2288,6 @@
                       "id": "title",
                       "kind": "headline",
                       "settings": {
-                        "level": 2,
                         "weight": 700
                       },
                       "value": "FAQ"
@@ -1601,8 +2409,6 @@
                       "id": "row-col-1-cta",
                       "kind": "button",
                       "settings": {
-                        "variant": "primary",
-                        "size": "md",
                         "iconRight": "arrow-right"
                       },
                       "value": "Learn more"
@@ -1658,8 +2464,6 @@
                       "id": "row-col-2-cta",
                       "kind": "button",
                       "settings": {
-                        "variant": "primary",
-                        "size": "md",
                         "iconRight": "arrow-right"
                       },
                       "value": "Learn more"
@@ -1715,8 +2519,6 @@
                       "id": "row-col-3-cta",
                       "kind": "button",
                       "settings": {
-                        "variant": "primary",
-                        "size": "md",
                         "iconRight": "arrow-right"
                       },
                       "value": "Learn more"
@@ -1918,8 +2720,6 @@
                       "id": "col-c-button",
                       "kind": "button",
                       "settings": {
-                        "variant": "primary",
-                        "size": "md",
                         "labelFrom": "title",
                         "actionFromScope": "action"
                       },
@@ -1997,7 +2797,6 @@
                     "id": "headline",
                     "kind": "headline",
                     "settings": {
-                      "level": 2,
                       "weight": 700,
                       "align": "center"
                     }
@@ -2037,7 +2836,6 @@
       },
       "defaults": {
         "headline": {
-          "level": 2,
           "weight": 700,
           "align": "center"
         }
@@ -2087,7 +2885,6 @@
                 "id": "title",
                 "kind": "headline",
                 "settings": {
-                  "level": 2,
                   "weight": 700
                 }
               },
@@ -2184,8 +2981,7 @@
                       "settings": {
                         "valueFrom": "progressPercent",
                         "size": 76,
-                        "mobileSize": 60,
-                        "showLabel": true
+                        "mobileSize": 60
                       }
                     },
                     {
@@ -2327,7 +3123,6 @@
       },
       "defaults": {
         "headline": {
-          "level": 2,
           "weight": 700
         }
       }
@@ -2391,6 +3186,89 @@
         ]
       },
       "defaults": {}
+    },
+    {
+      "id": "testimonials",
+      "label": "Testimonials",
+      "category": "section",
+      "lifecycle": "active",
+      "rootKind": "stack",
+      "applicablePageTypes": [
+        "homepage",
+        "custom"
+      ],
+      "recommendation": {
+        "tier": "addition",
+        "order": 90
+      },
+      "renderOnly": false,
+      "compiledSectionType": "testimonials",
+      "intent": "Member quotes — one focused testimonial at a time",
+      "surface": {},
+      "starter": {
+        "id": "root",
+        "kind": "stack",
+        "template": "testimonials",
+        "settings": {
+          "gap": 8,
+          "surface": {
+            "padding": "section",
+            "minHeight": 440
+          }
+        },
+        "children": [
+          {
+            "id": "title-wrap",
+            "kind": "container",
+            "settings": {
+              "maxWidth": "content",
+              "padding": 0
+            },
+            "children": [
+              {
+                "id": "title",
+                "kind": "headline",
+                "settings": {
+                  "align": "center"
+                }
+              }
+            ]
+          },
+          {
+            "id": "rail",
+            "kind": "carousel",
+            "settings": {
+              "autoplay": true,
+              "interval_ms": 6000,
+              "bleed": true
+            },
+            "children": [
+              {
+                "id": "item-1",
+                "kind": "quote",
+                "settings": {}
+              },
+              {
+                "id": "item-2",
+                "kind": "quote",
+                "settings": {}
+              },
+              {
+                "id": "item-3",
+                "kind": "quote",
+                "settings": {}
+              }
+            ]
+          }
+        ]
+      },
+      "defaults": {
+        "carousel": {
+          "autoplay": true,
+          "interval_ms": 6000,
+          "bleed": true
+        }
+      }
     }
   ],
   "pageTemplates": [
@@ -2564,8 +3442,7 @@
       "intent": "Post-register onboarding",
       "defaults": {
         "stack": {
-          "align": "center",
-          "maxWidth": "510px"
+          "align": "center"
         }
       },
       "starter": {
@@ -2600,12 +3477,7 @@
       "lifecycle": "active",
       "pageType": "account-activity",
       "intent": "Member activity feed",
-      "defaults": {
-        "stack": {
-          "padding": "50px 0",
-          "maxWidth": "820px"
-        }
-      },
+      "defaults": {},
       "starter": {
         "id": "root",
         "kind": "stack",
@@ -2638,12 +3510,7 @@
       "lifecycle": "active",
       "pageType": "account-profile",
       "intent": "Member profile settings",
-      "defaults": {
-        "stack": {
-          "padding": "50px 0",
-          "maxWidth": "820px"
-        }
-      },
+      "defaults": {},
       "starter": {
         "id": "root",
         "kind": "stack",
@@ -2889,8 +3756,6 @@
                     "id": "hero-media",
                     "kind": "image",
                     "settings": {
-                      "aspectRatio": "16:9",
-                      "objectFit": "cover",
                       "radius": "m",
                       "outline": true
                     },
@@ -2927,7 +3792,6 @@
                         "kind": "button",
                         "settings": {
                           "size": "lg",
-                          "variant": "primary",
                           "action": {
                             "type": "page",
                             "value": "register"
@@ -2965,7 +3829,6 @@
                     "id": "intro-headline",
                     "kind": "headline",
                     "settings": {
-                      "level": 2,
                       "weight": 700,
                       "align": "center"
                     },
@@ -3003,8 +3866,6 @@
                     "id": "feat-1-img",
                     "kind": "image",
                     "settings": {
-                      "aspectRatio": "16:9",
-                      "objectFit": "cover",
                       "radius": "m",
                       "outline": true
                     },
@@ -3048,8 +3909,6 @@
                     "id": "feat-2-img",
                     "kind": "image",
                     "settings": {
-                      "aspectRatio": "16:9",
-                      "objectFit": "cover",
                       "radius": "m",
                       "outline": true
                     },
@@ -3093,8 +3952,6 @@
                     "id": "feat-3-img",
                     "kind": "image",
                     "settings": {
-                      "aspectRatio": "16:9",
-                      "objectFit": "cover",
                       "radius": "m",
                       "outline": true
                     },
@@ -3156,7 +4013,6 @@
                     "id": "cta-headline",
                     "kind": "headline",
                     "settings": {
-                      "level": 2,
                       "weight": 700,
                       "align": "center"
                     },
@@ -3175,7 +4031,6 @@
                     "kind": "button",
                     "settings": {
                       "size": "lg",
-                      "variant": "primary",
                       "action": {
                         "type": "page",
                         "value": "register"

@@ -74,7 +74,9 @@ func TestResolve_Live200_DigestMismatch_FallsBackToVendored(t *testing.T) {
 	if !warned {
 		t.Error("a digest mismatch should warn")
 	}
-	if len(cat.Templates) != 8 {
+	// 9 templates as of the 0.14.1 pin (testimonials added in 0.13.0). Bump this
+	// alongside internal/catalog/catalog.json on future re-pins.
+	if len(cat.Templates) != 9 {
 		t.Errorf("fell back to the wrong catalog: %d templates", len(cat.Templates))
 	}
 }

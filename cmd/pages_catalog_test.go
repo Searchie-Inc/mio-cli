@@ -203,8 +203,9 @@ func TestCatalogSectionTypes_WritableOnly(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Stdout), &rows); err != nil {
 		t.Fatalf("stdout not a JSON array: %v\n%s", err, res.Stdout)
 	}
-	if len(rows) != 7 {
-		t.Errorf("writable section types = %d, want 7", len(rows))
+	// testimonials flipped writable=false -> true in 0.13.0.
+	if len(rows) != 8 {
+		t.Errorf("writable section types = %d, want 8", len(rows))
 	}
 	ids := map[string]bool{}
 	for _, r := range rows {

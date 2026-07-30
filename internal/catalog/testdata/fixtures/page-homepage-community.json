@@ -34,8 +34,6 @@
               "id": "#3",
               "kind": "image",
               "settings": {
-                "aspectRatio": "16:9",
-                "objectFit": "cover",
                 "radius": "m",
                 "outline": true
               },
@@ -72,7 +70,6 @@
                   "kind": "button",
                   "settings": {
                     "size": "lg",
-                    "variant": "primary",
                     "action": {
                       "type": "page",
                       "value": "register"
@@ -110,7 +107,6 @@
               "id": "#10",
               "kind": "headline",
               "settings": {
-                "level": 2,
                 "weight": 700,
                 "align": "center"
               },
@@ -148,8 +144,6 @@
               "id": "#14",
               "kind": "image",
               "settings": {
-                "aspectRatio": "16:9",
-                "objectFit": "cover",
                 "radius": "m",
                 "outline": true
               },
@@ -193,8 +187,6 @@
               "id": "#19",
               "kind": "image",
               "settings": {
-                "aspectRatio": "16:9",
-                "objectFit": "cover",
                 "radius": "m",
                 "outline": true
               },
@@ -238,8 +230,6 @@
               "id": "#24",
               "kind": "image",
               "settings": {
-                "aspectRatio": "16:9",
-                "objectFit": "cover",
                 "radius": "m",
                 "outline": true
               },
@@ -301,7 +291,6 @@
               "id": "#30",
               "kind": "headline",
               "settings": {
-                "level": 2,
                 "weight": 700,
                 "align": "center"
               },
@@ -320,7 +309,6 @@
               "kind": "button",
               "settings": {
                 "size": "lg",
-                "variant": "primary",
                 "action": {
                   "type": "page",
                   "value": "register"

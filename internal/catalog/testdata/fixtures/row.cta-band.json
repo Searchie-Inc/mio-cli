@@ -70,8 +70,6 @@
               "id": "#6",
               "kind": "button",
               "settings": {
-                "variant": "primary",
-                "size": "md",
                 "iconRight": "arrow-right"
               },
               "value": "Learn more"
@@ -127,8 +125,6 @@
               "id": "#11",
               "kind": "button",
               "settings": {
-                "variant": "primary",
-                "size": "md",
                 "iconRight": "arrow-right"
               },
               "value": "Learn more"
@@ -184,8 +180,6 @@
               "id": "#16",
               "kind": "button",
               "settings": {
-                "variant": "primary",
-                "size": "md",
                 "iconRight": "arrow-right"
               },
               "value": "Learn more"

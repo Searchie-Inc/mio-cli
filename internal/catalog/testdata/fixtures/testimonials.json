@@ -1,0 +1,57 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "testimonials",
+  "settings": {
+    "gap": 8,
+    "surface": {
+      "padding": "section",
+      "minHeight": 440
+    }
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "container",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "headline",
+          "settings": {
+            "align": "center"
+          }
+        }
+      ]
+    },
+    {
+      "id": "#3",
+      "kind": "carousel",
+      "settings": {
+        "autoplay": true,
+        "interval_ms": 6000,
+        "bleed": true
+      },
+      "children": [
+        {
+          "id": "#4",
+          "kind": "quote",
+          "settings": {}
+        },
+        {
+          "id": "#5",
+          "kind": "quote",
+          "settings": {}
+        },
+        {
+          "id": "#6",
+          "kind": "quote",
+          "settings": {}
+        }
+      ]
+    }
+  ]
+}

@@ -189,8 +189,6 @@
               "id": "#16",
               "kind": "button",
               "settings": {
-                "variant": "primary",
-                "size": "md",
                 "labelFrom": "title",
                 "actionFromScope": "action"
               },
