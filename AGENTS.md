@@ -189,7 +189,7 @@ Every implemented resource and its verbs.
 
 - **`pages publish` requires `--if-match <draft_version>`** — read the `draft_version` attribute from a prior `pages retrieve`, then pass it as `--if-match`. The backend uses it as an optimistic-concurrency guard and will return 409 if the draft has changed since you read it.
 - **`pages tree set` `--if-match` is OPTIONAL (defaults to `0`) — publish's is not.** `pages tree get` 404s on a page that has no draft yet, so the very FIRST tree set has no `draft_version` to echo back: omit `--if-match` and it defaults to `0`, which the backend accepts only while the page is still at `draft_version 0` (a fresh page starts there). For every subsequent set pass the current `draft_version`. The default does NOT bypass optimistic concurrency: a defaulted (or stale) `0` against a page that already has a draft returns a 409 conflict, so you can never silently clobber an existing draft.
-- **`pages tree get` and `pages tree set` do NOT share a shape.** `get` answers `{"id": …, "tree": {"root": …}, "draft_version": N}`; `set --file` expects the tree object itself, `{"root": …}`. Feeding a `get` response straight back is rejected — unwrap with `--jq .tree` and keep the `draft_version` for `--if-match`. `pages catalog scaffold` already emits the `set` shape.
+- **`pages tree get` and `pages tree set` do NOT share a shape, and the fix is a RE-WRAP.** `get` answers `{"id": …, "tree": <the root NODE, bare>, "draft_version": N}` — the backend deliberately unwraps before answering (`bare_node = resolved.get("root", resolved)`; its DTO documents `tree` as "the resolved draft tree ROOT node — bare (not wrapped in `{root: ...}`)"). `set --file` rejects anything without a top-level `root` (`Tree must have a 'root' key at the top level.`). So `--jq .tree` alone produces a file `tree set` refuses: use `--jq '{root: .tree}'` and keep the `draft_version` for `--if-match`. `pages catalog scaffold` already emits the *set* shape.
 - **A page created by `hubs scaffold` already has a draft.** Its `draft_version` is `1`, not `0`, so the first tree write YOU make against it needs `--if-match 1` — the `0` default is only correct for a page that has never had a draft. Always read it back: `mio pages tree get <page_id> --jq .draft_version`.
 - **`pages create --privacy` defaults to `members`.** A page created without `--privacy public` is behind the login wall, which is how a hub ships looking public and isn't. `hubs scaffold` sets it (MIO-2563); the manual page path does not. Also: `home` is a reserved slug (rejected) and an omitted `--slug` fails with `Field required` — use a real slug and mark the homepage with `--is-home`.
 - **`pages retrieve --tree`** returns a `page-trees` resource (raw published node tree) instead of page metadata. Use this for admin editor access.
@@ -260,14 +260,21 @@ A section node is the same envelope plus a `template` and `children`:
 - `settings.weight` must be a **number** (`700`), never `"bold"`; `pages tree set`
   rejects both that and a blank/non-string `template` client-side, before any HTTP.
 
-**Leaf kinds** (the complete set): `headline` `text` `image` `video` `button` `icon`
-`divider` `progress-ring`. `subheadline`, `paragraph`, `embed`, `html`, `spacer`,
-`stat`, `input` and `section` are **not** node kinds — they were removed from the
-frontend (or never existed), so authoring one yields a blank node; use `headline`
-with `level:3`, `text`, and container `gap` respectively. `content-grid` is a
-*template* id, not a kind. There is **no `sidebar` kind**: a sidebar is a `row`
-whose `stack` children carry `settings.width`
-(`full`/`1/2`/`1/3`/`2/3`/`1/4`/`3/4`).
+**Value-bearing kinds** — the nine the renderer reads a top-level `value` from:
+`headline` `text` `image` `video` `button` `icon` `divider` `progress-ring` `quote`.
+`quote`'s `value` is an **object** (`{quote, name?, profession?, avatarUrl?,
+avatarFallback?}`) and renders nothing unless `quote` is a non-empty string;
+`progress-ring` is the one kind that reads `settings.value` instead. `subheadline`,
+`paragraph`, `embed`, `html`, `spacer`, `stat`, `input` and `section` are **not** node
+kinds — use `headline` with `level:3`, `text`, and container `gap` respectively.
+`content-grid` is a *template* id, not a kind. There is **no `sidebar` kind**: a
+sidebar is a `row` whose `stack` children carry `settings.width`.
+
+**The full node-kind and settings vocabulary is generated**, not hand-listed — see
+the skill (`mio skills print`), whose `<!-- catalog-gen:… -->` blocks are rendered
+from the embedded catalog's `settingsSchema` by `go generate ./...` and byte-pinned
+by `TestSkillDocIsGeneratedFromCatalog`. Do not transcribe those lists here; they
+moved three catalog minors in a day.
 
 **Button action** is `{"type": …, "value": …}` with `type` ∈ `url` | `page` |
 `email` | `scroll` | `playlist`; `value` is canonical (no scheme prefix, no `#`).
@@ -280,13 +287,20 @@ whose `stack` children carry `settings.width`
 | `{"type":"color","token":"primary\|secondary\|accent\|muted\|background"}` | solid theme color; `primary` also stamps `data-bg="primary"` (bold band + primary-button auto-inversion) |
 | `{"type":"custom-color","value":"#rrggbb"}` | solid inline color (invalid hex → nothing) |
 | `{"type":"gradient"}` | gradient, configured by the **sibling** `surface.gradient` |
-| `{"type":"image","url":"<durable-url>","blur":true}` | image layer + automatic `secondary` scrim (`overlay` is deprecated/ignored) |
-| `{"type":"none"}` / `{"type":"thumbnail"}` | nothing (`thumbnail` is accepted but unimplemented) |
+| `{"type":"image","url":"<durable-url>","blur":true}` | image layer; the `secondary` scrim is **always** composed over it (not authorable), `blur` only adds a further layer |
+| `{"type":"none"}` | nothing |
+
+`thumbnail` is **not** a valid value — the catalog excludes it deliberately ("declared
+as a TODO in hub types, implemented nowhere, used by no recipe"), so authoring it hits
+the off-enum path below.
 
 Two traps worth stating plainly:
 
-1. **An invalid `background.type` is accepted on publish and renders a transparent
-   row with no error** — the renderer's switch falls through a `default` case.
+1. **An off-enum `background.type` is accepted on publish and renders a transparent
+   row with no error** — the renderer resolves an unknown discriminant to no class and
+   no style. The catalog documents its own limitation too: the enum constrains `type`,
+   but every variant field is optional and nothing checks that you supplied the one
+   your `type` needs, so `{"type":"custom-color"}` with no `value` also renders nothing.
 2. **The gradient config is a SIBLING of `background` (`surface.gradient`), not
    nested inside it.** Nesting is ignored and you silently get the default `split`
    gradient. `gradient.type` ∈ `monochrome` | `analogous` | `complementary` |
@@ -309,12 +323,18 @@ frontend like this:
 |---|---|
 | `primary` | buttons, links, CTAs, brand accents |
 | `secondary` | **section headings (h1–h3) AND the base of every `surface.background:{"type":"tint"}` block** |
-| `text` / `background` | body copy / page background |
+| `text` / `background` | body copy / page background — **only when the theme mode is `custom`**; in `light`/`dark` the theme layer clears both and derives them from `secondary` |
 | `header_color` / `header_accent` | top-nav background + accent (emitted raw, no contrast correction) |
 | `dark_mode` (bool) | **not** the theme selector — only flips the defaults for `background`/`text` when those are unset |
 
-- **`secondary` is the classic mistake**: it is not a decorative accent. Set it light
-  and every heading goes invisible on a white page.
+- **`secondary` is the classic mistake**: it is not a decorative accent, it is the
+  page's ink. In `light` mode `--hub-text: var(--hub-secondary)`, so it colors every
+  heading *and* all body copy, and it is the base of every `tint` surface; in `dark`
+  mode it becomes the page background. Set it light and the whole page goes invisible.
+- **To control `background`/`text` directly, ask for `custom`**:
+  `--settings-json '{"background":{"type":"custom"}}'` alongside the branding keys. In
+  `custom` mode `text` is AA-contrast-clamped against `background`, so a low-contrast
+  pair is corrected rather than honoured exactly.
 - Color values must be **6-digit hex** for all six color keys (`primary`, `secondary`,
   `background`, `text`, `header_color`, `header_accent`). The frontend parser tests
   `/^#[0-9a-fA-F]{6}$/` and silently substitutes its own default on anything else, so

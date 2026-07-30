@@ -103,17 +103,19 @@ mio hubs update hub_abc123 \
 |---|---|
 | `primary` | buttons, links, CTAs, brand accents |
 | `secondary` | **section headings (h1–h3) AND the base of every `surface.background:{"type":"tint"}` block** |
-| `text` | body copy |
-| `background` | page background |
+| `text` | body copy — **only in `custom` theme mode** (see below) |
+| `background` | page background — **only in `custom` theme mode** (see below) |
 | `header_color` / `header_accent` | top-nav background + accent (emitted raw — no contrast correction) |
 | `dark_mode` (bool) | **not** the theme selector — only flips the defaults for `background`/`text` when those are unset (see below) |
 | `logo_url` / `favicon_url` / `social_image_url` | imagery |
 | `font_heading` / `font_body` / `heading_font_size` / `body_font_size` | typography |
 
-- **Foot-gun: `secondary` is not a decorative accent.** In light mode it resolves to
-  the frontend's `--foreground`, so it colors every heading *and* tints every `tint`
-  surface. Set it light and every heading goes invisible on a white page — the most
-  common branding mistake. Pick a dark, high-contrast value.
+- **Foot-gun: `secondary` is not a decorative accent — it is the page's ink.** In
+  `light` mode the frontend sets `--hub-text: var(--hub-secondary)`, so `secondary`
+  colors every heading *and* all body copy, *and* it is the base of every `tint`
+  surface. (In `dark` mode it becomes the page **background** instead.) Set it light
+  and every heading and paragraph goes invisible on a white page — the most common
+  branding mistake by a distance. Pick a dark, high-contrast value.
 - **Color values must be 6-digit hex** (`#0F766E`) — for all six color keys
   (`primary`, `secondary`, `background`, `text`, `header_color`, `header_accent`).
   The frontend's branding parser tests them against `/^#[0-9a-fA-F]{6}$/` and silently
@@ -137,12 +139,29 @@ mio hubs update hub_abc123 \
   There is **no `settings.theme` key** — writing one is a silent no-op. (The
   frontend's parsed `theme.mode` is *derived* from `settings.background.type`; nothing
   reads a raw `settings.theme`.)
-- **`branding.dark_mode` is a different, weaker knob.** It does not select the theme —
-  it only flips the *defaults* the branding parser uses when `branding.background` and
-  `branding.text` are absent or invalid (dark: background←`secondary`, text←`#FFFFFF`).
-  Set both keys explicitly and `dark_mode` changes nothing. Where the two disagree the
-  frontend logs a dev-only warning and `settings.background.type` wins, so set them
-  consistently.
+- **`branding.text` and `branding.background` are ignored unless the mode is
+  `custom`.** The theme layer only emits `--hub-text`/`--hub-background` from those two
+  keys when `settings.background.type == "custom"`; in `light` and `dark` it explicitly
+  clears them and derives both from `secondary` (light: background white, text
+  `secondary`; dark: background `secondary`, text white). So setting
+  `branding.background:"#ffffff"` on a default (`light`) hub changes nothing — it was
+  already white — and setting `branding.text` there does nothing at all. To control
+  both directly, ask for `custom`:
+
+  ```bash
+  mio hubs update hub_abc123 \
+    --settings-json '{"background":{"type":"custom"}}' \
+    --branding-json '{"background":"#FFFDF7","text":"#1A1A1A"}'
+  ```
+
+  In `custom` mode `text` is additionally AA-contrast-clamped against `background`, so
+  a low-contrast pair is corrected rather than honoured exactly.
+- **`branding.dark_mode` selects nothing.** It only flips the *defaults* the branding
+  parser uses for `background`/`text` when those are absent or invalid — and in
+  `light`/`dark` mode those values are discarded anyway. Where it disagrees with the
+  settings-derived mode the frontend logs a dev-only warning and the settings mode
+  wins. Set the mode in `settings.background.type`; keep `dark_mode` consistent with it
+  for the benefit of any backend consumer that still reads it.
 
 #### Menus and nav icons
 
@@ -300,9 +319,10 @@ mio pages catalog scaffold --template grid            > grid.json
 
 `row` is the unified 1–4 column section; pick the layout with `--variant`:
 
-<!-- catalog-sync:row-variants -->
-`1col` · `2eq` · `2left` · `2right` · `3eq` · `4eq` · `bound-cards` · `cta-band` · `faq`
-<!-- /catalog-sync -->
+<!-- catalog-gen:row-variants -->
+`1col` · `2eq` · `2left` · `2right` · `3eq` · `4eq` · `bound-cards` ·
+`cta-band` · `faq`
+<!-- /catalog-gen -->
 
 `1col`/`2eq`/`3eq`/`4eq` are equal splits; `2left` is 2/3 + 1/3 and `2right` is
 1/3 + 2/3. Three are content presets that arrive **already filled with placeholder
@@ -315,18 +335,24 @@ prints them all.
 
 #### The tree envelope: `get` returns one shape, `set` wants another
 
+**`get` hands back the BARE root node; `set` demands the `{"root": …}` wrapper.**
+So the round trip is a **re-wrap**, not an unwrap:
+
 ```bash
-# get →  {"id": …, "tree": {"root": …}, "draft_version": N}   ← the tree is NESTED
-# set ←  {"root": …}                                          ← the tree itself
+# get →  {"id": …, "tree": <the root NODE, bare>, "draft_version": N}
+# set ←  {"root": <the root node>}
 V=$(mio pages tree get "$PAGE_ID" --hub hub_abc123 --jq .draft_version)
-mio pages tree get "$PAGE_ID" --hub hub_abc123 --jq .tree > tree.json   # unwrap
+mio pages tree get "$PAGE_ID" --hub hub_abc123 --jq '{root: .tree}' > tree.json
 # ...edit tree.json...
 mio pages tree set "$PAGE_ID" --hub hub_abc123 --if-match "$V" --file tree.json
 ```
 
-Feeding a `tree get` response straight back into `tree set` is rejected: `--file`
-must contain the tree object itself (`{"root": …}`), not the resource that wraps it.
-`--jq .tree` is the whole unwrap. `pages catalog scaffold` already emits the `set`
+The backend's read path deliberately unwraps before answering (`bare_node =
+resolved.get("root", resolved)` — its DTO documents `tree` as "the resolved draft
+tree ROOT node — bare (not wrapped in `{root: ...}`)"), while the write path rejects
+anything without a top-level `root` (`Tree must have a 'root' key at the top level.`).
+`--jq .tree` alone therefore produces a file that `tree set` refuses — you must
+re-wrap with `--jq '{root: .tree}'`. `pages catalog scaffold` already emits the *set*
 shape, which is why the scaffold→set pipe needs no transform.
 
 #### `--if-match`, and why the first write is the odd one out
@@ -397,90 +423,212 @@ A section node is the same envelope plus a `template` and children:
   cascade — every value that must render has to be inlined on its own node.
 - **Exactly one `level:1` headline per page.** Extra level-1 headlines are demoted to
   `<h2>` (they still render, but the page's `<h1>` is whichever came first).
-- The **only** exception to the top-level-`value` rule is `progress-ring`, which
-  reads a numeric `settings.value`.
 
-### Leaf kinds and their settings
+### Which kinds carry a `value` — the nine leaf kinds
 
-The renderer's leaf set is exactly these eight. `subheadline`, `paragraph`,
-`embed`, `html`, `spacer`, `stat`, `input` and `section` **are not node kinds** —
-they were removed from the frontend (or never existed), and authoring one gets you
-a blank node. Use `headline` with `level: 3` instead of `subheadline`, `text`
-instead of `paragraph`, and a `stack`/`row` `gap` instead of `spacer`.
+`value` is only meaningful on the frontend's `LeafKind` set. These nine, and what
+the renderer expects in `value`:
 
-| kind | `value` | settings that matter |
-|---|---|---|
-| `headline` | text | `level` 1–6 (default **2**), `weight` 400/500/600/700 (default 400 — set `700` for titles), `align` left/center/right |
-| `text` | text | `size` `body`\|`small`, `weight`, `align`, `clamp` 1–6 (renders a show-more control), `marginBottom` 0/1/2/3/4/6/8 (default **2**), `muted` bool, `tone:"primary"` |
-| `image` | the image URL | `alt`, `aspectRatio` `16:9`(default)\|`4:3`\|`1:1`\|`auto`, `objectFit` `cover`(default)\|`contain` (forces natural aspect), `radius` `control`\|`control-l`(default)\|`m`, `outline` bool. `width`/`height` are accepted but are **no-ops** |
-| `video` | the video URL | `embed_type` `native`(default)\|`iframe` — note the snake_case; `controls`(true), `autoplay`(false), `loop`(false), `muted`(**true**). There is no `provider` setting; a disallowed iframe host renders a visible error box |
-| `button` | the label | `action` (below), `variant` (default `primary`), `size` `sm`\|`md`\|`lg`, `icon`/`iconRight` (sprite names), `newTab` bool, `disabled` bool |
-| `icon` | **the glyph name** (not `settings.name`) | `size` 16/20/24/32, `color` `default`\|`primary`\|`muted`, `strokeWidth`. An unknown name falls back to `star` rather than vanishing |
-| `divider` | — | `spacing` 2/4/6/8 (default 4) |
-| `progress-ring` | — (uses `settings.value`) | `value` 0–100, `size` 16/24/48/64/76, `variant` `default`\|`white`, `label` |
+| kind | `value` |
+|---|---|
+| `headline` | the heading text |
+| `text` | the body text |
+| `image` | the image URL |
+| `video` | the video URL |
+| `button` | the **label** (there is no `label` setting) |
+| `icon` | the **glyph name** (not `settings.name`) |
+| `divider` | — (none) |
+| `progress-ring` | — uses a numeric **`settings.value`**, the one exception to the top-level rule |
+| `quote` | an **object**: `{quote, name?, profession?, avatarUrl?, avatarFallback?}`. `quote` must be a non-empty string or the node renders nothing |
 
-**Button `action` is `{"type": …, "value": …}`**, and `value` is always canonical —
-no scheme prefix, no `#`:
+> This table is **hand-maintained** — the catalog does not record which kinds take a
+> `value`. `LeafKind` in mio-hub `src/lib/page-tree/types.ts` is authoritative, and
+> the drift test can only check these nine against the catalog's kind list, not
+> against mio-hub. Treat it as the least trustworthy table in this document.
+
+`subheadline`, `paragraph`, `embed`, `html`, `spacer`, `stat`, `input` and `section`
+**are not node kinds** — they were removed from the frontend or never existed, and
+authoring one gets you a blank node. Use `headline` with `level: 3` instead of
+`subheadline`, `text` instead of `paragraph`, and a container `gap` instead of
+`spacer`.
+
+**Button `action` is `{"type": …, "value": …}`**, and its `value` is always
+canonical — no scheme prefix, no `#`:
 
 ```json
 {"kind":"button","value":"Browse the library",
  "settings":{"size":"lg","action":{"type":"url","value":"https://example.com/x"}}}
 ```
 
-`type` is `url` | `page` | `email` | `scroll` | `playlist`. `email` takes a bare
-address, `scroll` a bare anchor id, `page` a hub-relative `/slug/...` path or page
-id, `playlist` a playlist id. A malformed or missing action renders a non-navigating
-button. The legacy `settings.href` still works but is deprecated.
+`email` takes a bare address, `scroll` a bare anchor id, `page` a system page type /
+UUID / hub-relative path, `playlist` a playlist id. A malformed or missing action
+renders a non-navigating button. `settings.href` is a deprecated alias.
+
+### Every kind's settings — generated from the catalog
+
+Property names, types, enums and defaults below come straight from the embedded
+catalog's `settingsSchema` (`go generate ./...` rewrites this block; a test fails the
+build if it drifts). The backend serves the **same** catalog pin, so
+`GET /api/page-builder/catalog` agrees with this — you do not need to re-check it.
+`core` settings change what the node *is*; `presentational` settings change how it
+looks. An unlisted property is not read by the renderer. Properties are alphabetical
+— Go maps lose the catalog's declaration order.
+
+<!-- catalog-gen:node-settings -->
+**`accordion`** — accepts children
+- core: `defaultExpanded` *array* · `expansion` *string* `single|multiple`
+
+**`button`** — no children
+- core: `action` *object* {params, type, value} · `actionFromScope` *string* · `href` *string* · `labelFrom` *string*
+- presentational: `disabled` *boolean* · `icon` *string* · `iconRight` *string* · `newTab` *boolean* default `false` · `size` *string* `sm|md|lg` default `md` · `variant` *string* `primary|secondary|ghost-light|overlay-light|destructive|link|muted|ghost-dark|overlay-dark` default `primary`
+
+**`carousel`** — accepts children
+- core: `loop` *boolean* default `true` · `slidesPerView` *number* default `1`
+- presentational: `autoplay` *boolean* default `false` · `bleed` *boolean* · `interval_ms` *number* · `show_dots` *boolean* default `true`
+
+**`container`** — accepts children
+- presentational: `background` *string* `default|muted|accent` · `maxWidth` *string* `content|search|4xl|6xl|7xl` · `padding` *number* `0|2|4|6|8|12|16` · `rounded` *boolean*
+
+**`content-card`** — accepts children
+- core: `actionFromScope` *string*
+- presentational: `surface` *object → shared:surface*
+
+**`cta-slot`** — no children
+- core: `name` *string*
+- presentational: `variant` *string* `primary|secondary` default `primary`
+
+**`divider`** — no children
+- presentational: `spacing` *number* `2|4|6|8` default `4`
+
+**`field`** — no children
+- core: `actionFromScope` *string* · `name` *string* · `role` *string* `title|subtitle|meta|body`
+- presentational: `align` *string* `left|center|right` · `clamp` *number* · `fade` *boolean* · `icon` *string* · `marginBottom` *number* `0|1|2|3|4|6|8` · `muted` *boolean* · `optional` *boolean* · `ring` *object* {size, value} · `size` *string* `title|subtitle|body-big|body|body-small` · `tone` *string* `default|primary` · `weight` *number* `400|500|600|700`
+
+**`file-attachments`** — no children
+- core: `attachments` *array* · `contentId` *string*
+
+**`file-player`** — no children
+- core: `contentId` *string* · `fileId` *string* · `playlistId` *string*
+
+**`grid`** — accepts children
+- presentational: `cols` *number* `1|2|3|4|6|12` · `gap` *number* `1|2|3|4|6|8|12` · `variant` *string* `legacy|ds-content|responsive`
+
+**`headline`** — no children
+- core: `level` *number* `1|2|3|4|5|6` default `2`
+- presentational: `align` *string* `left|center|right` default `left` · `weight` *number* `400|500|600|700` default `400`
+
+**`horizontal-scroll`** — accepts children
+- presentational: `gap` *number* `2|4|6|8` · `itemWidth` *string* `auto|card` · `snap` *string* `none|start|center` default `start`
+
+**`icon`** — no children
+- presentational: `color` *string* `default|primary|muted` default `default` · `size` *number* `16|20|24|32|48` default `24` · `strokeWidth` *number*
+
+**`image`** — no children
+- core: `alt` *string*
+- presentational: `aspectRatio` *string* `16:9|4:3|1:1|auto` default `16:9` · `lightbox` *boolean* · `objectFit` *string* `cover|contain` default `cover` · `outline` *boolean* · `radius` *string* `control|control-l|m`
+
+**`media-slot`** — no children
+- core: `alt` *string* · `name` *string* · `preset` *string* `thumbnail-160|medium-720|large-1440|webp-medium`
+- presentational: `aspectRatio` *string* `16:9|4:3|1:1|auto` · `objectFit` *string* `cover|contain` · `outline` *boolean* · `progressBar` *boolean* · `radius` *string* `control|control-l|m` · `width` *number*
+
+**`progress-ring`** — no children
+- core: `label` *string* · `value` *number* · `valueFrom` *string*
+- presentational: `disabled` *boolean* · `mobileSize` *number* · `size` *number* default `64` · `variant` *string* `default|white`
+
+**`quote`** — no children
+- presentational: `showAvatar` *boolean* default `true`
+
+**`row`** — accepts children
+- presentational: `align` *string* `start|center|end|stretch` · `fullWidth` *boolean* · `gap` *number* `1|1.5|2|2.5|3|4|5|6|8|12|section` · `justify` *string* `start|center|end|between|around` · `maxWidth` *number* `800` · `mobileGap` *number* `1.5|3|6` · `responsive` *boolean* · `split` *boolean* · `wrap` *boolean*
+
+**`search-bar`** — no children
+- core: `placeholder` *string*
+
+**`stack`** — accepts children
+- presentational: `align` *string* `start|center|end|stretch` · `gap` *number* `0|0.5|1|1.5|2|2.5|3|4|6|8|12` · `grow` *boolean* · `mobileGap` *number* `1.5|3|6` · `px` *number* `0.5` · `surface` *object → shared:surface* · `width` *string* `full|1/2|1/3|1/4|2/3|3/4`
+
+**`tabs`** — accepts children
+- *no settings — presentation is fully derived*
+
+**`text`** — no children
+- presentational: `align` *string* `left|center|right` default `left` · `clamp` *number* · `marginBottom` *number* `0|1|2|3|4|6|8` · `muted` *boolean* · `size` *string* `body|small` · `tone` *string* `primary` · `weight` *number* `400|500|600|700`
+
+**`video`** — no children
+- core: `embed_type` *string* `native|iframe` default `native`
+- presentational: `autoplay` *boolean* default `false` · `controls` *boolean* default `true` · `loop` *boolean* default `false` · `muted` *boolean* default `true`
+
+<!-- /catalog-gen -->
 
 ### Containers and layout — there is no `sidebar`
 
-Layout kinds: `stack` (vertical), `row` (horizontal), plus `grid`, `carousel`,
-`horizontal-scroll`, `tabs`, `container`, `content-card`, `accordion`.
-
 `sidebar` is **not** a node kind. A sidebar layout is a `row` whose `stack` children
-carry `settings.width` from `full` | `1/2` | `1/3` | `2/3` | `1/4` | `3/4` — e.g.
-`2/3` + `1/3`. `row` also takes `responsive` (stacks on narrow screens), `wrap`,
-`gap`, `mobileGap`, `align`, `justify`; `stack` takes `gap`, `align`, `width` and
-its own `surface`.
+carry `settings.width` — see `kind:row` and `kind:stack` in the generated settings
+above for the exact `width` enum and the responsive/wrap/gap/align properties.
 
 ### Sections: `template` + `surface`
 
 A node is treated as a **section** when it carries a `template`. The catalog's
 section templates are:
 
-<!-- catalog-sync:section-templates -->
-`hero` · `carousel` · `grid` · `content-grid` · `row` · `search-bar` · `compact` · `content-card`
-<!-- /catalog-sync -->
+<!-- catalog-gen:section-templates -->
+`hero` · `carousel` · `grid` · `content-grid` · `row` · `search-bar` ·
+`compact` · `content-card` · `testimonials`
+<!-- /catalog-gen -->
 
-Of those, exactly seven — everything except `content-card`, which is a card recipe
-rather than a page section — opt the node into the surface renderer:
-`hero`, `carousel`, `grid`, `content-grid`, `row`, `search-bar`, `compact`. Any
-other `template` string lays out plain. `compact` is the frontend name for the
-legacy "scroll" strip.
+Of those, exactly seven — everything except `content-card` (a card recipe) and
+`testimonials` — opt the node into the surface renderer: `hero`, `carousel`, `grid`,
+`content-grid`, `row`, `search-bar`, `compact`. Any other `template` string lays out
+plain. `compact` is the frontend name for the legacy "scroll" strip.
 
 **A section must carry its `template`** — the CLI rejects a blank/non-string one up
 front, but an *absent* one just means the node renders without its section surface.
 
-`settings.surface` is `{"padding": "section", "background": {...}, "gradient": {...}}`.
+### `settings.surface` — generated from the catalog
+
+<!-- catalog-gen:surface-properties -->
+`settings.surface` accepts:
+
+- `background` *object → shared:background*
+- `borderRadius` *string* `none|sm|md|lg|full|hub-s|hub-m` *(freeform — any other string is legal too)*
+- `gradient` *object → shared:gradient*
+- `minHeight` *number* `500|440`
+- `padding` *string* `none|sm|md|lg|xl|section` *(freeform — any other string is legal too)*
+- `shadow` *string* `none|sm|md|lg|xl`
+- `visibility` *object* {desktop, mobile}
+
+Plus three keys the validator unions onto **every** node's settings, whatever its kind:
+
+- `slot` *string*
+- `surface` *object → shared:surface*
+- `tab_label` *string*
+<!-- /catalog-gen -->
 
 ### `surface.background` — the enum, and two traps
 
-| value | renders |
-|---|---|
-| `{"type":"tint"}` | a light tint of `secondary` — the only value any scaffold emits |
-| `{"type":"color","token":"primary\|secondary\|accent\|muted\|background"}` | solid theme color. `primary` also stamps `data-bg="primary"`, which is what produces the bold band **and** auto-inverts primary buttons inside it |
-| `{"type":"custom-color","value":"#rrggbb"}` | solid inline color (invalid hex → nothing) |
-| `{"type":"gradient"}` | gradient — configure it via the **sibling** `surface.gradient` |
-| `{"type":"image","url":"<durable-url>","blur":true}` | image layer + an automatic `secondary` scrim. Key is `url`; `overlay` is deprecated and ignored |
-| `{"type":"none"}` | explicitly no background |
-| `{"type":"thumbnail"}` | accepted, currently a **no-op** — renders nothing |
+<!-- catalog-gen:surface-background -->
+| property | type | values / default |
+|---|---|---|
+| `blur` | *boolean* | — |
+| `token` | *string* | `primary\|secondary\|muted\|accent\|background` |
+| `type` | *string* | `none\|color\|custom-color\|tint\|image\|gradient` |
+| `url` | *string* | — |
+| `value` | *string* | — |
+<!-- /catalog-gen -->
 
-- **Trap 1 — an invalid `background.type` is accepted on publish and renders a
-  transparent row with no error.** The renderer's switch has a `default` case that
-  returns no class and no style. There is no warning in production. If a band looks
-  see-through, the type string is wrong. (`image` and `thumbnail` also fall through
-  that `default` — `image` paints via a separate layer; `thumbnail` genuinely does
-  nothing yet.)
+`tint` is the only value any scaffold emits. `type:"color"` with `token:"primary"`
+also stamps `data-bg="primary"`, which is what produces the bold band **and**
+auto-inverts primary buttons inside it. On `type:"image"` the secondary-tint scrim is
+**always** composed over the image — that is not authorable, and `blur` only adds a
+further 25px layer on top of it.
+
+- **Trap 1 — an off-enum `background.type` is accepted on publish and renders a
+  transparent row with no error.** The renderer resolves an unknown discriminant to
+  no class and no style, and there is no warning in production. If a band looks
+  see-through, the type string is wrong. The catalog states its own limitation here:
+  the enum constrains `type`, but every variant field is optional and **nothing
+  validates that you supplied the field your `type` needs** — `{"type":"custom-color"}`
+  with no `value`, or `{"type":"image"}` with no `url`, passes validation and renders
+  nothing.
 - **Trap 2 — the gradient config is a SIBLING of `background`, not nested inside
   it.** Nesting it is silently ignored and you get the default `split` gradient:
 
@@ -492,40 +640,58 @@ front, but an *absent* one just means the node renders without its section surfa
   }
   ```
 
-  `gradient.type` is `monochrome` | `analogous` | `complementary` | `triadic` |
-  `split` | `warm-shift` | `custom`. `custom` **requires** `customStart` +
-  `customEnd` (6-digit hex); either missing or malformed and it falls back to
-  `split`. An unknown `color` token also falls back to no background.
+#### `surface.gradient`
 
-### Vocabulary (kept in sync with the embedded catalog by a test)
+<!-- catalog-gen:surface-gradient -->
+| property | type | values / default |
+|---|---|---|
+| `customEnd` | *string* | — |
+| `customStart` | *string* | — |
+| `type` | *string* | `complementary\|analogous\|triadic\|monochrome\|split\|warm-shift\|custom` |
+<!-- /catalog-gen -->
 
-Node kinds the catalog knows — anything else is an unknown node:
+Only consulted when `background.type == "gradient"`. A non-`custom` type resolves
+against the hub theme's `primary`. `custom` needs **both** `customStart` and
+`customEnd` as valid hex; a missing or malformed pair falls back to `split`. An
+unrecognized `background.token` renders no background at all.
 
-<!-- catalog-sync:node-kinds -->
-`accordion` · `button` · `carousel` · `container` · `content-card` · `cta-slot` ·
-`divider` · `field` · `file-attachments` · `file-player` · `grid` · `headline` ·
-`horizontal-scroll` · `icon` · `image` · `media-slot` · `progress-ring` · `row` ·
-`search-bar` · `stack` · `tabs` · `text` · `video`
-<!-- /catalog-sync -->
+### Vocabulary — generated from the catalog
 
-Compiled section types (`pages sections create --type`, writable subset via
+Every node kind the catalog knows, split by whether it accepts children. Anything
+not listed here is an unknown node: the API takes it, the renderer drops it.
+
+<!-- catalog-gen:node-kinds -->
+Containers (`childRules` accepts children):
+
+`accordion` · `carousel` · `container` · `content-card` · `grid` ·
+`horizontal-scroll` · `row` · `stack` · `tabs`
+
+Childless (`childRules: "none"`):
+
+`button` · `cta-slot` · `divider` · `field` · `file-attachments` ·
+`file-player` · `headline` · `icon` · `image` · `media-slot` · `progress-ring` ·
+`quote` · `search-bar` · `text` · `video`
+<!-- /catalog-gen -->
+
+Compiled section types (`pages sections create --type`; the writable subset is
 `pages catalog section-types --writable-only`):
 
-<!-- catalog-sync:section-types -->
-`feature` · `row` · `grid` · `carousel` · `content-grid` · `search` · `compact` · `testimonials` · `calendar`
-<!-- /catalog-sync -->
+<!-- catalog-gen:section-types -->
+`feature` · `row` · `grid` · `carousel` · `content-grid` · `search` ·
+`compact` · `testimonials` · `calendar`
+<!-- /catalog-gen -->
 
 Page templates (`pages catalog scaffold --template …`):
 
-<!-- catalog-sync:page-templates -->
+<!-- catalog-gen:page-templates -->
 `page-homepage` · `page-login` · `page-register` · `page-onboarding` ·
 `page-account-activity` · `page-account-profile` · `page-members` ·
 `page-file-detail` · `page-discussions-index` · `page-generic` ·
 `page-homepage-community` · `page-about` · `page-faq`
-<!-- /catalog-sync -->
+<!-- /catalog-gen -->
 
-These lists track the catalog version the CLI ships; `mio pages catalog templates`
-/ `section-types` always print the truth for the backend you are talking to.
+These lists track the catalog version the CLI ships; `mio pages catalog templates` /
+`section-types` always print the truth for the backend you are talking to.
 
 ## Silent-drop checklist — run this before you call a page done
 

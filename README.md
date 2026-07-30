@@ -263,9 +263,10 @@ mio pages catalog scaffold --template page-homepage > tree.json
 mio pages catalog scaffold --template row --variant 3eq > cols.json   # a section to splice in
 mio pages tree set <page-id> --hub <hub-id> --file tree.json          # first tree: --if-match defaults to 0
 mio pages publish <page-id> --hub <hub-id> --if-match 1
-# `tree get` answers {tree, draft_version}; `tree set --file` wants the tree itself.
+# `tree get` hands back the BARE root node; `tree set --file` wants {"root": ...}.
+# The round trip is a RE-wrap, not an unwrap.
 V=$(mio pages tree get <page-id> --hub <hub-id> --jq .draft_version)
-mio pages tree get <page-id> --hub <hub-id> --jq .tree > tree.json
+mio pages tree get <page-id> --hub <hub-id> --jq '{root: .tree}' > tree.json
 
 # Products & prices  (the product id is a positional argument, not a flag)
 mio products list
@@ -421,12 +422,12 @@ nothing, with no error:
 
 - **A node's text lives in `value` at the TOP LEVEL of the node, not `settings.value`.**
   This is the most common one by a distance. (`progress-ring` is the only kind that
-  genuinely reads `settings.value`.)
+  genuinely reads `settings.value`; `quote`'s `value` is an object, not a string.)
 - `settings.weight` must be a **number** (`700`), never `"bold"`.
 - A section node must carry a non-empty **`template`** (`hero`, `carousel`, `row`, …).
 - An off-enum **`surface.background.type`** renders a transparent row. The valid set
   is `tint` · `color` (+`token`) · `custom-color` (+`value`) · `gradient` · `image`
-  (+`url`) · `none` · `thumbnail`.
+  (+`url`) · `none` — `thumbnail` is deliberately **not** one of them.
 - The **gradient config is a sibling** of `background` — `surface.gradient`, not
   `surface.background.gradient`. Nesting it silently yields the default gradient.
 - A `header`/`footer` menu item without a **`type`** is dropped; a `mobile` tab whose
