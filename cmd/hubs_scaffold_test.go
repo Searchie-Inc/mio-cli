@@ -1177,29 +1177,53 @@ func TestTemplateHubPolicy_UnknownFieldIsLoud(t *testing.T) {
 	}
 }
 
-// TestScaffoldResult_PolicyGateThreeStates: the machine result distinguishes
-// "enforced" (true), "explicitly not enforced" (false) and "not managed by this
-// template, the hub's gate was left alone" (null). The null case must never
-// collapse into false — that is the answer the broken build effectively gave.
-func TestScaffoldResult_PolicyGateThreeStates(t *testing.T) {
-	yes, no := true, false
+// TestScaffold_PolicyGateResultMatchesWhatWasWritten pins the `policy_gate`
+// contract against the REAL pipeline, one full command run per template shape.
+//
+// It replaces a version that hand-built a scaffoldContext and asserted three
+// states including `false` — a value the enable-only pipeline cannot produce, so
+// the test asserted a contract that did not exist. Pinning an unreachable state
+// is the same class of mistake as a guard whose oracle is the thing it
+// validates: it passes forever and proves nothing about the command. The oracle
+// here is what the command actually prints, and the assertion pairs it with
+// whether the gate PATCH was really sent.
+func TestScaffold_PolicyGateResultMatchesWhatWasWritten(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		gate *bool
-		want any
+		name      string
+		policies  any
+		want      any
+		wantWrite bool
 	}{
-		{"declared true", &yes, true},
-		{"declared false", &no, false},
-		{"not declared", nil, nil},
+		{"declares enabled:true", map[string]any{
+			"terms": map[string]any{"required": true, "enabled": true}}, true, true},
+		{"declares enabled:false", map[string]any{
+			"terms": map[string]any{"required": true, "enabled": false}}, nil, false},
+		{"declares no enabled", map[string]any{
+			"terms": map[string]any{"required": true}}, nil, false},
+		{"no policies block at all", nil, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := scaffoldResult(&scaffoldContext{policyGate: tc.gate}, "community")
+			srv, rec := fullScaffoldServerWithCatalog(t, catalogWithPolicies(t, tc.policies))
+
+			res := runContract(t, scaffoldEnv(t, srv.URL),
+				withTeam("t_team1", "hubs", "scaffold",
+					"--template", "community", "--name", "X", "--slug", "x")...)
+			if res.Code != errs.ExitOK {
+				t.Fatalf("exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+			}
+
+			got := decodeSoleJSON(t, res.Stdout)
 			v, ok := got["policy_gate"]
 			if !ok {
 				t.Fatal("policy_gate must be emitted unconditionally, like every other result key")
 			}
 			if v != tc.want {
 				t.Errorf("policy_gate = %#v, want %#v", v, tc.want)
+			}
+			// The field means "what this run WROTE", so it must agree with the wire.
+			if wrote := len(rec.policyGateBodies) > 0; wrote != tc.wantWrite {
+				t.Errorf("gate PATCH sent = %t, want %t (policy_gate reports the WRITE, not the declaration); bodies=%d",
+					wrote, tc.wantWrite, len(rec.policyGateBodies))
 			}
 		})
 	}
@@ -1857,8 +1881,21 @@ func fullScaffoldServer(t *testing.T) (*httptest.Server, *scaffoldCapture) {
 // every PATCH to the hub itself (blobs + publish).
 func fullScaffoldServerFor(t *testing.T, hubID string, isPrivate bool) (*httptest.Server, *scaffoldCapture) {
 	t.Helper()
+	return fullScaffoldServerAll(t, hubID, isPrivate, catalog21Body(t))
+}
+
+// fullScaffoldServerWithCatalog is fullScaffoldServer serving a CUSTOM catalog
+// body, so a CLI-level test can drive a full run against a hub-template shape
+// the shipped 2.1 fixture does not carry (MIO-2567: the policy-gate result
+// contract, one run per template shape).
+func fullScaffoldServerWithCatalog(t *testing.T, catBody []byte) (*httptest.Server, *scaffoldCapture) {
+	t.Helper()
+	return fullScaffoldServerAll(t, "hub_new", true, catBody)
+}
+
+func fullScaffoldServerAll(t *testing.T, hubID string, isPrivate bool, catBody []byte) (*httptest.Server, *scaffoldCapture) {
+	t.Helper()
 	rec := &scaffoldCapture{hubID: hubID}
-	catBody := catalog21Body(t)
 	// Match the hub itself by SUFFIX: the client emits paths under /api/v1/... , so
 	// an exact "/api/teams/…/hubs/<id>" compare would never match. The hub's own
 	// sub-collections all carry a further segment (/spaces, /pages, …), so only the
@@ -2054,11 +2091,12 @@ func TestScaffold_ResumeAppliesGateExactlyOnce(t *testing.T) {
 	}
 }
 
-// conflictingPoliciesCatalogBody rewrites the 2.1 fixture's community
-// hubTemplate to declare a contradictory pair of per-policy `enabled` values and
-// re-digests it, so a REAL scaffold run can be driven through the whole preflight
-// against a template only the preflight can reject.
-func conflictingPoliciesCatalogBody(t *testing.T) []byte {
+// catalogWithPolicies rewrites the 2.1 fixture's community hubTemplate to carry
+// the given policies block (nil DELETES the key entirely) and re-digests it, so
+// a REAL scaffold run can be driven end-to-end against a template shape the
+// shipped catalog does not contain. Digest-valid, so it passes the same
+// verification the live artifact does.
+func catalogWithPolicies(t *testing.T, policies any) []byte {
 	t.Helper()
 	dec := json.NewDecoder(bytes.NewReader(catalog21Body(t)))
 	dec.UseNumber()
@@ -2071,9 +2109,10 @@ func conflictingPoliciesCatalogBody(t *testing.T) []byte {
 		t.Fatal("2.1 catalog fixture has no hubTemplates[]")
 	}
 	ht, _ := hts[0].(map[string]any)
-	ht["policies"] = map[string]any{
-		"terms":          map[string]any{"required": true, "enabled": true},
-		"privacy_policy": map[string]any{"enabled": false},
+	if policies == nil {
+		delete(ht, "policies")
+	} else {
+		ht["policies"] = policies
 	}
 	meta, ok := doc["meta"].(map[string]any)
 	if !ok {
@@ -2082,14 +2121,24 @@ func conflictingPoliciesCatalogBody(t *testing.T) []byte {
 	delete(meta, "digest")
 	digest, err := catalog.Digest(doc)
 	if err != nil {
-		t.Fatalf("recompute conflicting-policies catalog digest: %v", err)
+		t.Fatalf("recompute catalog digest: %v", err)
 	}
 	meta["digest"] = digest
 	out, err := json.Marshal(doc)
 	if err != nil {
-		t.Fatalf("marshal conflicting-policies catalog: %v", err)
+		t.Fatalf("marshal catalog: %v", err)
 	}
 	return out
+}
+
+// conflictingPoliciesCatalogBody is the shape only the preflight can reject: a
+// contradictory pair of per-policy `enabled` values.
+func conflictingPoliciesCatalogBody(t *testing.T) []byte {
+	t.Helper()
+	return catalogWithPolicies(t, map[string]any{
+		"terms":          map[string]any{"required": true, "enabled": true},
+		"privacy_policy": map[string]any{"enabled": false},
+	})
 }
 
 // TestScaffold_ConflictingPoliciesFailInPreflightNotMidPipeline: the policies

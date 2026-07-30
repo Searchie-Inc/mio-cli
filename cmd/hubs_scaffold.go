@@ -1432,8 +1432,12 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 //     contract whose keys come and go with the template is not one an agent can
 //     write `.spaces | length` against;
 //   - policy_gate (MIO-2567) reports the hub-level enforcement gate this run
-//     APPLIED — true/false when the template declared one, null when it declared
-//     none and the hub's gate was left as it was. It is the one field that
+//     WROTE. The write is enable-only (see scaffoldPolicyGate), so the pipeline
+//     produces exactly two values: true when it turned enforcement on, and null
+//     when it wrote no gate at all — which covers BOTH "no policy declared
+//     enabled" and "the declaration resolved to false", the two cases whose
+//     shared outcome is that the hub's existing setting stands. It is the one
+//     field that
 //     distinguishes "the ToS document exists" (policies[]) from "members are
 //     actually asked to accept it", which is precisely the pair QA could not
 //     tell apart: content present, `policies_enabled` reading true off the
@@ -1543,17 +1547,22 @@ func hubPublicPath(slug string) string {
 	return "/" + slug
 }
 
-// policyGateResult renders the resolved policy gate for the machine result: the
-// applied boolean, or JSON null when the template declared no enforcement intent
-// and the hub's gate was therefore never written.
+// policyGateResult renders the gate this run WROTE for the machine result: the
+// written boolean, or JSON null when no gate was written at all.
 //
-// The point is the THREE-state contract `jq .policy_gate` reads — true
-// (enforced), false (explicitly not enforced), null (not managed by this
-// template) — and specifically that the nil case must never collapse into
-// false, which is the answer the broken build effectively gave. The output
-// layer would round-trip a bare *bool to the same JSON; this states the
-// contract where a reader (and a test) can see it, the way nilIfEmpty does for
-// unknown ids (MIO-2567).
+// The contract `jq .policy_gate` reads is TWO-valued, because the write is
+// enable-only: true (this run turned enforcement on) and null (it did not
+// touch the gate — no declaration, or a declaration that resolved to false).
+// What must never happen is the null collapsing into false: "this run left the
+// hub's enforcement alone" and "enforcement is off" are different statements,
+// and answering the second for the first is the shape of the original bug.
+//
+// The *bool is kept rather than a plain bool because a resolved false is a real
+// state the resolver can produce — it is simply not written today — so the
+// encoding stays honest if the ratified applier contract ever gains a disable
+// case. The output layer would round-trip a bare *bool to the same JSON; this
+// states the contract where a reader can see it, as nilIfEmpty does for unknown
+// ids (MIO-2567).
 func policyGateResult(gate *bool) any {
 	if gate == nil {
 		return nil
