@@ -22,8 +22,13 @@ Invoke the same way every time: `/codex-review`. The mode picks itself.
 - `TARGET`: optional `$ARGUMENTS` — file path, branch name, or empty (defaults to `git diff main...HEAD`)
 - `MAX_ROUNDS`: 3
 - `CODEX_MODEL`: `gpt-5.6-sol`
-- `CODEX_TIMEOUT`: `900` (15 min — the hard ceiling for any single call)
-- `CODEX_BIN`: `$(command -v codex)` (fails loudly if codex is not on PATH)
+- `CODEX_TIMEOUT`: `900` (15 min — the hard ceiling for any single call). **Assign it in the shell you are running**; `timeout "$CODEX_TIMEOUT"` with it unset fails `timeout: invalid time interval ''` at exit 125, which the Reliability section does not otherwise cover.
+- Confirm codex is present before Round 1 — `command -v codex` alone does not abort a script without `set -e`:
+
+```bash
+command -v codex >/dev/null || { echo "ABORT: codex not on PATH"; exit 1; }
+CODEX_TIMEOUT=900
+```
 
 ## Codex CLI reference
 
@@ -42,7 +47,7 @@ timeout "$CODEX_TIMEOUT" codex exec -m gpt-5.6-sol -c model_reasoning_effort="xh
 
 **Prove the prompt is non-empty before the call.** An empty `PROMPT_FILE` is caught by Codex itself — it prints `No prompt provided via stdin.` and exits **1** (measured on v0.145.0) — so this guard buys a clear abort rather than a rescue. The guard that genuinely matters is the one on the **diff file** in the fallback path below, where the prompt is valid and only the *content* is empty: Codex has nothing to object to, reviews nothing, and returns an APPROVE.
 
-Resume the same session for follow-up rounds (preserves context, no diff re-upload). **Run it from the repo root** — `resume` takes no `-C`, and outside a trusted directory it fails with `Not inside a trusted directory and --skip-git-repo-check was not specified.` (exit 1):
+Resume the same session for follow-up rounds (preserves context, no diff re-upload). **Run it from the repo root, and check the `workdir:` line in the run header.** `resume` takes no `-C` (`error: unexpected argument '-C' found`) and it does **not** refuse an unexpected directory — measured from a temp dir, it starts the session with `workdir: /tmp/tmp.XXXX` and proceeds. Codex is then sandboxed to an empty directory and can read none of the repo, with no loud failure. There is no guard for this but your own eyes on the header:
 
 ```bash
 echo "Round 2 — fixes applied: ..." | timeout "$CODEX_TIMEOUT" codex exec resume --last \
@@ -150,17 +155,20 @@ A single-file `$ARGUMENTS` forces COMMIT mode.
 
 ### 2. Gather context — and get the gates green FIRST
 
-Codex needs a passing build to give useful signal. Before Round 1, confirm all green (this is CI parity):
+Codex needs a passing build to give useful signal. Before Round 1, confirm all green — this is the same block as `cli-prime` §2, and the two prefixes are not optional:
 
 ```bash
+export PATH="$PATH:$(go env GOPATH)/bin"   # golangci-lint is NOT on PATH by default
 go build ./...            # compiles
 go vet ./...              # vet clean
 gofmt -l .                # prints nothing — `.`, not `cmd internal`: CI checks root main.go too
 golangci-lint run ./...   # 0 issues (v2.12.2 — same as CI)
-go test ./... -race -timeout 120s
+XDG_CONFIG_HOME=$(mktemp -d) go test ./... -race -timeout 120s
 ```
 
-Then collect: `git log <base>..HEAD --oneline`, `git diff <base>..HEAD --stat`, `git diff --name-only <base>..HEAD`, and the pass count. For PHASE/BRANCH also gather design docs (`docs/`) and reference files that show the convention this work should follow (e.g. `cmd/pages.go` for a hub-scoped resource, `cmd/products.go` as the reference resource).
+**Without `XDG_CONFIG_HOME`, two tests fail from the developer's real credentials** — `TestContract_ExitCodes_NoCredentials` and `TestWiring_SingleHubAutoDefault`. They are environmental, not regressions. Do not "fix those first" and above all do not change their assertions; isolate and they are green. See `cli-prime` §3.1.
+
+Then collect: `git log <base>...HEAD --oneline`, `git diff <base>...HEAD --stat`, `git diff --name-only <base>...HEAD`, and the pass count. Use `...` consistently — `..` and `...` describe different change sets once `main` advances past the branch point, so mixing them makes the stat summary and the reviewed diff disagree. For PHASE/BRANCH also gather design docs (`docs/`) and reference files that show the convention this work should follow (e.g. `cmd/pages.go` for a hub-scoped resource, `cmd/products.go` as the reference resource).
 
 ### 3. Build the prompt
 
@@ -186,7 +194,7 @@ Fixed:
 Deferred:
 - [Low] <desc> — tracked as follow-up
 Please re-review and issue a new verdict." | timeout "$CODEX_TIMEOUT" codex exec resume --last \
-  -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -c sandbox_mode="read-only" -
+  -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -c sandbox_mode="read-only" - 2>&1
 git status --porcelain   # belt-and-braces; must be clean
 ```
 
@@ -330,7 +338,7 @@ Triage findings exactly as for Codex (Critical → fix now with a regression tes
 
 - Prose-only or formatting-only changes — skip it. **But `AGENTS.md`, `llms.txt`, `cmd/skills/content/mio-skill.md` and `.claude/skills/**` are not prose** — agents execute them literally, so a wrong command or a false claim in them is a runtime defect and gets the full gate. This is not hypothetical: the review of *this very skill* found a fallback command that silently handed the reviewer an empty diff, and a resume invocation that ran with write access while the file three sections up asserted read-only. Both would have shipped under a docs-only exemption.
 - Trivial renames/refactors — skip it.
-- Build/tests failing — fix those first; Codex needs green gates for useful signal.
+- Build/tests genuinely failing — fix those first; Codex needs green gates for useful signal. (First confirm they are genuine: the two credential-leak failures in Step 2 are not.)
 - The user says "skip Codex" — honor it.
 
 ## Cost awareness

@@ -69,6 +69,22 @@ An agent probing UUID validation ran `mio config set current_team` against the d
 XDG_CONFIG_HOME=$(mktemp -d) go run . <args>
 ```
 
+**But never check an exit code through `go run`.** It collapses every non-zero exit to `1`, which silently destroys the contract in §1. Measured:
+
+| invocation | `go run .` | built binary |
+|---|---|---|
+| unknown flag (`ExitUsage`) | **1** | **2** |
+| no credentials (`ExitAuth`) | **1** | **3** |
+
+`go run` does print `exit status 3` on stderr and the CLI still reports `meta.exit_code` in its JSON envelope, but in the ordinary `cmd >/dev/null 2>&1; echo $?` shape the real code is simply gone. Whenever the exit code is what you are testing, build first and run the binary:
+
+```bash
+BIN=$(mktemp -d)/mio
+go build -o "$BIN" . && XDG_CONFIG_HOME=$(mktemp -d) "$BIN" <args>; echo "exit=$?"
+```
+
+(Verified: this returns `3` for missing credentials and `2` for an unknown flag, where `go run` returns `1` for both.)
+
 ### 3.3 Fetch before asserting any cross-repo fact
 
 Sibling checkouts in `~/src` run days and dozens of commits stale, and are often parked on a feature branch. `git fetch origin` and read `origin/main` — never the working tree.
