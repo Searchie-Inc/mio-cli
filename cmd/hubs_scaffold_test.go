@@ -1070,6 +1070,22 @@ func TestStepPolicies_NoDeclarationSaysSo(t *testing.T) {
 	if !strings.Contains(notes.String(), `no policy declares "enabled"`) {
 		t.Errorf("the no-declaration case must say so on stderr; notes=%q", notes.String())
 	}
+
+	// …and the PLAN says it too, the way stepPublish's skip does — a --dry-run
+	// that is silent about enforcement is the same ambiguity one surface over.
+	var plan []planEntry
+	dry := newStepSC(cl, "hub_1", "acme")
+	dry.dryRun, dry.plan = true, &plan
+	if err := stepPolicies(dry, tmpl); err != nil {
+		t.Fatalf("stepPolicies dry-run: %v", err)
+	}
+	var joined []string
+	for _, e := range plan {
+		joined = append(joined, e.step+" — "+e.detail)
+	}
+	if len(plan) != 2 || !strings.Contains(plan[1].detail, "enforcement gate not written") {
+		t.Errorf("dry-run plan must record the gate skip; plan=%v", joined)
+	}
 }
 
 // TestStepPolicies_ConflictingEnabledErrorsBeforeAnyWrite: policy enforcement is

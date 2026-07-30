@@ -760,16 +760,19 @@ func stepPolicies(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	}
 
 	// ENABLE-ONLY (see scaffoldPolicyGate). Nothing declared, or a declaration
-	// that resolves to false: no gate request. Say so — the whole point of this
-	// ticket is that "documents written, enforcement unknown" must never again be
-	// a state you can only discover from a member's 404. Real runs only; the
-	// dry-run plan below covers the planned case, and sc.step would not run this.
+	// that resolves to false: no gate request — but SAY SO, on the plan and on a
+	// real run's stderr, exactly as stepPublish narrates its own skip. The whole
+	// point of this ticket is that "documents written, enforcement unknown" must
+	// never again be a state you can only discover from a member's 404.
 	if res.gate == nil || !*res.gate {
-		if !sc.dryRun {
-			sc.notef("policies: %s — enforcement gate NOT written; the hub's current setting stands (check or set it with `mio hubs policies gate %s --enabled`).",
-				policyGateSkipReason(res.gate), sc.hubID)
-		}
-		return nil
+		reason := policyGateSkipReason(res.gate)
+		return sc.step("policies",
+			"skipped — "+reason+"; enforcement gate not written (the hub's current setting stands)",
+			func() error {
+				sc.notef("policies: %s — enforcement gate NOT written; the hub's current setting stands (check or set it with `mio hubs policies gate %s --enabled`).",
+					reason, sc.hubID)
+				return nil
+			})
 	}
 
 	gateDetail := fmt.Sprintf("PATCH %s — enable policy enforcement (settings.policies.enabled=true, collapsed from the template's per-policy enabled)",
