@@ -180,7 +180,6 @@ Conventions: file CLI work under component **CLI V1** (id `10257`) and parent it
 
 - **`.claude/skills/create-ticket/SKILL.md`** — filing a ticket that actually reaches the board.
 - **`.claude/agents/cli-code-reviewer.md`** — the blind reviewer. Dispatch it by name (`subagent_type: cli-code-reviewer`) with a diff and a scope, and nothing else; the blindness contract lives in the agent, not in your brief. Note agent definitions load at **session start**, so a newly added one is not dispatchable until the session restarts.
-- **`.claude/settings.json` + `.claude/hooks/`** — a `PreToolUse` hook blocks code commits with no `MIO-<n>`. Tests: `.claude/hooks/require-jira-on-code-commit.test.sh`; run it after any edit to the hook.
 - **`.claude/rules/verifying-guards.md` — read it.** A guard is not verified until you have watched it fail. Any PR adding or changing a test, assertion or preflight check must break the protected behaviour, observe the named failure, restore, and **say so in the PR**. Seven unfailable guards reached or nearly reached `main` in one week; reading caught none of them.
 - **`.claude/skills/codex-review/SKILL.md`** — multi-round review before merge. If Codex is unavailable, the substitute is a *blind* review (a fresh agent given the diff and primary sources, but not the PR's claims or a list of what to check) — not skipping.
 

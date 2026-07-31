@@ -47,7 +47,7 @@ Two things about `transition`:
 
 ### Field notes
 
-- Only `--component` is missing from the CLI flags. `--parent` **does** exist (`--parent string   Parent work item ID`) — the payload sets both together simply because you are already writing JSON for the component.
+- `--parent` **does** exist as a flag (`--parent string   Parent work item ID`); `--component` and `--priority` do not (`✗ Error: unknown flag: --priority`). The payload sets them together simply because you are already writing JSON for the component.
 - `parentIssueId` takes the epic **key** (`MIO-2665`), despite the name.
 - `additionalAttributes` is the passthrough to JIRA's `fields.*`. `components` and `priority` live there, **not** at top level.
 - `assignee` must be a real email — the `@me` shortcut works in `acli jira workitem assign` but **not** in a `--from-json` payload, where it returns `User not found for email: @me`.
@@ -62,7 +62,7 @@ $ acli jira workitem search --jql "key = MIO-2665" --fields "key,components" --j
 ✗ Error: field 'components' is not allowed
 ```
 
-Read back with the Atlassian MCP `getJiraIssue` instead — `cloudId: "northresults.atlassian.net"`, fields `["summary","components","parent","assignee"]`. (Both `getJiraIssue` and `editJiraIssue` **require** `cloudId`; the site hostname works as the value.) A create that *did* work reads as empty through `acli … search --json`, which is exactly how an earlier ticket in this repo got sent down a needless create-then-edit path.
+Read back with the Atlassian MCP `getJiraIssue` instead — `cloudId: "northresults.atlassian.net"`, fields `["summary","components","parent","assignee"]`. Note it returns the ticket **`description` regardless**, even with a narrow `fields` list — so a blind reviewer using it to check a claim receives the authorial narrative its contract withholds. If that matters, have someone else read it back. (Both `getJiraIssue` and `editJiraIssue` **require** `cloudId`; the site hostname works as the value.) A create that *did* work reads as empty through `acli … search --json`, which is exactly how an earlier ticket in this repo got sent down a needless create-then-edit path.
 
 **2. Do not set the description with `--description-file`.** That flag takes "plain text or ADF" — there is no markdown conversion, which is precisely why markdown passed to it survives literally into the ADF: headings arrive as `\## The gap`, bullets as `\-`. Use MCP `editJiraIssue` with `contentFormat: "markdown"`; it converts properly.
 

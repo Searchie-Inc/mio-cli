@@ -81,8 +81,8 @@ Also check structure: balanced code fences, snippets that still parse, cross-ref
 - **The working tree.** Do not modify it, commit, push, amend, or change refs. Demonstrate breakage in a temp directory.
 - **Shared external state is read-only too — Jira, Slack, GitHub, the backends, the API.** Do not create, transition, comment on or edit a ticket; do not post; do not write through the API, against any environment. This holds *even to verify a claim in the diff*. If the only way to check something is to mutate shared state, **you do not check it** — you report it under "Could not verify" and say what would settle it. An unverifiable claim is a finding; a probe ticket on a shared board is a defect you caused.
 - **Never write to `~/.config/mio/`.** No `mio config set`, no `mio auth` — those are live credentials, and an agent destroyed them once.
-- **Isolate with `HOME`, not just `XDG_CONFIG_HOME`.** `XDG_CONFIG_HOME=$(mktemp -d)` covers credentials (`internal/config`) but **not** `mio skills install`, which resolves its target through `os.UserHomeDir()` (`cmd/skills.go`) and would overwrite your real `~/.claude/skills/mio/SKILL.md`. Use `HOME=$(mktemp -d) XDG_CONFIG_HOME=$(mktemp -d) go run . <args>` — that covers both classes.
-- **`go run` collapses every non-zero exit to 1.** When the exit code is what you are testing, build first: `BIN=$(mktemp -d)/mio; go build -o "$BIN" . && HOME=$(mktemp -d) XDG_CONFIG_HOME=$(mktemp -d) "$BIN" <args>`.
+- **`XDG_CONFIG_HOME=$(mktemp -d)` covers credentials, but not everything.** It isolates `internal/config`, so it is the right default for most probes. It does **not** cover `mio skills install`, which resolves its destination through `os.UserHomeDir()` (`cmd/skills.go`) and so writes under your real `$HOME` — into `~/.claude/skills/mio/` or `$CODEX_HOME`. (It refuses to clobber a hand-edited file without `--force`, but a managed one it will refresh.) **Add `HOME=$(mktemp -d)` only for the commands that need it** — `skills`, `update`, anything resolving a home directory. Do not make it blanket: a fresh `HOME` relocates `GOCACHE`/`GOMODCACHE`, so every Go command re-downloads and rebuilds from scratch (~16 s and ~150 MB per probe, and it fails outright with no network). If you do need both, pass the caches through: `HOME=$T GOCACHE=$(go env GOCACHE) GOMODCACHE=$(go env GOMODCACHE) ...`.
+- **`go run` collapses every non-zero exit to 1.** When the exit code is what you are testing, build first: `BIN=$(mktemp -d)/mio; go build -o "$BIN" . && XDG_CONFIG_HOME=$(mktemp -d) "$BIN" <args>`.
 - A bare `go test ./...` fails two tests from credential leakage, not from the code (`cli-prime` §3.1). Determine which you are looking at before reporting a failure. Prefix with `XDG_CONFIG_HOME=$(mktemp -d)` and they are green.
 - Reading history is fine (`git log --oneline`, `git diff`), but **do not run `git show <sha>` or `git log` without `--oneline`** on the commits under review — their message bodies are exactly the authorial narrative the blindness contract withholds.
 - If invoking `codex`, run it from the repo root — it may append a trust entry to `~/.codex/config.toml`; restore it and say so if you do. This is the one sanctioned write, and it is a repair, not an exception to the rule above.
@@ -93,7 +93,9 @@ Confirm these before reporting, and report any that were already red on `main` s
 
 ```bash
 export PATH="$PATH:$(go env GOPATH)/bin"   # golangci-lint is not on PATH by default
-go build ./... && go vet ./... && gofmt -l .
+go build ./... && go vet ./...
+gofmt -l .                                  # SEPARATE: it exits 0 even when it lists files,
+                                            # so chaining it with && can never fail. Clean = NO output.
 golangci-lint run ./...                     # expect "0 issues."
 XDG_CONFIG_HOME=$(mktemp -d) go test ./... -race -timeout 120s
 ```
