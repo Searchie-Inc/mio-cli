@@ -1,6 +1,6 @@
 ---
 name: create-ticket
-description: Use whenever a JIRA ticket should be filed for mio-cli work — "create a ticket", "file a bug", "log this", "track this", or a problem described plus an intent to track it. Encodes the acli payload shape (there is no --component flag; components and parent go through --from-json) and the MIO conventions that decide whether a ticket ever reaches the board.
+description: Use whenever a JIRA ticket should be filed for mio-cli work — "create a ticket", "file a bug", "log this", "track this", or a problem described plus an intent to track it. Encodes the acli payload shape (there is no --component flag, so components go through --from-json) and the MIO conventions that decide whether a ticket ever reaches the board.
 ---
 
 # Create a MIO ticket (mio-cli)
@@ -12,7 +12,8 @@ The reason this skill exists: **a ticket without `component = CLI V1` never appe
 Components, parent and assignee all stick in a single `--from-json` create. Verified on MIO-2840.
 
 ```bash
-cat > /tmp/ticket.json <<'JSON'
+TICKET_JSON=$(mktemp -t ticket.XXXXXX.json)   # not a fixed /tmp path — parallel sessions collide
+cat > "$TICKET_JSON" <<'JSON'
 {
   "projectKey": "MIO",
   "type": "Task",
@@ -28,19 +29,25 @@ cat > /tmp/ticket.json <<'JSON'
   }
 }
 JSON
-acli jira workitem create --from-json /tmp/ticket.json
+acli jira workitem create --from-json "$TICKET_JSON"
 ```
 
 Then set the real description as **markdown** via the Atlassian MCP (see below), and transition:
 
 ```bash
-acli jira workitem transition --key MIO-1234 --status "In Progress"
+acli jira workitem transition --key MIO-<n> --status "In Progress"
 ```
 
-Note `--key` is required on `transition` — omitting it fails with `at least one of the flags in the group [key jql filter] is required`.
+> **Never paste a concrete key into a command you are about to run as an example.** `MIO-<n>` here is a placeholder and must stay one. Keys like `MIO-1234` look like placeholders and are not — `MIO-1234` is a real open ticket ("Email templates leak MJML dev comments into sent body"), and this file is executed literally, so an agent copying it would transition a stranger's bug into In Progress.
+
+Two things about `transition`:
+
+- `--key` is required — omitting it fails with `at least one of the flags in the group [key jql filter] is required`.
+- **It exits 0 even when it fails.** Measured: `acli jira workitem transition --key MIO-999999 --status "In Progress"` prints `✗ Failure: … Issue does not exist or you do not have permission to see it.` **to stdout**, and exits **0**. So `2>/dev/null` hides nothing and an `&&` chain proceeds as if it worked, leaving the ticket in To Do while you believe otherwise. Check the output text, or pass `--json` and read `successCount`.
 
 ### Field notes
 
+- Only `--component` is missing from the CLI flags. `--parent` **does** exist (`--parent string   Parent work item ID`) — the payload sets both together simply because you are already writing JSON for the component.
 - `parentIssueId` takes the epic **key** (`MIO-2665`), despite the name.
 - `additionalAttributes` is the passthrough to JIRA's `fields.*`. `components` and `priority` live there, **not** at top level.
 - `assignee` must be a real email — the `@me` shortcut works in `acli jira workitem assign` but **not** in a `--from-json` payload, where it returns `User not found for email: @me`.
@@ -48,15 +55,16 @@ Note `--key` is required on `transition` — omitting it fails with `at least on
 
 ## Two gotchas that cost time
 
-**1. Do not verify with `acli search`.** It does not return `components` or `parent` by default, and `--fields components` is rejected outright:
+**1. Do not verify with `acli jira workitem search`.** It does not return `components` or `parent` by default, and asking for them is rejected outright:
 
 ```
+$ acli jira workitem search --jql "key = MIO-2665" --fields "key,components" --json
 ✗ Error: field 'components' is not allowed
 ```
 
-Read back with the Atlassian MCP `getJiraIssue` (fields `["summary","components","parent","assignee"]`). A create that *did* work reads as empty through `acli search --json`, which is exactly how an earlier ticket in this repo got sent down a needless create-then-edit path.
+Read back with the Atlassian MCP `getJiraIssue` instead — `cloudId: "northresults.atlassian.net"`, fields `["summary","components","parent","assignee"]`. (Both `getJiraIssue` and `editJiraIssue` **require** `cloudId`; the site hostname works as the value.) A create that *did* work reads as empty through `acli … search --json`, which is exactly how an earlier ticket in this repo got sent down a needless create-then-edit path.
 
-**2. Do not set the description with `--description-file`.** Its markdown→ADF conversion escapes the markup — headings arrive as literal `\## The gap`, bullets as `\-`. Use MCP `editJiraIssue` with `contentFormat: "markdown"`; it renders properly.
+**2. Do not set the description with `--description-file`.** That flag takes "plain text or ADF" — there is no markdown conversion, which is precisely why markdown passed to it survives literally into the ADF: headings arrive as `\## The gap`, bullets as `\-`. Use MCP `editJiraIssue` with `contentFormat: "markdown"`; it converts properly.
 
 ## Conventions
 

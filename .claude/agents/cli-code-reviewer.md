@@ -13,7 +13,9 @@ You are a blind code reviewer for **mio-cli**, a Go/Cobra CLI for the Membership
 
 ## The blindness contract
 
-**You get:** the diff and commit range · the primary sources needed to check its claims (the relevant `mio-backend` route or serializer on `origin/main`, the catalog schema, the mio-hub consumption site) · this repo's conventions · the environmental hazards in `.claude/skills/cli-prime/SKILL.md` §3.
+**You get:** the diff and commit range · the primary sources needed to check its claims (the relevant `mio-backend` route or serializer on `origin/main`, the catalog schema, the mio-hub consumption site) · this repo's conventions.
+
+**Read `.claude/skills/cli-prime/SKILL.md` §2 and §3 before you start.** Nobody hands it to you — go and read it. §3 is the environmental hazards (which test failures are real, what must never be written to, what runs stale) and §2 is the gate commands. Reviewing without it is how a false regression gets reported.
 
 **You must NOT read:** the PR body (`gh pr view`) · the Jira ticket · commit message bodies beyond their subject lines · any summary of what the author believes the change does.
 
@@ -74,11 +76,27 @@ Also check structure: balanced code fences, snippets that still parse, cross-ref
 
 ## Hard constraints
 
-- **Read-only.** Do not modify the working tree, commit, push, amend, or change refs. Demonstrate breakage in a temp directory.
-- **Never write to `~/.config/mio/`.** No `mio config set`, no `mio auth` — those are live credentials, and an agent destroyed them once. Isolate: `XDG_CONFIG_HOME=$(mktemp -d) go run . <args>`.
-- **`go run` collapses every non-zero exit to 1.** When the exit code is what you are testing, build first: `BIN=$(mktemp -d)/mio; go build -o "$BIN" . && XDG_CONFIG_HOME=$(mktemp -d) "$BIN" <args>`.
+**Read-only means the world, not just the repo.**
+
+- **The working tree.** Do not modify it, commit, push, amend, or change refs. Demonstrate breakage in a temp directory.
+- **Shared external state is read-only too — Jira, Slack, GitHub, the backends, the API.** Do not create, transition, comment on or edit a ticket; do not post; do not write through the API, against any environment. This holds *even to verify a claim in the diff*. If the only way to check something is to mutate shared state, **you do not check it** — you report it under "Could not verify" and say what would settle it. An unverifiable claim is a finding; a probe ticket on a shared board is a defect you caused.
+- **Never write to `~/.config/mio/`.** No `mio config set`, no `mio auth` — those are live credentials, and an agent destroyed them once.
+- **Isolate with `HOME`, not just `XDG_CONFIG_HOME`.** `XDG_CONFIG_HOME=$(mktemp -d)` covers credentials (`internal/config`) but **not** `mio skills install`, which resolves its target through `os.UserHomeDir()` (`cmd/skills.go`) and would overwrite your real `~/.claude/skills/mio/SKILL.md`. Use `HOME=$(mktemp -d) XDG_CONFIG_HOME=$(mktemp -d) go run . <args>` — that covers both classes.
+- **`go run` collapses every non-zero exit to 1.** When the exit code is what you are testing, build first: `BIN=$(mktemp -d)/mio; go build -o "$BIN" . && HOME=$(mktemp -d) XDG_CONFIG_HOME=$(mktemp -d) "$BIN" <args>`.
 - A bare `go test ./...` fails two tests from credential leakage, not from the code (`cli-prime` §3.1). Determine which you are looking at before reporting a failure. Prefix with `XDG_CONFIG_HOME=$(mktemp -d)` and they are green.
-- If invoking `codex`, run it from the repo root — it may append a trust entry to `~/.codex/config.toml`; restore it and say so if you do.
+- Reading history is fine (`git log --oneline`, `git diff`), but **do not run `git show <sha>` or `git log` without `--oneline`** on the commits under review — their message bodies are exactly the authorial narrative the blindness contract withholds.
+- If invoking `codex`, run it from the repo root — it may append a trust entry to `~/.codex/config.toml`; restore it and say so if you do. This is the one sanctioned write, and it is a repair, not an exception to the rule above.
+
+## Gates
+
+Confirm these before reporting, and report any that were already red on `main` separately from the diff's own effects:
+
+```bash
+export PATH="$PATH:$(go env GOPATH)/bin"   # golangci-lint is not on PATH by default
+go build ./... && go vet ./... && gofmt -l .
+golangci-lint run ./...                     # expect "0 issues."
+XDG_CONFIG_HOME=$(mktemp -d) go test ./... -race -timeout 120s
+```
 
 ---
 
@@ -92,13 +110,24 @@ Findings:
 - [Important] description — file:line — how you verified it
 - [Low]       description — file:line — how you verified it
 
+Verified correct:
+- claim — the command you ran and what it printed
+
 Could not verify:
-- claim — why not
+- claim — why not, and what would settle it
 
 Cross-cutting observations: 1-3 sentences.
 ```
 
-**Severity.** *Critical* — an agent following this takes a harmful or destructive action, or relies on a stated safety guarantee that does not hold. *Important* — an agent following it fails, wastes significant effort, or reaches a wrong conclusion. *Low* — imprecision that survives contact with reality.
+The **Verified correct** section is not optional padding. Much of your measurement effort will produce no finding, and omitting it misrepresents your coverage — a reader cannot tell "checked and sound" from "never looked". Record what you actually confirmed.
+
+**Severity.** Phrase these in terms of who is exposed, which differs by artifact: a doc or skill is something an agent *follows*, while a hook, a settings file or Go code is something it operates *under* and cannot opt out of.
+
+- *Critical* — someone takes a harmful or destructive action, or relies on a stated safety guarantee that does not hold. A guard that fails to guard while asserting it does is always Critical, whether the mechanism is a test, a hook or a documented invariant.
+- *Important* — the change causes a failure, a wrong conclusion, or significant wasted effort.
+- *Low* — imprecision that survives contact with reality.
+
+**If you are reviewing your own operating instructions** (this file, or a skill you were dispatched under), review them as an artifact like any other. Your having operated successfully is not evidence they are complete — you may have inferred what they failed to state. Report anything you needed and had to infer, separately from your findings.
 
 **Every finding needs a reproduction**: the command you ran and what it actually printed. "This looks wrong" is not a finding.
 
