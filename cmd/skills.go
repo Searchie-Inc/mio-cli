@@ -218,7 +218,7 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 	// installed counts every target that HAS a managed skill, whatever happened
 	// to it. Without it, a failed refresh falls through to the "you have no skill
 	// installed" nudge one line after naming the file it could not refresh.
-	var installed, modified int
+	var installed int
 	for _, target := range []string{"claude", "codex"} {
 		path, err := skillDestPath(target, false) // user scope only
 		if err != nil {
@@ -226,6 +226,12 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 		}
 		state, err := classifySkillFile(path)
 		if err != nil {
+			// Unreadable is NOT "not installed" — a file is there, we just could
+			// not classify it. Count it and say so, or the run goes silent (or,
+			// worse, claims nothing is installed at a path that has one).
+			installed++
+			fmt.Fprintf(w, "Could not read the %s skill at %s (%v) — left untouched.\n",
+				targetLabel(target), path, err)
 			continue
 		}
 		switch state {
@@ -265,20 +271,20 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 			}
 		case skillManagedModified, skillUnmanaged:
 			installed++
-			modified++
+			// Per-target, and NAMED. `mio skills install --force` defaults to
+			// --target claude, so a bare suggestion printed about the codex skill
+			// reports "already up to date" for claude and leaves the edited file
+			// exactly as it was — success-looking output, problem untouched. Worse
+			// when only codex is installed: it CREATES a claude skill the user
+			// never had. Every other line here carries the target and path; this
+			// one must too.
+			fmt.Fprintf(w, "Your %s skill at %s was edited locally and was not refreshed — run 'mio skills install --force --target %s' to update it.\n",
+				targetLabel(target), path, target)
 		}
 	}
-
-	// A hand-edited skill is reported whenever one exists, not only when nothing
-	// else succeeded: with two targets, one healthy and one hand-edited, gating
-	// this on refreshed/current made the whole run silent and the user never
-	// learned their edited file had been skipped.
-	if modified > 0 {
-		fmt.Fprintln(w, "Your mio CLI agent skill was edited locally and was not refreshed — run 'mio skills install --force' to update it.")
-	}
 	// Only suggest installing one when there genuinely is none. `installed`
-	// counts a managed skill existing regardless of what happened to it, so a
-	// failed refresh no longer contradicts the line above it.
+	// counts a managed skill existing regardless of what happened to it — a
+	// failed refresh, or an unreadable file, must not contradict the line above.
 	if installed == 0 {
 		fmt.Fprintln(w, "A mio CLI agent skill is available — run 'mio skills install' to add it to Claude Code.")
 	}

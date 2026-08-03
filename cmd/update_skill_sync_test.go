@@ -391,7 +391,46 @@ func TestRefreshManagedSkills_ReportsHandEditedAlongsideAHealthyTarget(t *testin
 	var out bytes.Buffer
 	refreshManagedSkills(&out, "/opt/mio/bin/mio")
 
-	if !strings.Contains(out.String(), "edited locally") {
-		t.Errorf("a hand-edited skill must be reported even when another target is healthy; got: %q", out.String())
+	// Presence is not enough — the remediation must be USABLE. `mio skills
+	// install --force` defaults to --target claude, so a bare suggestion printed
+	// about the codex skill reports "already up to date" for claude and leaves
+	// the edited file untouched (and, when only codex is installed, creates a
+	// claude skill the user never had).
+	got := out.String()
+	if !strings.Contains(got, "edited locally") {
+		t.Fatalf("a hand-edited skill must be reported even when another target is healthy; got: %q", got)
 	}
+	if !strings.Contains(got, codex) {
+		t.Errorf("the message must name the PATH it is about; got: %q", got)
+	}
+	if !strings.Contains(got, "--target codex") {
+		t.Errorf("the remediation must target codex — `--force` alone defaults to claude and fixes nothing; got: %q", got)
+	}
+	if strings.Contains(got, claude) {
+		t.Errorf("the healthy claude skill must not be named as edited; got: %q", got)
+	}
+}
+
+// An unreadable skill file is not "not installed" — a file is there, it just
+// could not be classified. Staying silent (or claiming none is installed) is the
+// same false report assertNoInstallNudge exists to prevent.
+func TestRefreshManagedSkills_ReportsAnUnreadableSkill(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores mode bits")
+	}
+	home := isolateSkillHome(t)
+	path := claudeSkillPath(home)
+	seedManagedSkill(t, path, "0.12.1")
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+	var out bytes.Buffer
+	refreshManagedSkills(&out, "/opt/mio/bin/mio")
+
+	if !strings.Contains(out.String(), "Could not read") {
+		t.Errorf("an unreadable skill must be reported, not silently skipped; got: %q", out.String())
+	}
+	assertNoInstallNudge(t, out.String())
 }

@@ -115,7 +115,7 @@ running binary cannot do this itself: the skill body is compiled into each
 release, so the old process only holds the old surface and could at best write
 the *previous* content under the *new* version's label.
 
-Two consequences worth knowing:
+Three consequences worth knowing:
 
 - The path is named in the output **when the file changes**. If your skill is
   already current the update says nothing about it — silence there means
@@ -125,8 +125,10 @@ Two consequences worth knowing:
   `$CODEX_HOME/skills/mio/SKILL.md` — `~/.codex/skills/mio/SKILL.md` when
   `CODEX_HOME` is unset), which is **outside** `--prefix`.
 - A skill file you hand-edited, or one that was not installed by `mio`, is never
-  touched — the update says so and leaves it to you
-  (`mio skills install --force` to take the new one).
+  touched. The update names that file and gives you the command for **that
+  target** — `mio skills install --force --target <claude|codex>`. Note the
+  `--target` is load-bearing: `--force` alone defaults to `claude`, so running it
+  for an edited Codex skill reports "already up to date" and changes nothing.
 
 If the refresh cannot run, the update tells you rather than leaving a stale
 skill in place. A stale skill is worth avoiding: it advertises verbs the
