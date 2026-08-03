@@ -26,9 +26,10 @@ import (
 )
 
 // Two documents, each repeating the single hub-level gate, with distinct
-// versions: "default-v1" (reset to the platform default) vs a custom one. That
-// asymmetry is the point of the verb — it is how an operator tells a
-// hand-written ToS from one a scaffold resume reverted (MIO-2818).
+// versions. NOTE the version asymmetry here is realistic for a tos saved WITH
+// --require-acceptance only; it is NOT a general custom-vs-default signal —
+// see TestHubsPoliciesGet_VersionIsNotADiscriminator, which pins the case that
+// disproves it (custom content under a "default-v1" version).
 const policiesListBody = `{"data":[` +
 	`{"id":"hub_x:tos","type":"policies","attributes":{"policy_type":"tos","content":"Custom terms.","version":"v_9f3a","enabled":true,"require_acceptance":true}},` +
 	`{"id":"hub_x:privacy_policy","type":"policies","attributes":{"policy_type":"privacy_policy","content":"Default text.","version":"default-v1","enabled":true,"require_acceptance":null}}` +
@@ -77,10 +78,10 @@ func TestHubsPoliciesGet_AmbientHub(t *testing.T) {
 	}
 }
 
-// TestHubsPoliciesGet_RendersListWithVersions is the reason the verb exists: an
-// operator must be able to read the gate and tell a custom document from a
-// reverted one. Asserts the rendered payload is a LIST carrying version and
-// enabled — not merely that a request fired.
+// TestHubsPoliciesGet_RendersListWithVersions asserts the rendered payload is a
+// LIST carrying every field the verb exists to surface — not merely that a
+// request fired. (Reading the gate is the reason the verb exists; telling a
+// custom document from a reverted one needs the CONTENT, not the version.)
 func TestHubsPoliciesGet_RendersListWithVersions(t *testing.T) {
 	srv, _, _, _, _ := captureAdminReq(t, http.StatusOK, policiesListBody)
 

@@ -261,8 +261,11 @@ mio hubs create --name "My Hub" --slug my-hub \
   --favicon-url https://cdn.example.com/favicon.ico \
   --branding-json '{"primary":"#6747E3","heading_font_size":32}' \
   --navigation-json @nav.json \
-  --settings-json '{"policies":{"enabled":true}}' \  # create-only: hubs UPDATE discards settings.policies (MIO-2811)
+  --settings-json '{"policies":{"enabled":true}}' \
   --meta-json '{"discussions":{"enabled":true}}'
+# NOTE settings.policies is create-only — `hubs update` accepts the key and the
+# API discards it (MIO-2811). Use `hubs policies gate` / `hubs policies update`
+# on an existing hub, and `hubs policies get` to read it back.
 # retrieve surfaces derived registration_enabled + published booleans.
 # The hub id is an OPTIONAL positional on every hubs verb except `delete`:
 # positional > --hub > current_hub in config. All three of these are equivalent.

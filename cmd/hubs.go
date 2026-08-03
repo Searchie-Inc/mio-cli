@@ -25,10 +25,13 @@ package cmd
 // MIO-2732: it made `mio hubs retrieve --hub <id>` fail with Cobra's generic
 // "accepts 1 arg(s), received 0".
 //
-// NOTE: there is no admin/team-scoped policies READ. The only policies GET is
-// the hub portal route /api/hubs/{hub_id}/policies, which requires member
-// (contact) auth and rejects admin API keys with 401 — so it is intentionally
-// not exposed here (see MIO-2269 deferred items).
+// NOTE: the admin/team-scoped policies READ is `hubs policies get` (MIO-2815),
+// GET on the SAME path as the policies PATCH. This comment previously said no
+// such read existed — it does (admin_get_hub_policies, MIO-2394), and it takes
+// the same owner credentials as `policies gate`. What is genuinely unusable
+// here is the hub PORTAL route /api/hubs/{hub_id}/policies, which requires
+// member (contact) auth, rejects admin API keys with 401, and serves defaults
+// with enabled forced true — so it cannot report the real gate state.
 
 import (
 	"context"
