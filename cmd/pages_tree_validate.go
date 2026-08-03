@@ -5,8 +5,15 @@ package cmd
 // (MIO-2537, pairs with backend MIO-2538 in review).
 //
 // The API validates a tree's STRUCTURE, not its RENDERABILITY: several malformed
-// node settings are accepted (200) and then SILENTLY DROPPED by the renderer, so
-// an author sees a phantom success and a missing section/node at render time.
+// node shapes are accepted (200) and then fail at render time, so an author sees
+// a phantom success. The failure is NOT uniform, and the messages below say
+// which is which (MIO-2799):
+//   - a genuine DROP — content under settings.value is never read, so the node
+//     renders EMPTY;
+//   - a DISCARD with fallback — a non-numeric weight is ignored and the kind's
+//     default applies, so the node renders with the wrong weight, not missing.
+// Calling everything a "silent drop" sends the reader hunting for a missing
+// node when the node is right there.
 // This walker rejects the well-defined malformed cases up front (ExitUsage, no
 // HTTP) with a message naming the offending node and field.
 //
@@ -16,8 +23,15 @@ package cmd
 // children[...]} (see internal/catalog). The two pinned rules:
 //
 //   - settings.weight, if present, must be a NUMBER (e.g. 700) — never a CSS
-//     keyword string like "bold". The catalog only ever emits numeric weights;
-//     a string weight is dropped.
+//     keyword string like "bold". The catalog only ever emits numeric weights.
+//     NOTE the failure mode is a per-kind FALLBACK, not a drop (MIO-2799): the
+//     renderer gates on Object.prototype.hasOwnProperty over a {400,500,600,700}
+//     map, so "bold" misses and headline falls back to font-normal while text
+//     resolves to no weight class. The node always renders; the authored weight
+//     is discarded. (A numeric STRING like "700" actually matches, because
+//     object keys are strings — the CLI still rejects it as strictness, but it
+//     is not the thing that breaks.) mio-docs says "discarded rather than
+//     applied"; keep these two surfaces in agreement.
 //   - template, if present on a node (the section marker), must be a NON-EMPTY
 //     STRING ("hero", "carousel", "row", …). A section whose template is blank
 //     or non-string has no resolvable section type and will not render. A node
@@ -63,7 +77,7 @@ func validatePageNode(node map[string]any, path string) error {
 	if settings, ok := node["settings"].(map[string]any); ok {
 		if w, present := settings["weight"]; present && !isJSONNumber(w) {
 			return errs.New(errs.ExitUsage,
-				"%s: settings.weight must be a number like 700, not %s — a non-numeric weight is accepted by the API (200) but SILENTLY DROPPED by the renderer",
+				"%s: settings.weight must be a number like 700, not %s — a non-numeric weight is accepted by the API (200) and then DISCARDED by the renderer, which falls back per kind (headline -> 400/normal, text -> no weight class at all). The node still renders; the weight you authored does not",
 				where, describeJSONValue(w))
 		}
 	}
@@ -75,6 +89,24 @@ func validatePageNode(node map[string]any, path string) error {
 			return errs.New(errs.ExitUsage,
 				"%s: template must be a non-empty string like \"hero\", \"carousel\" or \"row\", not %s — a section without a resolvable template is accepted by the API (200) but SILENTLY DROPPED by the renderer",
 				where, describeJSONValue(tmpl))
+		}
+	}
+
+	// (3) content `value` under settings instead of the node top level (MIO-2575).
+	// THE most-hit silent drop: the API 200s and the renderer emits an empty node
+	// (headline renders String(node.value ?? "") -> ""). Seven leaf kinds read the
+	// TOP-LEVEL value — headline, text, image, video, button, icon, quote — and
+	// exactly one, progress-ring, legitimately reads settings.value (a number),
+	// so it is exempt. Checked only when the top-level value is ABSENT: a node
+	// carrying both is not silently dropping anything, and rejecting it would
+	// break trees the renderer handles fine.
+	if settings, ok := node["settings"].(map[string]any); ok {
+		if _, misplaced := settings["value"]; misplaced && readsTopLevelValue(node) {
+			if _, topLevel := node["value"]; !topLevel {
+				return errs.New(errs.ExitUsage,
+					"%s: content value must be TOP-LEVEL on the node, not settings.value — the API accepts settings.value (200) and the renderer never reads it, so the node renders EMPTY. Move it to the node's \"value\" key. (progress-ring is the sole kind that reads settings.value)",
+					where)
+			}
 		}
 	}
 
@@ -91,6 +123,38 @@ func validatePageNode(node map[string]any, path string) error {
 		}
 	}
 	return nil
+}
+
+// topLevelValueKinds is the set of node kinds VERIFIED to read the top-level
+// node.value in mio-hub (origin/main, src/components/primitives/leaves/*):
+// headline, text, image, video, button, icon and quote each reference
+// node.value. progress-ring is deliberately ABSENT — it is the sole kind that
+// reads settings.value (a number), so flagging it would reject a tree the
+// renderer handles correctly.
+//
+// This is an ALLOWLIST, not an exemption list, and that is the load-bearing
+// choice: an unrecognised or future kind must never be rejected on a guess,
+// because this walker flags only shapes that CAN NEVER render. A denylist would
+// invert that — every kind added to mio-hub would start failing here until
+// someone remembered to update the CLI.
+var topLevelValueKinds = map[string]bool{
+	"headline": true,
+	"text":     true,
+	"image":    true,
+	"video":    true,
+	"button":   true,
+	"icon":     true,
+	"quote":    true,
+}
+
+// readsTopLevelValue reports whether a node's kind is known to read node.value,
+// i.e. whether a settings.value on it is definitely the misplacement trap.
+func readsTopLevelValue(node map[string]any) bool {
+	kind, ok := node["kind"].(string)
+	if !ok {
+		return false
+	}
+	return topLevelValueKinds[strings.TrimSpace(kind)]
 }
 
 // nodeLabel names a node for an error message: its id when it carries one, else

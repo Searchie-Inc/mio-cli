@@ -807,8 +807,10 @@ each one against the tree you just published:
 - **Text in `settings.value` instead of the node's top-level `value`** — see above.
   This is the one that bites first.
 - **`weight` must be numeric** — a number like `700`, never a CSS keyword like
-  `"bold"`. A string weight is dropped. (`pages tree set` catches this one
-  client-side, before any HTTP.)
+  `"bold"`. A non-numeric weight is DISCARDED, not dropped: the node still
+  renders, with the kind's fallback (headline → 400/normal, text → no weight
+  class), so you are hunting a wrong font weight, not a missing node.
+  (`pages tree set` catches this one client-side, before any HTTP.)
 - **A section must carry its `template`** (`"hero"`, `"carousel"`, `"row"`, …). The
   catalog scaffold sets it; a blank or non-string one is rejected client-side.
 - **Button nodes need the correct `action` shape.** A malformed/missing `action`

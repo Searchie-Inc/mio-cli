@@ -198,3 +198,90 @@ func TestPagesTreeSet_ButtonEmptyAction_NotOverRejected(t *testing.T) {
 		t.Error("a button with an empty/scope-inherited action must not be rejected")
 	}
 }
+
+// ─── MIO-2575: content value under settings ──────────────────────────────────
+//
+// The most-hit silent drop. Seven leaf kinds read the TOP-LEVEL node.value
+// (headline, text, image, video, button, icon, quote — verified against mio-hub
+// origin/main); exactly one, progress-ring, reads settings.value. So the check
+// must fire for the seven and MUST NOT fire for progress-ring.
+
+func treeWith(node map[string]any) map[string]any {
+	return map[string]any{"root": map[string]any{
+		"id": "root", "children": []any{node},
+	}}
+}
+
+func TestValidatePageTree_ValueInSettingsRejected(t *testing.T) {
+	for _, kind := range []string{"headline", "text", "image", "video", "button", "icon", "quote"} {
+		t.Run(kind, func(t *testing.T) {
+			err := validatePageTree(treeWith(map[string]any{
+				"id": "n1", "kind": kind,
+				"settings": map[string]any{"value": "Hello"},
+			}))
+			if err == nil {
+				t.Fatalf("%s with settings.value must be rejected — the renderer reads node.value and emits an empty node", kind)
+			}
+			if !strings.Contains(err.Error(), "TOP-LEVEL") {
+				t.Errorf("message must say where the value belongs; got: %v", err)
+			}
+		})
+	}
+}
+
+// progress-ring is the ONE kind that legitimately reads settings.value. Flagging
+// it would reject a tree the renderer handles correctly — the conduit rule.
+func TestValidatePageTree_ProgressRingSettingsValueAllowed(t *testing.T) {
+	if err := validatePageTree(treeWith(map[string]any{
+		"id": "n1", "kind": "progress-ring",
+		"settings": map[string]any{"value": 42},
+	})); err != nil {
+		t.Errorf("progress-ring reads settings.value — it must NOT be rejected; got: %v", err)
+	}
+}
+
+// A node carrying BOTH is not silently dropping anything: the renderer reads the
+// top-level one. Rejecting it would break working trees.
+func TestValidatePageTree_ValueBothPlacesAllowed(t *testing.T) {
+	if err := validatePageTree(treeWith(map[string]any{
+		"id": "n1", "kind": "headline", "value": "Hello",
+		"settings": map[string]any{"value": "ignored"},
+	})); err != nil {
+		t.Errorf("top-level value present — nothing is dropped, must not reject; got: %v", err)
+	}
+}
+
+// An unknown or absent kind must not be rejected on a guess — this walker only
+// flags shapes that can never render.
+func TestValidatePageTree_UnknownKindWithSettingsValueAllowed(t *testing.T) {
+	for _, n := range []map[string]any{
+		{"id": "n1", "kind": "some-future-kind", "settings": map[string]any{"value": 1}},
+		{"id": "n2", "settings": map[string]any{"value": 1}},
+	} {
+		if err := validatePageTree(treeWith(n)); err != nil {
+			t.Errorf("unknown/absent kind must not be rejected on a guess; got: %v", err)
+		}
+	}
+}
+
+// ─── MIO-2799: the weight message must describe the real failure mode ────────
+
+func TestValidatePageTree_WeightMessageDescribesFallbackNotDrop(t *testing.T) {
+	err := validatePageTree(treeWith(map[string]any{
+		"id": "n1", "kind": "headline", "value": "Hi",
+		"settings": map[string]any{"weight": "bold"},
+	}))
+	if err == nil {
+		t.Fatal("a non-numeric weight must still be rejected — the check itself is correct")
+	}
+	msg := err.Error()
+	// The behaviour is a per-kind fallback: headline -> font-normal, text -> no
+	// class. The node RENDERS. Saying "silently dropped" sends the reader looking
+	// for a missing node, and contradicts the mio-docs guides (MIO-2799).
+	if strings.Contains(msg, "SILENTLY DROPPED") {
+		t.Errorf("message still claims a silent drop; the weight is DISCARDED and a per-kind fallback applies. got: %v", msg)
+	}
+	if !strings.Contains(msg, "DISCARDED") {
+		t.Errorf("message must name the real consequence (discarded + fallback); got: %v", msg)
+	}
+}
