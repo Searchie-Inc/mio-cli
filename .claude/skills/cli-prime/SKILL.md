@@ -172,10 +172,14 @@ acli jira workitem search \
 
 Epics: **MIO-2572** scaffold · **MIO-2665** general bug-fix & hardening (non-scaffold) · **MIO-2666** hub + page templates.
 
-Conventions: file CLI work under component **CLI V1** (id `10257`) and parent it to the right epic. `acli jira workitem create` cannot set components — set them afterwards via the Atlassian MCP `editJiraIssue`. Transition to **In Progress** when you pick a ticket up and **Done** when it merges. Assign before starting: most tickets are unassigned and parallel sessions have collided twice.
+Conventions: file CLI work under component **CLI V1** (id `10257`) and parent it to the right epic. Transition to **In Progress** when you pick a ticket up and **Done** when it merges. Assign before starting: most tickets are unassigned and parallel sessions have collided twice.
+
+**Use the `create-ticket` skill to file one** — `acli jira workitem create` has no `--component` flag, and a ticket without `component = CLI V1` never reaches the board, silently. The skill carries the verified `--from-json` payload (components *and* parent stick in one call) plus the read-back and transition gotchas.
 
 ## 8. Rules and skills already in this repo
 
+- **`.claude/skills/create-ticket/SKILL.md`** — filing a ticket that actually reaches the board.
+- **`.claude/agents/cli-code-reviewer.md`** — the blind reviewer. Dispatch it by name (`subagent_type: cli-code-reviewer`) with a diff and a scope, and nothing else; the blindness contract lives in the agent, not in your brief. Note agent definitions load at **session start**, so a newly added one is not dispatchable until the session restarts.
 - **`.claude/rules/verifying-guards.md` — read it.** A guard is not verified until you have watched it fail. Any PR adding or changing a test, assertion or preflight check must break the protected behaviour, observe the named failure, restore, and **say so in the PR**. Seven unfailable guards reached or nearly reached `main` in one week; reading caught none of them.
 - **`.claude/skills/codex-review/SKILL.md`** — multi-round review before merge. If Codex is unavailable, the substitute is a *blind* review (a fresh agent given the diff and primary sources, but not the PR's claims or a list of what to check) — not skipping.
 
