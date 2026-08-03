@@ -337,3 +337,42 @@ func TestValidatePageTree_ValueMessageIsPerKindNotUniversallyEmpty(t *testing.T)
 		t.Errorf("message must distinguish quote, which returns null and vanishes; got: %v", msg)
 	}
 }
+
+// The message enumerates FOUR distinct render outcomes; probing only two of them
+// is the "probe set smaller than the claim" shape from
+// .claude/rules/verifying-guards.md. Each kind-group below was verified against
+// mio-hub origin/main, and each is a case where "renders empty" would send the
+// author looking in the wrong place.
+func TestValidatePageTree_ValueMessageCoversEveryKindGroup(t *testing.T) {
+	err := validatePageTree(treeWith(map[string]any{
+		"id": "n1", "kind": "headline", "settings": map[string]any{"value": "x"},
+	}))
+	if err == nil {
+		t.Fatal("expected a rejection")
+	}
+	msg := err.Error()
+	for _, want := range []struct{ phrase, why string }{
+		{"headline/text render empty", "the only group that genuinely renders empty"},
+		{"grey fallback TILE", "image passes \"\" to Thumbnail, which renders a tinted tile with the image sprite"},
+		{"source not allowed", "video under embed_type \"iframe\" renders a VISIBLE red error box"},
+		{"star", "icon falls back to the star glyph"},
+		{"quote renders NOTHING", "quote returns null and is absent entirely"},
+		{"blank label", "button renders, with no label"},
+	} {
+		if !strings.Contains(msg, want.phrase) {
+			t.Errorf("message must cover %q — %s; got: %v", want.phrase, want.why, msg)
+		}
+	}
+}
+
+// A null top-level value is not a real value: String(null ?? "") is "", so the
+// node drops exactly as if the key were absent. Treating null as "present"
+// would let the commonest hand-edited shape through.
+func TestValidatePageTree_NullTopLevelValueStillRejected(t *testing.T) {
+	if err := validatePageTree(treeWith(map[string]any{
+		"id": "n1", "kind": "headline", "value": nil,
+		"settings": map[string]any{"value": "Hello"},
+	})); err == nil {
+		t.Error("value:null with settings.value is still a silent drop — must be rejected")
+	}
+}

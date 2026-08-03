@@ -8,8 +8,10 @@ package cmd
 // node shapes are accepted (200) and then fail at render time, so an author sees
 // a phantom success. The failure is NOT uniform, and the messages below say
 // which is which (MIO-2799):
-//   - a genuine DROP — content under settings.value is never read, so the node
-//     renders EMPTY;
+//   - a genuine MISS — content under settings.value is never read, so the value
+//     never appears; what shows instead is PER-KIND (empty, a grey fallback
+//     tile, a "star" glyph, a red error box, or nothing at all) — never assume
+//     "empty", see rule (3) below;
 //   - a DISCARD with fallback — a non-numeric weight is ignored and the kind's
 //     default applies, so the node renders with the wrong weight, not missing.
 // Calling everything a "silent drop" sends the reader hunting for a missing
@@ -20,7 +22,7 @@ package cmd
 // It is deliberately CONSERVATIVE — it flags only shapes that can never render,
 // so a valid tree (including a catalog-scaffolded one) is never rejected. The
 // tree shape is {"root": <node>}; a node is {kind, settings{...}, template?,
-// children[...]} (see internal/catalog). The two pinned rules:
+// children[...]} (see internal/catalog). The three pinned rules:
 //
 //   - settings.weight, if present, must be a NUMBER (e.g. 700) — never a CSS
 //     keyword string like "bold". The catalog only ever emits numeric weights.
@@ -38,6 +40,11 @@ package cmd
 //     WITHOUT a template key is NOT identifiable as a section from the tree
 //     alone (inner containers legitimately carry no template), so it is left
 //     untouched — matching the existing minimal-tree contract tests.
+//   - settings.value, on a kind that reads the TOP-LEVEL node.value, is the
+//     misplacement trap (MIO-2575). Checked against an ALLOWLIST of the seven
+//     kinds verified to read node.value, so an unrecognised or future kind is
+//     never rejected on a guess; progress-ring is absent from it because it is
+//     the sole kind that legitimately reads settings.value.
 //
 // NOT validated: the button-node `action` shape. The catalog scaffold emits
 // valid buttons with an empty settings object (they inherit the action from
@@ -95,11 +102,18 @@ func validatePageNode(node map[string]any, path string) error {
 	// (3) content `value` under settings instead of the node top level (MIO-2575).
 	// THE most-hit trap: the API 200s and the renderer never reads settings.value,
 	// so the authored value never appears. The VISIBLE result is per-kind and the
-	// message says so — headline/text/image/video empty, icon falls back to the
-	// "star" glyph (resolveIconName, mio-hub icons.ts: "so the page-tree never
-	// renders nothing"), quote returns null so the node is absent entirely, button
-	// renders with a blank label. Describing all of them as "renders EMPTY" would
-	// repeat exactly the mistake MIO-2799 corrects for weight. Seven leaf kinds read the
+	// message says so. Verified against mio-hub origin/main: headline/text render
+	// empty; image passes "" to Thumbnail, whose `src ? <img> : <fallback>` branch
+	// renders a tinted bg-hub-surface-5 tile carrying the image sprite (its own
+	// test: "does not render an img when src is omitted — shows the fallback
+	// icon"); video renders an empty <video> natively but a VISIBLE red "Video
+	// iframe source not allowed:" box under embed_type "iframe" (isAllowedEmbedUrl
+	// throws on ""); icon falls back to the "star" glyph (resolveIconName: "so the
+	// page-tree never renders nothing"); quote returns null so the node is absent
+	// entirely; button renders with a blank label. Describing any of them as
+	// "renders EMPTY" repeats exactly the mistake MIO-2799 corrects for weight —
+	// it sends the author hunting a blank area while a grey tile or a red error
+	// box is sitting there. Seven leaf kinds read the
 	// TOP-LEVEL value — headline, text, image, video, button, icon, quote — and
 	// exactly one, progress-ring, legitimately reads settings.value (a number),
 	// so it is exempt. Checked only when the top-level value is ABSENT: a node
@@ -107,9 +121,11 @@ func validatePageNode(node map[string]any, path string) error {
 	// break trees the renderer handles fine.
 	if settings, ok := node["settings"].(map[string]any); ok {
 		if _, misplaced := settings["value"]; misplaced && readsTopLevelValue(node) {
-			if _, topLevel := node["value"]; !topLevel {
+			// A null top-level value is NOT a real value: the renderer computes
+			// String(node.value ?? "") -> "", so it drops just like an absent one.
+			if tv, topLevel := node["value"]; !topLevel || tv == nil {
 				return errs.New(errs.ExitUsage,
-					"%s: content value must be TOP-LEVEL on the node, not settings.value — the API accepts settings.value (200) and the renderer never reads it, so the value you authored never appears. What you see instead depends on the kind: headline/text/image/video render empty, icon falls back to the \"star\" glyph, quote renders NOTHING AT ALL, button renders with a blank label. Move it to the node's \"value\" key. (progress-ring is the sole kind that reads settings.value)",
+					"%s: content value must be TOP-LEVEL on the node, not settings.value — the API accepts settings.value (200) and the renderer never reads it, so the value you authored never appears. What you see instead depends on the kind: headline/text render empty, image renders the grey fallback TILE (not nothing), video renders an empty player — or, with embed_type \"iframe\", a visible red \"source not allowed\" box — icon falls back to the \"star\" glyph, quote renders NOTHING AT ALL, button renders with a blank label. Move it to the node's \"value\" key. (progress-ring is the sole kind that reads settings.value)",
 					where)
 			}
 		}

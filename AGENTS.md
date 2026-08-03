@@ -268,8 +268,7 @@ A section node is the same envelope plus a `template` and `children`:
 - `settings.weight` must be a **number** (`700`), never `"bold"`; `pages tree set`
   rejects THREE shapes client-side, before any HTTP: that, a blank/non-string `template`, and a content `value` placed under `settings` on a kind that reads the top-level one (MIO-2575).
 
-**Value-bearing kinds** — the nine the renderer reads a top-level `value` from:
-`headline` `text` `image` `video` `button` `icon` `divider` `progress-ring` `quote`.
+**Value-bearing kinds** — the seven the renderer reads a top-level `value` from: `headline` `text` `image` `video` `button` `icon` `quote` — `divider` reads no value at all, and `progress-ring` reads `settings.value` (a number), which is why `pages tree set`'s misplacement check allowlists exactly seven kinds (MIO-2575).
 `quote`'s `value` is an **object** (`{quote, name?, profession?, avatarUrl?,
 avatarFallback?}`) and renders nothing unless `quote` is a non-empty string;
 `progress-ring` is the one kind that reads `settings.value` instead. `subheadline`,
