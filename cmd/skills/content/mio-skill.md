@@ -799,16 +799,25 @@ Page templates (`pages catalog scaffold --template …`):
 These lists track the catalog version the CLI ships; `mio pages catalog templates` /
 `section-types` always print the truth for the backend you are talking to.
 
-## Silent-drop checklist — run this before you call a page done
+## Render-contract checklist — run this before you call a page done
 
-Every item returns `200` and then drops the node/section/card at render time. Check
-each one against the tree you just published:
+Each item is a shape the API accepts and the renderer then fails to honour. The
+failures are NOT all the same, and the difference is where you will go looking:
+some DROP the node, some DISCARD one setting and render the node anyway. Three
+of them `pages tree set` now rejects client-side (exit 2, before any HTTP), so
+you will not reach the API with them at all.
 
 - **Text in `settings.value` instead of the node's top-level `value`** — see above.
-  This is the one that bites first.
+  This is the one that bites first. **Rejected client-side** (MIO-2575). If you
+  bypass the CLI: the value is never read, and what you see depends on the kind —
+  headline/text/image/video render empty, `icon` falls back to the **star** glyph,
+  `quote` renders nothing at all, `button` renders with a blank label.
 - **`weight` must be numeric** — a number like `700`, never a CSS keyword like
-  `"bold"`. A string weight is dropped. (`pages tree set` catches this one
-  client-side, before any HTTP.)
+  `"bold"`. A non-numeric weight is DISCARDED, not dropped: the node still
+  renders, with the kind's fallback (headline → 400/normal, text and `field` →
+  no weight class — and for a `field` that also discards the weight its `role`
+  would have applied), so you are hunting a wrong font weight, not a missing node.
+  (`pages tree set` catches this one client-side, before any HTTP.)
 - **A section must carry its `template`** (`"hero"`, `"carousel"`, `"row"`, …). The
   catalog scaffold sets it; a blank or non-string one is rejected client-side.
 - **Button nodes need the correct `action` shape.** A malformed/missing `action`

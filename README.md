@@ -489,7 +489,7 @@ nothing, with no error:
 - `mio pages publish` returns **`section_count`** — compare it against the number of
   sections you authored. That, not the `200`, is the "did it apply" signal.
 
-`mio pages tree set` catches the numeric-`weight` and blank-`template` cases
+`mio pages tree set` catches the numeric-`weight`, blank-`template` and value-under-`settings` cases
 client-side (exit `2`, no HTTP). The rest are documented in full in the bundled agent
 skill — `mio skills print`, or `mio skills install` to drop it into Claude Code /
 Codex — and in [AGENTS.md](./AGENTS.md#page-tree-render-contract).
