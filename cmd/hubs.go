@@ -57,6 +57,7 @@ func init() {
 
 	// hubs policies <action>  (nested sub-resource)
 	hubsPoliciesCmd.AddCommand(
+		hubsPoliciesGetCmd,
 		hubsPoliciesUpdateCmd,
 		hubsPoliciesGateCmd,
 	)
@@ -655,6 +656,18 @@ the ambient context (--hub, or current_hub in config).`,
 		if err != nil {
 			return err
 		}
+		// `policies` is a legitimate settings key and passes the allowlist, but the
+		// backend pops it on the UPDATE path — so this flag reports success and
+		// changes nothing. Checked HERE, against the user's flag, rather than inside
+		// applyHubBlobs: the scaffold routes the community template's settings
+		// (which carry policies) through the same applier, and warning a user about
+		// a template internal they never typed on every single scaffold is noise.
+		// MIO-2811 option (1) is about the flag; this is the flag. Runs before any
+		// HTTP so --strict-keys rejects with no request. (MIO-2811)
+		strictForPolicies, _ := cmd.Flags().GetBool("strict-keys")
+		if err := checkPoliciesOnUpdate(cmd.ErrOrStderr(), settings, strictForPolicies); err != nil {
+			return err
+		}
 		meta, err := parseJSONObjectFlag(cmd, "meta-json")
 		if err != nil {
 			return err
@@ -1213,6 +1226,58 @@ func init() {
 // hubsPoliciesGatePath returns /api/teams/{team_id}/hubs/{hub_id}/policies/gate.
 func hubsPoliciesGatePath(teamID, hubID string) string {
 	return fmt.Sprintf("/api/teams/%s/hubs/%s/policies/gate", teamID, hubID)
+}
+
+var hubsPoliciesGetCmd = &cobra.Command{
+	Use:   "get [hub_id]",
+	Short: "Read a hub's legal policies and the enforcement gate.",
+	Long: `Read both policy documents (Terms of Service, Privacy Policy) and the
+hub-level enforcement gate, as ACTUALLY STORED.
+
+This is the team-owner admin read (MIO-2394), not the member-portal one: the
+portal read serves defaults and forces enabled=true for public display, so this
+is the only way to answer "is enforcement really on for this hub?".
+
+Each item carries policy_type, content, version, enabled and require_acceptance.
+` + "`enabled`" + ` is the ONE hub-level gate repeated on every item, not a per-policy
+flag — the backend stores a single boolean (see ` + "`hubs policies gate`" + `).
+
+` + "`version`" + ` is what distinguishes a customised document from the platform
+default: a hub whose Terms were written by hand carries its own version, while a
+reset document reads "default-v1". That matters because ` + "`hubs scaffold --hub`" + `
+(resume) sends content:null for any policy its template declares no text for,
+which reverts the document to the default and re-prompts every member who had
+already accepted (MIO-2818). Read this BEFORE a resume if the hub has custom
+legal text.
+
+The hub identifier may be given positionally; omit it to use the ambient hub
+(--hub, or current_hub in config).
+
+NOTE the response is a LIST, and it is EMPTY when policies are unconfigured —
+so capture the gate with ` + "`-o plain --jq '.[0].enabled'`" + `, and treat an empty
+result as "nothing stored", not as "disabled".`,
+	Example: `  mio hubs policies get hub_abc123
+  mio hubs policies get --hub hub_abc123
+  mio hubs policies get hub_abc123 -o plain --jq '.[0].enabled'
+  mio hubs policies get hub_abc123 --jq '[.[] | {policy_type, version}]'`,
+	Args: hubsOptionalIDArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, teamID, err := hubsContext(cmd)
+		if err != nil {
+			return err
+		}
+		hubArg, hubGiven := optionalArg(args, 0)
+		hubID, err := c.hubTargetID(cmd, hubArg, hubGiven)
+		if err != nil {
+			return err
+		}
+
+		res, err := c.client.List(c.ctx, hubsPoliciesPath(teamID, hubID), nil)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
 }
 
 var hubsPoliciesGateCmd = &cobra.Command{
