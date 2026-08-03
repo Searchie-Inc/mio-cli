@@ -198,9 +198,14 @@ func TestRefreshManagedSkills_AnnouncesThePathOutsidePrefix(t *testing.T) {
 
 // A refresh that cannot happen must say so, not leave a silently stale skill.
 func TestRefreshManagedSkills_ReportsWhenItCannotRefresh(t *testing.T) {
+	// Seeded on CODEX deliberately: `mio skills install --force` defaults to
+	// --target claude, so a remediation printed about the codex skill that omits
+	// --target is worse than useless — it reports success for claude, leaves the
+	// codex file stale, and OVERWRITES a hand-edited claude skill if one exists.
+	// Seeding claude here would let that ship green.
 	t.Run("no usable new binary", func(t *testing.T) {
 		home := isolateSkillHome(t)
-		path := claudeSkillPath(home)
+		path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
 		before := seedManagedSkill(t, path, "0.12.1")
 
 		var out bytes.Buffer
@@ -213,12 +218,13 @@ func TestRefreshManagedSkills_ReportsWhenItCannotRefresh(t *testing.T) {
 		if !strings.Contains(out.String(), "Could not locate") {
 			t.Errorf("must report that the skill was left stale; got: %q", out.String())
 		}
+		assertTargetedRemediation(t, out.String(), "codex", path)
 		assertNoInstallNudge(t, out.String())
 	})
 
 	t.Run("handoff fails", func(t *testing.T) {
 		home := isolateSkillHome(t)
-		path := claudeSkillPath(home)
+		path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
 		seedManagedSkill(t, path, "0.12.1")
 		stubRefreshExec(t, func(_, _ string) error { return errors.New("exec boom") })
 
@@ -228,6 +234,7 @@ func TestRefreshManagedSkills_ReportsWhenItCannotRefresh(t *testing.T) {
 		if !strings.Contains(out.String(), "Could not refresh") {
 			t.Errorf("a failed handoff must be reported; got: %q", out.String())
 		}
+		assertTargetedRemediation(t, out.String(), "codex", path)
 		assertNoInstallNudge(t, out.String())
 	})
 }
@@ -432,5 +439,22 @@ func TestRefreshManagedSkills_ReportsAnUnreadableSkill(t *testing.T) {
 	if !strings.Contains(out.String(), "Could not read") {
 		t.Errorf("an unreadable skill must be reported, not silently skipped; got: %q", out.String())
 	}
+	assertTargetedRemediation(t, out.String(), "claude", path)
 	assertNoInstallNudge(t, out.String())
+}
+
+// Every remediation this function prints must name the target it is about.
+// `mio skills install --force` defaults to --target claude: printed about the
+// Codex skill it reports success for Claude and fixes nothing, and where a
+// hand-edited Claude skill exists it destroys it. Measured — following the bare
+// form removed a sentinel from a hand-edited file. So a target-less remediation
+// is a data-loss bug, not a wording nit.
+func assertTargetedRemediation(t *testing.T, out, target, path string) {
+	t.Helper()
+	if !strings.Contains(out, "--target "+target) {
+		t.Errorf("remediation must carry --target %s — a bare --force acts on claude; got: %q", target, out)
+	}
+	if !strings.Contains(out, path) {
+		t.Errorf("remediation must name the path it is about; got: %q", out)
+	}
 }

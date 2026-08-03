@@ -214,6 +214,14 @@ var skillRefreshExec = func(bin, target string) error {
 // So the new binary is asked to write its own skill. The classification stays
 // here, because it does not depend on version: an unmodified managed install is
 // refreshed, a file the user owns is never touched (MIO-2875).
+// EVERY message below must carry targetLabel(target), path AND --target <t>.
+// `mio skills install --force` defaults to --target claude, so a bare
+// suggestion printed about the Codex skill answers "already up to date" for
+// Claude and leaves the reported file untouched — success-looking output,
+// problem unfixed. When no Claude skill exists it CREATES one the user never
+// had, and when a hand-edited Claude skill exists it OVERWRITES it. That last
+// one is data loss reached by following our own instruction, so treat a
+// target-less remediation string here as a defect, not a nit.
 func refreshManagedSkills(w io.Writer, newBin string) {
 	// installed counts every target that HAS a managed skill, whatever happened
 	// to it. Without it, a failed refresh falls through to the "you have no skill
@@ -230,8 +238,8 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 			// not classify it. Count it and say so, or the run goes silent (or,
 			// worse, claims nothing is installed at a path that has one).
 			installed++
-			fmt.Fprintf(w, "Could not read the %s skill at %s (%v) — left untouched.\n",
-				targetLabel(target), path, err)
+			fmt.Fprintf(w, "Could not read the %s skill at %s (%v) — left untouched; inspect it, or run 'mio skills install --force --target %s' to replace it.\n",
+				targetLabel(target), path, err, target)
 			continue
 		}
 		switch state {
@@ -243,13 +251,13 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 			if newBin == "" {
 				// No usable path to the updated binary; say so rather than
 				// leaving a silently stale skill behind.
-				fmt.Fprintf(w, "Could not locate the updated mio binary to refresh the %s skill at %s — run 'mio skills install --force' with the new binary.\n",
-					targetLabel(target), path)
+				fmt.Fprintf(w, "Could not locate the updated mio binary to refresh the %s skill at %s — run 'mio skills install --force --target %s' with the new binary.\n",
+					targetLabel(target), path, target)
 				continue
 			}
 			if err := skillRefreshExec(newBin, target); err != nil {
-				fmt.Fprintf(w, "Could not refresh the %s skill at %s (%v) — run 'mio skills install --force'.\n",
-					targetLabel(target), path, err)
+				fmt.Fprintf(w, "Could not refresh the %s skill at %s (%v) — run 'mio skills install --force --target %s'.\n",
+					targetLabel(target), path, err, target)
 				continue
 			}
 			after, rerr := os.ReadFile(path)
@@ -271,13 +279,6 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 			}
 		case skillManagedModified, skillUnmanaged:
 			installed++
-			// Per-target, and NAMED. `mio skills install --force` defaults to
-			// --target claude, so a bare suggestion printed about the codex skill
-			// reports "already up to date" for claude and leaves the edited file
-			// exactly as it was — success-looking output, problem untouched. Worse
-			// when only codex is installed: it CREATES a claude skill the user
-			// never had. Every other line here carries the target and path; this
-			// one must too.
 			fmt.Fprintf(w, "Your %s skill at %s was edited locally and was not refreshed — run 'mio skills install --force --target %s' to update it.\n",
 				targetLabel(target), path, target)
 		}

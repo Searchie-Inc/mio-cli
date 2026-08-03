@@ -212,7 +212,7 @@ func TestRefreshManagedSkills_NudgesWhenNeverInstalled(t *testing.T) {
 	refreshManagedSkills(&buf, "/opt/mio/bin/mio")
 
 	// "mio skills install" alone cannot discriminate — it is a substring of the
-	// edited-locally message too ("run 'mio skills install --force' ..."), so
+	// edited-locally message too ("run 'mio skills install --force --target ...'"), so
 	// swapping the branches leaves this green. Assert the nudge exactly, and
 	// assert the other message is ABSENT.
 	if !strings.Contains(buf.String(), "A mio CLI agent skill is available") {
