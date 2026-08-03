@@ -1,11 +1,11 @@
 ---
 name: codex-review
-description: Use when the user asks for a Codex review, a second-opinion review, or runs /codex-review in the mio-cli (Go/Cobra) repo. Sends the current branch diff (or a specific file/branch) to Codex gpt-5.6-sol for multi-round review, fixes findings, and resubmits until APPROVE or 3 rounds max. Falls back to a blind review when Codex is out of credits or hangs — the gate is never skipped.
+description: Use when the user asks for a Codex review, a second-opinion review, or runs /codex-review in the mio-cli (Go/Cobra) repo. Sends the current branch diff (or a specific file/branch) to Codex gpt-5.5 for multi-round review, fixes findings, and resubmits until APPROVE or 3 rounds max. Falls back to a blind review when Codex is out of credits or hangs — the gate is never skipped.
 ---
 
 # Codex Code Review (mio CLI)
 
-Multi-round code review via Codex `gpt-5.6-sol` for the **mio-cli** Go/Cobra repo. Sends the diff, gets findings, fixes issues, resubmits until APPROVE or 3 rounds max. A second opinion from a different model family — complementary to `go vet`, `golangci-lint`, and the repo's contract/drift tests. When Codex is unreachable, the **blind review** below is the substitute; the gate is never skipped.
+Multi-round code review via Codex `gpt-5.5` for the **mio-cli** Go/Cobra repo. Sends the diff, gets findings, fixes issues, resubmits until APPROVE or 3 rounds max. A second opinion from a different model family — complementary to `go vet`, `golangci-lint`, and the repo's contract/drift tests. When Codex is unreachable, the **blind review** below is the substitute; the gate is never skipped.
 
 **One command, three modes** — auto-detected from the diff:
 
@@ -21,7 +21,7 @@ Invoke the same way every time: `/codex-review`. The mode picks itself.
 
 - `TARGET`: optional `$ARGUMENTS` — file path, branch name, or empty (defaults to `git diff main...HEAD`)
 - `MAX_ROUNDS`: 3
-- `CODEX_MODEL`: `gpt-5.6-sol`
+- `CODEX_MODEL`: `gpt-5.5`
 - `CODEX_TIMEOUT`: `900` (15 min — the hard ceiling for any single call). **Assign it in the shell you are running**; `timeout "$CODEX_TIMEOUT"` with it unset fails `timeout: invalid time interval ''` at exit 125, which the Reliability section does not otherwise cover.
 - Confirm codex is present before Round 1 — `command -v codex` alone does not abort a script without `set -e`:
 
@@ -41,7 +41,7 @@ build_prompt > "$PROMPT_FILE"              # you assemble this: repo-context blo
 
 [ -s "$PROMPT_FILE" ] || { echo "ABORT: empty prompt — not a verdict"; exit 1; }
 
-timeout "$CODEX_TIMEOUT" codex exec -m gpt-5.6-sol -c model_reasoning_effort="xhigh" \
+timeout "$CODEX_TIMEOUT" codex exec -m gpt-5.5 -c model_reasoning_effort="xhigh" \
   --sandbox read-only -C "$(pwd)" - < "$PROMPT_FILE" 2>&1
 ```
 
@@ -51,7 +51,7 @@ Resume the same session for follow-up rounds (preserves context, no diff re-uplo
 
 ```bash
 echo "Round 2 — fixes applied: ..." | timeout "$CODEX_TIMEOUT" codex exec resume --last \
-  -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -c sandbox_mode="read-only" - 2>&1
+  -m gpt-5.5 -c model_reasoning_effort="xhigh" -c sandbox_mode="read-only" - 2>&1
 git status --porcelain   # confirm Codex wrote nothing
 ```
 
@@ -59,7 +59,7 @@ Capture **stderr** on every call (`2>&1`): the run header, the quota banner and 
 
 | Flag | Purpose |
 |---|---|
-| `-m gpt-5.6-sol` | Always gpt-5.6-sol (not gpt-5.5 — repinned MIO-2836) |
+| `-m gpt-5.5` | The current pin. **History, so this does not get flipped back:** MIO-2836 repinned gpt-5.5 -> gpt-5.6-sol; Marius repinned it back to gpt-5.5 on 2026-08-03 on cost grounds. Measured on the MIO-2815 review: sol round 1 = 234,106 tokens, 5.5 round 2 (a resume, so not a clean comparison) = 388,679. So 5.5 was NOT cheaper in that instance — the pin stands because it is the owner's call, not because the numbers settled it. If you are optimising spend, the bigger lever is that a blind review costs far less and caught the same substantive Critical |
 | `-c model_reasoning_effort="xhigh"` | Extra High reasoning |
 | `--sandbox read-only` | Review-only. `exec` already defaults to approval `never`, so this alone gives full autonomous read + command access with **no** write |
 | `-C <repo>` | Working directory |
@@ -94,10 +94,10 @@ error: unexpected argument '--sandbox' found
 But the underlying config key **is**, and resume already takes `-c`:
 
 ```
-codex exec resume --last -m gpt-5.6-sol -c model_reasoning_effort='xhigh' -c sandbox_mode='read-only' -
+codex exec resume --last -m gpt-5.5 -c model_reasoning_effort='xhigh' -c sandbox_mode='read-only' -
   -> approval: never   sandbox: read-only
 
-codex exec resume --last -m gpt-5.6-sol -c model_reasoning_effort='xhigh' -
+codex exec resume --last -m gpt-5.5 -c model_reasoning_effort='xhigh' -
   -> approval: never   sandbox: workspace-write [workdir, /tmp, $TMPDIR]
 ```
 
@@ -205,7 +205,7 @@ Fixed:
 Deferred:
 - [Low] <desc> — tracked as follow-up
 Please re-review and issue a new verdict." | timeout "$CODEX_TIMEOUT" codex exec resume --last \
-  -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -c sandbox_mode="read-only" - 2>&1
+  -m gpt-5.5 -c model_reasoning_effort="xhigh" -c sandbox_mode="read-only" - 2>&1
 git status --porcelain   # belt-and-braces; must be clean
 ```
 
