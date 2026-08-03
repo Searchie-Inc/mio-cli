@@ -115,8 +115,10 @@ the *previous* content under the *new* version's label.
 
 Two consequences worth knowing:
 
-- The skill lives at `~/.claude/skills/mio/SKILL.md` (or `$CODEX_HOME/skills/…`),
-  which is **outside** `--prefix`. The update names the path it writes.
+- The skill lives at `~/.claude/skills/mio/SKILL.md` (or, for Codex,
+  `$CODEX_HOME/skills/mio/SKILL.md` — `~/.codex/skills/mio/SKILL.md` when
+  `CODEX_HOME` is unset), which is **outside** `--prefix`. The update names the
+  path it writes.
 - A skill file you hand-edited, or one that was not installed by `mio`, is never
   touched — the update says so and leaves it to you
   (`mio skills install --force` to take the new one).

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -211,6 +212,7 @@ func TestRefreshManagedSkills_ReportsWhenItCannotRefresh(t *testing.T) {
 		if !strings.Contains(out.String(), "Could not locate") {
 			t.Errorf("must report that the skill was left stale; got: %q", out.String())
 		}
+		assertNoInstallNudge(t, out.String())
 	})
 
 	t.Run("handoff fails", func(t *testing.T) {
@@ -225,6 +227,7 @@ func TestRefreshManagedSkills_ReportsWhenItCannotRefresh(t *testing.T) {
 		if !strings.Contains(out.String(), "Could not refresh") {
 			t.Errorf("a failed handoff must be reported; got: %q", out.String())
 		}
+		assertNoInstallNudge(t, out.String())
 	})
 }
 
@@ -234,4 +237,68 @@ func headLines(s string, n int) string {
 		lines = lines[:n]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// The production handoff argv is the load-bearing line of MIO-2874, and every
+// other test in this file stubs it out — so a typo'd subcommand, or a dropped
+// --target that makes the codex refresh rewrite the claude file, would ship with
+// the suite fully green. This one exercises the REAL skillRefreshExec against a
+// real built binary. It is the only oracle that argv has.
+func TestSkillRefreshExec_RealBinaryArgv(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary")
+	}
+	bin := filepath.Join(t.TempDir(), "mio")
+	build := exec.Command("go", "build",
+		"-ldflags", "-X github.com/Searchie-Inc/mio-cli/internal/version.Version=9.9.9",
+		"-o", bin, ".")
+	build.Dir = repoRoot(t)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build stand-in binary: %v\n%s", err, out)
+	}
+
+	home := isolateSkillHome(t)
+	claude := claudeSkillPath(home)
+	codex := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
+	seedManagedSkill(t, claude, "0.0.1")
+	seedManagedSkill(t, codex, "0.0.1")
+
+	var out bytes.Buffer
+	refreshManagedSkills(&out, bin) // real exec, no stub
+
+	for label, p := range map[string]string{"claude": claude, "codex": codex} {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s skill: %v", label, err)
+		}
+		got, ok := skillFileVersion(string(data))
+		if !ok || got != "9.9.9" {
+			t.Errorf("%s skill should have been rewritten by the new binary to 9.9.9, got %q (ok=%v) — the handoff argv is wrong",
+				label, got, ok)
+		}
+	}
+	if !strings.Contains(out.String(), claude) || !strings.Contains(out.String(), codex) {
+		t.Errorf("both refreshed paths should be named; got: %q", out.String())
+	}
+}
+
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("locate repo root: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// A failure path must never follow "could not refresh the skill at <path>" with
+// "a skill is available — run 'mio skills install'". The second line is false:
+// the skill IS installed, at the path just named. Introduced by dropping the
+// counter that tracked "a managed install exists" independently of whether the
+// refresh succeeded.
+func assertNoInstallNudge(t *testing.T, out string) {
+	t.Helper()
+	if strings.Contains(out, "run 'mio skills install' to add it") {
+		t.Errorf("contradictory nudge: told the user no skill is installed, one line after naming the installed file\n%s", out)
+	}
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -183,16 +185,19 @@ func runSkillsPrint(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// refreshManagedSkills is called by `mio update` after a successful self-update.
-// For each installed target it refreshes an unmodified managed install to the
-// new embedded skill, never clobbers a hand-edited or unmanaged file, and never
-// writes to a target that was never installed. If nothing is installed anywhere
-// it prints a one-line nudge. It is best-effort: any error is swallowed so a
-// skill hiccup can never fail the update itself.
+// skillRefreshHandoffTimeout bounds the handoff. A newly installed binary that
+// wedges must not hang `mio update` indefinitely — "best-effort" has to mean
+// bounded, not merely error-swallowing.
+const skillRefreshHandoffTimeout = 30 * time.Second
+
 // skillRefreshExec runs the NEWLY INSTALLED binary to rewrite a managed skill.
-// It is a package var so tests can observe the handoff without exec'ing.
+// It is a package var so tests can observe the handoff without exec'ing — but
+// note that stubbing it removes the argv below from every oracle, so the real
+// invocation is covered separately by TestSkillRefreshExec_RealBinaryArgv.
 var skillRefreshExec = func(bin, target string) error {
-	cmd := exec.Command(bin, "skills", "install", "--force", "--target", target)
+	ctx, cancel := context.WithTimeout(context.Background(), skillRefreshHandoffTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "skills", "install", "--force", "--target", target)
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	return cmd.Run()
 }
@@ -210,7 +215,10 @@ var skillRefreshExec = func(bin, target string) error {
 // here, because it does not depend on version: an unmodified managed install is
 // refreshed, a file the user owns is never touched (MIO-2875).
 func refreshManagedSkills(w io.Writer, newBin string) {
-	var refreshed, current, modified int
+	// installed counts every target that HAS a managed skill, whatever happened
+	// to it. Without it, a failed refresh falls through to the "you have no skill
+	// installed" nudge one line after naming the file it could not refresh.
+	var refreshed, current, installed, modified int
 	for _, target := range []string{"claude", "codex"} {
 		path, err := skillDestPath(target, false) // user scope only
 		if err != nil {
@@ -224,6 +232,8 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 		case skillMissing:
 			// Never installed for this target — do not write.
 		case skillManagedUnmodified:
+			installed++
+			before, _ := os.ReadFile(path)
 			if newBin == "" {
 				// No usable path to the updated binary; say so rather than
 				// leaving a silently stale skill behind.
@@ -240,6 +250,13 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 			if rerr != nil {
 				continue
 			}
+			if before != nil && string(after) == string(before) {
+				// The child reported success and changed nothing — already current.
+				// Saying "Refreshed" here would be a small lie in the commonest
+				// case of all: re-running an update you already have.
+				current++
+				continue
+			}
 			if ver, ok := skillFileVersion(string(after)); ok {
 				fmt.Fprintf(w, "Refreshed mio skill for %s at %s (version %s)\n",
 					targetLabel(target), path, ver)
@@ -248,19 +265,18 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 			}
 			refreshed++
 		case skillManagedModified, skillUnmanaged:
+			installed++
 			modified++
 		}
 	}
 
 	switch {
-	case refreshed > 0 || current > 0:
-		// At least one managed install exists; refresh lines (if any) already
-		// printed. Do not nag.
-		if modified > 0 && refreshed == 0 {
+	case installed > 0:
+		// A managed skill exists somewhere; per-target lines (refresh or failure)
+		// are already printed. Never suggest installing one.
+		if modified > 0 && refreshed == 0 && current == 0 {
 			fmt.Fprintln(w, "Your mio CLI agent skill was edited locally and was not refreshed — run 'mio skills install --force' to update it.")
 		}
-	case modified > 0:
-		fmt.Fprintln(w, "Your mio CLI agent skill was edited locally and was not refreshed — run 'mio skills install --force' to update it.")
 	default:
 		fmt.Fprintln(w, "A mio CLI agent skill is available — run 'mio skills install' to add it to Claude Code.")
 	}

@@ -82,15 +82,27 @@ func init() {
 }
 
 // installedBinaryPath is where the updater just wrote the new binary. Returns ""
-// when it is not a usable executable, so the caller reports the skill was left
-// alone instead of silently leaving a stale one (MIO-2874).
+// when no regular file is there, so the caller reports the skill was left alone
+// instead of silently leaving a stale one (MIO-2874).
+//
+// The result is made ABSOLUTE deliberately. filepath.Join(".", "mio") yields the
+// separator-free "mio", and os/exec resolves a separator-free name through $PATH
+// rather than the current directory — so `mio update --prefix .` would hand the
+// skill refresh to whatever other mio happens to be on PATH and then report its
+// version as installed. That is precisely the "skill that lies about which verbs
+// exist" outcome this whole path exists to prevent, reached through a supported
+// flag value.
 func installedBinaryPath(prefix string) string {
 	name := "mio"
 	if runtime.GOOS == "windows" {
 		name = "mio.exe"
 	}
-	p := filepath.Join(prefix, name)
-	if fi, err := os.Stat(p); err != nil || fi.IsDir() {
+	p, err := filepath.Abs(filepath.Join(prefix, name))
+	if err != nil {
+		return ""
+	}
+	fi, err := os.Stat(p)
+	if err != nil || !fi.Mode().IsRegular() {
 		return ""
 	}
 	return p
