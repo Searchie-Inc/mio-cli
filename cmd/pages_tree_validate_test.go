@@ -285,3 +285,55 @@ func TestValidatePageTree_WeightMessageDescribesFallbackNotDrop(t *testing.T) {
 		t.Errorf("message must name the real consequence (discarded + fallback); got: %v", msg)
 	}
 }
+
+// TestPagesTreeSet_ValueInSettings_ExitUsageNoHTTP is the contract-level guard
+// for the third rejection (MIO-2575), matching the shape the weight and template
+// rules already have. The four tests above call validatePageTree directly and so
+// pin only "an error"; they cannot see the EXIT CODE or the no-HTTP property,
+// which are the stable public contract. Verified: flipping the check's
+// errs.ExitUsage to errs.ExitGeneric left the whole package green without this.
+func TestPagesTreeSet_ValueInSettings_ExitUsageNoHTTP(t *testing.T) {
+	fp := writeTreeFile(t, `{"root":{"id":"root","kind":"stack","children":[{"id":"h","kind":"headline","settings":{"value":"Hello"}}]}}`)
+
+	fired := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fired = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	err := executeCLI(t, baseEnv(srv.URL),
+		"--team", "t_team1", "--hub", "hub_123",
+		"pages", "tree", "set", "page_x", "--file", fp,
+	)
+	if codeForExecuteErr(err) != errs.ExitUsage {
+		t.Fatalf("exit = %d, want %d (ExitUsage); err=%v", codeForExecuteErr(err), errs.ExitUsage, err)
+	}
+	if fired {
+		t.Error("a misplaced content value must be rejected before any HTTP request")
+	}
+	if err == nil || !strings.Contains(err.Error(), "settings.value") {
+		t.Errorf("error should name settings.value; got %v", err)
+	}
+}
+
+// The message must NOT claim every kind renders empty — icon falls back to the
+// "star" glyph and quote renders nothing at all. Asserting a universal "renders
+// EMPTY" would repeat, for value, exactly the misdescription MIO-2799 corrects
+// for weight: it sends the author hunting a missing node when a star is sitting
+// there.
+func TestValidatePageTree_ValueMessageIsPerKindNotUniversallyEmpty(t *testing.T) {
+	err := validatePageTree(treeWith(map[string]any{
+		"id": "i1", "kind": "icon", "settings": map[string]any{"value": "rocket"},
+	}))
+	if err == nil {
+		t.Fatal("icon with settings.value must still be rejected")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "star") {
+		t.Errorf("message must name icon's actual fallback (the \"star\" glyph), not claim it renders empty; got: %v", msg)
+	}
+	if !strings.Contains(msg, "quote renders NOTHING") {
+		t.Errorf("message must distinguish quote, which returns null and vanishes; got: %v", msg)
+	}
+}

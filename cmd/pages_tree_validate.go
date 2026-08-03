@@ -93,8 +93,13 @@ func validatePageNode(node map[string]any, path string) error {
 	}
 
 	// (3) content `value` under settings instead of the node top level (MIO-2575).
-	// THE most-hit silent drop: the API 200s and the renderer emits an empty node
-	// (headline renders String(node.value ?? "") -> ""). Seven leaf kinds read the
+	// THE most-hit trap: the API 200s and the renderer never reads settings.value,
+	// so the authored value never appears. The VISIBLE result is per-kind and the
+	// message says so — headline/text/image/video empty, icon falls back to the
+	// "star" glyph (resolveIconName, mio-hub icons.ts: "so the page-tree never
+	// renders nothing"), quote returns null so the node is absent entirely, button
+	// renders with a blank label. Describing all of them as "renders EMPTY" would
+	// repeat exactly the mistake MIO-2799 corrects for weight. Seven leaf kinds read the
 	// TOP-LEVEL value — headline, text, image, video, button, icon, quote — and
 	// exactly one, progress-ring, legitimately reads settings.value (a number),
 	// so it is exempt. Checked only when the top-level value is ABSENT: a node
@@ -104,7 +109,7 @@ func validatePageNode(node map[string]any, path string) error {
 		if _, misplaced := settings["value"]; misplaced && readsTopLevelValue(node) {
 			if _, topLevel := node["value"]; !topLevel {
 				return errs.New(errs.ExitUsage,
-					"%s: content value must be TOP-LEVEL on the node, not settings.value — the API accepts settings.value (200) and the renderer never reads it, so the node renders EMPTY. Move it to the node's \"value\" key. (progress-ring is the sole kind that reads settings.value)",
+					"%s: content value must be TOP-LEVEL on the node, not settings.value — the API accepts settings.value (200) and the renderer never reads it, so the value you authored never appears. What you see instead depends on the kind: headline/text/image/video render empty, icon falls back to the \"star\" glyph, quote renders NOTHING AT ALL, button renders with a blank label. Move it to the node's \"value\" key. (progress-ring is the sole kind that reads settings.value)",
 					where)
 			}
 		}

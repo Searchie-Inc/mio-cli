@@ -266,7 +266,7 @@ A section node is the same envelope plus a `template` and `children`:
 - No defaults cascade — inline every rendering value on its own node. Exactly one
   `level:1` headline per page (the rest are demoted to `<h2>`).
 - `settings.weight` must be a **number** (`700`), never `"bold"`; `pages tree set`
-  rejects both that and a blank/non-string `template` client-side, before any HTTP.
+  rejects THREE shapes client-side, before any HTTP: that, a blank/non-string `template`, and a content `value` placed under `settings` on a kind that reads the top-level one (MIO-2575).
 
 **Value-bearing kinds** — the nine the renderer reads a top-level `value` from:
 `headline` `text` `image` `video` `button` `icon` `divider` `progress-ring` `quote`.
