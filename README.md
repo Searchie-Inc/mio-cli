@@ -263,6 +263,9 @@ mio hubs create --name "My Hub" --slug my-hub \
   --navigation-json @nav.json \
   --settings-json '{"policies":{"enabled":true}}' \
   --meta-json '{"discussions":{"enabled":true}}'
+# NOTE settings.policies is create-only — `hubs update` accepts the key and the
+# API discards it (MIO-2811). Use `hubs policies gate` / `hubs policies update`
+# on an existing hub, and `hubs policies get` to read it back.
 # retrieve surfaces derived registration_enabled + published booleans.
 # The hub id is an OPTIONAL positional on every hubs verb except `delete`:
 # positional > --hub > current_hub in config. All three of these are equivalent.
@@ -419,7 +422,7 @@ Scripts and agents can branch on these stable codes.
 | `teams` | `create`, `list`, `retrieve`, `update`, `delete`, `switch` (server-side switch + updates local context); `members list/add/remove` |
 | `users` | `me`, `list`, `retrieve`, `update` |
 | `roles` | `create`, `list`, `retrieve`, `update`, `delete`; `permissions list` |
-| `hubs` | `create`, `list`, `retrieve`, `update`, `delete`; `navigation list/add/remove/reorder` (edit the menu item-by-item); `policies update` (the document) and `policies gate` (the hub-level enforcement switch — a policy written without the gate is never presented); `scaffold` (one-command full-experience hub from a template live-fetched from the backend catalog; provenance-guarded resume on re-runs; writes the template's policies AND flips the gate they declare), `templates` (list the backend catalog's hub templates) |
+| `hubs` | `create`, `list`, `retrieve`, `update`, `delete`; `navigation list/add/remove/reorder` (edit the menu item-by-item); `policies get` (read both documents + the gate AS STORED — always two items; note `version` does NOT distinguish custom text from the platform default, so compare the `content`), `policies update` (the document) and `policies gate` (the hub-level enforcement switch — a policy written without the gate is never presented); `scaffold` (one-command full-experience hub from a template live-fetched from the backend catalog; provenance-guarded resume on re-runs; writes the template's policies AND flips the gate they declare), `templates` (list the backend catalog's hub templates) |
 | `contacts` | `create`, `list`, `retrieve`, `update`, `delete`, `restore` |
 | `contact-attributes` | `create/list/retrieve/update/delete` defs; `options` sub-group; `hub-config` sub-group; `values get/set` |
 | `tags` | `create`, `list`, `retrieve`, `update`, `delete`, `assign`, `assign-bulk`, `remove` |

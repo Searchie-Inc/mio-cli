@@ -7,14 +7,13 @@ package cmd
 //       "hub_policy_gate" (derived from the two-segment policies/gate tail),
 //       attributes {enabled: bool}.
 //
-// (`policies get` is NOT YET implemented — MIO-2815. This comment used to say it
-// was intentional, on the grounds that the only policies GET was the hub portal
-// route, which requires member auth and rejects admin API keys. That is wrong:
+// (`policies get` IS implemented as of MIO-2815 — see hubs_policies_get_test.go.
+// An earlier version of this comment claimed the omission was intentional, on
+// the grounds that the only policies GET was the hub portal route, which needs
+// member auth and rejects admin API keys. That was wrong:
 // GET /api/v1/teams/{team_id}/hubs/{identifier}/policies exists
 // (admin_get_hub_policies, MIO-2394) and takes the SAME owner credentials as the
-// gate verb below, reporting both documents with the ACTUAL stored gate state.
-// It is the only way to see whether a `hubs scaffold` resume reverted
-// hand-edited legal text, so the missing verb is a gap, not a decision.)
+// gate verb below, reporting both documents with the ACTUAL stored gate state.)
 
 import (
 	"net/http"

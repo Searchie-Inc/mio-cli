@@ -235,3 +235,52 @@ func sortedKeySet(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// policiesUnwritableOnUpdateMsg explains the create/update asymmetry that makes
+// `settings.policies` a silent no-op on update.
+//
+// The backend accepts policies.enabled / policies.show on hub CREATE and pops
+// the key outright on UPDATE (app/hubs/service.py, `incoming.pop("policies",
+// None)  # client can never write policies here`). The CLI cannot re-route it:
+// sending it to a different endpoint would be the CLI second-guessing the API,
+// and only `enabled` has another door anyway — `show` has none, so a re-route
+// would trade one asymmetry for another. What the CLI CAN do is stop implying a
+// write that never happens (MIO-2811).
+const policiesUnwritableOnUpdateMsg = "settings.policies cannot be written by `hubs update` — the API accepts the key and discards it. " +
+	"Use `mio hubs policies gate <hub_id> --enabled[=false]` for policies.enabled, or `mio hubs policies update` for the document text. " +
+	"NOTE this differs from `hubs create`, which DOES accept settings.policies.enabled/show; there is no CLI door for policies.show on an existing hub. " +
+	"Read the stored state back with `mio hubs policies get <hub_id>`."
+
+// checkPoliciesOnUpdate warns (or, with --strict-keys, errors) when an update's
+// --settings-json carries `policies`.
+//
+// `policies` is a LEGITIMATE settings key — it is on the allowlist, it is real on
+// create, and validateBlobKeys is right not to flag it. This is a different
+// failure: a known key on the wrong verb. Without this, `hubs update
+// --settings-json '{"policies":{"enabled":true}}'` prints success, exits 0 and
+// changes nothing, and the only way to discover that is to read backend source.
+func checkPoliciesOnUpdate(warnW io.Writer, settings map[string]any, unsetPaths []unsetPath, strict bool) error {
+	touched := false
+	if settings != nil {
+		_, touched = settings["policies"]
+	}
+	// --unset is the same silent no-op by a different door: the backend restores
+	// the stored policies block wholesale on update (`merged["policies"] =
+	// current_settings["policies"]`), so deleting a key under it changes nothing.
+	// It is documented as "the only real delete", which makes the omission here
+	// more misleading than the flag's, not less.
+	for _, p := range unsetPaths {
+		if p.blob == "settings" && len(p.segments) > 0 && p.segments[0] == "policies" {
+			touched = true
+			break
+		}
+	}
+	if !touched {
+		return nil
+	}
+	if strict {
+		return errs.New(errs.ExitUsage, "%s", policiesUnwritableOnUpdateMsg)
+	}
+	fmt.Fprintf(warnW, "warning: %s\n", policiesUnwritableOnUpdateMsg)
+	return nil
+}

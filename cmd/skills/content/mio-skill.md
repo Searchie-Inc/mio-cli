@@ -71,8 +71,11 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   **The catch:** the policy write always sends `content`, and the `community`
   template carries none — so **every resume reverts that hub's ToS and Privacy text
   to the backend default**, and because the ToS is acceptance-gated it also bumps the
-  version, **re-prompting every member who had already accepted**. If you customized
-  the legal text, re-apply it after any resume:
+  version, **re-prompting every member who had already accepted**. Check BEFORE a resume with
+  `mio hubs policies get "$HUB_ID"` — but read the **content**, not the version:
+  the backend versions only a ToS saved WITH `--require-acceptance` and projects
+  everything else as `default-v1`, so custom text routinely reads as the default.
+  If you customized the legal text, re-apply it after any resume:
   `mio hubs policies update "$HUB_ID" --policy-type tos --content @tos.md --require-acceptance`.
   **Not in `v0.13.0` or earlier** — on those binaries the gate is never written at
   all, so fix a scaffolded hub with `mio hubs policies gate "$HUB_ID" --enabled`.
@@ -846,7 +849,7 @@ Discover everything with `mio --help`, `mio <group> --help`, or the machine-read
 index at `mio gen-docs --dir ./docs`. Core groups:
 
 - **Auth/context:** `mio whoami` · `mio config set|get|list` · `mio teams list|switch` · `mio api-keys create|list`
-- **Hubs:** `mio hubs scaffold|templates` · `mio hubs create|retrieve|update|list` · `mio hubs policies update|gate` · `mio hubs navigation list|add|remove|reorder`
+- **Hubs:** `mio hubs scaffold|templates` · `mio hubs create|retrieve|update|list` · `mio hubs policies get|update|gate` · `mio hubs navigation list|add|remove|reorder`
 - **Pages:** `mio pages create|list|retrieve|home` · `mio pages catalog templates|section-types|scaffold` · `mio pages tree get|set` · `mio pages publish` · `mio pages sections create|list|reorder`
 - **Media:** `mio media files upload|list|durable-url` · `mio media playlists create|set-cover` (+ `playlists items add|list|remove|reorder`) · `mio media hub-media publish` · `mio media hub-playlists publish` · `mio media search` · `mio media transcripts get|edit|revert`
 - **Community:** `mio community spaces create|list` · `mio community discussions create|list|update` · `mio community moderation ...`
