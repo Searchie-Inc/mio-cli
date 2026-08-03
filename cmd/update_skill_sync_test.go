@@ -461,3 +461,31 @@ func assertTargetedRemediation(t *testing.T, out, target, path string) {
 		t.Errorf("remediation must name the path it is about; got: %q", out)
 	}
 }
+
+// The child can report success and still leave a file we cannot read back. That
+// path used to `continue` silently — and because `installed` was already counted,
+// the run printed NOTHING AT ALL, breaking the guarantee README and llms.txt both
+// state: a failure always prints a line.
+func TestRefreshManagedSkills_ReportsAFailedReadBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores mode bits")
+	}
+	home := isolateSkillHome(t)
+	// Codex, so a hardcoded --target claude cannot satisfy the assertion.
+	path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
+	seedManagedSkill(t, path, "0.12.1")
+	stubRefreshExec(t, func(_, _ string) error { return os.Chmod(path, 0o000) })
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+	var out bytes.Buffer
+	refreshManagedSkills(&out, "/opt/mio/bin/mio")
+
+	if strings.TrimSpace(out.String()) == "" {
+		t.Fatal("a failed read-back printed nothing — README and llms.txt promise a failure always prints")
+	}
+	if !strings.Contains(out.String(), "could not read it back") {
+		t.Errorf("the failure must be named; got: %q", out.String())
+	}
+	assertTargetedRemediation(t, out.String(), "codex", path)
+	assertNoInstallNudge(t, out.String())
+}

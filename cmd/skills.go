@@ -263,6 +263,12 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 			}
 			after, rerr := os.ReadFile(path)
 			if rerr != nil {
+				// The child reported success but we cannot read the result. Say so:
+				// `installed` is already counted, so a bare `continue` here would
+				// print NOTHING at all and break the documented guarantee that a
+				// failure always prints a line.
+				fmt.Fprintf(w, "Refreshed the %s skill at %s but could not read it back (%v) — verify it, or run 'mio skills install --force --target %s'.\n",
+					targetLabel(target), path, rerr, target)
 				continue
 			}
 			if before != nil && string(after) == string(before) {

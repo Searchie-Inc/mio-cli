@@ -127,11 +127,13 @@ Three consequences worth knowing:
 - A skill file you hand-edited, or one that was not installed by `mio`, is never
   touched. The update names that file and gives you the command for **that
   target** — `mio skills install --force --target <claude|codex>`. Note the
-  `--target` is load-bearing. `--force` alone defaults to `claude`, so running it
-  for an edited **Codex** skill acts on the wrong file instead — among other outcomes it may: reports
-  "already up to date" and fixes nothing (a current Claude skill exists), *creates*
-  a Claude skill you never had (none exists), or **overwrites your hand-edited
-  Claude skill** (one exists and you had edited it). Always pass the `--target` the CLI printed.
+  `--target` is load-bearing, and omitting it **can destroy data**. `--force`
+  alone defaults to `claude`, so running it for an edited **Codex** skill acts on
+  the Claude file instead. Depending on what is there it reports "already up to
+  date" and fixes nothing, *creates* a Claude skill you never had, or
+  **overwrites your hand-edited Claude skill** — measured: a sentinel in a
+  hand-edited `SKILL.md` was gone afterwards. Always pass the `--target` the CLI
+  printed.
 
 If the refresh cannot run, the update tells you rather than leaving a stale
 skill in place. A stale skill is worth avoiding: it advertises verbs the
