@@ -95,6 +95,51 @@ mio update --version 0.2.1
   version is renamed to `mio.exe.old` next to the new one and removed
   automatically on the next `mio` run.
 
+> **Windows, on v0.12.1 or earlier: one manual install is required.**
+> `mio update` is run by the updater compiled into your *installed* binary, and
+> builds before v0.13.0 carry the old `sh`-shelling code — so in stock
+> PowerShell they fail no matter what a later release fixed — usually
+> `exec: "sh": executable file not found in %PATH%`, or
+> `curl or wget is required to update mio` if neither is on `%PATH%`. Both mean
+> the same thing: you are running a pre-0.13.0 updater. A shipped fix cannot repair an
+> already-installed updater. Download the current release from the
+> [releases page](https://github.com/Searchie-Inc/mio-cli/releases) once;
+> updates work normally afterwards. The failure is clean — your existing
+> `mio.exe` is left intact with nothing to recover from. (MIO-2873)
+
+### The agent skill and `mio update`
+
+If you have a managed agent skill installed (`mio skills install`), a successful
+update refreshes it by asking the **newly installed** binary to rewrite it. The
+running binary cannot do this itself: the skill body is compiled into each
+release, so the old process only holds the old surface and could at best write
+the *previous* content under the *new* version's label.
+
+Three consequences worth knowing:
+
+- The path is named in the output **when the file changes**. If your skill is
+  already current the update says nothing about it — silence there means
+  "already current", not "failed"; a failure or a skipped hand-edited file
+  always prints a line.
+- The skill lives at `~/.claude/skills/mio/SKILL.md` (or, for Codex,
+  `$CODEX_HOME/skills/mio/SKILL.md` — `~/.codex/skills/mio/SKILL.md` when
+  `CODEX_HOME` is unset), which is **outside** `--prefix`.
+- A skill file you hand-edited, or one that was not installed by `mio`, is never
+  touched. The update names that file and gives you the command for **that
+  target** — `mio skills install --force --target <claude|codex>`. Note the
+  `--target` is load-bearing, and omitting it **can destroy data**. `--force`
+  alone defaults to `claude`, so running it for an edited **Codex** skill acts on
+  the Claude file instead. Depending on what is there it reports "already up to
+  date" and fixes nothing, *creates* a Claude skill you never had, or
+  **overwrites your hand-edited Claude skill** — measured: a sentinel in a
+  hand-edited `SKILL.md` was gone afterwards. Always pass the `--target` the CLI
+  printed.
+
+If the refresh cannot run, the update tells you rather than leaving a stale
+skill in place. A stale skill is worth avoiding: it advertises verbs the
+installed binary may not have, and the resulting failures look like CLI bugs
+rather than version skew.
+
 ---
 
 ## First run

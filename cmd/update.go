@@ -66,10 +66,11 @@ shell and no curl are required.`,
 			}
 			return errs.Wrap(errs.ExitGeneric, err)
 		}
-		// After a successful self-update, keep any managed agent skill in sync:
-		// refresh an unmodified install, never clobber a hand-edited one, and
-		// nudge if none is installed. Best-effort — never fails the update.
-		refreshManagedSkills(cmd.OutOrStdout())
+		// After a successful self-update, keep any managed agent skill in sync.
+		// The refresh is delegated to the binary we just installed — this
+		// process still holds the OLD embedded skill body and cannot render the
+		// new one (MIO-2874). Best-effort: never fails the update.
+		refreshManagedSkills(cmd.OutOrStdout(), installedBinaryPath(opts.Prefix))
 		return nil
 	},
 }
@@ -78,6 +79,33 @@ func init() {
 	updateCmd.Flags().StringVar(&updateFlags.Version, "version", "", "Release version to install, e.g. 0.2.1. Defaults to latest.")
 	updateCmd.Flags().StringVar(&updateFlags.Prefix, "prefix", "", "Install directory. Defaults to the current executable's directory.")
 	rootCmd.AddCommand(updateCmd)
+}
+
+// installedBinaryPath is where the updater just wrote the new binary. Returns ""
+// when no regular file is there, so the caller reports the skill was left alone
+// instead of silently leaving a stale one (MIO-2874).
+//
+// The result is made ABSOLUTE deliberately. filepath.Join(".", "mio") yields the
+// separator-free "mio", and os/exec resolves a separator-free name through $PATH
+// rather than the current directory — so `mio update --prefix .` would hand the
+// skill refresh to whatever other mio happens to be on PATH and then report its
+// version as installed. That is precisely the "skill that lies about which verbs
+// exist" outcome this whole path exists to prevent, reached through a supported
+// flag value.
+func installedBinaryPath(prefix string) string {
+	name := "mio"
+	if runtime.GOOS == "windows" {
+		name = "mio.exe"
+	}
+	p, err := filepath.Abs(filepath.Join(prefix, name))
+	if err != nil {
+		return ""
+	}
+	fi, err := os.Stat(p)
+	if err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	return p
 }
 
 func resolveUpdatePrefix(prefix string) (string, error) {

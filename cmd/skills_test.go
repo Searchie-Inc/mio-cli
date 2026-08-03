@@ -142,15 +142,27 @@ func TestRefreshManagedSkills_RefreshesUnmodifiedManagedInstall(t *testing.T) {
 		t.Fatalf("seed file should classify as managedUnmodified, got %v", st)
 	}
 
+	// The refresh is performed BY the newly installed binary — this process holds
+	// only its own embedded body and cannot render another version's (MIO-2874).
+	// Stand in for that binary writing its own content.
+	oldExec := skillRefreshExec
+	t.Cleanup(func() { skillRefreshExec = oldExec })
+	skillRefreshExec = func(_, target string) error {
+		if target != "claude" {
+			return nil
+		}
+		return writeSkillFile(path, renderSkill("9.9.9"))
+	}
+
 	var buf bytes.Buffer
-	refreshManagedSkills(&buf)
+	refreshManagedSkills(&buf, "/opt/mio/bin/mio")
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read refreshed: %v", err)
 	}
-	if !strings.Contains(string(data), skillVersionKey+": "+version.Version) {
-		t.Errorf("refreshed skill should carry current version %q", version.Version)
+	if !strings.Contains(string(data), skillVersionKey+": 9.9.9") {
+		t.Errorf("refreshed skill should carry the INSTALLED version written by the new binary")
 	}
 	if strings.Contains(string(data), skillVersionKey+": 0.0.1") {
 		t.Errorf("refreshed skill still carries the old version")
@@ -177,7 +189,7 @@ func TestRefreshManagedSkills_NeverClobbersHandEditedInstall(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	refreshManagedSkills(&buf)
+	refreshManagedSkills(&buf, "/opt/mio/bin/mio")
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -197,10 +209,17 @@ func TestRefreshManagedSkills_NudgesWhenNeverInstalled(t *testing.T) {
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 
 	var buf bytes.Buffer
-	refreshManagedSkills(&buf)
+	refreshManagedSkills(&buf, "/opt/mio/bin/mio")
 
-	if !strings.Contains(buf.String(), "mio skills install") {
-		t.Errorf("expected an install nudge, got: %q", buf.String())
+	// "mio skills install" alone cannot discriminate — it is a substring of the
+	// edited-locally message too ("run 'mio skills install --force --target ...'"), so
+	// swapping the branches leaves this green. Assert the nudge exactly, and
+	// assert the other message is ABSENT.
+	if !strings.Contains(buf.String(), "A mio CLI agent skill is available") {
+		t.Errorf("expected the install nudge, got: %q", buf.String())
+	}
+	if strings.Contains(buf.String(), "edited locally") {
+		t.Errorf("nothing is installed, so the edited-locally message is wrong; got: %q", buf.String())
 	}
 }
 

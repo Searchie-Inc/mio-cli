@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -8,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -182,16 +185,49 @@ func runSkillsPrint(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// refreshManagedSkills is called by `mio update` after a successful self-update.
-// For each installed target it refreshes an unmodified managed install to the
-// new embedded skill, never clobbers a hand-edited or unmanaged file, and never
-// writes to a target that was never installed. If nothing is installed anywhere
-// it prints a one-line nudge. It is best-effort: any error is swallowed so a
-// skill hiccup can never fail the update itself.
-func refreshManagedSkills(w io.Writer) {
-	content := renderSkill(version.Version)
+// skillRefreshHandoffTimeout bounds the handoff. A newly installed binary that
+// wedges must not hang `mio update` indefinitely — "best-effort" has to mean
+// bounded, not merely error-swallowing.
+const skillRefreshHandoffTimeout = 30 * time.Second
 
-	var refreshed, current, modified int
+// skillRefreshExec runs the NEWLY INSTALLED binary to rewrite a managed skill.
+// It is a package var so tests can observe the handoff without exec'ing — but
+// note that stubbing it removes the argv below from every oracle, so the real
+// invocation is covered separately by TestSkillRefreshExec_RealBinaryArgv.
+var skillRefreshExec = func(bin, target string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), skillRefreshHandoffTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "skills", "install", "--force", "--target", target)
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	return cmd.Run()
+}
+
+// refreshManagedSkills keeps a managed agent skill in sync after a self-update.
+//
+// It CANNOT render the new skill itself. The skill body is //go:embed-ed, so the
+// running process only ever holds its OWN version's content; `renderSkill` just
+// stamps a version string onto that body. Re-stamping it with the installed
+// version would produce the old content under the new version's label, with a
+// matching content hash — a skill that lies about which verbs exist and offers
+// no signal that it does. That is worse than leaving it stale (MIO-2874).
+//
+// So the new binary is asked to write its own skill. The classification stays
+// here, because it does not depend on version: an unmodified managed install is
+// refreshed, a file the user owns is never touched (MIO-2875).
+// EVERY REMEDIATION below must carry targetLabel(target), path AND --target <t>
+// (the "Refreshed ..." lines and the install nudge are not remediations).
+// `mio skills install --force` defaults to --target claude, so a bare
+// suggestion printed about the Codex skill answers "already up to date" for
+// Claude and leaves the reported file untouched — success-looking output,
+// problem unfixed. When no Claude skill exists it CREATES one the user never
+// had, and when a hand-edited Claude skill exists it OVERWRITES it. That last
+// one is data loss reached by following our own instruction, so treat a
+// target-less remediation string here as a defect, not a nit.
+func refreshManagedSkills(w io.Writer, newBin string) {
+	// installed counts every target that HAS a managed skill, whatever happened
+	// to it. Without it, a failed refresh falls through to the "you have no skill
+	// installed" nudge one line after naming the file it could not refresh.
+	var installed int
 	for _, target := range []string{"claude", "codex"} {
 		path, err := skillDestPath(target, false) // user scope only
 		if err != nil {
@@ -199,36 +235,65 @@ func refreshManagedSkills(w io.Writer) {
 		}
 		state, err := classifySkillFile(path)
 		if err != nil {
+			// Unreadable is NOT "not installed" — a file is there, we just could
+			// not classify it. Count it and say so, or the run goes silent (or,
+			// worse, claims nothing is installed at a path that has one).
+			installed++
+			fmt.Fprintf(w, "Could not read the %s skill at %s (%v) — left untouched; inspect it, or run 'mio skills install --force --target %s' to replace it.\n",
+				targetLabel(target), path, err, target)
 			continue
 		}
 		switch state {
 		case skillMissing:
 			// Never installed for this target — do not write.
 		case skillManagedUnmodified:
-			if existing, rerr := os.ReadFile(path); rerr == nil && string(existing) == content {
-				current++ // already current, nothing to do
+			installed++
+			before, _ := os.ReadFile(path)
+			if newBin == "" {
+				// No usable path to the updated binary; say so rather than
+				// leaving a silently stale skill behind.
+				fmt.Fprintf(w, "Could not locate the updated mio binary to refresh the %s skill at %s — run 'mio skills install --force --target %s' with the new binary.\n",
+					targetLabel(target), path, target)
 				continue
 			}
-			if werr := writeSkillFile(path, content); werr == nil {
-				refreshed++
+			if err := skillRefreshExec(newBin, target); err != nil {
+				fmt.Fprintf(w, "Could not refresh the %s skill at %s (%v) — run 'mio skills install --force --target %s'.\n",
+					targetLabel(target), path, err, target)
+				continue
+			}
+			after, rerr := os.ReadFile(path)
+			if rerr != nil {
+				// The child reported success but we cannot read the result. Say so:
+				// `installed` is already counted, so a bare `continue` here would
+				// print NOTHING at all and break the documented guarantee that a
+				// failure always prints a line.
+				fmt.Fprintf(w, "Refreshed the %s skill at %s but could not read it back (%v) — verify it, or run 'mio skills install --force --target %s'.\n",
+					targetLabel(target), path, rerr, target)
+				continue
+			}
+			if before != nil && string(after) == string(before) {
+				// The child reported success and changed nothing — already current.
+				// Saying "Refreshed" here would be a small lie in the commonest
+				// case of all: re-running an update you already have. Stay quiet;
+				// `installed` above already prevents the "none installed" nudge.
+				continue
+			}
+			if ver, ok := skillFileVersion(string(after)); ok {
 				fmt.Fprintf(w, "Refreshed mio skill for %s at %s (version %s)\n",
-					targetLabel(target), path, version.Version)
+					targetLabel(target), path, ver)
+			} else {
+				fmt.Fprintf(w, "Refreshed mio skill for %s at %s\n", targetLabel(target), path)
 			}
 		case skillManagedModified, skillUnmanaged:
-			modified++
+			installed++
+			fmt.Fprintf(w, "Your %s skill at %s was edited locally and was not refreshed — run 'mio skills install --force --target %s' to update it.\n",
+				targetLabel(target), path, target)
 		}
 	}
-
-	switch {
-	case refreshed > 0 || current > 0:
-		// At least one managed install exists; refresh lines (if any) already
-		// printed. Do not nag.
-		if modified > 0 && refreshed == 0 {
-			fmt.Fprintln(w, "Your mio CLI agent skill was edited locally and was not refreshed — run 'mio skills install --force' to update it.")
-		}
-	case modified > 0:
-		fmt.Fprintln(w, "Your mio CLI agent skill was edited locally and was not refreshed — run 'mio skills install --force' to update it.")
-	default:
+	// Only suggest installing one when there genuinely is none. `installed`
+	// counts a managed skill existing regardless of what happened to it — a
+	// failed refresh, or an unreadable file, must not contradict the line above.
+	if installed == 0 {
 		fmt.Fprintln(w, "A mio CLI agent skill is available — run 'mio skills install' to add it to Claude Code.")
 	}
 }
@@ -325,6 +390,18 @@ func renderSkill(ver string) string {
 	b.WriteString("---\n")
 	b.WriteString(skillBody)
 	return b.String()
+}
+
+// skillFileVersion reports the version recorded in a skill file's frontmatter.
+// Used to report what the refreshed file actually says, rather than what the
+// running (pre-update) binary assumes it says.
+func skillFileVersion(content string) (string, bool) {
+	fields, _, ok := splitFrontmatter(content)
+	if !ok {
+		return "", false
+	}
+	v, ok := fields[skillVersionKey]
+	return v, ok
 }
 
 // classifySkillFile reads the file at path and classifies whether it is safe to
