@@ -241,6 +241,21 @@ func TestHubsPoliciesGet_BlankHubIsUsageErrorAndFiresNoRequest(t *testing.T) {
 	if *fired {
 		t.Error("no HTTP request must be fired for a blank hub id — it is a local usage error")
 	}
+
+	// Same, with NO --team either. Codex flagged that the assertion above leans on
+	// an explicit --team and claimed production would resolve the team over the
+	// network first. Measured: it does not — with no team configured the
+	// resolution fails locally, so this still exits 2 with nothing on the wire,
+	// exactly as `hubs retrieve` and `hubs policies gate` do. Pinned so the
+	// ordering cannot regress into a request-before-usage-error.
+	srv2, fired2 := firedGuardServer(t)
+	res2 := runContract(t, baseEnv(srv2.URL), "hubs", "policies", "get", "")
+	if res2.Code != errs.ExitUsage {
+		t.Errorf("no --team, blank hub: exit = %d, want %d (ExitUsage); stderr=%q", res2.Code, errs.ExitUsage, res2.Stderr)
+	}
+	if *fired2 {
+		t.Error("no --team, blank hub: no HTTP request must fire before the usage error")
+	}
 }
 
 // TestHubsPoliciesGet_TooManyArgsIsUsageError — the verb takes at most one

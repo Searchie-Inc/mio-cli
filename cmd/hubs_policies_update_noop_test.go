@@ -26,11 +26,16 @@ const hubUpdateOKBody = `{"data":{"id":"hub_x","type":"hubs","attributes":{"name
 // TestHubsUpdate_PoliciesInSettingsWarns — the update still succeeds (the rest of
 // the blob is written), but stderr must say the policies key went nowhere.
 func TestHubsUpdate_PoliciesInSettingsWarns(t *testing.T) {
-	srv, _, _, _, _ := captureAdminReq(t, http.StatusOK, hubUpdateOKBody)
+	srv, _, _, _, gotBody := captureAdminReq(t, http.StatusOK, hubUpdateOKBody)
 
+	// A WRITABLE SIBLING alongside `policies`. Without it this test cannot tell a
+	// correct implementation from one that warns and then throws the whole
+	// settings patch away: with only `policies` in the object there is nothing
+	// left to observe on the wire. Codex caught exactly that — mutating the verb
+	// to blank `settings` after the warning left every policies test green.
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "hubs", "update", "hub_x",
-			"--settings-json", `{"policies":{"enabled":true,"show":true}}`)...)
+			"--settings-json", `{"policies":{"enabled":true,"show":true},"registration":{"enabled":true}}`)...)
 
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit code = %d, want %d (the write itself is valid); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
@@ -52,6 +57,12 @@ func TestHubsUpdate_PoliciesInSettingsWarns(t *testing.T) {
 	// Warnings go to stderr so `-o json` on stdout stays parseable.
 	if strings.Contains(res.Stdout, "cannot be written") {
 		t.Errorf("the warning must not contaminate stdout; stdout=%q", res.Stdout)
+	}
+	// The warning must not cost the caller their legitimate settings write. This
+	// is the assertion that makes the guard self-sufficient.
+	body := string(*gotBody)
+	if !strings.Contains(body, `"registration"`) {
+		t.Errorf("the sibling settings key must still reach the wire — warning about policies must not drop the rest of the patch; body=%s", body)
 	}
 }
 
