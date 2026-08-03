@@ -98,8 +98,10 @@ mio update --version 0.2.1
 > **Windows, on v0.12.1 or earlier: one manual install is required.**
 > `mio update` is run by the updater compiled into your *installed* binary, and
 > builds before v0.13.0 carry the old `sh`-shelling code — so in stock
-> PowerShell they fail with `exec: "sh": executable file not found in %PATH%`
-> no matter what a later release fixed. A shipped fix cannot repair an
+> PowerShell they fail no matter what a later release fixed — usually
+> `exec: "sh": executable file not found in %PATH%`, or
+> `curl or wget is required to update mio` if neither is on `%PATH%`. Both mean
+> the same thing: you are running a pre-0.13.0 updater. A shipped fix cannot repair an
 > already-installed updater. Download the current release from the
 > [releases page](https://github.com/Searchie-Inc/mio-cli/releases) once;
 > updates work normally afterwards. The failure is clean — your existing
@@ -115,10 +117,13 @@ the *previous* content under the *new* version's label.
 
 Two consequences worth knowing:
 
+- The path is named in the output **when the file changes**. If your skill is
+  already current the update says nothing about it — silence there means
+  "already current", not "failed"; a failure or a skipped hand-edited file
+  always prints a line.
 - The skill lives at `~/.claude/skills/mio/SKILL.md` (or, for Codex,
   `$CODEX_HOME/skills/mio/SKILL.md` — `~/.codex/skills/mio/SKILL.md` when
-  `CODEX_HOME` is unset), which is **outside** `--prefix`. The update names the
-  path it writes.
+  `CODEX_HOME` is unset), which is **outside** `--prefix`.
 - A skill file you hand-edited, or one that was not installed by `mio`, is never
   touched — the update says so and leaves it to you
   (`mio skills install --force` to take the new one).

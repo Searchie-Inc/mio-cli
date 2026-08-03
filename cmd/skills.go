@@ -218,7 +218,7 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 	// installed counts every target that HAS a managed skill, whatever happened
 	// to it. Without it, a failed refresh falls through to the "you have no skill
 	// installed" nudge one line after naming the file it could not refresh.
-	var refreshed, current, installed, modified int
+	var installed, modified int
 	for _, target := range []string{"claude", "codex"} {
 		path, err := skillDestPath(target, false) // user scope only
 		if err != nil {
@@ -253,8 +253,8 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 			if before != nil && string(after) == string(before) {
 				// The child reported success and changed nothing — already current.
 				// Saying "Refreshed" here would be a small lie in the commonest
-				// case of all: re-running an update you already have.
-				current++
+				// case of all: re-running an update you already have. Stay quiet;
+				// `installed` above already prevents the "none installed" nudge.
 				continue
 			}
 			if ver, ok := skillFileVersion(string(after)); ok {
@@ -263,21 +263,23 @@ func refreshManagedSkills(w io.Writer, newBin string) {
 			} else {
 				fmt.Fprintf(w, "Refreshed mio skill for %s at %s\n", targetLabel(target), path)
 			}
-			refreshed++
 		case skillManagedModified, skillUnmanaged:
 			installed++
 			modified++
 		}
 	}
 
-	switch {
-	case installed > 0:
-		// A managed skill exists somewhere; per-target lines (refresh or failure)
-		// are already printed. Never suggest installing one.
-		if modified > 0 && refreshed == 0 && current == 0 {
-			fmt.Fprintln(w, "Your mio CLI agent skill was edited locally and was not refreshed — run 'mio skills install --force' to update it.")
-		}
-	default:
+	// A hand-edited skill is reported whenever one exists, not only when nothing
+	// else succeeded: with two targets, one healthy and one hand-edited, gating
+	// this on refreshed/current made the whole run silent and the user never
+	// learned their edited file had been skipped.
+	if modified > 0 {
+		fmt.Fprintln(w, "Your mio CLI agent skill was edited locally and was not refreshed — run 'mio skills install --force' to update it.")
+	}
+	// Only suggest installing one when there genuinely is none. `installed`
+	// counts a managed skill existing regardless of what happened to it, so a
+	// failed refresh no longer contradicts the line above it.
+	if installed == 0 {
 		fmt.Fprintln(w, "A mio CLI agent skill is available — run 'mio skills install' to add it to Claude Code.")
 	}
 }

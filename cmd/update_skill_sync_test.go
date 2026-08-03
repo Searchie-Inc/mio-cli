@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -300,5 +301,97 @@ func assertNoInstallNudge(t *testing.T, out string) {
 	t.Helper()
 	if strings.Contains(out, "run 'mio skills install' to add it") {
 		t.Errorf("contradictory nudge: told the user no skill is installed, one line after naming the installed file\n%s", out)
+	}
+}
+
+// installedBinaryPath decides WHICH binary writes the skill, so a defect here
+// hands the refresh to the wrong mio and reports its version as installed. It
+// had no test at all until this case: reverting the fix left the whole suite
+// green while restoring a live bug.
+func TestInstalledBinaryPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("binary name and PATH semantics differ on windows")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "mio")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\ntrue\n"), 0o755); err != nil {
+		t.Fatalf("seed binary: %v", err)
+	}
+
+	t.Run("relative prefix resolves to an absolute path, not a PATH lookup", func(t *testing.T) {
+		t.Chdir(dir)
+		got := installedBinaryPath(".")
+		if !filepath.IsAbs(got) {
+			t.Fatalf("must be absolute — a separator-free name is resolved through $PATH by os/exec, "+
+				"so `mio update --prefix .` would hand the refresh to a different mio; got %q", got)
+		}
+		if resolved, err := filepath.EvalSymlinks(got); err == nil {
+			if want, werr := filepath.EvalSymlinks(bin); werr == nil && resolved != want {
+				t.Errorf("resolved to %q, want %q", resolved, want)
+			}
+		}
+	})
+
+	t.Run("absolute prefix", func(t *testing.T) {
+		if got := installedBinaryPath(dir); got != bin {
+			t.Errorf("installedBinaryPath(%q) = %q, want %q", dir, got, bin)
+		}
+	})
+
+	t.Run("missing / directory / non-regular yield empty", func(t *testing.T) {
+		if got := installedBinaryPath(t.TempDir()); got != "" {
+			t.Errorf("missing binary should yield \"\", got %q", got)
+		}
+		d2 := t.TempDir()
+		if err := os.Mkdir(filepath.Join(d2, "mio"), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if got := installedBinaryPath(d2); got != "" {
+			t.Errorf("a directory named mio should yield \"\", got %q", got)
+		}
+	})
+}
+
+// The already-current case must be quiet about refreshing but must NOT look like
+// "nothing is installed" — it is the commonest outcome of all (re-running an
+// update you already have).
+func TestRefreshManagedSkills_AlreadyCurrentIsQuietButNotAlarming(t *testing.T) {
+	home := isolateSkillHome(t)
+	path := claudeSkillPath(home)
+	seedManagedSkill(t, path, "0.12.1")
+
+	// Child succeeds and changes nothing.
+	stubRefreshExec(t, func(_, _ string) error { return nil })
+
+	var out bytes.Buffer
+	refreshManagedSkills(&out, "/opt/mio/bin/mio")
+
+	if strings.Contains(out.String(), "Refreshed") {
+		t.Errorf("must not claim a refresh when the file did not change; got: %q", out.String())
+	}
+	assertNoInstallNudge(t, out.String())
+}
+
+// A hand-edited file must be reported even when ANOTHER target refreshed or was
+// already current — otherwise the combination is silent and the user never
+// learns their edited skill was skipped.
+func TestRefreshManagedSkills_ReportsHandEditedAlongsideAHealthyTarget(t *testing.T) {
+	home := isolateSkillHome(t)
+	claude := claudeSkillPath(home)
+	codex := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
+
+	seedManagedSkill(t, claude, "0.12.1") // healthy, will be "already current"
+	edited := seedManagedSkill(t, codex, "0.12.1") + "\n<!-- mine -->\n"
+	if err := os.WriteFile(codex, []byte(edited), 0o644); err != nil {
+		t.Fatalf("seed edited: %v", err)
+	}
+
+	stubRefreshExec(t, func(_, _ string) error { return nil })
+
+	var out bytes.Buffer
+	refreshManagedSkills(&out, "/opt/mio/bin/mio")
+
+	if !strings.Contains(out.String(), "edited locally") {
+		t.Errorf("a hand-edited skill must be reported even when another target is healthy; got: %q", out.String())
 	}
 }
