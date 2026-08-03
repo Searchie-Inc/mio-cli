@@ -214,7 +214,8 @@ var skillRefreshExec = func(bin, target string) error {
 // So the new binary is asked to write its own skill. The classification stays
 // here, because it does not depend on version: an unmodified managed install is
 // refreshed, a file the user owns is never touched (MIO-2875).
-// EVERY message below must carry targetLabel(target), path AND --target <t>.
+// EVERY REMEDIATION below must carry targetLabel(target), path AND --target <t>
+// (the "Refreshed ..." lines and the install nudge are not remediations).
 // `mio skills install --force` defaults to --target claude, so a bare
 // suggestion printed about the Codex skill answers "already up to date" for
 // Claude and leaves the reported file untouched — success-looking output,

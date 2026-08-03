@@ -426,7 +426,10 @@ func TestRefreshManagedSkills_ReportsAnUnreadableSkill(t *testing.T) {
 		t.Skip("root ignores mode bits")
 	}
 	home := isolateSkillHome(t)
-	path := claudeSkillPath(home)
+	// CODEX, not claude: `--force` defaults to claude, so a probe seeded on
+	// claude is satisfied by both the correct `--target %s` and a hardcoded
+	// `--target claude`. Verified — that hardcode ships the whole suite green.
+	path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
 	seedManagedSkill(t, path, "0.12.1")
 	if err := os.Chmod(path, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
@@ -439,7 +442,7 @@ func TestRefreshManagedSkills_ReportsAnUnreadableSkill(t *testing.T) {
 	if !strings.Contains(out.String(), "Could not read") {
 		t.Errorf("an unreadable skill must be reported, not silently skipped; got: %q", out.String())
 	}
-	assertTargetedRemediation(t, out.String(), "claude", path)
+	assertTargetedRemediation(t, out.String(), "codex", path)
 	assertNoInstallNudge(t, out.String())
 }
 
