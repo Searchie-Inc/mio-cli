@@ -107,3 +107,67 @@ func TestHubsCreate_PoliciesInSettingsDoesNotWarn(t *testing.T) {
 		t.Errorf("hubs create ACCEPTS settings.policies — warning there would be wrong; stderr=%q", res.Stderr)
 	}
 }
+
+// --unset settings.policies.* is the SAME silent no-op by a different door: the
+// backend restores the stored policies block wholesale on update
+// (`merged["policies"] = current_settings["policies"]`), so deleting a key under
+// it changes nothing. It is documented as "the only real delete", which makes an
+// undisclosed no-op there more misleading than the flag's, not less.
+func TestHubsUpdate_UnsetPoliciesWarns(t *testing.T) {
+	srv, _, _, _, _ := captureAdminReq(t, http.StatusOK, hubUpdateOKBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "update", "hub_x", "--unset", "settings.policies.enabled")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "settings.policies cannot be written by") {
+		t.Errorf("--unset settings.policies.* must disclose the no-op too; got: %q", res.Stderr)
+	}
+}
+
+// The nested form and the bare blob path must both trip it.
+func TestHubsUpdate_UnsetPoliciesBareBlobWarns(t *testing.T) {
+	srv, _, _, _, _ := captureAdminReq(t, http.StatusOK, hubUpdateOKBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "update", "hub_x", "--unset", "settings.policies")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "settings.policies cannot be written by") {
+		t.Errorf("bare --unset settings.policies must warn; got: %q", res.Stderr)
+	}
+}
+
+// It must NOT fire for other unset paths — this is the over-correction to avoid.
+func TestHubsUpdate_UnsetOtherKeyIsSilent(t *testing.T) {
+	srv, _, _, _, _ := captureAdminReq(t, http.StatusOK, hubUpdateOKBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "update", "hub_x", "--unset", "settings.registration.enabled")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if strings.Contains(res.Stderr, "settings.policies") {
+		t.Errorf("must not warn for an unrelated --unset path; got: %q", res.Stderr)
+	}
+}
+
+// A branding path that merely ends in "policies" must not trip the blob check.
+func TestHubsUpdate_UnsetNonSettingsPoliciesIsSilent(t *testing.T) {
+	srv, _, _, _, _ := captureAdminReq(t, http.StatusOK, hubUpdateOKBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "update", "hub_x", "--unset", "meta.policies")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if strings.Contains(res.Stderr, "cannot be written by") {
+		t.Errorf("meta.policies is a different blob and is writable; got: %q", res.Stderr)
+	}
+}

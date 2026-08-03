@@ -259,11 +259,23 @@ const policiesUnwritableOnUpdateMsg = "settings.policies cannot be written by `h
 // failure: a known key on the wrong verb. Without this, `hubs update
 // --settings-json '{"policies":{"enabled":true}}'` prints success, exits 0 and
 // changes nothing, and the only way to discover that is to read backend source.
-func checkPoliciesOnUpdate(warnW io.Writer, settings map[string]any, strict bool) error {
-	if settings == nil {
-		return nil
+func checkPoliciesOnUpdate(warnW io.Writer, settings map[string]any, unsetPaths []unsetPath, strict bool) error {
+	touched := false
+	if settings != nil {
+		_, touched = settings["policies"]
 	}
-	if _, present := settings["policies"]; !present {
+	// --unset is the same silent no-op by a different door: the backend restores
+	// the stored policies block wholesale on update (`merged["policies"] =
+	// current_settings["policies"]`), so deleting a key under it changes nothing.
+	// It is documented as "the only real delete", which makes the omission here
+	// more misleading than the flag's, not less.
+	for _, p := range unsetPaths {
+		if p.blob == "settings" && len(p.segments) > 0 && p.segments[0] == "policies" {
+			touched = true
+			break
+		}
+	}
+	if !touched {
 		return nil
 	}
 	if strict {

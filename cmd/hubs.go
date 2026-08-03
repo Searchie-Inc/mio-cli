@@ -664,10 +664,6 @@ the ambient context (--hub, or current_hub in config).`,
 		// a template internal they never typed on every single scaffold is noise.
 		// MIO-2811 option (1) is about the flag; this is the flag. Runs before any
 		// HTTP so --strict-keys rejects with no request. (MIO-2811)
-		strictForPolicies, _ := cmd.Flags().GetBool("strict-keys")
-		if err := checkPoliciesOnUpdate(cmd.ErrOrStderr(), settings, strictForPolicies); err != nil {
-			return err
-		}
 		meta, err := parseJSONObjectFlag(cmd, "meta-json")
 		if err != nil {
 			return err
@@ -712,6 +708,18 @@ the ambient context (--hub, or current_hub in config).`,
 			return err
 		}
 		strictKeys, _ := cmd.Flags().GetBool("strict-keys")
+
+		// `policies` is a legitimate settings key and passes the allowlist, but the
+		// backend pops it on the UPDATE path — so both --settings-json and
+		// --unset settings.policies.* report success and change nothing. Checked
+		// HERE, against the user's flags, rather than inside applyHubBlobs: the
+		// scaffold routes the community template's settings (which carry policies)
+		// through the same applier, and warning about a template internal the user
+		// never typed on every scaffold is noise. Runs before any HTTP so
+		// --strict-keys rejects with no request. (MIO-2811)
+		if err := checkPoliciesOnUpdate(cmd.ErrOrStderr(), settings, unsetPaths, strictKeys); err != nil {
+			return err
+		}
 
 		rmw := branding != nil || settings != nil || meta != nil || logo != nil ||
 			favicon != nil || registration != nil || len(unsetPaths) > 0
@@ -1058,7 +1066,7 @@ func init() {
 var hubsPoliciesCmd = &cobra.Command{
 	Use:   "policies",
 	Short: "Manage hub legal policies.",
-	Long:  "Create or update legal policies (Terms of Service, Privacy Policy) for a hub.",
+	Long:  "Read, create or update legal policies (Terms of Service, Privacy Policy) for a hub, and toggle the hub-level enforcement gate.",
 }
 
 // hubsPoliciesPath returns /api/teams/{team_id}/hubs/{hub_id}/policies.
@@ -1238,28 +1246,48 @@ This is the team-owner admin read (MIO-2394), not the member-portal one: the
 portal read serves defaults and forces enabled=true for public display, so this
 is the only way to answer "is enforcement really on for this hub?".
 
-Each item carries policy_type, content, version, enabled and require_acceptance.
-` + "`enabled`" + ` is the ONE hub-level gate repeated on every item, not a per-policy
-flag — the backend stores a single boolean (see ` + "`hubs policies gate`" + `).
+Always returns exactly TWO items — tos and privacy_policy — even for a hub that
+has never configured either; an unconfigured document is served with rendered
+default text. There is no empty case to handle.
 
-` + "`version`" + ` is what distinguishes a customised document from the platform
-default: a hub whose Terms were written by hand carries its own version, while a
-reset document reads "default-v1". That matters because ` + "`hubs scaffold --hub`" + `
-(resume) sends content:null for any policy its template declares no text for,
-which reverts the document to the default and re-prompts every member who had
-already accepted (MIO-2818). Read this BEFORE a resume if the hub has custom
-legal text.
+` + "`enabled`" + ` is the ONE hub-level gate repeated on every item, not a per-policy
+flag: the backend stores a single boolean (see ` + "`hubs policies gate`" + `).
+
+CAN THIS TELL A CUSTOM DOCUMENT FROM THE PLATFORM DEFAULT? Not by itself, and
+the fields mislead in ways worth knowing before you rely on them:
+
+  version   NOT a discriminator. The backend assigns a version ONLY for tos
+            AND ONLY when require_acceptance is set. A hand-written privacy
+            policy, or a tos saved without --require-acceptance, stores no
+            version — and the read projects an absent version as "default-v1".
+            So custom text routinely reads as "default-v1".
+  content   Always populated: your stored text if any, otherwise the rendered
+            platform default. Its presence proves nothing; reading it does.
+  require_acceptance
+            Tri-state. true/false mean a real edit was recorded. null means
+            UNKNOWN — never written, or written before that value began being
+            persisted (MIO-2523). So non-null proves an edit happened; null
+            does not prove one did not.
+
+In practice: READ THE CONTENT AND LOOK AT IT. That is the only reliable check
+before ` + "`hubs scaffold --hub`" + ` (resume), which sends content:null for any policy
+its template declares no text for and reverts that document to the platform
+default (MIO-2818). For a tos that was saved with --require-acceptance, the
+revert also bumps the version and re-prompts every member who had accepted;
+for anything else the text is replaced silently, with no version change to
+notice afterwards.
 
 The hub identifier may be given positionally; omit it to use the ambient hub
 (--hub, or current_hub in config).
 
-NOTE the response is a LIST, and it is EMPTY when policies are unconfigured —
-so capture the gate with ` + "`-o plain --jq '.[0].enabled'`" + `, and treat an empty
-result as "nothing stored", not as "disabled".`,
+Output is a LIST, so index it: ` + "`-o plain --jq '.[0].enabled'`" + `. A bare
+` + "`--jq .enabled`" + ` does not yield null — it EXITS 1 with
+"expected an object but got: array".`,
 	Example: `  mio hubs policies get hub_abc123
   mio hubs policies get --hub hub_abc123
   mio hubs policies get hub_abc123 -o plain --jq '.[0].enabled'
-  mio hubs policies get hub_abc123 --jq '[.[] | {policy_type, version}]'`,
+  mio hubs policies get hub_abc123 --jq '[.[] | {policy_type, version, require_acceptance}]'
+  mio hubs policies get hub_abc123 -o plain --jq '.[] | select(.policy_type=="tos") | .content'`,
 	Args: hubsOptionalIDArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := hubsContext(cmd)

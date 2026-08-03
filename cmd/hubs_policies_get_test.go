@@ -136,25 +136,88 @@ func TestHubsPoliciesGet_JQCapturesGate(t *testing.T) {
 	}
 }
 
-// TestHubsPoliciesGet_EmptyWhenUnconfigured pins the documented empty case. The
-// backend returns an empty data array when policies are unconfigured, which must
-// render as an empty list rather than an error — an agent has to be able to tell
-// "nothing stored" from "disabled".
-func TestHubsPoliciesGet_EmptyWhenUnconfigured(t *testing.T) {
-	srv, _, _, _, _ := captureAdminReq(t, http.StatusOK, `{"data":[]}`)
+// TestHubsPoliciesGet_AlwaysTwoDocuments pins what the backend ACTUALLY does for
+// an unconfigured hub: it returns both documents with rendered default text, not
+// an empty list.
+//
+// An earlier version of this test fed `{"data":[]}` and asserted an empty render,
+// on the belief that the admin read short-circuits when policies are unconfigured.
+// It does not — that early return lives in the PORTAL read (`get_policies`).
+// `get_admin_policies` calls `_project_policy_documents` unconditionally, which
+// loops `for policy_type in ("tos", "privacy_policy")` and always appends both;
+// the backend's own test is named `test_absent_settings_returns_two_disabled_defaults`.
+// So the old test pinned a state the server cannot produce, with a hand-built stub
+// as its only oracle — "asserting an unreachable state" from
+// .claude/rules/verifying-guards.md.
+func TestHubsPoliciesGet_AlwaysTwoDocuments(t *testing.T) {
+	// The unconfigured shape, as the backend really serves it: both documents,
+	// default text, gate off, require_acceptance null ("never recorded").
+	const unconfigured = `{"data":[` +
+		`{"id":"hub_x:tos","type":"policies","attributes":{"policy_type":"tos","content":"# Terms of Service for Acme","version":"default-v1","enabled":false,"require_acceptance":null}},` +
+		`{"id":"hub_x:privacy_policy","type":"policies","attributes":{"policy_type":"privacy_policy","content":"# Privacy Policy for Acme","version":"default-v1","enabled":false,"require_acceptance":null}}` +
+		`]}`
+	srv, _, _, _, _ := captureAdminReq(t, http.StatusOK, unconfigured)
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "hubs", "policies", "get", "hub_x")...)
 
 	if res.Code != errs.ExitOK {
-		t.Fatalf("exit code = %d, want %d (an unconfigured hub is not an error); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+		t.Fatalf("exit code = %d, want %d; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
 	var items []map[string]any
 	if err := json.Unmarshal([]byte(res.Stdout), &items); err != nil {
 		t.Fatalf("stdout is not a JSON list: %v\nstdout=%s", err, res.Stdout)
 	}
-	if len(items) != 0 {
-		t.Errorf("want an empty list for an unconfigured hub, got %d items", len(items))
+	if len(items) != 2 {
+		t.Fatalf("an unconfigured hub still returns BOTH documents, got %d", len(items))
+	}
+	for _, it := range items {
+		if it["require_acceptance"] != nil {
+			t.Errorf("unconfigured require_acceptance must render as null (\"never recorded\"), got %v", it["require_acceptance"])
+		}
+		if it["enabled"] != false {
+			t.Errorf("unconfigured gate must render false, got %v", it["enabled"])
+		}
+	}
+}
+
+// TestHubsPoliciesGet_VersionIsNotADiscriminator is the guard for the Critical
+// this verb shipped with. The help used to tell operators that "default-v1" means
+// the platform default and their text is safe to overwrite. The backend assigns a
+// version ONLY for tos AND ONLY when require_acceptance is set
+// (app/hubs/service.py: `if policy_type == "tos" and require_acceptance:`), and
+// projects an absent version as "default-v1". So a hand-written privacy policy
+// reads "default-v1" while holding custom text — and an operator following that
+// advice would run a resume and destroy it.
+//
+// This pins the shape that proves it: custom content under a default version.
+func TestHubsPoliciesGet_VersionIsNotADiscriminator(t *testing.T) {
+	const customUnderDefaultVersion = `{"data":[` +
+		`{"id":"hub_x:privacy_policy","type":"policies","attributes":{"policy_type":"privacy_policy","content":"OUR HAND WRITTEN PRIVACY POLICY","version":"default-v1","enabled":true,"require_acceptance":false}}` +
+		`]}`
+	srv, _, _, _, _ := captureAdminReq(t, http.StatusOK, customUnderDefaultVersion)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "policies", "get", "hub_x")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	var items []map[string]any
+	if err := json.Unmarshal([]byte(res.Stdout), &items); err != nil {
+		t.Fatalf("stdout is not a JSON list: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("want 1 item, got %d", len(items))
+	}
+	// Both must survive the render: the version that looks default, and the
+	// content that proves it is not. Dropping either would let an operator
+	// conclude the wrong thing from the same call.
+	if items[0]["version"] != "default-v1" {
+		t.Errorf("version = %v, want default-v1", items[0]["version"])
+	}
+	if got, _ := items[0]["content"].(string); !strings.Contains(got, "HAND WRITTEN") {
+		t.Errorf("content must be rendered — it is the ONLY reliable check before a resume; got %q", got)
 	}
 }
 
