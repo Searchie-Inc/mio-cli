@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -188,9 +189,27 @@ func runSkillsPrint(cmd *cobra.Command, _ []string) error {
 // writes to a target that was never installed. If nothing is installed anywhere
 // it prints a one-line nudge. It is best-effort: any error is swallowed so a
 // skill hiccup can never fail the update itself.
-func refreshManagedSkills(w io.Writer) {
-	content := renderSkill(version.Version)
+// skillRefreshExec runs the NEWLY INSTALLED binary to rewrite a managed skill.
+// It is a package var so tests can observe the handoff without exec'ing.
+var skillRefreshExec = func(bin, target string) error {
+	cmd := exec.Command(bin, "skills", "install", "--force", "--target", target)
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	return cmd.Run()
+}
 
+// refreshManagedSkills keeps a managed agent skill in sync after a self-update.
+//
+// It CANNOT render the new skill itself. The skill body is //go:embed-ed, so the
+// running process only ever holds its OWN version's content; `renderSkill` just
+// stamps a version string onto that body. Re-stamping it with the installed
+// version would produce the old content under the new version's label, with a
+// matching content hash — a skill that lies about which verbs exist and offers
+// no signal that it does. That is worse than leaving it stale (MIO-2874).
+//
+// So the new binary is asked to write its own skill. The classification stays
+// here, because it does not depend on version: an unmodified managed install is
+// refreshed, a file the user owns is never touched (MIO-2875).
+func refreshManagedSkills(w io.Writer, newBin string) {
 	var refreshed, current, modified int
 	for _, target := range []string{"claude", "codex"} {
 		path, err := skillDestPath(target, false) // user scope only
@@ -205,15 +224,29 @@ func refreshManagedSkills(w io.Writer) {
 		case skillMissing:
 			// Never installed for this target — do not write.
 		case skillManagedUnmodified:
-			if existing, rerr := os.ReadFile(path); rerr == nil && string(existing) == content {
-				current++ // already current, nothing to do
+			if newBin == "" {
+				// No usable path to the updated binary; say so rather than
+				// leaving a silently stale skill behind.
+				fmt.Fprintf(w, "Could not locate the updated mio binary to refresh the %s skill at %s — run 'mio skills install --force' with the new binary.\n",
+					targetLabel(target), path)
 				continue
 			}
-			if werr := writeSkillFile(path, content); werr == nil {
-				refreshed++
-				fmt.Fprintf(w, "Refreshed mio skill for %s at %s (version %s)\n",
-					targetLabel(target), path, version.Version)
+			if err := skillRefreshExec(newBin, target); err != nil {
+				fmt.Fprintf(w, "Could not refresh the %s skill at %s (%v) — run 'mio skills install --force'.\n",
+					targetLabel(target), path, err)
+				continue
 			}
+			after, rerr := os.ReadFile(path)
+			if rerr != nil {
+				continue
+			}
+			if ver, ok := skillFileVersion(string(after)); ok {
+				fmt.Fprintf(w, "Refreshed mio skill for %s at %s (version %s)\n",
+					targetLabel(target), path, ver)
+			} else {
+				fmt.Fprintf(w, "Refreshed mio skill for %s at %s\n", targetLabel(target), path)
+			}
+			refreshed++
 		case skillManagedModified, skillUnmanaged:
 			modified++
 		}
@@ -325,6 +358,18 @@ func renderSkill(ver string) string {
 	b.WriteString("---\n")
 	b.WriteString(skillBody)
 	return b.String()
+}
+
+// skillFileVersion reports the version recorded in a skill file's frontmatter.
+// Used to report what the refreshed file actually says, rather than what the
+// running (pre-update) binary assumes it says.
+func skillFileVersion(content string) (string, bool) {
+	fields, _, ok := splitFrontmatter(content)
+	if !ok {
+		return "", false
+	}
+	v, ok := fields[skillVersionKey]
+	return v, ok
 }
 
 // classifySkillFile reads the file at path and classifies whether it is safe to

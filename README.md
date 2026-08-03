@@ -95,6 +95,37 @@ mio update --version 0.2.1
   version is renamed to `mio.exe.old` next to the new one and removed
   automatically on the next `mio` run.
 
+> **Windows, on v0.12.1 or earlier: one manual install is required.**
+> `mio update` is run by the updater compiled into your *installed* binary, and
+> builds before v0.13.0 carry the old `sh`-shelling code — so in stock
+> PowerShell they fail with `exec: "sh": executable file not found in %PATH%`
+> no matter what a later release fixed. A shipped fix cannot repair an
+> already-installed updater. Download the current release from the
+> [releases page](https://github.com/Searchie-Inc/mio-cli/releases) once;
+> updates work normally afterwards. The failure is clean — your existing
+> `mio.exe` is left intact with nothing to recover from. (MIO-2873)
+
+### The agent skill and `mio update`
+
+If you have a managed agent skill installed (`mio skills install`), a successful
+update refreshes it by asking the **newly installed** binary to rewrite it. The
+running binary cannot do this itself: the skill body is compiled into each
+release, so the old process only holds the old surface and could at best write
+the *previous* content under the *new* version's label.
+
+Two consequences worth knowing:
+
+- The skill lives at `~/.claude/skills/mio/SKILL.md` (or `$CODEX_HOME/skills/…`),
+  which is **outside** `--prefix`. The update names the path it writes.
+- A skill file you hand-edited, or one that was not installed by `mio`, is never
+  touched — the update says so and leaves it to you
+  (`mio skills install --force` to take the new one).
+
+If the refresh cannot run, the update tells you rather than leaving a stale
+skill in place. A stale skill is worth avoiding: it advertises verbs the
+installed binary may not have, and the resulting failures look like CLI bugs
+rather than version skew.
+
 ---
 
 ## First run

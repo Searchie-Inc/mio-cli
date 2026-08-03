@@ -66,10 +66,11 @@ shell and no curl are required.`,
 			}
 			return errs.Wrap(errs.ExitGeneric, err)
 		}
-		// After a successful self-update, keep any managed agent skill in sync:
-		// refresh an unmodified install, never clobber a hand-edited one, and
-		// nudge if none is installed. Best-effort — never fails the update.
-		refreshManagedSkills(cmd.OutOrStdout())
+		// After a successful self-update, keep any managed agent skill in sync.
+		// The refresh is delegated to the binary we just installed — this
+		// process still holds the OLD embedded skill body and cannot render the
+		// new one (MIO-2874). Best-effort: never fails the update.
+		refreshManagedSkills(cmd.OutOrStdout(), installedBinaryPath(opts.Prefix))
 		return nil
 	},
 }
@@ -78,6 +79,21 @@ func init() {
 	updateCmd.Flags().StringVar(&updateFlags.Version, "version", "", "Release version to install, e.g. 0.2.1. Defaults to latest.")
 	updateCmd.Flags().StringVar(&updateFlags.Prefix, "prefix", "", "Install directory. Defaults to the current executable's directory.")
 	rootCmd.AddCommand(updateCmd)
+}
+
+// installedBinaryPath is where the updater just wrote the new binary. Returns ""
+// when it is not a usable executable, so the caller reports the skill was left
+// alone instead of silently leaving a stale one (MIO-2874).
+func installedBinaryPath(prefix string) string {
+	name := "mio"
+	if runtime.GOOS == "windows" {
+		name = "mio.exe"
+	}
+	p := filepath.Join(prefix, name)
+	if fi, err := os.Stat(p); err != nil || fi.IsDir() {
+		return ""
+	}
+	return p
 }
 
 func resolveUpdatePrefix(prefix string) (string, error) {
