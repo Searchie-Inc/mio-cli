@@ -24,9 +24,16 @@ type ScaffoldFromTemplateRequest struct {
 	IdempotencyKey string
 }
 
-// ScaffoldedPage is one page the op created, keyed by its template role.
+// ScaffoldedPage is one page the op created.
+//
+// Slug is the page's IDENTITY and the only field that attributes PageID to a
+// specific template entry — Role is semantic classification and is NOT unique
+// (the community hubTemplate gives both `about` and `faq` role "secondary").
+// Slug is empty against a backend that predates MIO-2749 (mio-backend #631);
+// callers must handle that, see recordServerOpResult.
 type ScaffoldedPage struct {
 	Role              string
+	Slug              string
 	PageID            string
 	PublishedRevision int
 }
@@ -81,6 +88,7 @@ func (c *Client) ScaffoldFromTemplate(ctx context.Context, teamID, hubID string,
 		}
 		var page ScaffoldedPage
 		page.Role, _ = m["role"].(string)
+		page.Slug, _ = m["slug"].(string)
 		page.PageID, _ = m["page_id"].(string)
 		page.PublishedRevision = intFromAny(m["published_revision"])
 		out.Pages = append(out.Pages, page)

@@ -25,16 +25,30 @@ import (
 // op POST must carry as catalog_digest (the preflight-resolved catalog's pin).
 const fixtureCatalogDigest = "sha256:ab30e06a03eb7040b53754d3afac4313872d1c9e8dfc0c5f9cec9d2b6903c5eb"
 
-// opCreated201 writes the op's 201 with all three community pages, roles keyed
-// like the fixture slugs (published_revision is a PUBLISHED revision — the
-// context must NOT read it as a draft version).
+// opCreated201 writes the op's 201 with all three community pages, in the shape
+// a CURRENT backend sends (mio-backend #631, MIO-2749): every entry carries its
+// slug, and about/faq BOTH carry role "secondary" — matching the real community
+// hubTemplate, where role is not a unique key. published_revision is a PUBLISHED
+// revision — the context must NOT read it as a draft version.
 func opCreated201(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusCreated)
 	_, _ = w.Write([]byte(`{"data":{"id":"ts_1","type":"template_scaffolds","attributes":{` +
 		`"hub_id":"hub_1","pages":[` +
+		`{"role":"homepage","slug":"homepage","page_id":"pg_home","published_revision":3},` +
+		`{"role":"secondary","slug":"about","page_id":"pg_about","published_revision":1},` +
+		`{"role":"secondary","slug":"faq","page_id":"pg_faq","published_revision":1}]}}}`))
+}
+
+// opCreated201NoSlug writes the SAME 201 as a backend that predates MIO-2749:
+// role only, no slug. Drives the templateSlugForRole fallback in
+// recordServerOpResult.
+func opCreated201NoSlug(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write([]byte(`{"data":{"id":"ts_1","type":"template_scaffolds","attributes":{` +
+		`"hub_id":"hub_1","pages":[` +
 		`{"role":"homepage","page_id":"pg_home","published_revision":3},` +
-		`{"role":"about","page_id":"pg_about","published_revision":1},` +
-		`{"role":"faq","page_id":"pg_faq","published_revision":1}]}}}`))
+		`{"role":"secondary","page_id":"pg_about","published_revision":1},` +
+		`{"role":"secondary","page_id":"pg_faq","published_revision":1}]}}}`))
 }
 
 // opConflict409 writes the op's digest-mismatch rejection.
@@ -107,13 +121,72 @@ func TestStepPages_OpPathSkipsClientSideWrites(t *testing.T) {
 	if sc.homeDraftVersion != 0 {
 		t.Errorf("homeDraftVersion = %d, want 0 — published_revision must NOT be conflated with a draft version", sc.homeDraftVersion)
 	}
-	// MIO-2574: the op's ROLE-keyed listing is recorded under the template SLUG,
-	// so both apply branches feed the machine-readable result the same way. Only
-	// the unambiguous roles map — the community template gives both secondary
-	// pages the role "secondary", and a wrong id would be worse than none.
+	// MIO-2574: the op's listing is recorded under the template SLUG, so both
+	// apply branches feed the machine-readable result the same way.
+	// MIO-2749: the op now SENDS the slug, so every entry maps — including the
+	// two that share role "secondary", which role alone could never separate.
+	for slug, want := range map[string]string{
+		"homepage": "pg_home",
+		"about":    "pg_about",
+		"faq":      "pg_faq",
+	} {
+		if got := sc.pageIDsBySlug[slug]; got != want {
+			t.Errorf("pageIDsBySlug[%s] = %q, want %q (from the op's own slug field)", slug, got, want)
+		}
+	}
+}
+
+// TestStepPages_OpPathRecordsBothSameRolePages is the MIO-2749 regression: the
+// two community pages that SHARE role "secondary" must land under their own
+// distinct slugs. Against the pre-fix code — which inferred slug from role via
+// templateSlugForRole — "secondary" matched two template entries, so the helper
+// returned "" and BOTH ids were silently dropped.
+func TestStepPages_OpPathRecordsBothSameRolePages(t *testing.T) {
+	srv, be := newRecoveryBackend(t, nil, nil)
+	be.opHandler = func(w http.ResponseWriter, _ int) { opCreated201(w) }
+
+	sc, err := driveStepPages(t, srv.URL)
+	if err != nil {
+		t.Fatalf("stepPages via the backend op: %v", err)
+	}
+	if sc.pageIDsBySlug["about"] != "pg_about" {
+		t.Errorf("pageIDsBySlug[about] = %q, want pg_about — the id must come from the entry's own slug, not from role",
+			sc.pageIDsBySlug["about"])
+	}
+	if sc.pageIDsBySlug["faq"] != "pg_faq" {
+		t.Errorf("pageIDsBySlug[faq] = %q, want pg_faq — the id must come from the entry's own slug, not from role",
+			sc.pageIDsBySlug["faq"])
+	}
+	if sc.pageIDsBySlug["about"] == sc.pageIDsBySlug["faq"] {
+		t.Errorf("about and faq resolved to the SAME id %q — the two role==secondary entries were not separated",
+			sc.pageIDsBySlug["about"])
+	}
+}
+
+// TestStepPages_OpPathLegacyResponseFallsBackToRole: against a backend that
+// predates MIO-2749 the entries carry no slug, so recordServerOpResult falls
+// back to templateSlugForRole. The unambiguous homepage still maps; the two
+// role=="secondary" entries stay unrecorded, because a wrong id is worse than a
+// missing one. This pins the fallback as still reachable and still conservative.
+func TestStepPages_OpPathLegacyResponseFallsBackToRole(t *testing.T) {
+	srv, be := newRecoveryBackend(t, nil, nil)
+	be.opHandler = func(w http.ResponseWriter, _ int) { opCreated201NoSlug(w) }
+
+	sc, err := driveStepPages(t, srv.URL)
+	if err != nil {
+		t.Fatalf("stepPages via the backend op: %v", err)
+	}
 	if sc.pageIDsBySlug["homepage"] != "pg_home" {
-		t.Errorf("pageIDsBySlug[homepage] = %q, want pg_home (the op's role==homepage entry, keyed by slug)",
-			sc.pageIDsBySlug["homepage"])
+		t.Errorf("pageIDsBySlug[homepage] = %q, want pg_home via the role fallback", sc.pageIDsBySlug["homepage"])
+	}
+	if got, ok := sc.pageIDsBySlug["about"]; ok {
+		t.Errorf("pageIDsBySlug[about] = %q, want ABSENT — role \"secondary\" is ambiguous and must not be guessed", got)
+	}
+	if got, ok := sc.pageIDsBySlug["faq"]; ok {
+		t.Errorf("pageIDsBySlug[faq] = %q, want ABSENT — role \"secondary\" is ambiguous and must not be guessed", got)
+	}
+	if sc.homePageID != "pg_home" {
+		t.Errorf("homePageID = %q, want pg_home", sc.homePageID)
 	}
 }
 

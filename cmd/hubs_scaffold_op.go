@@ -134,11 +134,20 @@ func recordServerOpResult(sc *scaffoldContext, res client.ScaffoldFromTemplateRe
 		return
 	}
 	for _, p := range res.Pages {
-		sc.notef("page %q applied by backend op (page %s, published revision %d)", p.Role, p.PageID, p.PublishedRevision)
 		// Record the id under the template SLUG (MIO-2574) so both apply
-		// branches key the machine-readable result the same way — the op
-		// listing is role-keyed, the client-side loop slug-keyed.
-		sc.recordPageID(templateSlugForRole(sc, p.Role), p.PageID)
+		// branches key the machine-readable result the same way — the
+		// client-side loop is slug-keyed.
+		//
+		// MIO-2749: the op now returns the slug itself, so take it directly.
+		// templateSlugForRole is only the fallback for a backend that predates
+		// that change and still sends role alone; it cannot resolve a role two
+		// template entries share, so about/faq stay unrecorded there.
+		slug := p.Slug
+		if slug == "" {
+			slug = templateSlugForRole(sc, p.Role)
+		}
+		sc.notef("page %q applied by backend op (page %s, published revision %d)", p.Role, p.PageID, p.PublishedRevision)
+		sc.recordPageID(slug, p.PageID)
 		if p.Role == "homepage" && sc.homePageID == "" {
 			sc.homePageID = p.PageID
 		}
@@ -151,6 +160,12 @@ func recordServerOpResult(sc *scaffoldContext, res client.ScaffoldFromTemplateRe
 // templateSlugForRole maps a role from the op's page listing back onto the
 // template pages[] slug that declared it, and does so ONLY when the role is
 // UNAMBIGUOUS — exactly one template entry claims it.
+//
+// LEGACY-BACKEND FALLBACK ONLY (MIO-2749). A current backend returns the slug
+// on every entry and recordServerOpResult uses that directly; this runs only
+// when the response carries no slug, i.e. a backend older than mio-backend
+// #631. Keep it: the CLI talks to whatever backend it is pointed at, and this
+// file already tolerates version skew elsewhere (the op-absent 404/405 probe).
 //
 // The ambiguity is real, not theoretical: the shipped community template gives
 // its secondary pages the SAME role ("secondary" for both about and faq), so a
