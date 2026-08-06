@@ -64,6 +64,20 @@ $ acli jira workitem search --jql "key = MIO-2665" --fields "key,components" --j
 
 Read back with the Atlassian MCP `getJiraIssue` instead — `cloudId: "northresults.atlassian.net"`, fields `["summary","components","parent","assignee"]`. Note it returns the ticket **`description` regardless**, even with a narrow `fields` list — so a blind reviewer using it to check a claim receives the authorial narrative its contract withholds. If that matters, have someone else read it back. (Both `getJiraIssue` and `editJiraIssue` **require** `cloudId`; the site hostname works as the value.) A create that *did* work reads as empty through `acli … search --json`, which is exactly how an earlier ticket in this repo got sent down a needless create-then-edit path.
 
+**2b. `addCommentToJiraIssue` mangles markdown — use acli for COMMENTS.** The MCP
+`editJiraIssue` + `contentFormat: markdown` flow below is right for the
+*description*, but the comment tool double-escapes: newlines land as literal
+`\n` and the body picks up a stray trailing `"}`, rendering as one unreadable
+blob. Verified by reading the stored comment back. Use a plain-text file instead:
+
+```bash
+acli jira workitem comment create --key MIO-<n> --body-file /path/to/body.txt
+acli jira workitem comment update --key MIO-<n> --id <comment_id> --body-file /path/to/body.txt
+```
+
+`--body-file` is plain text, so lay the comment out with blank lines and indented
+blocks rather than markdown fences.
+
 **2. Do not set the description with `--description-file`.** That flag takes "plain text or ADF" — there is no markdown conversion, which is precisely why markdown passed to it survives literally into the ADF: headings arrive as `\## The gap`, bullets as `\-`. Use MCP `editJiraIssue` with `contentFormat: "markdown"`; it converts properly.
 
 ## Conventions
