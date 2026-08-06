@@ -57,7 +57,7 @@ func init() {
 	hubsNavAddCmd.Flags().String("type", "", "Convenience for a url item: url (page/playlist/discussions and mobile items use --item-json).")
 	hubsNavAddCmd.Flags().String("href", "", "url item href (with --type url). A hub-relative href must start with /{slug}.")
 	hubsNavAddCmd.Flags().String("label", "", "url item label (with --type url).")
-	hubsNavAddCmd.Flags().Int("position", 0, "Insert at this zero-based index (default: append to the end).")
+	hubsNavAddCmd.Flags().Int("position", 0, "Insert at this zero-based index (default: append to the end). The item's own `position` field is set from its resulting index, so a `position` inside --item-json is normalized to that index rather than honoured verbatim.")
 
 	hubsNavRemoveCmd.Flags().Int("index", 0, "Zero-based index of the item to remove (see 'navigation list'). Required.")
 

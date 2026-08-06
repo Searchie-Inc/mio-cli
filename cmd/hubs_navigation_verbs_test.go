@@ -523,3 +523,58 @@ func TestNavAdd_PassthroughItemsAreNotStamped(t *testing.T) {
 		t.Errorf("a mobile passthrough item must NOT be given a position — it has no `type` and the backend never validates it: %v", items[0])
 	}
 }
+
+// --position is documented as the insertion index. Since `position` on the item
+// is defined as the array index, the flag necessarily feeds it too — Claudiu's
+// re-test showed `--type url --position 5` still 422'd because the CLI wrote no
+// position AT ALL, not because the flag was disconnected from it. Pinned so the
+// two cannot drift apart.
+func TestNavAdd_PositionFlagFeedsTheItemField(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--type", "url", "--href", "/my-hub/new", "--label", "New", "--position", "1")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "header")
+	if len(items) != 3 {
+		t.Fatalf("want 3 items, got %d", len(items))
+	}
+	if href := navItemStr(t, items[1], "href"); href != "/my-hub/new" {
+		t.Fatalf("--position 1 did not insert at index 1; got %q", href)
+	}
+	if pos, present := navItemPos(t, items[1]); !present || pos != 1 {
+		t.Errorf("the item inserted at --position 1 must carry position 1; got %v (present=%v)", pos, present)
+	}
+}
+
+// A caller-supplied `position` inside --item-json is NORMALIZED to the item's
+// array index, not honoured verbatim.
+//
+// This is a deliberate override and the one place this change overrules explicit
+// input. `position` is a derived property of order, not independent data: the
+// CLI owns the array (via --position / remove --index / reorder) and
+// `navigation list` advertises those same indices for addressing. Honouring a
+// conflicting value would produce a menu whose positions disagree with the order
+// the operator was just shown, and could duplicate an existing item's position.
+// Documented in --position's help so it is a decision rather than a surprise.
+func TestNavAdd_ExplicitPositionInItemJSONIsNormalized(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--item-json", `{"type":"page","label":"About","page_id":"pg_1","position":9}`)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "header")
+	last := len(items) - 1
+	if pos, present := navItemPos(t, items[last]); !present || pos != last {
+		t.Errorf("an explicit position:9 must be normalized to the array index %d; got %v (present=%v)", last, pos, present)
+	}
+	for i, it := range items {
+		if pos, _ := navItemPos(t, it); pos != i {
+			t.Errorf("item %d has position %d — positions must agree with array order after normalization", i, pos)
+		}
+	}
+}
