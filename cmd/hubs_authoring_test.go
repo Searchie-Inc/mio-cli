@@ -643,3 +643,87 @@ func TestHubsCreate_HintOnStderrTableModePrivate(t *testing.T) {
 		t.Errorf("the publish hint must not appear on stdout; stdout=%q", res.Stdout)
 	}
 }
+
+// ─── MIO-2991: `hubs list` must inject the same derived fields as retrieve ───
+//
+// list shipped without injectHubDerivedState while retrieve/create/update all
+// had it, so a caller enumerating hubs read registration_enabled and published
+// as null. Because registration_enabled is FAIL-CLOSED, an absent value is
+// indistinguishable from a genuine false — the gap reads as "registration is off
+// everywhere" rather than as an error. There is no server-side fallback: the API
+// has no registration_enabled field at all.
+//
+// Asserts on a MULTI-ITEM response deliberately, to catch a per-item loop that
+// only touches Data[0] — which a single-item fixture cannot.
+//
+// It does NOT catch ranging by value over Collection.Data: Attributes is a
+// map[string]any, so a copied Resource shares the same underlying map and the
+// by-value form works. Verified by mutation — it passes the whole suite. Said
+// explicitly because an earlier draft of this comment claimed otherwise, and a
+// reader would have trusted a guard that does not exist.
+func TestHubsList_SurfacesDerivedStateOnEveryItem(t *testing.T) {
+	const body = `{
+		"data": [
+			{"id": "hub_1", "type": "hubs", "attributes": {
+				"title": "A", "slug": "a", "is_private": false,
+				"settings": {"registration": {"enabled": true}}}},
+			{"id": "hub_2", "type": "hubs", "attributes": {
+				"title": "B", "slug": "b", "is_private": true,
+				"settings": {"registration": {"enabled": false}}}},
+			{"id": "hub_3", "type": "hubs", "attributes": {
+				"title": "C", "slug": "c", "is_private": false,
+				"settings": {}}}
+		]
+	}`
+	srv, _ := hubRespServer(t, body)
+
+	res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", "hubs", "list")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	var out []map[string]any
+	if err := json.Unmarshal([]byte(res.Stdout), &out); err != nil {
+		t.Fatalf("stdout is not a JSON list: %v; stdout=%q", err, res.Stdout)
+	}
+	if len(out) != 3 {
+		t.Fatalf("rendered %d hubs, want 3", len(out))
+	}
+	// Every item must carry BOTH derived fields — never absent, which is what a
+	// consumer reads as null.
+	for i, h := range out {
+		if _, ok := h["registration_enabled"]; !ok {
+			t.Errorf("hub %d has no registration_enabled — a caller reads null, which is indistinguishable from a genuine false", i)
+		}
+		if _, ok := h["published"]; !ok {
+			t.Errorf("hub %d has no published", i)
+		}
+	}
+	// And the values must be right, not merely present — the LAST item matters
+	// most: it is the one a Data[0]-only fix would miss.
+	if out[0]["registration_enabled"] != true || out[0]["published"] != true {
+		t.Errorf("hub_1: got registration_enabled=%v published=%v, want true/true", out[0]["registration_enabled"], out[0]["published"])
+	}
+	if out[1]["registration_enabled"] != false || out[1]["published"] != false {
+		t.Errorf("hub_2 (private, registration off): got registration_enabled=%v published=%v, want false/false", out[1]["registration_enabled"], out[1]["published"])
+	}
+	if out[2]["registration_enabled"] != false {
+		t.Errorf("hub_3 (no registration key) must fail closed to false, got %v", out[2]["registration_enabled"])
+	}
+}
+
+// --raw deliberately bypasses the derived fields on every path (documented at
+// cmd/hubs.go). The list fix must not change that.
+func TestHubsList_RawBypassesDerivedState(t *testing.T) {
+	const body = `{"data":[{"id":"hub_1","type":"hubs","attributes":{
+		"title":"A","slug":"a","is_private":false,
+		"settings":{"registration":{"enabled":true}}}}]}`
+	srv, _ := hubRespServer(t, body)
+
+	res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", "hubs", "list", "--raw")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if strings.Contains(res.Stdout, "registration_enabled") {
+		t.Errorf("--raw must render the untouched API envelope, with no derived fields; stdout=%q", res.Stdout)
+	}
+}

@@ -398,3 +398,270 @@ func TestNavAdd_PositionOutOfRange_NoPatch(t *testing.T) {
 		}
 	}
 }
+
+// ─── MIO-2990: every strictly-validated item must carry `position` ───────────
+//
+// The backend declares a bare `position: int` on NavItemUrl, NavItemDiscussions
+// and NavItemPage (app/hubs/validation.py _KNOWN_NAV_ITEM_MODELS) — no default,
+// so an item without it is a 422. The CLI never set it, on ANY path.
+//
+// The tests above could not catch that: they assert on ARRAY ORDER against a
+// stub that does not validate, so they are green whether or not the emitted
+// item carries the field the API requires. These assert the wire shape instead.
+
+func navItemPos(t *testing.T, item any) (int, bool) {
+	t.Helper()
+	m, ok := item.(map[string]any)
+	if !ok {
+		t.Fatalf("nav item is not an object: %#v", item)
+	}
+	v, present := m["position"]
+	if !present {
+		return 0, false
+	}
+	f, ok := v.(float64) // encoding/json numbers
+	if !ok {
+		t.Fatalf("position is not a number: %#v", v)
+	}
+	return int(f), true
+}
+
+// Both construction paths must stamp it — Claudiu reported --item-json only, but
+// the url convenience path omitted it too.
+func TestNavAdd_EmitsPositionOnEveryItem(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"url convenience", []string{"--type", "url", "--href", "/my-hub/new", "--label", "New"}},
+		{"item-json page", []string{"--item-json", `{"type":"page","label":"About","page_id":"pg_9"}`}},
+		{"item-json discussions", []string{"--item-json", `{"type":"discussions","label":"Talk"}`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
+			args := append([]string{"hubs", "navigation", "add", "hub_x", "header"}, tc.args...)
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+			if res.Code != errs.ExitOK {
+				t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+			}
+			items := patchNavBucket(t, *body, "header")
+			for i, it := range items {
+				pos, present := navItemPos(t, it)
+				if !present {
+					t.Fatalf("item %d has no `position` — the API requires it on every url/page/discussions item (422 otherwise): %v", i, it)
+				}
+				if pos != i {
+					t.Errorf("item %d has position %d, want %d (position must match array index)", i, pos, i)
+				}
+			}
+		})
+	}
+}
+
+// A mid-bucket insert must renumber the items it displaced. Set-on-insert alone
+// would leave two items claiming position 0.
+func TestNavAdd_MidBucketInsertRenumbersDisplacedItems(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--position", "0", "--type", "url", "--href", "/my-hub/first", "--label", "First")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "header")
+	seen := map[int]bool{}
+	for i, it := range items {
+		pos, present := navItemPos(t, it)
+		if !present {
+			t.Fatalf("item %d lost its position on a mid-bucket insert: %v", i, it)
+		}
+		if seen[pos] {
+			t.Fatalf("duplicate position %d — the displaced items were not renumbered: %v", pos, items)
+		}
+		seen[pos] = true
+		if pos != i {
+			t.Errorf("item %d has position %d after a front insert, want %d", i, pos, i)
+		}
+	}
+}
+
+// remove goes through the same write path, so it must renumber too — otherwise a
+// removal leaves a gap and every later item claims a stale index.
+func TestNavRemove_RenumbersRemainingItems(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "remove", "hub_x", "header", "--index", "0")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "header")
+	for i, it := range items {
+		pos, present := navItemPos(t, it)
+		if !present || pos != i {
+			t.Errorf("after remove, item %d has position %v (present=%v), want %d", i, pos, present, i)
+		}
+	}
+}
+
+// The mobile {id,label,route,icon} shape carries no `type` and takes the
+// backend's PASSTHROUGH branch — it is not schema-checked and does not need a
+// position. Stamping one would be inventing a field on a shape the CLI does not
+// own, which the conduit rule cuts against.
+func TestNavAdd_PassthroughItemsAreNotStamped(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", `{"header":[],"footer":[],"mobile":[]}`)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "mobile",
+			"--item-json", `{"id":"home","label":"Home","route":"/","icon":"house"}`)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "mobile")
+	if len(items) != 1 {
+		t.Fatalf("want 1 mobile item, got %d", len(items))
+	}
+	if _, present := navItemPos(t, items[0]); present {
+		t.Errorf("a mobile passthrough item must NOT be given a position — it has no `type` and the backend never validates it: %v", items[0])
+	}
+}
+
+// --position is documented as the insertion index. Since `position` on the item
+// is defined as the array index, the flag necessarily feeds it too — Claudiu's
+// re-test showed `--type url --position 5` still 422'd because the CLI wrote no
+// position AT ALL, not because the flag was disconnected from it. Pinned so the
+// two cannot drift apart.
+func TestNavAdd_PositionFlagFeedsTheItemField(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--type", "url", "--href", "/my-hub/new", "--label", "New", "--position", "1")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "header")
+	if len(items) != 3 {
+		t.Fatalf("want 3 items, got %d", len(items))
+	}
+	if href := navItemStr(t, items[1], "href"); href != "/my-hub/new" {
+		t.Fatalf("--position 1 did not insert at index 1; got %q", href)
+	}
+	if pos, present := navItemPos(t, items[1]); !present || pos != 1 {
+		t.Errorf("the item inserted at --position 1 must carry position 1; got %v (present=%v)", pos, present)
+	}
+}
+
+// A caller-supplied `position` inside --item-json is NORMALIZED to the item's
+// array index, not honoured verbatim.
+//
+// This is a deliberate override and the one place this change overrules explicit
+// input. `position` is a derived property of order, not independent data: the
+// CLI owns the array (via --position / remove --index / reorder) and
+// `navigation list` advertises those same indices for addressing. Honouring a
+// conflicting value would produce a menu whose positions disagree with the order
+// the operator was just shown, and could duplicate an existing item's position.
+// Documented in --position's help so it is a decision rather than a surprise.
+func TestNavAdd_ExplicitPositionInItemJSONIsNormalized(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--item-json", `{"type":"page","label":"About","page_id":"pg_1","position":9}`)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "header")
+	last := len(items) - 1
+	if pos, present := navItemPos(t, items[last]); !present || pos != last {
+		t.Errorf("an explicit position:9 must be normalized to the array index %d; got %v (present=%v)", last, pos, present)
+	}
+	for i, it := range items {
+		if pos, _ := navItemPos(t, it); pos != i {
+			t.Errorf("item %d has position %d — positions must agree with array order after normalization", i, pos)
+		}
+	}
+}
+
+// ─── the sibling buckets must survive a single-bucket edit untouched ─────────
+//
+// These verbs are documented as mutating ONE bucket, but the write is a
+// whole-blob read-modify-write, so renumbering the entire blob silently rewrote
+// the siblings. That is live rendered state, not bookkeeping: mio-hub SORTS
+// header/footer by `position` (src/lib/hub-shape/navigation.ts parseList), so a
+// footer stored out of array order gets re-flattened by a HEADER-only command,
+// with the footer never appearing in the output.
+func TestNavAdd_DoesNotRenumberSiblingBuckets(t *testing.T) {
+	// footer stored OUT of array order: F carries 3, G carries 0 — mio-hub
+	// renders G,F. A blob-wide renumber would rewrite it to F=0,G=1 and flip it.
+	const nav = `{
+		"header":[{"type":"url","href":"/my-hub/a","label":"A","position":0}],
+		"footer":[{"type":"url","href":"/my-hub/f","label":"F","position":3},
+		          {"type":"url","href":"/my-hub/g","label":"G","position":0}],
+		"mobile":[]}`
+	srv, body, _ := navMockServer(t, "my-hub", nav)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--type", "url", "--href", "/my-hub/new", "--label", "New")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	footer := patchNavBucket(t, *body, "footer")
+	if len(footer) != 2 {
+		t.Fatalf("footer should be passed through with 2 items, got %d", len(footer))
+	}
+	if pos, _ := navItemPos(t, footer[0]); pos != 3 {
+		t.Errorf("footer[0] (F) position = %d, want 3 — a header-only edit must not renumber the footer; mio-hub sorts by position, so this flips its rendered order", pos)
+	}
+	if pos, _ := navItemPos(t, footer[1]); pos != 0 {
+		t.Errorf("footer[1] (G) position = %d, want 0 — sibling buckets pass through verbatim", pos)
+	}
+}
+
+// mobile must still be renumbered when IT is the bucket being edited — the fix
+// for the sibling bug must not become "never touch mobile".
+func TestNavAdd_MobileBucketIsRenumberedWhenEdited(t *testing.T) {
+	const nav = `{"header":[],"footer":[],
+		"mobile":[{"type":"url","href":"/my-hub/m","label":"M","position":7}]}`
+	srv, body, _ := navMockServer(t, "my-hub", nav)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "mobile",
+			"--item-json", `{"type":"url","href":"/my-hub/n","label":"N"}`)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "mobile")
+	for i, it := range items {
+		if pos, present := navItemPos(t, it); !present || pos != i {
+			t.Errorf("mobile item %d has position %v (present=%v), want %d — mobile is a first-class bucket and must renumber when edited", i, pos, present, i)
+		}
+	}
+}
+
+// Index, not a counter over recognized items only. mio-hub gives an item with no
+// `position` a fallback of its INPUT INDEX, so in a bucket mixing recognized and
+// passthrough items a counter would make the first recognized item claim 0 and
+// tie with the first passthrough item — reordering the menu away from what
+// `navigation list` shows.
+func TestNavAdd_PositionIsArrayIndexNotAKnownItemCounter(t *testing.T) {
+	const nav = `{"header":[
+		{"type":"playlist","label":"Watch"},
+		{"type":"url","href":"/my-hub/a","label":"A","position":1}],
+		"footer":[],"mobile":[]}`
+	srv, body, _ := navMockServer(t, "my-hub", nav)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--type", "url", "--href", "/my-hub/b", "--label", "B")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "header")
+	// index 0 is the passthrough playlist (no position, no stamp).
+	if _, present := navItemPos(t, items[0]); present {
+		t.Errorf("the passthrough playlist must not be stamped: %v", items[0])
+	}
+	// The recognized items must carry their ARRAY indices (1, 2) — a counter
+	// over recognized items only would emit 0 and 1.
+	if pos, _ := navItemPos(t, items[1]); pos != 1 {
+		t.Errorf("items[1] position = %d, want 1 (array index); a known-item counter would say 0", pos)
+	}
+	if pos, _ := navItemPos(t, items[2]); pos != 2 {
+		t.Errorf("items[2] position = %d, want 2 (array index); a known-item counter would say 1", pos)
+	}
+}

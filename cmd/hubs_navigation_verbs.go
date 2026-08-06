@@ -53,11 +53,11 @@ func init() {
 	)
 	hubsCmd.AddCommand(hubsNavigationCmd)
 
-	hubsNavAddCmd.Flags().String("item-json", "", "Full menu item as a JSON object (any bucket/type). Inline JSON or @file.")
+	hubsNavAddCmd.Flags().String("item-json", "", "Full menu item as a JSON object (any bucket/type). Inline JSON or @file. NOT fully verbatim: a position key is normalized to the item's resulting array index (see --position).")
 	hubsNavAddCmd.Flags().String("type", "", "Convenience for a url item: url (page/playlist/discussions and mobile items use --item-json).")
 	hubsNavAddCmd.Flags().String("href", "", "url item href (with --type url). A hub-relative href must start with /{slug}.")
 	hubsNavAddCmd.Flags().String("label", "", "url item label (with --type url).")
-	hubsNavAddCmd.Flags().Int("position", 0, "Insert at this zero-based index (default: append to the end).")
+	hubsNavAddCmd.Flags().Int("position", 0, "Insert at this zero-based index (default: append to the end). The item's own position field is set from its resulting index, so a position inside --item-json is normalized to that index rather than honoured verbatim. NOTE no backticks here: pflag's UnquoteUsage takes the first backquoted word as the flag's value name, which would replace the 'int' placeholder.")
 
 	hubsNavRemoveCmd.Flags().Int("index", 0, "Zero-based index of the item to remove (see 'navigation list'). Required.")
 
@@ -185,15 +185,85 @@ func bucketItems(nav map[string]any, bucket string) ([]any, error) {
 
 // writeHubNav validates the whole blob (buckets well-formed + header/footer hrefs
 // hub-scoped) then PATCHes navigation as a whole-blob REPLACE.
-func writeHubNav(c *cmdContext, teamID, hubID string, nav map[string]any, slug string) error {
+func writeHubNav(c *cmdContext, teamID, hubID string, nav map[string]any, slug string, editedBucket string) error {
 	if err := validateNavigationBlob(nav); err != nil {
 		return err
 	}
+	// `position` is REQUIRED on every strictly-validated nav item and the CLI
+	// never set it — add/remove/reorder all shipped items without it, so a typed
+	// add 422s with `NavItemPage.position Field required` (MIO-2990). Renumbering
+	// here rather than at the insert covers all three verbs at once, and keeps
+	// position consistent with array order after a mid-bucket insert or a remove,
+	// which a set-on-insert fix would not.
+	//
+	// ONLY the edited bucket. These verbs are documented as mutating ONE bucket
+	// (see this file's header, docs/internal/api-surface.md, llms.txt), and the
+	// write is a whole-blob read-modify-write, so renumbering everything would
+	// silently rewrite the siblings. That is not bookkeeping: mio-hub SORTS
+	// header/footer by `position` (src/lib/hub-shape/navigation.ts parseList,
+	// ties falling back to input index), so a footer stored out of array order —
+	// e.g. F(position 3), G(position 0), rendering G,F — would be re-flattened to
+	// F,G by a HEADER-only command, with the footer never appearing in the
+	// output. Measured before this was scoped.
+	renumberNavPositions(nav, editedBucket)
 	if err := validateNavigationHrefs(nav, slug); err != nil {
 		return err
 	}
 	_, err := c.client.Update(c.ctx, hubsPath(teamID, hubID), map[string]any{"navigation": nav})
 	return err
+}
+
+// knownNavItemTypes are the item types the backend validates STRICTLY, each of
+// which declares a bare `position: int` with no default (app/hubs/validation.py
+// _KNOWN_NAV_ITEM_MODELS -> NavItemUrl / NavItemDiscussions / NavItemPage).
+//
+// Anything else — a "playlist" item, or the mobile {id,label,route,icon} shape
+// which carries no `type` at all — takes the backend's PASSTHROUGH branch and is
+// not schema-checked. Those are left untouched: stamping `position` onto a shape
+// the CLI does not own would be inventing a field, which the conduit rule cuts
+// against, and it is not what makes them fail (they do not fail).
+//
+// Matched case- and space-insensitively to mirror the backend's own dispatch
+// (_normalize_nav_item_type), so the CLI classifies an item the same way the
+// server will. NOT because it rescues such an item: a `" Page "` 422s WITH a
+// position too — normalization picks the model, then model_validate runs against
+// the ORIGINAL dict, whose type fails NavItemPage's Literal["page"]. Stamping
+// position on one changes nothing. Kept because agreeing with the server's
+// classification is the right default, not because it fixes anything.
+var knownNavItemTypes = map[string]bool{
+	"url":         true,
+	"discussions": true,
+	"page":        true,
+}
+
+// renumberNavPositions sets each strictly-validated item's `position` to its
+// zero-based index within the EDITED bucket. Sibling buckets are left byte-for-
+// byte as fetched — see writeHubNav for why touching them is a live-data bug.
+//
+// Index, not a counter over known items only: `position` addresses the item's
+// place in the rendered menu, and `navigation list` advertises the same array
+// index for remove/reorder. mio-hub's parseList gives an item WITHOUT a position
+// a fallback of its input index, so in a bucket mixing known and passthrough
+// items only the array index keeps the two schemes consistent — a counter would
+// make a url after two playlists claim position 0 and tie with the first.
+func renumberNavPositions(nav map[string]any, bucket string) {
+	{
+		items, ok := nav[bucket].([]any)
+		if !ok {
+			return
+		}
+		for i, it := range items {
+			m, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			t, ok := m["type"].(string)
+			if !ok || !knownNavItemTypes[strings.ToLower(strings.TrimSpace(t))] {
+				continue
+			}
+			m["position"] = i
+		}
+	}
 }
 
 // indexedBucket renders a bucket's items each prefixed with its zero-based index,
@@ -372,7 +442,7 @@ ambient hub (--hub, or current_hub in config).`,
 		out = append(out, items[at:]...)
 		nav[bucket] = out
 
-		if err := writeHubNav(c, teamID, hubID, nav, slug); err != nil {
+		if err := writeHubNav(c, teamID, hubID, nav, slug, bucket); err != nil {
 			return err
 		}
 		return c.render(cmd, map[string]any{bucket: indexedBucket(nav, bucket)})
@@ -425,7 +495,7 @@ ambient hub (--hub, or current_hub in config).`,
 		out = append(out, items[idx+1:]...)
 		nav[bucket] = out
 
-		if err := writeHubNav(c, teamID, hubID, nav, slug); err != nil {
+		if err := writeHubNav(c, teamID, hubID, nav, slug, bucket); err != nil {
 			return err
 		}
 		return c.render(cmd, map[string]any{bucket: indexedBucket(nav, bucket)})
@@ -515,7 +585,7 @@ ambient hub (--hub, or current_hub in config).`,
 		}
 		nav[bucket] = reordered
 
-		if err := writeHubNav(c, teamID, hubID, nav, slug); err != nil {
+		if err := writeHubNav(c, teamID, hubID, nav, slug, bucket); err != nil {
 			return err
 		}
 		return c.render(cmd, map[string]any{bucket: indexedBucket(nav, bucket)})
