@@ -1,9 +1,9 @@
 {
   "meta": {
     "schemaVersion": "2.1.0",
-    "catalogVersion": "0.14.1",
-    "revision": 16,
-    "digest": "sha256:32a5cf74c7a13a4899ad255cd84a2577110fb78dce801cbe53cc3234348d0a15",
+    "catalogVersion": "0.17.0",
+    "revision": 19,
+    "digest": "sha256:7aab4eecad137aed9ed4e9bbe1f89305520a29c315816f405e28f120b42427d0",
     "createdAt": "2026-07-14T00:00:00Z"
   },
   "nodeKinds": {
@@ -209,7 +209,13 @@
         },
         "token": {
           "type": "string",
-          "enum": ["primary", "secondary", "muted", "accent", "background"],
+          "enum": [
+            "primary",
+            "secondary",
+            "muted",
+            "accent",
+            "background"
+          ],
           "description": "Used when type='color'. Theme token name, resolved via BG_TOKEN_CLASS (node-surface.tsx) to a Tailwind bg-* class. An unrecognized token renders no background (dev console.warn)."
         },
         "value": {
@@ -270,18 +276,39 @@
         "padding": {
           "type": "string",
           "freeform": true,
-          "enum": ["none", "sm", "md", "lg", "xl", "section"],
+          "enum": [
+            "none",
+            "sm",
+            "md",
+            "lg",
+            "xl",
+            "section"
+          ],
           "description": "Named spacing token (PADDING_CLASS, node-surface.tsx) OR a raw CSS escape-hatch string (e.g. '15px', '1.25rem') — freeform:true means the enum lists the KNOWN named tokens but any other string value is also legal (rendered as an inline style), not a validation error. 'section' contributes VERTICAL inset only (py-hub-section) and is only visually complete on a maxWidth:'content' container root (see kind:container.maxWidth)."
         },
         "borderRadius": {
           "type": "string",
           "freeform": true,
-          "enum": ["none", "sm", "md", "lg", "full", "hub-s", "hub-m"],
+          "enum": [
+            "none",
+            "sm",
+            "md",
+            "lg",
+            "full",
+            "hub-s",
+            "hub-m"
+          ],
           "description": "Named radius token (RADIUS_CLASS, node-surface.tsx) OR a raw CSS escape-hatch string (e.g. '12px', '50%') — freeform:true, same semantics as padding above."
         },
         "shadow": {
           "type": "string",
-          "enum": ["none", "sm", "md", "lg", "xl"],
+          "enum": [
+            "none",
+            "sm",
+            "md",
+            "lg",
+            "xl"
+          ],
           "description": "Named shadow token (SHADOW_CLASS, node-surface.tsx). NO raw-CSS escape hatch (legacy parity, discrete sizes only) — unlike padding/borderRadius, an unrecognized value is NOT a freeform fallback, it resolves to no shadow class."
         },
         "visibility": {
@@ -300,7 +327,10 @@
         },
         "minHeight": {
           "type": "number",
-          "enum": [500, 440],
+          "enum": [
+            500,
+            440
+          ],
           "description": "Section-root-only concern (like visibility). Literal whitelist, NO raw-CSS escape hatch — a fixed DS design token, not free-form author input (MIN_HEIGHT_CLASS, template-surface.tsx). 500 = unconditional min-h-[500px] (search-bar band). 440 = @[660px]/hub:min-h-[440px], gated to >=660px container width (testimonials carousel band, MIO-2678) — mobile takes natural height."
         }
       }
@@ -332,17 +362,41 @@
       "presentational": {
         "gap": {
           "type": "number",
-          "enum": [0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 6, 8, 12],
+          "enum": [
+            0,
+            0.5,
+            1,
+            1.5,
+            2,
+            2.5,
+            3,
+            4,
+            6,
+            8,
+            12
+          ],
           "description": "Flex-column gap step."
         },
         "align": {
           "type": "string",
-          "enum": ["start", "center", "end", "stretch"],
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "stretch"
+          ],
           "description": "Cross-axis alignment (items-*)."
         },
         "width": {
           "type": "string",
-          "enum": ["full", "1/2", "1/3", "1/4", "2/3", "3/4"],
+          "enum": [
+            "full",
+            "1/2",
+            "1/3",
+            "1/4",
+            "2/3",
+            "3/4"
+          ],
           "description": "Row/columns unification (MIO-2137): makes this stack behave as a responsive COLUMN inside a `row` — full-width on mobile, its flex-grow ratio at/above the hub 660px container-query breakpoint. Requires an ancestor declaring @container/hub."
         },
         "surface": {
@@ -352,7 +406,11 @@
         },
         "mobileGap": {
           "type": "number",
-          "enum": [1.5, 3, 6],
+          "enum": [
+            1.5,
+            3,
+            6
+          ],
           "description": "Opt-in mobile-narrower gap step (DS playlist header content column)."
         },
         "grow": {
@@ -361,7 +419,9 @@
         },
         "px": {
           "type": "number",
-          "enum": [0.5],
+          "enum": [
+            0.5
+          ],
           "description": "Opt-in 2px horizontal optical inset (px-0.5)."
         }
       }
@@ -371,17 +431,40 @@
       "presentational": {
         "gap": {
           "type": "number",
-          "enum": [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 12, "section"],
+          "enum": [
+            1,
+            1.5,
+            2,
+            2.5,
+            3,
+            4,
+            5,
+            6,
+            8,
+            12,
+            "section"
+          ],
           "description": "Flex-row gap step, plus the 'section' sentinel (gap-hub-section-gap, row.tsx:92) — matches RowSettings.gap's mixed union; under the enum-subsumes-type rule the type field is not load-bearing here."
         },
         "align": {
           "type": "string",
-          "enum": ["start", "center", "end", "stretch"],
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "stretch"
+          ],
           "description": "Cross-axis alignment (items-*)."
         },
         "justify": {
           "type": "string",
-          "enum": ["start", "center", "end", "between", "around"],
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "between",
+            "around"
+          ],
           "description": "Main-axis distribution (justify-*)."
         },
         "responsive": {
@@ -402,12 +485,18 @@
         },
         "mobileGap": {
           "type": "number",
-          "enum": [1.5, 3, 6],
+          "enum": [
+            1.5,
+            3,
+            6
+          ],
           "description": "Opt-in mobile-narrower gap step."
         },
         "maxWidth": {
           "type": "number",
-          "enum": [800],
+          "enum": [
+            800
+          ],
           "description": "Opt-in max-width cap (DS playlist header sections)."
         }
       }
@@ -417,17 +506,36 @@
       "presentational": {
         "cols": {
           "type": "number",
-          "enum": [1, 2, 3, 4, 6, 12],
+          "enum": [
+            1,
+            2,
+            3,
+            4,
+            6,
+            12
+          ],
           "description": "Column count (legacy variant only)."
         },
         "gap": {
           "type": "number",
-          "enum": [1, 2, 3, 4, 6, 8, 12],
+          "enum": [
+            1,
+            2,
+            3,
+            4,
+            6,
+            8,
+            12
+          ],
           "description": "Grid gap step (legacy variant only)."
         },
         "variant": {
           "type": "string",
-          "enum": ["legacy", "ds-content", "responsive"],
+          "enum": [
+            "legacy",
+            "ds-content",
+            "responsive"
+          ],
           "description": "Layout variant. 'legacy' = flat grid with configurable cols/gap (default). 'ds-content' = DS-aligned content-page grid with its own section band + containment. 'responsive' = DS grid-section column progression (1->3@660->4@1024) WITHOUT its own section band — relies on an ancestor's TemplateSurface for the @container/hub context."
         }
       }
@@ -471,18 +579,30 @@
       "presentational": {
         "gap": {
           "type": "number",
-          "enum": [2, 4, 6, 8],
+          "enum": [
+            2,
+            4,
+            6,
+            8
+          ],
           "description": "Inter-item gap step."
         },
         "snap": {
           "type": "string",
-          "enum": ["none", "start", "center"],
+          "enum": [
+            "none",
+            "start",
+            "center"
+          ],
           "default": "start",
           "description": "CSS scroll-snap-align mode."
         },
         "itemWidth": {
           "type": "string",
-          "enum": ["auto", "card"],
+          "enum": [
+            "auto",
+            "card"
+          ],
           "description": "'card' fixes each item wrapper to a DS card width (~300px, the `compact` scroll recipe). 'auto' (default) leaves sizing to the child's own layout."
         }
       }
@@ -498,12 +618,24 @@
       "presentational": {
         "padding": {
           "type": "number",
-          "enum": [0, 2, 4, 6, 8, 12, 16],
+          "enum": [
+            0,
+            2,
+            4,
+            6,
+            8,
+            12,
+            16
+          ],
           "description": "Padding scale."
         },
         "background": {
           "type": "string",
-          "enum": ["default", "muted", "accent"],
+          "enum": [
+            "default",
+            "muted",
+            "accent"
+          ],
           "description": "Simple background token — UNRELATED to shared:background/TemplateSurface; this is container.tsx's own small enum."
         },
         "rounded": {
@@ -512,7 +644,13 @@
         },
         "maxWidth": {
           "type": "string",
-          "enum": ["content", "search", "4xl", "6xl", "7xl"],
+          "enum": [
+            "content",
+            "search",
+            "4xl",
+            "6xl",
+            "7xl"
+          ],
           "description": "Content-width cap + gutter. 'content' is the DS gutter-outside-cap idiom (MIO-2128) that pairs with shared:surface.padding='section' on an ancestor surface."
         }
       }
@@ -536,7 +674,10 @@
       "core": {
         "expansion": {
           "type": "string",
-          "enum": ["single", "multiple"],
+          "enum": [
+            "single",
+            "multiple"
+          ],
           "description": "Single vs multiple simultaneously-open panels."
         },
         "defaultExpanded": {
@@ -553,7 +694,10 @@
       "core": {
         "embed_type": {
           "type": "string",
-          "enum": ["native", "iframe"],
+          "enum": [
+            "native",
+            "iframe"
+          ],
           "default": "native",
           "description": "'native' renders an HTML5 <video>; 'iframe' renders a sandboxed <iframe> gated through isAllowedEmbedUrl (an unlisted host renders an inline error, not the iframe)."
         }
@@ -586,7 +730,12 @@
       "presentational": {
         "spacing": {
           "type": "number",
-          "enum": [2, 4, 6, 8],
+          "enum": [
+            2,
+            4,
+            6,
+            8
+          ],
           "default": 4,
           "description": "Vertical margin scale (my-*)."
         }
@@ -619,7 +768,10 @@
         },
         "variant": {
           "type": "string",
-          "enum": ["default", "white"],
+          "enum": [
+            "default",
+            "white"
+          ],
           "description": "Surface variant. 'default' = light. 'white' = for dark/colourful surfaces."
         },
         "disabled": {
@@ -632,7 +784,14 @@
       "core": {
         "level": {
           "type": "number",
-          "enum": [1, 2, 3, 4, 5, 6],
+          "enum": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
           "default": 2,
           "description": "Heading level 1-6, drives both the rendered tag and the DS type-scale size mapping (SIZE_BY_LEVEL)."
         }
@@ -640,13 +799,22 @@
       "presentational": {
         "align": {
           "type": "string",
-          "enum": ["left", "center", "right"],
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
           "default": "left",
           "description": "Text alignment."
         },
         "weight": {
           "type": "number",
-          "enum": [400, 500, 600, 700],
+          "enum": [
+            400,
+            500,
+            600,
+            700
+          ],
           "default": 400,
           "description": "Font weight. MIO-985 Thread B: default headlines are font-normal (400), not the old font-semibold."
         }
@@ -657,18 +825,30 @@
       "presentational": {
         "align": {
           "type": "string",
-          "enum": ["left", "center", "right"],
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
           "default": "left",
           "description": "Text alignment."
         },
         "size": {
           "type": "string",
-          "enum": ["body", "small"],
+          "enum": [
+            "body",
+            "small"
+          ],
           "description": "2-size DS scale (MIO-985 Thread B)."
         },
         "weight": {
           "type": "number",
-          "enum": [400, 500, 600, 700],
+          "enum": [
+            400,
+            500,
+            600,
+            700
+          ],
           "description": "Opt-in font-weight. Unset = normal."
         },
         "clamp": {
@@ -677,7 +857,15 @@
         },
         "marginBottom": {
           "type": "number",
-          "enum": [0, 1, 2, 3, 4, 6, 8],
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            6,
+            8
+          ],
           "description": "Opt-in bottom margin (mb-* scale)."
         },
         "muted": {
@@ -686,7 +874,9 @@
         },
         "tone": {
           "type": "string",
-          "enum": ["primary"],
+          "enum": [
+            "primary"
+          ],
           "description": "Opt-in color tone. 'primary' applies text-primary and wins over `muted` when both are set."
         }
       }
@@ -706,19 +896,31 @@
         },
         "aspectRatio": {
           "type": "string",
-          "enum": ["16:9", "4:3", "1:1", "auto"],
+          "enum": [
+            "16:9",
+            "4:3",
+            "1:1",
+            "auto"
+          ],
           "default": "16:9",
           "description": "Fixed aspect preset, mapped to ui/thumbnail's `aspect` prop. '4:3' has no direct thumbnail preset — mapped to 'preview' plus an override class."
         },
         "objectFit": {
           "type": "string",
-          "enum": ["cover", "contain"],
+          "enum": [
+            "cover",
+            "contain"
+          ],
           "default": "cover",
           "description": "'contain' takes priority over aspectRatio and always resolves to ui/thumbnail's natural (shrink-wrap) mode."
         },
         "radius": {
           "type": "string",
-          "enum": ["control", "control-l", "m"],
+          "enum": [
+            "control",
+            "control-l",
+            "m"
+          ],
           "description": "DS thumbnail radius preset (ui/thumbnail `radius`)."
         },
         "outline": {
@@ -734,7 +936,13 @@
           "properties": {
             "type": {
               "type": "string",
-              "enum": ["page", "url", "email", "scroll", "playlist"],
+              "enum": [
+                "page",
+                "url",
+                "email",
+                "scroll",
+                "playlist"
+              ],
               "description": "Action['type'] (src/lib/page-tree/action.ts)."
             },
             "value": {
@@ -780,7 +988,11 @@
         },
         "size": {
           "type": "string",
-          "enum": ["sm", "md", "lg"],
+          "enum": [
+            "sm",
+            "md",
+            "lg"
+          ],
           "default": "md",
           "description": "Leaf-facing size name, mapped to ui/button size tokens (sm->sm, md->default, lg->lg)."
         },
@@ -808,13 +1020,23 @@
       "presentational": {
         "size": {
           "type": "number",
-          "enum": [16, 20, 24, 32, 48],
+          "enum": [
+            16,
+            20,
+            24,
+            32,
+            48
+          ],
           "default": 24,
           "description": "Pixel size, mapped to the nearest ui/icon-valid size (12|14|16|20|24|32) via toIconSize()."
         },
         "color": {
           "type": "string",
-          "enum": ["default", "primary", "muted"],
+          "enum": [
+            "default",
+            "primary",
+            "muted"
+          ],
           "default": "default",
           "description": "Color token."
         },
@@ -832,7 +1054,12 @@
         },
         "role": {
           "type": "string",
-          "enum": ["title", "subtitle", "meta", "body"],
+          "enum": [
+            "title",
+            "subtitle",
+            "meta",
+            "body"
+          ],
           "description": "Semantic role within the parent template — the cascade resolver applies role-specific defaults (e.g. title gets heading-weight styling), all overridable via the explicit settings below."
         },
         "actionFromScope": {
@@ -843,17 +1070,32 @@
       "presentational": {
         "size": {
           "type": "string",
-          "enum": ["title", "subtitle", "body-big", "body", "body-small"],
+          "enum": [
+            "title",
+            "subtitle",
+            "body-big",
+            "body",
+            "body-small"
+          ],
           "description": "Explicit size override. Falls back to the role default, then 'body'."
         },
         "weight": {
           "type": "number",
-          "enum": [400, 500, 600, 700],
+          "enum": [
+            400,
+            500,
+            600,
+            700
+          ],
           "description": "Explicit font-weight override. Falls back to the role default (title only), then unset."
         },
         "align": {
           "type": "string",
-          "enum": ["left", "center", "right"],
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
           "description": "Text alignment."
         },
         "muted": {
@@ -862,7 +1104,10 @@
         },
         "tone": {
           "type": "string",
-          "enum": ["default", "primary"],
+          "enum": [
+            "default",
+            "primary"
+          ],
           "description": "Opt-in color tone. 'primary' wins over `muted` when both are set. 'default' is the explicit no-tone path — same rendered result as leaving `tone` unset."
         },
         "clamp": {
@@ -871,7 +1116,15 @@
         },
         "marginBottom": {
           "type": "number",
-          "enum": [0, 1, 2, 3, 4, 6, 8],
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            6,
+            8
+          ],
           "description": "Opt-in bottom margin (mb-* scale)."
         },
         "icon": {
@@ -926,17 +1179,29 @@
       "presentational": {
         "aspectRatio": {
           "type": "string",
-          "enum": ["16:9", "4:3", "1:1", "auto"],
+          "enum": [
+            "16:9",
+            "4:3",
+            "1:1",
+            "auto"
+          ],
           "description": "Same styling contract as kind:image's aspectRatio."
         },
         "objectFit": {
           "type": "string",
-          "enum": ["cover", "contain"],
+          "enum": [
+            "cover",
+            "contain"
+          ],
           "description": "Same styling contract as kind:image's objectFit."
         },
         "radius": {
           "type": "string",
-          "enum": ["control", "control-l", "m"],
+          "enum": [
+            "control",
+            "control-l",
+            "m"
+          ],
           "description": "Same styling contract as kind:image's radius."
         },
         "outline": {
@@ -963,7 +1228,10 @@
       "presentational": {
         "variant": {
           "type": "string",
-          "enum": ["primary", "secondary"],
+          "enum": [
+            "primary",
+            "secondary"
+          ],
           "default": "primary",
           "description": "Visual style, forwarded to buttonVariants()."
         }
@@ -3758,8 +4026,7 @@
                     "settings": {
                       "radius": "m",
                       "outline": true
-                    },
-                    "value": "https://assets.searchie.io/hub-templates/community/hero.jpg"
+                    }
                   },
                   {
                     "id": "hero-content",
@@ -3868,8 +4135,7 @@
                     "settings": {
                       "radius": "m",
                       "outline": true
-                    },
-                    "value": "https://assets.searchie.io/hub-templates/community/feature-discussions.jpg"
+                    }
                   },
                   {
                     "id": "feat-1-body",
@@ -3911,8 +4177,7 @@
                     "settings": {
                       "radius": "m",
                       "outline": true
-                    },
-                    "value": "https://assets.searchie.io/hub-templates/community/feature-resources.jpg"
+                    }
                   },
                   {
                     "id": "feat-2-body",
@@ -3954,8 +4219,7 @@
                     "settings": {
                       "radius": "m",
                       "outline": true
-                    },
-                    "value": "https://assets.searchie.io/hub-templates/community/feature-events.jpg"
+                    }
                   },
                   {
                     "id": "feat-3-body",
@@ -4058,28 +4322,292 @@
         "kind": "stack",
         "template": "page-about",
         "settings": {
-          "gap": 6
+          "gap": 0
         },
         "children": [
           {
-            "id": "about",
-            "kind": "row",
+            "id": "about-hero",
+            "kind": "container",
             "template": "row",
-            "settings": {},
+            "settings": {
+              "maxWidth": "content",
+              "padding": 0,
+              "surface": {
+                "padding": "section",
+                "background": {
+                  "type": "tint"
+                }
+              }
+            },
             "children": [
               {
-                "id": "about-headline",
-                "kind": "headline",
+                "id": "about-hero-body",
+                "kind": "stack",
                 "settings": {
-                  "level": 1
+                  "gap": 2,
+                  "align": "center"
                 },
-                "value": "About {{hub_name}}"
+                "children": [
+                  {
+                    "id": "about-hero-headline",
+                    "kind": "headline",
+                    "settings": {
+                      "level": 1,
+                      "weight": 700,
+                      "align": "center"
+                    },
+                    "value": "About {{hub_name}}"
+                  },
+                  {
+                    "id": "about-hero-text",
+                    "kind": "text",
+                    "settings": {
+                      "align": "center",
+                      "clamp": 5
+                    },
+                    "value": "A place for our members to learn, share, and grow together. Here's who we are and what we're building."
+                  },
+                  {
+                    "id": "about-hero-cta",
+                    "kind": "button",
+                    "settings": {
+                      "size": "lg",
+                      "action": {
+                        "type": "page",
+                        "value": "register"
+                      }
+                    },
+                    "value": "Join the community"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "about-mission",
+            "kind": "container",
+            "template": "row",
+            "settings": {
+              "maxWidth": "content",
+              "padding": 0,
+              "surface": {
+                "padding": "section"
+              }
+            },
+            "children": [
+              {
+                "id": "about-mission-body",
+                "kind": "row",
+                "settings": {
+                  "responsive": true,
+                  "wrap": true,
+                  "gap": 6,
+                  "mobileGap": 3,
+                  "align": "stretch"
+                },
+                "children": [
+                  {
+                    "id": "about-mission-col1",
+                    "kind": "stack",
+                    "settings": {
+                      "width": "1/2",
+                      "gap": 2
+                    },
+                    "children": [
+                      {
+                        "id": "about-mission-h1",
+                        "kind": "headline",
+                        "settings": {
+                          "weight": 700
+                        },
+                        "value": "Our mission"
+                      },
+                      {
+                        "id": "about-mission-t1",
+                        "kind": "text",
+                        "settings": {},
+                        "value": "We exist to bring people together around what they care about — sharing knowledge, supporting one another, and building something that lasts."
+                      }
+                    ]
+                  },
+                  {
+                    "id": "about-mission-col2",
+                    "kind": "stack",
+                    "settings": {
+                      "width": "1/2",
+                      "gap": 2
+                    },
+                    "children": [
+                      {
+                        "id": "about-mission-h2",
+                        "kind": "headline",
+                        "settings": {
+                          "weight": 700
+                        },
+                        "value": "What you'll find"
+                      },
+                      {
+                        "id": "about-mission-t2",
+                        "kind": "text",
+                        "settings": {},
+                        "value": "Discussions, resources, and events — a space to ask questions, find answers, and connect with members who share your interests."
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "about-values",
+            "kind": "grid",
+            "template": "content-grid",
+            "settings": {
+              "variant": "ds-content"
+            },
+            "children": [
+              {
+                "id": "about-val-learn",
+                "kind": "stack",
+                "settings": {
+                  "gap": 1,
+                  "align": "center"
+                },
+                "children": [
+                  {
+                    "id": "about-val-learn-h",
+                    "kind": "headline",
+                    "settings": {
+                      "level": 3,
+                      "weight": 700,
+                      "align": "center"
+                    },
+                    "value": "Learn"
+                  },
+                  {
+                    "id": "about-val-learn-t",
+                    "kind": "text",
+                    "settings": {
+                      "align": "center",
+                      "muted": true
+                    },
+                    "value": "Guides, resources, and members who love to share what they know."
+                  }
+                ]
               },
               {
-                "id": "about-text",
-                "kind": "text",
-                "settings": {},
-                "value": "Tell your members who you are, what you do, and why this community exists."
+                "id": "about-val-share",
+                "kind": "stack",
+                "settings": {
+                  "gap": 1,
+                  "align": "center"
+                },
+                "children": [
+                  {
+                    "id": "about-val-share-h",
+                    "kind": "headline",
+                    "settings": {
+                      "level": 3,
+                      "weight": 700,
+                      "align": "center"
+                    },
+                    "value": "Share"
+                  },
+                  {
+                    "id": "about-val-share-t",
+                    "kind": "text",
+                    "settings": {
+                      "align": "center",
+                      "muted": true
+                    },
+                    "value": "Post your own ideas and help others find their footing."
+                  }
+                ]
+              },
+              {
+                "id": "about-val-connect",
+                "kind": "stack",
+                "settings": {
+                  "gap": 1,
+                  "align": "center"
+                },
+                "children": [
+                  {
+                    "id": "about-val-connect-h",
+                    "kind": "headline",
+                    "settings": {
+                      "level": 3,
+                      "weight": 700,
+                      "align": "center"
+                    },
+                    "value": "Connect"
+                  },
+                  {
+                    "id": "about-val-connect-t",
+                    "kind": "text",
+                    "settings": {
+                      "align": "center",
+                      "muted": true
+                    },
+                    "value": "Meet people who care about the same things you do."
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "about-cta",
+            "kind": "container",
+            "template": "row",
+            "settings": {
+              "maxWidth": "content",
+              "padding": 0,
+              "surface": {
+                "padding": "section",
+                "background": {
+                  "type": "tint"
+                }
+              }
+            },
+            "children": [
+              {
+                "id": "about-cta-body",
+                "kind": "stack",
+                "settings": {
+                  "gap": 2,
+                  "align": "center"
+                },
+                "children": [
+                  {
+                    "id": "about-cta-headline",
+                    "kind": "headline",
+                    "settings": {
+                      "weight": 700,
+                      "align": "center"
+                    },
+                    "value": "Ready to join {{hub_name}}?"
+                  },
+                  {
+                    "id": "about-cta-text",
+                    "kind": "text",
+                    "settings": {
+                      "align": "center"
+                    },
+                    "value": "Create your free account and become part of the community."
+                  },
+                  {
+                    "id": "about-cta-btn",
+                    "kind": "button",
+                    "settings": {
+                      "size": "lg",
+                      "action": {
+                        "type": "page",
+                        "value": "register"
+                      }
+                    },
+                    "value": "Join now"
+                  }
+                ]
               }
             ]
           }
@@ -4099,50 +4627,176 @@
         "kind": "stack",
         "template": "page-faq",
         "settings": {
-          "gap": 6
+          "gap": 0
         },
         "children": [
           {
-            "id": "faq",
-            "kind": "row",
+            "id": "faq-hero",
+            "kind": "container",
             "template": "row",
-            "settings": {},
+            "settings": {
+              "maxWidth": "content",
+              "padding": 0,
+              "surface": {
+                "padding": "section",
+                "background": {
+                  "type": "tint"
+                }
+              }
+            },
             "children": [
               {
-                "id": "faq-headline",
-                "kind": "headline",
+                "id": "faq-hero-body",
+                "kind": "stack",
                 "settings": {
-                  "level": 1
+                  "gap": 2,
+                  "align": "center"
                 },
-                "value": "Frequently asked questions"
-              },
+                "children": [
+                  {
+                    "id": "faq-hero-headline",
+                    "kind": "headline",
+                    "settings": {
+                      "level": 1,
+                      "weight": 700,
+                      "align": "center"
+                    },
+                    "value": "Frequently asked questions"
+                  },
+                  {
+                    "id": "faq-hero-text",
+                    "kind": "text",
+                    "settings": {
+                      "align": "center"
+                    },
+                    "value": "Answers to the questions members ask most — still stuck? Join and ask the community."
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "faq-list",
+            "kind": "container",
+            "template": "row",
+            "settings": {
+              "maxWidth": "content",
+              "padding": 0,
+              "surface": {
+                "padding": "section"
+              }
+            },
+            "children": [
               {
                 "id": "faq-accordion",
                 "kind": "accordion",
                 "settings": {
-                  "expansion": "single",
-                  "defaultExpanded": [
-                    "faq-q1"
-                  ]
+                  "expansion": "single"
                 },
                 "children": [
                   {
                     "id": "faq-q1",
                     "kind": "text",
                     "settings": {
-                      "tab_label": "How do I join?",
-                      "muted": true
+                      "tab_label": "How do I join?"
                     },
-                    "value": "Click Join and create an account."
+                    "value": "Click Join the community and create your free account — it only takes a minute."
                   },
                   {
                     "id": "faq-q2",
                     "kind": "text",
                     "settings": {
-                      "tab_label": "Is it free?",
-                      "muted": true
+                      "tab_label": "Is it free?"
                     },
-                    "value": "Yes — membership is free to start."
+                    "value": "Yes — membership is free to start. Some hubs offer paid plans with extra benefits."
+                  },
+                  {
+                    "id": "faq-q3",
+                    "kind": "text",
+                    "settings": {
+                      "tab_label": "What can I do here?"
+                    },
+                    "value": "Join discussions, browse resources, attend events, and connect with other members."
+                  },
+                  {
+                    "id": "faq-q4",
+                    "kind": "text",
+                    "settings": {
+                      "tab_label": "How do I reset my password?"
+                    },
+                    "value": "Use the 'Forgot password' link on the sign-in page and follow the emailed instructions."
+                  },
+                  {
+                    "id": "faq-q5",
+                    "kind": "text",
+                    "settings": {
+                      "tab_label": "Can I use this on mobile?"
+                    },
+                    "value": "Yes — the hub works in any modern mobile browser, with no app to install."
+                  },
+                  {
+                    "id": "faq-q6",
+                    "kind": "text",
+                    "settings": {
+                      "tab_label": "How do I get help?"
+                    },
+                    "value": "Start a discussion in the community, or reach out to the hub's team directly."
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "faq-cta",
+            "kind": "container",
+            "template": "row",
+            "settings": {
+              "maxWidth": "content",
+              "padding": 0,
+              "surface": {
+                "padding": "section",
+                "background": {
+                  "type": "tint"
+                }
+              }
+            },
+            "children": [
+              {
+                "id": "faq-cta-body",
+                "kind": "stack",
+                "settings": {
+                  "gap": 2,
+                  "align": "center"
+                },
+                "children": [
+                  {
+                    "id": "faq-cta-headline",
+                    "kind": "headline",
+                    "settings": {
+                      "weight": 700,
+                      "align": "center"
+                    },
+                    "value": "Still have questions?"
+                  },
+                  {
+                    "id": "faq-cta-text",
+                    "kind": "text",
+                    "settings": {
+                      "align": "center"
+                    },
+                    "value": "Join {{hub_name}} and ask the community — someone's usually happy to help."
+                  },
+                  {
+                    "id": "faq-cta-btn",
+                    "kind": "button",
+                    "settings": {
+                      "size": "lg",
+                      "action": {
+                        "type": "page",
+                        "value": "register"
+                      }
+                    },
+                    "value": "Join the community"
                   }
                 ]
               }
@@ -4158,9 +4812,6 @@
       "label": "Community",
       "lifecycle": "active",
       "branding": {
-        "logo_url": "https://assets.searchie.io/hub-templates/community/logo.png",
-        "favicon_url": "https://assets.searchie.io/hub-templates/community/favicon.png",
-        "social_image_url": "https://assets.searchie.io/hub-templates/community/social.png",
         "primary": "#4F46E5",
         "secondary": "#15803D",
         "background": "#FFFFFF",
@@ -4294,7 +4945,13 @@
           "title": "FAQ",
           "privacy": "public"
         }
-      ]
+      ],
+      "welcomePost": {
+        "space": "general",
+        "title": "Welcome — introduce yourself",
+        "body": "Glad you're here! Take a minute to say hello in General — share a bit about yourself and what brought you to the community. We're looking forward to meeting you.",
+        "is_published": true
+      }
     }
   ],
   "profiles": {

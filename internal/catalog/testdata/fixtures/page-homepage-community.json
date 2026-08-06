@@ -36,8 +36,7 @@
               "settings": {
                 "radius": "m",
                 "outline": true
-              },
-              "value": "https://assets.searchie.io/hub-templates/community/hero.jpg"
+              }
             },
             {
               "id": "#4",
@@ -146,8 +145,7 @@
               "settings": {
                 "radius": "m",
                 "outline": true
-              },
-              "value": "https://assets.searchie.io/hub-templates/community/feature-discussions.jpg"
+              }
             },
             {
               "id": "#15",
@@ -189,8 +187,7 @@
               "settings": {
                 "radius": "m",
                 "outline": true
-              },
-              "value": "https://assets.searchie.io/hub-templates/community/feature-resources.jpg"
+              }
             },
             {
               "id": "#20",
@@ -232,8 +229,7 @@
               "settings": {
                 "radius": "m",
                 "outline": true
-              },
-              "value": "https://assets.searchie.io/hub-templates/community/feature-events.jpg"
+              }
             },
             {
               "id": "#25",

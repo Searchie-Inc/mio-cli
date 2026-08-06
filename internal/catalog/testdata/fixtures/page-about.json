@@ -3,28 +3,292 @@
   "kind": "stack",
   "template": "page-about",
   "settings": {
-    "gap": 6
+    "gap": 0
   },
   "children": [
     {
       "id": "#1",
-      "kind": "row",
+      "kind": "container",
       "template": "row",
-      "settings": {},
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section",
+          "background": {
+            "type": "tint"
+          }
+        }
+      },
       "children": [
         {
           "id": "#2",
-          "kind": "headline",
+          "kind": "stack",
           "settings": {
-            "level": 1
+            "gap": 2,
+            "align": "center"
           },
-          "value": "About {{hub_name}}"
+          "children": [
+            {
+              "id": "#3",
+              "kind": "headline",
+              "settings": {
+                "level": 1,
+                "weight": 700,
+                "align": "center"
+              },
+              "value": "About {{hub_name}}"
+            },
+            {
+              "id": "#4",
+              "kind": "text",
+              "settings": {
+                "align": "center",
+                "clamp": 5
+              },
+              "value": "A place for our members to learn, share, and grow together. Here's who we are and what we're building."
+            },
+            {
+              "id": "#5",
+              "kind": "button",
+              "settings": {
+                "size": "lg",
+                "action": {
+                  "type": "page",
+                  "value": "register"
+                }
+              },
+              "value": "Join the community"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#6",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section"
+        }
+      },
+      "children": [
+        {
+          "id": "#7",
+          "kind": "row",
+          "settings": {
+            "responsive": true,
+            "wrap": true,
+            "gap": 6,
+            "mobileGap": 3,
+            "align": "stretch"
+          },
+          "children": [
+            {
+              "id": "#8",
+              "kind": "stack",
+              "settings": {
+                "width": "1/2",
+                "gap": 2
+              },
+              "children": [
+                {
+                  "id": "#9",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700
+                  },
+                  "value": "Our mission"
+                },
+                {
+                  "id": "#10",
+                  "kind": "text",
+                  "settings": {},
+                  "value": "We exist to bring people together around what they care about — sharing knowledge, supporting one another, and building something that lasts."
+                }
+              ]
+            },
+            {
+              "id": "#11",
+              "kind": "stack",
+              "settings": {
+                "width": "1/2",
+                "gap": 2
+              },
+              "children": [
+                {
+                  "id": "#12",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700
+                  },
+                  "value": "What you'll find"
+                },
+                {
+                  "id": "#13",
+                  "kind": "text",
+                  "settings": {},
+                  "value": "Discussions, resources, and events — a space to ask questions, find answers, and connect with members who share your interests."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#14",
+      "kind": "grid",
+      "template": "content-grid",
+      "settings": {
+        "variant": "ds-content"
+      },
+      "children": [
+        {
+          "id": "#15",
+          "kind": "stack",
+          "settings": {
+            "gap": 1,
+            "align": "center"
+          },
+          "children": [
+            {
+              "id": "#16",
+              "kind": "headline",
+              "settings": {
+                "level": 3,
+                "weight": 700,
+                "align": "center"
+              },
+              "value": "Learn"
+            },
+            {
+              "id": "#17",
+              "kind": "text",
+              "settings": {
+                "align": "center",
+                "muted": true
+              },
+              "value": "Guides, resources, and members who love to share what they know."
+            }
+          ]
         },
         {
-          "id": "#3",
-          "kind": "text",
-          "settings": {},
-          "value": "Tell your members who you are, what you do, and why this community exists."
+          "id": "#18",
+          "kind": "stack",
+          "settings": {
+            "gap": 1,
+            "align": "center"
+          },
+          "children": [
+            {
+              "id": "#19",
+              "kind": "headline",
+              "settings": {
+                "level": 3,
+                "weight": 700,
+                "align": "center"
+              },
+              "value": "Share"
+            },
+            {
+              "id": "#20",
+              "kind": "text",
+              "settings": {
+                "align": "center",
+                "muted": true
+              },
+              "value": "Post your own ideas and help others find their footing."
+            }
+          ]
+        },
+        {
+          "id": "#21",
+          "kind": "stack",
+          "settings": {
+            "gap": 1,
+            "align": "center"
+          },
+          "children": [
+            {
+              "id": "#22",
+              "kind": "headline",
+              "settings": {
+                "level": 3,
+                "weight": 700,
+                "align": "center"
+              },
+              "value": "Connect"
+            },
+            {
+              "id": "#23",
+              "kind": "text",
+              "settings": {
+                "align": "center",
+                "muted": true
+              },
+              "value": "Meet people who care about the same things you do."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#24",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section",
+          "background": {
+            "type": "tint"
+          }
+        }
+      },
+      "children": [
+        {
+          "id": "#25",
+          "kind": "stack",
+          "settings": {
+            "gap": 2,
+            "align": "center"
+          },
+          "children": [
+            {
+              "id": "#26",
+              "kind": "headline",
+              "settings": {
+                "weight": 700,
+                "align": "center"
+              },
+              "value": "Ready to join {{hub_name}}?"
+            },
+            {
+              "id": "#27",
+              "kind": "text",
+              "settings": {
+                "align": "center"
+              },
+              "value": "Create your free account and become part of the community."
+            },
+            {
+              "id": "#28",
+              "kind": "button",
+              "settings": {
+                "size": "lg",
+                "action": {
+                  "type": "page",
+                  "value": "register"
+                }
+              },
+              "value": "Join now"
+            }
+          ]
         }
       ]
     }
