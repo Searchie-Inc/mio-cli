@@ -653,9 +653,14 @@ func TestHubsCreate_HintOnStderrTableModePrivate(t *testing.T) {
 // everywhere" rather than as an error. There is no server-side fallback: the API
 // has no registration_enabled field at all.
 //
-// Asserts on a MULTI-ITEM response deliberately: a per-item loop that only
-// touches Data[0], or one that ranges by value over Collection.Data (mutating a
-// copy), both pass a single-item check.
+// Asserts on a MULTI-ITEM response deliberately, to catch a per-item loop that
+// only touches Data[0] — which a single-item fixture cannot.
+//
+// It does NOT catch ranging by value over Collection.Data: Attributes is a
+// map[string]any, so a copied Resource shares the same underlying map and the
+// by-value form works. Verified by mutation — it passes the whole suite. Said
+// explicitly because an earlier draft of this comment claimed otherwise, and a
+// reader would have trusted a guard that does not exist.
 func TestHubsList_SurfacesDerivedStateOnEveryItem(t *testing.T) {
 	const body = `{
 		"data": [

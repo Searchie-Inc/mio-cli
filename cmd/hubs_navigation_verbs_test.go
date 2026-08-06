@@ -578,3 +578,90 @@ func TestNavAdd_ExplicitPositionInItemJSONIsNormalized(t *testing.T) {
 		}
 	}
 }
+
+// ─── the sibling buckets must survive a single-bucket edit untouched ─────────
+//
+// These verbs are documented as mutating ONE bucket, but the write is a
+// whole-blob read-modify-write, so renumbering the entire blob silently rewrote
+// the siblings. That is live rendered state, not bookkeeping: mio-hub SORTS
+// header/footer by `position` (src/lib/hub-shape/navigation.ts parseList), so a
+// footer stored out of array order gets re-flattened by a HEADER-only command,
+// with the footer never appearing in the output.
+func TestNavAdd_DoesNotRenumberSiblingBuckets(t *testing.T) {
+	// footer stored OUT of array order: F carries 3, G carries 0 — mio-hub
+	// renders G,F. A blob-wide renumber would rewrite it to F=0,G=1 and flip it.
+	const nav = `{
+		"header":[{"type":"url","href":"/my-hub/a","label":"A","position":0}],
+		"footer":[{"type":"url","href":"/my-hub/f","label":"F","position":3},
+		          {"type":"url","href":"/my-hub/g","label":"G","position":0}],
+		"mobile":[]}`
+	srv, body, _ := navMockServer(t, "my-hub", nav)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--type", "url", "--href", "/my-hub/new", "--label", "New")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	footer := patchNavBucket(t, *body, "footer")
+	if len(footer) != 2 {
+		t.Fatalf("footer should be passed through with 2 items, got %d", len(footer))
+	}
+	if pos, _ := navItemPos(t, footer[0]); pos != 3 {
+		t.Errorf("footer[0] (F) position = %d, want 3 — a header-only edit must not renumber the footer; mio-hub sorts by position, so this flips its rendered order", pos)
+	}
+	if pos, _ := navItemPos(t, footer[1]); pos != 0 {
+		t.Errorf("footer[1] (G) position = %d, want 0 — sibling buckets pass through verbatim", pos)
+	}
+}
+
+// mobile must still be renumbered when IT is the bucket being edited — the fix
+// for the sibling bug must not become "never touch mobile".
+func TestNavAdd_MobileBucketIsRenumberedWhenEdited(t *testing.T) {
+	const nav = `{"header":[],"footer":[],
+		"mobile":[{"type":"url","href":"/my-hub/m","label":"M","position":7}]}`
+	srv, body, _ := navMockServer(t, "my-hub", nav)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "mobile",
+			"--item-json", `{"type":"url","href":"/my-hub/n","label":"N"}`)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "mobile")
+	for i, it := range items {
+		if pos, present := navItemPos(t, it); !present || pos != i {
+			t.Errorf("mobile item %d has position %v (present=%v), want %d — mobile is a first-class bucket and must renumber when edited", i, pos, present, i)
+		}
+	}
+}
+
+// Index, not a counter over recognized items only. mio-hub gives an item with no
+// `position` a fallback of its INPUT INDEX, so in a bucket mixing recognized and
+// passthrough items a counter would make the first recognized item claim 0 and
+// tie with the first passthrough item — reordering the menu away from what
+// `navigation list` shows.
+func TestNavAdd_PositionIsArrayIndexNotAKnownItemCounter(t *testing.T) {
+	const nav = `{"header":[
+		{"type":"playlist","label":"Watch"},
+		{"type":"url","href":"/my-hub/a","label":"A","position":1}],
+		"footer":[],"mobile":[]}`
+	srv, body, _ := navMockServer(t, "my-hub", nav)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--type", "url", "--href", "/my-hub/b", "--label", "B")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "header")
+	// index 0 is the passthrough playlist (no position, no stamp).
+	if _, present := navItemPos(t, items[0]); present {
+		t.Errorf("the passthrough playlist must not be stamped: %v", items[0])
+	}
+	// The recognized items must carry their ARRAY indices (1, 2) — a counter
+	// over recognized items only would emit 0 and 1.
+	if pos, _ := navItemPos(t, items[1]); pos != 1 {
+		t.Errorf("items[1] position = %d, want 1 (array index); a known-item counter would say 0", pos)
+	}
+	if pos, _ := navItemPos(t, items[2]); pos != 2 {
+		t.Errorf("items[2] position = %d, want 2 (array index); a known-item counter would say 1", pos)
+	}
+}
