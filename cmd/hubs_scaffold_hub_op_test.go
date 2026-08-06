@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -768,21 +769,75 @@ func TestScaffoldHubOp_FallsBackToTheEnvelopeIDForTheHub(t *testing.T) {
 	}
 }
 
-// An empty --logo-url means "clear this branding key" on the client path, but
-// the op's schema rejects an empty override outright. Letting the op take it
-// would make the same flag do two different things depending on a server flag.
-func TestScaffoldHubOp_EmptyOverrideForcesClientPath(t *testing.T) {
-	srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
+// An empty branding *_url — in ANY spelling — must be refused BEFORE any request.
+//
+// The earlier reading — "the op rejects it, so take the client path, which can
+// honour it" — was wrong in its second half: mio-backend's validate_branding runs
+// the same _validate_absolute_https_url over branding *_url keys on BOTH
+// HubCreateAttributes and HubUpdateAttributes, and that rejects the empty string.
+// So the client path creates the hub and THEN 422s at the blobs PATCH, leaving a
+// half-built hub with no rollback and printing a resume command carrying the same
+// poisoned flag. Neither path can honour it, so nothing may be written at all.
+func TestScaffoldHubOp_EmptyURLOverrideIsAUsageErrorBeforeAnyRequest(t *testing.T) {
+	// The probe set is EVERY registered --*-url flag, not a list maintained beside
+	// the implementation's own. Round 4 fixed --logo-url and --favicon-url and
+	// missed --social-image-url; a hardcoded pair here could not have noticed,
+	// which is the "probe set smaller than the claim" shape. The oracle is the
+	// WIRE — no request may fire — so no edit to any list can green this.
+	// Every registered --*-url flag, discovered rather than listed...
+	var cases [][]string // arg pairs
+	hubsScaffoldCmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if strings.HasSuffix(f.Name, "-url") {
+			cases = append(cases, []string{"--" + f.Name})
+		}
+	})
+	if len(cases) < 3 {
+		t.Fatalf("expected at least 3 --*-url flags on `hubs scaffold`, found %v — has the flag surface changed?", cases)
+	}
+	// ...PLUS the other spelling of the same override. The backend's rule is about
+	// branding KEYS, not flag names, so a check that only knew about flags left
+	// --branding-json on the orphan-producing path.
+	cases = append(cases, []string{"--branding-json"})
 
-	res := runContract(t, scaffoldEnv(t, srv.URL), scaffoldArgs("--logo-url", "")...)
-	if res.Code != errs.ExitOK {
-		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
-	}
-	if len(rec.opPosts) != 0 {
-		t.Errorf("an empty override 422s against the op but CLEARS the key client-side — the op must not be taken; got %d POST(s)", len(rec.opPosts))
-	}
-	if rec.hubCreates != 1 {
-		t.Errorf("must apply client-side, which can honour the clear; hub creates=%d", rec.hubCreates)
+	for _, tc := range cases {
+		flag := tc[0]
+		t.Run(flag, func(t *testing.T) {
+			// --branding-json takes an object, not a bare value.
+			value := func(v string) string {
+				if flag == "--branding-json" {
+					return `{"logo_url":"` + v + `"}`
+				}
+				return v
+			}
+			srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
+
+			res := runContract(t, scaffoldEnv(t, srv.URL), scaffoldArgs(flag, value("   "))...)
+			if res.Code != errs.ExitUsage {
+				t.Errorf("a whitespace-only %s must be refused too — the API rejects it as well; exit = %d, stderr=%q",
+					flag, res.Code, res.Stderr)
+			}
+			res = runContract(t, scaffoldEnv(t, srv.URL), scaffoldArgs(flag, value(""))...)
+			if res.Code != errs.ExitUsage {
+				t.Errorf("exit = %d, want %d (ExitUsage) — the API rejects an empty branding *_url on create AND "+
+					"update, so this can never succeed; stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+			}
+			// The oracle: NOTHING was written. A hub created here is orphaned.
+			if rec.hubCreates != 0 || len(rec.opPosts) != 0 || len(rec.clientPosts) != 0 {
+				t.Errorf("no request may fire — the old behaviour created a hub and then 422'd at the blobs "+
+					"PATCH; opPosts=%d hubCreates=%d otherPosts=%v",
+					len(rec.opPosts), rec.hubCreates, rec.clientPosts)
+			}
+			// An operator told only "no" is stuck: clearing a branding key has its
+			// own verb and the message must name it. The text comes back on the
+			// returned error, which runContract does not render.
+			err := executeCLI(t, scaffoldEnv(t, srv.URL), scaffoldArgs(flag, value(""))...)
+			if err == nil {
+				t.Fatal("an empty URL override must fail")
+			}
+			if !strings.Contains(err.Error(), "--unset branding.") {
+				t.Errorf("the error must name the real way to clear a branding key; err=%v", err)
+			}
+		})
 	}
 }
 
@@ -796,21 +851,235 @@ func TestScaffoldHubOp_EveryScaffoldFlagIsClassified(t *testing.T) {
 		unsupported[f.flag] = true
 	}
 
-	// Only the flags DECLARED on `hubs scaffold`. Flags() also reports the root's
-	// inherited persistent flags (--team/--output/--jq/--hub/…), which are either
-	// context or rendering and are not part of the op's request surface; --hub in
-	// particular is inherited and handled by its own skip branch.
-	inherited := hubsScaffoldCmd.InheritedFlags()
-	hubsScaffoldCmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
-		if f.Name == "help" || inherited.Lookup(f.Name) != nil {
+	// The scaffold's own flags, PLUS any persistent flag the `hubs` group adds —
+	// those are usable on `hubs scaffold` and equally droppable, and scanning only
+	// LocalFlags would miss them (it did: adding a hubsCmd persistent flag left
+	// this guard green). The ROOT's persistent flags are excluded: --team/--output/
+	// --jq/--hub are context or rendering, not part of the op's request surface,
+	// and --hub has its own skip branch.
+	rootPersistent := RootCmd().PersistentFlags()
+	scan := func(f *pflag.Flag) {
+		if f.Name == "help" || rootPersistent.Lookup(f.Name) != nil {
 			return
 		}
-		if hubOpExpressibleFlags[f.Name] || unsupported[f.Name] {
+		if hubOpExpressibleFlags[f.Name] || hubOpStructuralFlags[f.Name] || unsupported[f.Name] {
 			return
 		}
 		t.Errorf("--%s is classified neither expressible nor unsupported. "+
 			"The op path would silently ignore it (pflag Changed() is false for an unknown name, so the "+
-			"unsupported check cannot see it). Add it to hubOpExpressibleFlags if overrides{} can carry it, "+
-			"or to hubOpUnsupportedFlags so it forces the client path.", f.Name)
-	})
+			"unsupported check cannot see it). If overrides{} CANNOT carry it, add it to "+
+			"hubOpUnsupportedFlags — that is the only list the runtime reads, and the only one that "+
+			"actually forces the client path. Add it to hubOpExpressibleFlags ONLY if the request really "+
+			"carries it; that map wires nothing and merely records why the flag is exempt.", f.Name)
+	}
+	hubsScaffoldCmd.LocalFlags().VisitAll(scan)
+	hubsCmd.PersistentFlags().VisitAll(scan)
+}
+
+// Four agent-facing docs tell agents to branch on the literal token
+// `idempotency_fingerprint_mismatch` in the error text. That is a behavioural
+// claim about runtime output and needs a guard, not a one-off measurement:
+// deleting the token from the message left the whole suite green.
+//
+// internal/client's TestHasAPIErrorCode_MatchesCodeNotMessage asserts the
+// OPPOSITE property (the code is absent from apiError.message()), so it cannot
+// cover this — that is exactly why the token has to be re-added deliberately.
+func TestScaffoldHubOp_FingerprintMismatchNamesTheMachineToken(t *testing.T) {
+	srv, _ := hubOpScaffoldServer(t, http.StatusConflict,
+		`{"errors":[{"code":"idempotency_fingerprint_mismatch","detail":"reused"}]}`)
+
+	err := executeCLI(t, scaffoldEnv(t, srv.URL), scaffoldArgs()...)
+	if err == nil {
+		t.Fatal("a fingerprint mismatch must fail the run")
+	}
+	if !strings.Contains(err.Error(), "["+hubOpFingerprintMismatch+"]") {
+		t.Errorf("AGENTS.md, llms.txt, api-surface.md and mio-skill.md all tell agents to branch on %q "+
+			"in the error text; the server's detail is rendered instead of its code, so the token only "+
+			"appears if we put it there. err=%v", hubOpFingerprintMismatch, err)
+	}
+}
+
+// The same four docs state: "Every FLAG-forced skip is noted on stderr;
+// --dry-run is not." Both halves are behaviour, and inverting BOTH announce
+// booleans left the suite green — the existing skip tests assert only that no
+// POST fires. This pins the notes themselves.
+func TestScaffoldHubOp_SkipNotesMatchWhatTheDocsPromise(t *testing.T) {
+	const marker = "not using the server-side hub scaffold op"
+
+	for _, tc := range []struct {
+		name  string
+		extra []string
+		want  string // "" means: must say nothing at all
+	}{
+		{"branding flag is named", []string{"--primary-color", "#B91C1C"}, "--primary-color"},
+		{"local catalog is named", []string{"--catalog", "@CATALOG@"}, "--catalog"},
+		// The remaining two announce=true branches. Without these the table
+		// covered 2 of 4 while the docs promise EVERY flag-forced skip is noted —
+		// the "probe set smaller than the claim" shape.
+		{"resume mode is explained", []string{"--hub", "hub_new"}, "--hub"},
+		{"partial identity is explained", []string{"@DROP-SLUG@"}, "--name and --slug"},
+		{"structural --dry-run stays silent", []string{"--dry-run"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
+
+			// Two cases cannot be expressed as an extra flag on the standard args.
+			args := scaffoldArgs(tc.extra...)
+			switch {
+			case len(tc.extra) == 1 && tc.extra[0] == "@DROP-SLUG@":
+				args = withTeam("t_team1", "hubs", "scaffold", "--template", "community",
+					"--name", "Founders", "--output", "json")
+			case len(tc.extra) == 2 && tc.extra[1] == "@CATALOG@":
+				args = scaffoldArgs("--catalog", writeTempCatalog(t, catalog21Body(t)))
+			}
+			res := runContract(t, scaffoldEnv(t, srv.URL), args...)
+			if res.Code != errs.ExitOK {
+				t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+			}
+			if tc.want == "" {
+				if strings.Contains(res.Stderr, marker) {
+					t.Errorf("--dry-run is structural and the plan renderer emits no apply-time notes; "+
+						"the docs say so. stderr=%q", res.Stderr)
+				}
+				return
+			}
+			if !strings.Contains(res.Stderr, marker) || !strings.Contains(res.Stderr, tc.want) {
+				t.Errorf("a flag-forced skip must be announced AND name %s — silently dropping what the "+
+					"operator asked for is the outcome this whole branch exists to prevent. stderr=%q",
+					tc.want, res.Stderr)
+			}
+		})
+	}
+}
+
+// A 2xx carrying an id but a FOREIGN resource type is not this op's response and
+// must not be read as a finished hub. A generic `hubs` body is exactly what a
+// catch-all test stub answers with, which is how one pre-existing test silently
+// stopped exercising the client-side pipeline.
+func TestScaffoldHubOp_ForeignEnvelopeTypeIsNotAHub(t *testing.T) {
+	srv, rec := hubOpScaffoldServer(t, http.StatusCreated,
+		`{"data":{"id":"hub_created","type":"hubs","attributes":{"slug":"x","is_private":true}}}`)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL), scaffoldArgs()...)
+	if res.Code == errs.ExitOK {
+		t.Errorf("a `hubs` envelope is not a hub_scaffolds result — accepting its id reports a whole-hub "+
+			"build that never happened; stdout=%q", res.Stdout)
+	}
+	if rec.hubCreates != 0 {
+		t.Errorf("must not fall back either — the op answered 2xx and may have built the hub; creates=%d", rec.hubCreates)
+	}
+}
+
+// The unusable-2xx path attaches the status the API ACTUALLY answered, so a 201
+// whose body names no hub reports `status: "201"` with `exit_code: 7` — not the
+// "500" that ExitServer would otherwise back-derive.
+//
+// This is the contract TestContract_ErrorEnvelope_RealHTTPStatus states in so
+// many words: PRECISE status, COARSE exit code. It reads oddly — a 2xx inside an
+// error object — and the alternative was considered: reporting 500 would tell an
+// agent the API failed when it returned 201, which is the exact relabelling that
+// contract exists to stop. The oddity is the honest answer; the exit code, not
+// the status, is what says "this failed".
+//
+// Guarded because it is behaviour: dropping the status assignment left the whole
+// suite green while the envelope silently went back to claiming 500.
+func TestScaffoldHubOp_UnusableSuccessReportsTheRealHTTPStatus(t *testing.T) {
+	bin := buildBinary(t)
+	srv, _ := hubOpScaffoldServer(t, http.StatusCreated,
+		`{"data":{"type":"hub_scaffolds","attributes":{"summary":[],"replayed":false}}}`)
+
+	_, stderr, exitCode := runBinary(t, bin, []string{
+		"MIO_API_KEY=test-key",
+		"MIO_API_BASE_URL=" + srv.URL,
+	}, "--team", "t_team1", "hubs", "scaffold",
+		"--template", "community", "--name", "Founders", "--slug", "founders")
+
+	var envelope struct {
+		Errors []struct {
+			Status string         `json:"status"`
+			Meta   map[string]any `json:"meta"`
+		} `json:"errors"`
+	}
+	// stderr also carries progress notes before the envelope, which is
+	// pretty-printed across several lines — so take everything from the first "{".
+	raw := stderr
+	if i := strings.Index(raw, "{"); i >= 0 {
+		raw = raw[i:]
+	}
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		t.Fatalf("stderr tail is not a JSON:API envelope: %v; stderr=%q", err, stderr)
+	}
+	if len(envelope.Errors) == 0 {
+		t.Fatalf("error envelope empty; stderr=%q", stderr)
+	}
+	if got := envelope.Errors[0].Status; got != "201" {
+		t.Errorf("errors[0].status = %q, want \"201\" — the API answered 201; reporting 500 tells an agent "+
+			"the server failed when it did not, the relabelling TestContract_ErrorEnvelope_RealHTTPStatus forbids", got)
+	}
+	if exitCode != errs.ExitServer {
+		t.Errorf("exit code = %d, want %d — the status is precise, the exit code is coarse", exitCode, errs.ExitServer)
+	}
+}
+
+// Recovery guidance that names a command which does not exist is worse than no
+// guidance: it fires exactly when an operator or agent is trying to recover, and
+// following it costs another failed invocation. `mio hubs get` was shipped in
+// this file's read-back note; the verb is `retrieve`.
+//
+// The oracle is the COBRA COMMAND TREE, not a list of known-good strings — a
+// second list would just be another thing to forget to update.
+func TestScaffoldHubOp_RecoveryGuidanceNamesRealCommands(t *testing.T) {
+	// A live op whose hub cannot be read back: emits the read-back guidance.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalogGET(w, r, catalog21Body(t)) {
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hubs/from-template"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(hubOpLiveBody))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/hubs/hub_new"):
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"errors":[{"detail":"nope"}]}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL), scaffoldArgs()...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+	}
+
+	refs := regexp.MustCompile("`mio ([^`]+)`").FindAllStringSubmatch(res.Stderr, -1)
+	if len(refs) == 0 {
+		t.Fatalf("expected the read-back failure to suggest a command; stderr=%q", res.Stderr)
+	}
+	// Keep only command-shaped tokens; ids and placeholders (hub_new, <id>, --flag)
+	// are arguments, not verbs.
+	cmdToken := regexp.MustCompile(`^[a-z][a-z-]*$`)
+	for _, m := range refs {
+		var path []string
+		for _, tok := range strings.Fields(m[1]) {
+			if !cmdToken.MatchString(tok) {
+				break
+			}
+			path = append(path, tok)
+		}
+		if len(path) == 0 {
+			continue
+		}
+		cmd, _, err := RootCmd().Find(path)
+		// Find returns the DEEPEST command it matched, leaving unmatched tokens as
+		// args — so an unknown verb resolves to its parent. Requiring the resolved
+		// path to consume every token is what catches `hubs get`.
+		if err != nil || len(strings.Fields(cmd.CommandPath())) != len(path)+1 {
+			t.Errorf("recovery guidance names `mio %s`, which is not a command (resolved to %q). "+
+				"Guidance is executed literally by agents; stderr=%q",
+				m[1], cmd.CommandPath(), res.Stderr)
+		}
+	}
 }

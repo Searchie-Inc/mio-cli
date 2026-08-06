@@ -1481,6 +1481,13 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 	if berr != nil {
 		return berr
 	}
+	// Same pre-auth, pre-HTTP position: an empty branding *_url — however it was
+	// spelled, scalar flag or --branding-json — is rejected by the API on BOTH
+	// write paths, so failing here costs nothing, whereas failing at the blobs
+	// PATCH costs an orphaned half-built hub with no rollback.
+	if uerr := validateScaffoldBrandingURLs(branding, changedString(cmd, "logo-url"), changedString(cmd, "favicon-url")); uerr != nil {
+		return uerr
+	}
 
 	// 2. Resolve auth + team ONCE (shared by every step). With an id-shaped
 	//    --team this fires no HTTP.

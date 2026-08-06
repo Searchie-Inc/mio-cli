@@ -113,17 +113,10 @@ func hubOpSkipReason(cmd *cobra.Command, sc *scaffoldContext) (reason string, an
 		return fmt.Sprintf("%s cannot be expressed in the op's overrides",
 			strings.Join(changed, ", ")), true
 	}
-	// An override passed as an EMPTY string means "clear it" on the client path,
-	// but the op's schema requires a non-empty value and 422s — so the two paths
-	// would disagree about the same flag. Take the path that can honour it.
-	for _, e := range []struct {
-		flag string
-		val  *string
-	}{{"logo-url", sc.logoOverride}, {"favicon-url", sc.faviconOverride}} {
-		if e.val != nil && *e.val == "" {
-			return fmt.Sprintf("--%s was given an empty value (clear the branding key), which the op rejects", e.flag), true
-		}
-	}
+	// NOTE: an EMPTY --logo-url/--favicon-url does not appear here. It is not a
+	// reason to prefer the client path — the API rejects an empty branding *_url
+	// on hub create and hub update too — so it is refused outright, pre-HTTP, by
+	// validateScaffoldURLOverrides.
 	return "", false
 }
 
@@ -141,7 +134,20 @@ var hubOpExpressibleFlags = map[string]bool{
 	"logo-url":             true, // overrides.logo_url
 	"favicon-url":          true, // overrides.favicon_url
 	"registration-enabled": true, // overrides.registration_enabled
-	"dry-run":              true, // not an override: its own skip branch, which never probes
+}
+
+// hubOpStructuralFlags are flags the op has no equivalent for but which are
+// already handled by their own skip branch, so they never reach the request.
+//
+// Kept separate from hubOpExpressibleFlags only so each name records WHY it is
+// exempt; be honest about what that buys. Both maps are read by the completeness
+// guard alone, so listing a flag in either one silences that guard without
+// wiring anything — the whitelist-vs-whitelist escape hatch
+// .claude/rules/verifying-guards.md warns about, which this split narrows but
+// does not close. The guard's real job is catching a flag classified NOWHERE;
+// a flag deliberately misfiled here is not something it can see.
+var hubOpStructuralFlags = map[string]bool{
+	"dry-run": true, // hubOpSkipReason returns before probing
 }
 
 // maybeApplyViaHubOp is the runner's single entry point into the op branch: it
@@ -347,7 +353,7 @@ func recordHubOpPublishState(sc *scaffoldContext, res client.HubFromTemplateResu
 func readBackHubIdentity(sc *scaffoldContext) {
 	res, err := sc.cl.Retrieve(sc.ctx, hubsPath(sc.teamID, sc.hubID))
 	if err != nil {
-		sc.notef("could not read the new hub back (%v) — reporting the requested name/slug; verify with `mio hubs get %s`", err, sc.hubID)
+		sc.notef("could not read the new hub back (%v) — reporting the requested name/slug; verify with `mio hubs retrieve %s`", err, sc.hubID)
 		return
 	}
 	if slug, _ := res.Attributes["slug"].(string); slug != "" {

@@ -18,11 +18,15 @@ package client
 // Two things about this op that are easy to get wrong and are NOT symmetric
 // with the pages op:
 //
-//   - An EMPTY STRING override is rejected (400), not treated as "clear it".
+//   - An EMPTY STRING override is rejected (422 — logo_url/favicon_url carry
+//     min_length=1, so it is a schema RequestValidationError, not the op's own
+//     400), not treated as "clear it".
 //     The service applies an override only when truthy, so "" would do nothing
 //     while still changing the idempotency fingerprint — the same key would
 //     then 409 against the omitted form of a request that meant the same thing.
-//     Omit instead; clearing branding is the hub PATCH endpoint's job.
+//     Omit instead. Clearing branding is NOT simply "the hub PATCH endpoint's
+//     job" either: that endpoint's validate_branding rejects an empty *_url too,
+//     so the only real clear is `hubs update --unset branding.<key>`.
 //   - CreatedIDs is EMPTY on a replay. (The wire key is `created_resource_ids`
 //     — NOT `created_ids`. Reading the wrong key yields an empty map with no
 //     error, which is indistinguishable from a replay; pinned by test.) The ids live on the durable application
@@ -109,6 +113,20 @@ type HubFromTemplateResult struct {
 	Replayed   bool
 }
 
+// hubScaffoldType is the op's JSON:API resource type, pinned server-side as a
+// Literal (app/hub_scaffold/schemas.py).
+const hubScaffoldType = "hub_scaffolds"
+
+// unidentifiedHubErr reports an unusable 2xx while preserving the status the API
+// ACTUALLY answered. Without this the envelope back-derives 500 from the exit
+// code and tells an agent the API returned a server error when it returned 201 —
+// main.go documents `status` as exact when the failure came from the API.
+func unidentifiedHubErr(status int) error {
+	ce := errs.Wrap(errs.ExitServer, errUnidentifiedHub)
+	ce.HTTPStatus = status
+	return ce
+}
+
 // HubFromTemplate POSTs /api/teams/{team_id}/hubs/from-template.
 //
 // Returns errs.ExitNotFound when the op is absent (the 405 probe signal) so the
@@ -162,7 +180,17 @@ func (c *Client) HubFromTemplate(ctx context.Context, teamID string, req HubFrom
 	// must neither be reported as done nor fall back to a client-side apply that
 	// would build a second one. Surface it and let the operator look.
 	if res == nil {
-		return HubFromTemplateResult{}, errs.Wrap(errs.ExitServer, errUnidentifiedHub)
+		return HubFromTemplateResult{}, unidentifiedHubErr(status)
+	}
+
+	// A foreign resource type is not this op's response, whatever it carries. The
+	// backend pins Literal["hub_scaffolds"], so a mismatch means we are reading
+	// something else — and reading `hub_id` out of it would report a whole-hub
+	// build that never happened. Checked BEFORE the attribute, not only on the
+	// id-fallback path: an envelope with the wrong type but an attributes.hub_id
+	// would otherwise still be accepted.
+	if res.Type != "" && res.Type != hubScaffoldType {
+		return HubFromTemplateResult{}, unidentifiedHubErr(status)
 	}
 
 	out := HubFromTemplateResult{CreatedIDs: map[string][]string{}}
@@ -171,10 +199,16 @@ func (c *Client) HubFromTemplate(ctx context.Context, teamID string, req HubFrom
 		// The envelope carries the same id as the resource id
 		// (HubScaffoldResultResource(id=result.hub_id, ...)), so prefer the
 		// attribute but accept the resource id rather than reporting "".
+		//
+		// The TYPE is checked before trusting it. attributes.hub_id being present
+		// already proves the body is this op's shape; a bare id does not, and
+		// without this any 2xx envelope carrying an id is accepted as a finished
+		// hub. Not hypothetical: a test stub answering every request with a
+		// generic `hubs` resource was silently taken as a whole-hub build.
 		out.HubID = res.ID
 	}
 	if out.HubID == "" {
-		return HubFromTemplateResult{}, errs.Wrap(errs.ExitServer, errUnidentifiedHub)
+		return HubFromTemplateResult{}, unidentifiedHubErr(status)
 	}
 	out.Replayed, _ = res.Attributes["replayed"].(bool)
 

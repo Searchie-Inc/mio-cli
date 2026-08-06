@@ -208,6 +208,16 @@ func TestScaffold_CreateModeIgnoresConfiguredDefaultHub(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		// Whole-hub op (MIO-2976): absent here too, and for the same reason. The
+		// catch-all below answers ANY request with a hubs resource carrying an id,
+		// which the op path would otherwise accept as a successful whole-hub build
+		// — so without this the run never reaches stepHub and this test silently
+		// stops exercising the client-side pipeline it exists to pin.
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hubs/from-template") {
+			w.Header().Set("Allow", "GET")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":{"id":"hub_created","type":"hubs","attributes":{"slug":"x","is_private":true}}}`))
@@ -657,12 +667,6 @@ func TestStepOnboarding_CreatesDefAndEnablesOnHubCollectionPath(t *testing.T) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		isHub := strings.Contains(r.URL.Path, "/hubs/")
 		switch {
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hubs/from-template"):
-			// No whole-hub op here (MIO-2976). Without this the catch-all below
-			// answers the probe and this test silently exercises the OP path
-			// instead of the client-side pipeline it is written to pin.
-			w.Header().Set("Allow", "GET")
-			w.WriteHeader(http.StatusMethodNotAllowed)
 		case r.Method == http.MethodGet && !isHub: // defs list — no existing defs
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":[]}`))

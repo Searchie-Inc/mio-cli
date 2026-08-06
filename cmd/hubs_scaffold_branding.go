@@ -406,3 +406,68 @@ func registerScaffoldBrandingFlags(cmd *cobra.Command) {
 		"Branding keys to merge OVER the template's branding block, as a JSON object (inline or @file). The scalar branding flags WIN over the same key here. Accepted keys: "+
 			brandingKeysHelp+". Unknown keys are an ERROR (scaffold runs in strict key mode).")
 }
+
+// validateScaffoldBrandingURLs rejects an EMPTY or whitespace-only value for any
+// branding key ending in `_url`, before any HTTP fires (MIO-2976 review rounds
+// 4-6).
+//
+// This is not the CLI inventing a rule. mio-backend's validate_branding applies
+// _validate_absolute_https_url to "ANY key ending in `_url` (case-insensitive) —
+// present or future", and that rejects the empty string and whitespace; it is
+// wired to BOTH HubCreateAttributes and HubUpdateAttributes, so NEITHER scaffold
+// path can honour such a value. Letting it through creates the hub and THEN 422s
+// at the blobs PATCH, leaving a half-built hub with no rollback and printing a
+// resume command carrying the same poisoned value — an infinite retry loop.
+//
+// IT CHECKS RESOLVED BRANDING KEYS, NOT FLAG NAMES, because that is the level the
+// backend's rule lives at. Two earlier rounds stopped short of it: round 4 listed
+// --logo-url and --favicon-url and missed --social-image-url; round 5 generalised
+// to "any --*-url flag" and still missed --branding-json '{"logo_url":""}', which
+// expresses the identical override in a different spelling and orphaned a hub
+// exactly the same way. Every writer of a branding key funnels through the
+// resolved map or the two dedicated overrides, so both spellings are covered here
+// and any future one is too.
+//
+// KNOWN DIVERGENCE: a whitespace-only value would be STORED by the server-side op
+// (its schema is min_length=1 and _step_blobs writes via HubService.update, which
+// does not call validate_branding), so once HUB_SCAFFOLD_ENABLED flips this
+// refuses something that one path would accept. Refusing is deliberate: the value
+// is rejected by both hub write routes, so accepting it would make the outcome
+// depend on a server-side feature flag, and a stored "   " poisons every later
+// read-modify-write of the blob.
+func validateScaffoldBrandingURLs(b scaffoldBranding, logo, favicon *string) error {
+	bad := func(key string, v any) bool {
+		if !strings.HasSuffix(strings.ToLower(key), "_url") {
+			return false
+		}
+		str, ok := v.(string)
+		return ok && strings.TrimSpace(str) == ""
+	}
+
+	offenders := make([]string, 0, 2)
+	for k, v := range b.resolved() {
+		if bad(k, v) {
+			offenders = append(offenders, k)
+		}
+	}
+	// The two presentation overrides are applied by stepBlobs directly rather than
+	// through the branding layer, so they are not in resolved().
+	for _, e := range []struct {
+		key string
+		val *string
+	}{{"logo_url", logo}, {"favicon_url", favicon}} {
+		if e.val != nil && bad(e.key, *e.val) {
+			offenders = append(offenders, e.key)
+		}
+	}
+	if len(offenders) == 0 {
+		return nil
+	}
+	sort.Strings(offenders) // deterministic message when more than one is empty
+
+	return errs.New(errs.ExitUsage,
+		"branding %s was given an empty or whitespace-only value, which the API rejects on both hub create "+
+			"and hub update (branding *_url keys must be absolute https:// URLs). To CLEAR a branding key, "+
+			"scaffold without it and then run: mio hubs update <hub_id> --unset branding.%s",
+		strings.Join(offenders, ", "), offenders[0])
+}
