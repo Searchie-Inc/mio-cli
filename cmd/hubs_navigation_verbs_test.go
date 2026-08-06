@@ -398,3 +398,128 @@ func TestNavAdd_PositionOutOfRange_NoPatch(t *testing.T) {
 		}
 	}
 }
+
+// ─── MIO-2990: every strictly-validated item must carry `position` ───────────
+//
+// The backend declares a bare `position: int` on NavItemUrl, NavItemDiscussions
+// and NavItemPage (app/hubs/validation.py _KNOWN_NAV_ITEM_MODELS) — no default,
+// so an item without it is a 422. The CLI never set it, on ANY path.
+//
+// The tests above could not catch that: they assert on ARRAY ORDER against a
+// stub that does not validate, so they are green whether or not the emitted
+// item carries the field the API requires. These assert the wire shape instead.
+
+func navItemPos(t *testing.T, item any) (int, bool) {
+	t.Helper()
+	m, ok := item.(map[string]any)
+	if !ok {
+		t.Fatalf("nav item is not an object: %#v", item)
+	}
+	v, present := m["position"]
+	if !present {
+		return 0, false
+	}
+	f, ok := v.(float64) // encoding/json numbers
+	if !ok {
+		t.Fatalf("position is not a number: %#v", v)
+	}
+	return int(f), true
+}
+
+// Both construction paths must stamp it — Claudiu reported --item-json only, but
+// the url convenience path omitted it too.
+func TestNavAdd_EmitsPositionOnEveryItem(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"url convenience", []string{"--type", "url", "--href", "/my-hub/new", "--label", "New"}},
+		{"item-json page", []string{"--item-json", `{"type":"page","label":"About","page_id":"pg_9"}`}},
+		{"item-json discussions", []string{"--item-json", `{"type":"discussions","label":"Talk"}`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
+			args := append([]string{"hubs", "navigation", "add", "hub_x", "header"}, tc.args...)
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+			if res.Code != errs.ExitOK {
+				t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+			}
+			items := patchNavBucket(t, *body, "header")
+			for i, it := range items {
+				pos, present := navItemPos(t, it)
+				if !present {
+					t.Fatalf("item %d has no `position` — the API requires it on every url/page/discussions item (422 otherwise): %v", i, it)
+				}
+				if pos != i {
+					t.Errorf("item %d has position %d, want %d (position must match array index)", i, pos, i)
+				}
+			}
+		})
+	}
+}
+
+// A mid-bucket insert must renumber the items it displaced. Set-on-insert alone
+// would leave two items claiming position 0.
+func TestNavAdd_MidBucketInsertRenumbersDisplacedItems(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
+			"--position", "0", "--type", "url", "--href", "/my-hub/first", "--label", "First")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "header")
+	seen := map[int]bool{}
+	for i, it := range items {
+		pos, present := navItemPos(t, it)
+		if !present {
+			t.Fatalf("item %d lost its position on a mid-bucket insert: %v", i, it)
+		}
+		if seen[pos] {
+			t.Fatalf("duplicate position %d — the displaced items were not renumbered: %v", pos, items)
+		}
+		seen[pos] = true
+		if pos != i {
+			t.Errorf("item %d has position %d after a front insert, want %d", i, pos, i)
+		}
+	}
+}
+
+// remove goes through the same write path, so it must renumber too — otherwise a
+// removal leaves a gap and every later item claims a stale index.
+func TestNavRemove_RenumbersRemainingItems(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "remove", "hub_x", "header", "--index", "0")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "header")
+	for i, it := range items {
+		pos, present := navItemPos(t, it)
+		if !present || pos != i {
+			t.Errorf("after remove, item %d has position %v (present=%v), want %d", i, pos, present, i)
+		}
+	}
+}
+
+// The mobile {id,label,route,icon} shape carries no `type` and takes the
+// backend's PASSTHROUGH branch — it is not schema-checked and does not need a
+// position. Stamping one would be inventing a field on a shape the CLI does not
+// own, which the conduit rule cuts against.
+func TestNavAdd_PassthroughItemsAreNotStamped(t *testing.T) {
+	srv, body, _ := navMockServer(t, "my-hub", `{"header":[],"footer":[],"mobile":[]}`)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "mobile",
+			"--item-json", `{"id":"home","label":"Home","route":"/","icon":"house"}`)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	items := patchNavBucket(t, *body, "mobile")
+	if len(items) != 1 {
+		t.Fatalf("want 1 mobile item, got %d", len(items))
+	}
+	if _, present := navItemPos(t, items[0]); present {
+		t.Errorf("a mobile passthrough item must NOT be given a position — it has no `type` and the backend never validates it: %v", items[0])
+	}
+}

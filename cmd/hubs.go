@@ -251,6 +251,31 @@ func injectHubDerivedState(res *client.Resource) {
 	}
 }
 
+// injectHubDerivedStateAll applies injectHubDerivedState to every hub in a
+// collection.
+//
+// `hubs list` shipped without it (MIO-2991) while retrieve/create/update all had
+// it, so a caller enumerating hubs read `registration_enabled` and `published` as
+// null. That is the worse half of the asymmetry: `list` is what automation uses
+// to enumerate, and because registration_enabled is FAIL-CLOSED, an absent value
+// is indistinguishable from a genuine false — so the gap reads as "registration
+// is off everywhere" rather than as an error. There is no server-side fallback
+// either: the API ships policies_enabled but has no registration_enabled at all.
+//
+// Ranges by index defensively, NOT because by-value is broken today: Attributes
+// is a map[string]any, so a copied Resource shares the same underlying map and
+// `for _, r := range` works. Verified by mutation — the by-value form passes the
+// whole suite. Indexing is the form that stays correct if injectHubDerivedState
+// ever ASSIGNS a new Attributes map rather than mutating the existing one.
+func injectHubDerivedStateAll(col *client.Collection) {
+	if col == nil {
+		return
+	}
+	for i := range col.Data {
+		injectHubDerivedState(&col.Data[i])
+	}
+}
+
 // hubRegistrationEnabled reports settings.registration.enabled === true,
 // fail-closed: any missing key, non-object node, or non-true value is false.
 func hubRegistrationEnabled(attrs map[string]any) bool {
@@ -548,6 +573,8 @@ var hubsListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		// Same derived convenience fields retrieve/create/update add (MIO-2991).
+		injectHubDerivedStateAll(col)
 		return c.render(cmd, col)
 	},
 }

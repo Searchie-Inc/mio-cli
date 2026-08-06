@@ -189,11 +189,64 @@ func writeHubNav(c *cmdContext, teamID, hubID string, nav map[string]any, slug s
 	if err := validateNavigationBlob(nav); err != nil {
 		return err
 	}
+	// `position` is REQUIRED on every strictly-validated nav item and the CLI
+	// never set it — add/remove/reorder all shipped items without it, so a typed
+	// add 422s with `NavItemPage.position Field required` (MIO-2990). Renumbering
+	// here rather than at the insert covers all three verbs at once, and keeps
+	// position consistent with array order after a mid-bucket insert or a remove,
+	// which a set-on-insert fix would not.
+	renumberNavPositions(nav)
 	if err := validateNavigationHrefs(nav, slug); err != nil {
 		return err
 	}
 	_, err := c.client.Update(c.ctx, hubsPath(teamID, hubID), map[string]any{"navigation": nav})
 	return err
+}
+
+// knownNavItemTypes are the item types the backend validates STRICTLY, each of
+// which declares a bare `position: int` with no default (app/hubs/validation.py
+// _KNOWN_NAV_ITEM_MODELS -> NavItemUrl / NavItemDiscussions / NavItemPage).
+//
+// Anything else — a "playlist" item, or the mobile {id,label,route,icon} shape
+// which carries no `type` at all — takes the backend's PASSTHROUGH branch and is
+// not schema-checked. Those are left untouched: stamping `position` onto a shape
+// the CLI does not own would be inventing a field, which the conduit rule cuts
+// against, and it is not what makes them fail (they do not fail).
+//
+// Matched case- and space-insensitively because the backend normalizes the type
+// before lookup, so `" Page "` reaches strict validation and would 422 without a
+// position just the same.
+var knownNavItemTypes = map[string]bool{
+	"url":         true,
+	"discussions": true,
+	"page":        true,
+}
+
+// renumberNavPositions sets each strictly-validated item's `position` to its
+// zero-based index within its bucket, across every bucket in the blob.
+//
+// Index, not a counter over known items only: `position` addresses the item's
+// place in the rendered menu, and `navigation list` advertises the same array
+// index for remove/reorder. A bucket mixing known and passthrough items must
+// still agree with what the operator sees.
+func renumberNavPositions(nav map[string]any) {
+	for _, bucket := range []string{"header", "footer", "mobile"} {
+		items, ok := nav[bucket].([]any)
+		if !ok {
+			continue
+		}
+		for i, it := range items {
+			m, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			t, ok := m["type"].(string)
+			if !ok || !knownNavItemTypes[strings.ToLower(strings.TrimSpace(t))] {
+				continue
+			}
+			m["position"] = i
+		}
+	}
 }
 
 // indexedBucket renders a bucket's items each prefixed with its zero-based index,
