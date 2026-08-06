@@ -51,6 +51,15 @@ import (
 // errors.Is(err, ErrHubOpAbsent), never errs.CodeOf(err) == errs.ExitNotFound.
 var ErrHubOpAbsent = errors.New("hub scaffold op not available on this backend")
 
+// errUnidentifiedHub is returned when the op answers 2xx but the body does not
+// name a hub. Reported rather than swallowed: an empty hub id at exit 0 is the
+// silent-failure shape for `HUB_ID=$(mio hubs scaffold ... --jq .hub_id)`, which
+// the agent-facing docs teach.
+var errUnidentifiedHub = errors.New(
+	"the hub scaffold op reported success but its response did not identify a hub. " +
+		"A hub MAY have been created — check `mio hubs list`, or re-run the identical command " +
+		"(the idempotency key makes a re-run a replay, not a duplicate)")
+
 // HubFromTemplateOverrides are the operator's presentation overrides — the
 // CLI's flags, as JSON. Every field is optional and an omitted field means "the
 // template decides".
@@ -148,12 +157,25 @@ func (c *Client) HubFromTemplate(ctx context.Context, teamID string, req HubFrom
 		}
 		return HubFromTemplateResult{}, err
 	}
+	// A 2xx we cannot identify a hub from is NOT a success. The op is
+	// non-transactional from here on — it may well have built the hub — so this
+	// must neither be reported as done nor fall back to a client-side apply that
+	// would build a second one. Surface it and let the operator look.
 	if res == nil {
-		return HubFromTemplateResult{}, nil
+		return HubFromTemplateResult{}, errs.Wrap(errs.ExitServer, errUnidentifiedHub)
 	}
 
 	out := HubFromTemplateResult{CreatedIDs: map[string][]string{}}
 	out.HubID, _ = res.Attributes["hub_id"].(string)
+	if out.HubID == "" {
+		// The envelope carries the same id as the resource id
+		// (HubScaffoldResultResource(id=result.hub_id, ...)), so prefer the
+		// attribute but accept the resource id rather than reporting "".
+		out.HubID = res.ID
+	}
+	if out.HubID == "" {
+		return HubFromTemplateResult{}, errs.Wrap(errs.ExitServer, errUnidentifiedHub)
+	}
 	out.Replayed, _ = res.Attributes["replayed"].(bool)
 
 	if rows, ok := res.Attributes["summary"].([]any); ok {

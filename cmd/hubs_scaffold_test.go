@@ -657,6 +657,12 @@ func TestStepOnboarding_CreatesDefAndEnablesOnHubCollectionPath(t *testing.T) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		isHub := strings.Contains(r.URL.Path, "/hubs/")
 		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hubs/from-template"):
+			// No whole-hub op here (MIO-2976). Without this the catch-all below
+			// answers the probe and this test silently exercises the OP path
+			// instead of the client-side pipeline it is written to pin.
+			w.Header().Set("Allow", "GET")
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		case r.Method == http.MethodGet && !isHub: // defs list — no existing defs
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":[]}`))

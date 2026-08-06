@@ -66,12 +66,13 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   nothing above changes. Two things to know when it does turn on: re-running the
   SAME command converges (deterministic idempotency key) instead of creating a
   second hub — but re-running the same `--name`/`--slug` after the backend's catalog
-  pin moved, or with different override flags, exits `2` with
-  `idempotency_fingerprint_mismatch` having applied **nothing**; and any branding
+  pin moved, or with different override flags, exits `2` having applied **nothing**
+  (the message carries the literal token `[idempotency_fingerprint_mismatch]`); and any branding
   override (`--branding-json` or a palette flag like `--primary-color`, as in the
   example above), plus `--hub`, `--dry-run`, `--catalog`, or omitting `--name`/`--slug`,
-  forces the client-side path — the op cannot express them. The run says which flag
-  did it on stderr. `-o json` is identical either way.
+  forces the client-side path — the op cannot express them (an empty `--logo-url`/
+  `--favicon-url` does too: that CLEARS the key client-side and the op rejects it).
+  The run names the flag on stderr; `--dry-run` is silent, being structural. `-o json` is identical either way.
 - **Legal policies come with their enforcement switch, and a resume rewrites them.**
   The scaffold writes each policy document *and* flips the hub-level gate
   (`settings.policies.enabled`) when the template declares `enabled: true`;

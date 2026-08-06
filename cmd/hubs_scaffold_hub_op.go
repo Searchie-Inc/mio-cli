@@ -113,7 +113,35 @@ func hubOpSkipReason(cmd *cobra.Command, sc *scaffoldContext) (reason string, an
 		return fmt.Sprintf("%s cannot be expressed in the op's overrides",
 			strings.Join(changed, ", ")), true
 	}
+	// An override passed as an EMPTY string means "clear it" on the client path,
+	// but the op's schema requires a non-empty value and 422s — so the two paths
+	// would disagree about the same flag. Take the path that can honour it.
+	for _, e := range []struct {
+		flag string
+		val  *string
+	}{{"logo-url", sc.logoOverride}, {"favicon-url", sc.faviconOverride}} {
+		if e.val != nil && *e.val == "" {
+			return fmt.Sprintf("--%s was given an empty value (clear the branding key), which the op rejects", e.flag), true
+		}
+	}
 	return "", false
+}
+
+// hubOpExpressibleFlags are the `hubs scaffold` flags the op CAN honour, either
+// through its overrides{} block or its identity attributes. Together with
+// hubOpUnsupportedFlags this must classify EVERY flag on the command — a flag in
+// neither set is silently dropped when the op path is taken, because
+// pflag's Changed() answers false for a name it does not know. Pinned by
+// TestScaffoldHubOp_EveryScaffoldFlagIsClassified.
+var hubOpExpressibleFlags = map[string]bool{
+	"template":             true, // the op's hub_template_id
+	"name":                 true, // its name (also gated: must be non-empty)
+	"slug":                 true, // its slug (likewise)
+	"publish":              true, // overrides.publish
+	"logo-url":             true, // overrides.logo_url
+	"favicon-url":          true, // overrides.favicon_url
+	"registration-enabled": true, // overrides.registration_enabled
+	"dry-run":              true, // not an override: its own skip branch, which never probes
 }
 
 // maybeApplyViaHubOp is the runner's single entry point into the op branch: it
@@ -163,6 +191,10 @@ func applyViaHubOp(sc *scaffoldContext) (bool, error) {
 	}
 }
 
+// hubOpFingerprintMismatch is the backend error code for a reused
+// Idempotency-Key carrying a changed request.
+const hubOpFingerprintMismatch = "idempotency_fingerprint_mismatch"
+
 // hubOpError adds the guidance the raw server error cannot carry. The
 // fingerprint mismatch is the one an operator will actually hit and the one
 // where "just re-run" is WRONG advice: the key is derived from team+template+
@@ -171,9 +203,13 @@ func applyViaHubOp(sc *scaffoldContext) (bool, error) {
 // different --publish — reuses the key with a changed request and is refused.
 // Nothing was applied; the fix is a new identity or the client-side path.
 func hubOpError(err error) error {
-	if client.HasAPIErrorCode(err, "idempotency_fingerprint_mismatch") {
+	if client.HasAPIErrorCode(err, hubOpFingerprintMismatch) {
+		// The CODE is named in the message on purpose. apiError.message() renders
+		// detail-over-code, so without this the machine-readable token never
+		// appears anywhere in the CLI's output — while the agent-facing docs tell
+		// agents to branch on exactly that token.
 		return errs.Wrap(errs.CodeOf(err), fmt.Errorf(
-			"%w (this hub name+slug was already scaffolded from this template with a DIFFERENT request — "+
+			"%w ["+hubOpFingerprintMismatch+"] (this hub name+slug was already scaffolded from this template with a DIFFERENT request — "+
 				"the backend's catalog pin or your override flags have changed since. Nothing was applied. "+
 				"Scaffold under a different --name/--slug, or re-run with --catalog to take the client-side path)", err))
 	}
@@ -222,11 +258,18 @@ func recordHubOpResult(sc *scaffoldContext, res client.HubFromTemplateResult) {
 	}
 
 	// Pass 2: only attribute a kind whose row count matches the id count.
+	//
+	// A REPLAY is exempt from the note, not from the check: created_resource_ids
+	// is empty by design on a replay, so every kind "disagrees" and the operator
+	// would get a wall of anomaly warnings describing the documented normal. The
+	// replay disclosure above already says the ids are not coming.
 	trusted := map[string]bool{}
 	for kind, n := range counts {
 		if got := len(res.CreatedIDs[kind]); got != n {
-			sc.notef("backend op returned %d %s id(s) for %d created row(s) — ids for %s not recorded (they will read null)",
-				got, kind, n, kind)
+			if !res.Replayed {
+				sc.notef("backend op returned %d %s id(s) for %d created row(s) — ids for %s not recorded (they will read null)",
+					got, kind, n, kind)
+			}
 			continue
 		}
 		trusted[kind] = true

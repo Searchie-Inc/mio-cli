@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
+
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
@@ -549,6 +551,12 @@ func TestScaffoldHubOp_ReplayIsReportedNotReapplied(t *testing.T) {
 	if !strings.Contains(res.Stderr, "already scaffolded") {
 		t.Errorf("a replay must be disclosed — it is how the operator knows no duplicate was made; stderr=%q", res.Stderr)
 	}
+	// A replay carries NO created ids by design, so every kind trips the
+	// count-vs-rows check. Reporting each as an anomaly would bury the one line
+	// that matters under warnings describing the documented normal.
+	if strings.Contains(res.Stderr, "not recorded") {
+		t.Errorf("a replay's empty created_resource_ids is by design and must not be reported as a backend anomaly; stderr=%q", res.Stderr)
+	}
 }
 
 // A skipped row is the op explaining what it did NOT do; those reasons are the
@@ -674,4 +682,135 @@ func hubOpScaffoldServerNoReadBack(t *testing.T, opBody string) (*httptest.Serve
 	}))
 	t.Cleanup(srv.Close)
 	return srv, rec
+}
+
+// The op REQUIRES both identity attributes and rejects an empty one (name
+// min_length 1, slug pattern ^[a-z0-9-]+$). The client path is laxer — it lets
+// the backend mint a slug from the title — so an invocation giving only one of
+// the two must stay client-side.
+//
+// This branch shipped in the first cut of MIO-2976 with NO coverage: deleting it
+// left the whole cmd suite green, while an invocation that works today would
+// have started 422ing the moment the flag flipped.
+func TestScaffoldHubOp_PartialIdentityForcesClientPath(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"no slug", []string{"hubs", "scaffold", "--template", "community", "--name", "Founders", "--output", "json"}},
+		{"no name", []string{"hubs", "scaffold", "--template", "community", "--slug", "founders", "--output", "json"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A LIVE op, so a missing guard shows up as the op being taken. A 405
+			// stub could not discriminate — it falls back either way.
+			srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
+
+			res := runContract(t, scaffoldEnv(t, srv.URL), withTeam("t_team1", tc.args...)...)
+			if res.Code != errs.ExitOK {
+				t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+			}
+			if len(rec.opPosts) != 0 {
+				t.Errorf("the op requires BOTH --name and --slug non-empty; probing it sends an empty one and 422s once the flag flips. Got %d POST(s)", len(rec.opPosts))
+			}
+			if rec.hubCreates != 1 {
+				t.Errorf("must fall through to the client-side pipeline, which can mint the missing half; hub creates=%d", rec.hubCreates)
+			}
+			if !strings.Contains(res.Stderr, "--name and --slug") {
+				t.Errorf("the run must say why it left the op path; stderr=%q", res.Stderr)
+			}
+		})
+	}
+}
+
+// A 2xx the CLI cannot identify a hub from must NOT read as a successful build.
+// `HUB_ID=$(mio hubs scaffold … --jq .hub_id)` is the documented capture idiom,
+// so an empty hub_id at exit 0 is the silent-failure shape — and because the op
+// may well have built the hub, this must not fall back and build a second one.
+func TestScaffoldHubOp_UnidentifiableSuccessIsAnError(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"empty body", ""},
+		{"no hub id anywhere", `{"data":{"type":"hub_scaffolds","attributes":{"summary":[],"replayed":false}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, rec := hubOpScaffoldServer(t, http.StatusCreated, tc.body)
+
+			res := runContract(t, scaffoldEnv(t, srv.URL), scaffoldArgs()...)
+			if res.Code == errs.ExitOK {
+				t.Errorf("exit = 0 with an unusable response — an empty hub_id at exit 0 is exactly what breaks --jq .hub_id; stdout=%q", res.Stdout)
+			}
+			if strings.Contains(res.Stdout, `"hub_id": ""`) {
+				t.Errorf("an empty hub_id must never be rendered as a result; stdout=%q", res.Stdout)
+			}
+			if rec.hubCreates != 0 {
+				t.Errorf("the op answered 2xx and may have built the hub — falling back would build a SECOND one; hub creates=%d", rec.hubCreates)
+			}
+		})
+	}
+}
+
+// The resource id is the same value the attribute carries
+// (HubScaffoldResultResource(id=result.hub_id, …)), so a body that omits the
+// attribute but carries the envelope id is still usable — and must be used
+// rather than reported as "".
+func TestScaffoldHubOp_FallsBackToTheEnvelopeIDForTheHub(t *testing.T) {
+	const idOnly = `{"data":{"id":"hub_new","type":"hub_scaffolds","attributes":{
+	  "summary":[{"resource":"hub","action":"created"}],
+	  "created_resource_ids":{"hubs":["hub_new"]},
+	  "replayed":false}}}`
+	srv, _ := hubOpScaffoldServer(t, http.StatusCreated, idOnly)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL), scaffoldArgs()...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0 — the envelope id identifies the hub; stderr=%q", res.Code, res.Stderr)
+	}
+	if out := decodeScaffoldJSON(t, res.Stdout); out["hub_id"] != "hub_new" {
+		t.Errorf("hub_id = %v, want hub_new (read from data.id when the attribute is absent)", out["hub_id"])
+	}
+}
+
+// An empty --logo-url means "clear this branding key" on the client path, but
+// the op's schema rejects an empty override outright. Letting the op take it
+// would make the same flag do two different things depending on a server flag.
+func TestScaffoldHubOp_EmptyOverrideForcesClientPath(t *testing.T) {
+	srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL), scaffoldArgs("--logo-url", "")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+	}
+	if len(rec.opPosts) != 0 {
+		t.Errorf("an empty override 422s against the op but CLEARS the key client-side — the op must not be taken; got %d POST(s)", len(rec.opPosts))
+	}
+	if rec.hubCreates != 1 {
+		t.Errorf("must apply client-side, which can honour the clear; hub creates=%d", rec.hubCreates)
+	}
+}
+
+// A flag in neither classification set is SILENTLY dropped when the op path is
+// taken: pflag's Changed() answers false for a name it does not know, so
+// hubOpUnsupportedFlags would never see it and the op would run without it.
+// This fails the moment a new scaffold flag is added and left unclassified.
+func TestScaffoldHubOp_EveryScaffoldFlagIsClassified(t *testing.T) {
+	unsupported := map[string]bool{"branding-json": true, "catalog": true}
+	for _, f := range scaffoldBrandingFlags {
+		unsupported[f.flag] = true
+	}
+
+	// Only the flags DECLARED on `hubs scaffold`. Flags() also reports the root's
+	// inherited persistent flags (--team/--output/--jq/--hub/…), which are either
+	// context or rendering and are not part of the op's request surface; --hub in
+	// particular is inherited and handled by its own skip branch.
+	inherited := hubsScaffoldCmd.InheritedFlags()
+	hubsScaffoldCmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
+		if f.Name == "help" || inherited.Lookup(f.Name) != nil {
+			return
+		}
+		if hubOpExpressibleFlags[f.Name] || unsupported[f.Name] {
+			return
+		}
+		t.Errorf("--%s is classified neither expressible nor unsupported. "+
+			"The op path would silently ignore it (pflag Changed() is false for an unknown name, so the "+
+			"unsupported check cannot see it). Add it to hubOpExpressibleFlags if overrides{} can carry it, "+
+			"or to hubOpUnsupportedFlags so it forces the client path.", f.Name)
+	})
 }
