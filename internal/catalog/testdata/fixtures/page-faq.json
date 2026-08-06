@@ -3,50 +3,176 @@
   "kind": "stack",
   "template": "page-faq",
   "settings": {
-    "gap": 6
+    "gap": 0
   },
   "children": [
     {
       "id": "#1",
-      "kind": "row",
+      "kind": "container",
       "template": "row",
-      "settings": {},
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section",
+          "background": {
+            "type": "tint"
+          }
+        }
+      },
       "children": [
         {
           "id": "#2",
-          "kind": "headline",
+          "kind": "stack",
           "settings": {
-            "level": 1
-          },
-          "value": "Frequently asked questions"
-        },
-        {
-          "id": "#3",
-          "kind": "accordion",
-          "settings": {
-            "expansion": "single",
-            "defaultExpanded": [
-              "faq-q1"
-            ]
+            "gap": 2,
+            "align": "center"
           },
           "children": [
+            {
+              "id": "#3",
+              "kind": "headline",
+              "settings": {
+                "level": 1,
+                "weight": 700,
+                "align": "center"
+              },
+              "value": "Frequently asked questions"
+            },
             {
               "id": "#4",
               "kind": "text",
               "settings": {
-                "tab_label": "How do I join?",
-                "muted": true
+                "align": "center"
               },
-              "value": "Click Join and create an account."
-            },
+              "value": "Answers to the questions members ask most — still stuck? Join and ask the community."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#5",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section"
+        }
+      },
+      "children": [
+        {
+          "id": "#6",
+          "kind": "accordion",
+          "settings": {
+            "expansion": "single"
+          },
+          "children": [
             {
-              "id": "#5",
+              "id": "#7",
               "kind": "text",
               "settings": {
-                "tab_label": "Is it free?",
-                "muted": true
+                "tab_label": "How do I join?"
               },
-              "value": "Yes — membership is free to start."
+              "value": "Click Join the community and create your free account — it only takes a minute."
+            },
+            {
+              "id": "#8",
+              "kind": "text",
+              "settings": {
+                "tab_label": "Is it free?"
+              },
+              "value": "Yes — membership is free to start. Some hubs offer paid plans with extra benefits."
+            },
+            {
+              "id": "#9",
+              "kind": "text",
+              "settings": {
+                "tab_label": "What can I do here?"
+              },
+              "value": "Join discussions, browse resources, attend events, and connect with other members."
+            },
+            {
+              "id": "#10",
+              "kind": "text",
+              "settings": {
+                "tab_label": "How do I reset my password?"
+              },
+              "value": "Use the 'Forgot password' link on the sign-in page and follow the emailed instructions."
+            },
+            {
+              "id": "#11",
+              "kind": "text",
+              "settings": {
+                "tab_label": "Can I use this on mobile?"
+              },
+              "value": "Yes — the hub works in any modern mobile browser, with no app to install."
+            },
+            {
+              "id": "#12",
+              "kind": "text",
+              "settings": {
+                "tab_label": "How do I get help?"
+              },
+              "value": "Start a discussion in the community, or reach out to the hub's team directly."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#13",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section",
+          "background": {
+            "type": "tint"
+          }
+        }
+      },
+      "children": [
+        {
+          "id": "#14",
+          "kind": "stack",
+          "settings": {
+            "gap": 2,
+            "align": "center"
+          },
+          "children": [
+            {
+              "id": "#15",
+              "kind": "headline",
+              "settings": {
+                "weight": 700,
+                "align": "center"
+              },
+              "value": "Still have questions?"
+            },
+            {
+              "id": "#16",
+              "kind": "text",
+              "settings": {
+                "align": "center"
+              },
+              "value": "Join {{hub_name}} and ask the community — someone's usually happy to help."
+            },
+            {
+              "id": "#17",
+              "kind": "button",
+              "settings": {
+                "size": "lg",
+                "action": {
+                  "type": "page",
+                  "value": "register"
+                }
+              },
+              "value": "Join the community"
             }
           ]
         }
