@@ -473,6 +473,29 @@ func ApplicationID(hubID, hubTemplateID string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// CreateApplicationID is ApplicationID's CREATE-mode counterpart (MIO-2976):
+// the deterministic Idempotency-Key for the whole-hub op, which runs before any
+// hub id exists and so cannot key off one.
+//
+// It covers exactly the identity the operator typed — team, template, name,
+// slug — so re-running the SAME command converges on the backend's stored
+// application instead of creating a second hub (MIO-2565), while two different
+// hubs from one template stay distinct keys. Both name and slug are folded in,
+// not slug alone: the backend puts both in its request fingerprint, so a key
+// that ignored name would turn `--name Other --slug same` into a fingerprint
+// mismatch (409) rather than the distinct application it is.
+//
+// Note what is deliberately NOT in the key but IS in the backend's fingerprint:
+// the catalog digest and the overrides. A re-run after the backend's catalog pin
+// moves, or with a different --publish, therefore reuses this key with a changed
+// body and gets 409 `idempotency_fingerprint_mismatch` — refusing to half-apply
+// a different request under an old key. That is the safe direction, and the
+// caller turns it into actionable guidance rather than retrying.
+func CreateApplicationID(teamID, hubTemplateID, name, slug string) string {
+	sum := sha256.Sum256([]byte(teamID + "\x1f" + hubTemplateID + "\x1f" + name + "\x1f" + slug))
+	return hex.EncodeToString(sum[:])
+}
+
 // TreeDigest returns "sha256:<hex>" over the canonical tree — the provenance
 // marker's appliedTreeDigest (§5.1). Written and read back only by the CLI's
 // client-side path in v1 (§10.9 cross-language digest reconciliation pending).

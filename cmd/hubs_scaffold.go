@@ -1566,11 +1566,32 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 		return perr
 	}
 
+	// 4b. PROBE the whole-hub backend op (MIO-2976). In create mode the op builds
+	//     the entire hub in ONE server-side transaction; when it is absent (the
+	//     dormant flag, or a backend that predates it) this falls back to the
+	//     nine-step pipeline below, which stays the legacy path and the path for
+	//     every invocation the op cannot express (--hub, --dry-run, the branding
+	//     overrides, --catalog). It runs AFTER the preflight on purpose: the
+	//     preflight is write-free and resolves the catalog + template both paths
+	//     need, so a bad template still fails before anything is written on
+	//     either one.
+	//
+	//     On failure there is no recovery guidance to print: the op is one
+	//     transaction and rolls back, so nothing was applied — the same reason
+	//     the preflight returns directly above.
+	opHandled, operr := maybeApplyViaHubOp(cmd, sc)
+	if operr != nil {
+		return errs.Wrap(errs.CodeOf(operr), scaffoldStepError(sc, "hub-op", operr))
+	}
+
 	// 5. Run the pipeline in order. Each step decides for itself whether to fire
 	//    HTTP or (in dry-run) record its plan entry — see sc.step — so the runner
 	//    just dispatches and, on failure, prints the recovery guidance and returns
 	//    the step-tagged error (rendered once by main.go).
 	for _, step := range scaffoldPipeline {
+		if opHandled {
+			break // the op already built the hub; every step would be a re-apply
+		}
 		if serr := step.run(sc, &sc.hubTmpl); serr != nil {
 			printScaffoldRecovery(cmd.ErrOrStderr(), sc, templateID)
 			return errs.Wrap(errs.CodeOf(serr), scaffoldStepError(sc, step.name, serr))

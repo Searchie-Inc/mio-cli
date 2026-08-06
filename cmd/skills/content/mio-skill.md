@@ -59,6 +59,19 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   resumes. A page you edited, or a foreign page at a template slug, exits `2` and is
   **never** overwritten. Spaces, onboarding attributes and playlists skip if they
   already exist. **Legal policy CONTENT is the exception — see the next bullet.**
+- **A server-side op may build the hub in one shot (MIO-2976).** In create mode the
+  CLI probes `POST …/hubs/from-template` first; if the backend has it enabled, the
+  whole hub is built in ONE transaction and the nine client-side steps never run.
+  It ships **dormant**, so today every run still takes the client-side path and
+  nothing above changes. Two things to know when it does turn on: re-running the
+  SAME command converges (deterministic idempotency key) instead of creating a
+  second hub — but re-running the same `--name`/`--slug` after the backend's catalog
+  pin moved, or with different override flags, exits `2` with
+  `idempotency_fingerprint_mismatch` having applied **nothing**; and any branding
+  override (`--branding-json` or a palette flag like `--primary-color`, as in the
+  example above), plus `--hub`, `--dry-run`, `--catalog`, or omitting `--name`/`--slug`,
+  forces the client-side path — the op cannot express them. The run says which flag
+  did it on stderr. `-o json` is identical either way.
 - **Legal policies come with their enforcement switch, and a resume rewrites them.**
   The scaffold writes each policy document *and* flips the hub-level gate
   (`settings.policies.enabled`) when the template declares `enabled: true`;

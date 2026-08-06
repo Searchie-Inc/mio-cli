@@ -1,6 +1,9 @@
 package client
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 // apiError mirrors a single JSON:API error object. Every member is optional per
 // the spec; we keep the ones that carry useful operator-facing signal.
@@ -102,4 +105,31 @@ func (l *apiErrorList) Error() string {
 		parts = append(parts, e.message())
 	}
 	return strings.Join(parts, "; ")
+}
+
+// HasAPIErrorCode reports whether err's chain carries a JSON:API error object
+// with the given machine-readable `code`.
+//
+// Callers must use this rather than matching err.Error(): apiError.message()
+// prefers detail > title > code, so the code is ABSENT from the rendered string
+// whenever the server also sent a detail — which it normally does. A caller that
+// grepped the message for a code would therefore silently never match, and would
+// keep not matching no matter how the message was worded.
+func HasAPIErrorCode(err error, code string) bool {
+	var list *apiErrorList
+	for e := err; e != nil; {
+		if errors.As(e, &list) {
+			for _, ae := range list.Errors {
+				if ae.Code == code {
+					return true
+				}
+			}
+		}
+		u, ok := e.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		e = u.Unwrap()
+	}
+	return false
 }

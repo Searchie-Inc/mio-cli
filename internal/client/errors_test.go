@@ -1,6 +1,7 @@
 package client
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -141,5 +142,40 @@ func TestMetaRefs(t *testing.T) {
 	// message-only object (no type) renders just the message.
 	if r := metaRefs([]any{map[string]any{"message": "boom"}}); len(r) != 1 || r[0] != "boom" {
 		t.Errorf("message-only object = %v, want [boom]", r)
+	}
+}
+
+// TestHasAPIErrorCode_MatchesCodeNotMessage pins the exact reason this helper
+// exists (MIO-2976). apiError.message() prefers detail > title > code, so
+// whenever the server sends a detail — which it normally does — the machine
+// code is ABSENT from the rendered string. A caller that grepped err.Error()
+// for the code would never match, silently, forever; that was a real bug in the
+// first cut of the hub-op error guidance.
+func TestHasAPIErrorCode_MatchesCodeNotMessage(t *testing.T) {
+	err := errs.WrapHTTP(http.StatusConflict, &apiErrorList{Errors: []apiError{{
+		Status: "409",
+		Code:   "idempotency_fingerprint_mismatch",
+		Detail: "key reused with a different request",
+	}}})
+
+	// The discriminating assertion: the code is genuinely NOT in the message, so
+	// a message-based implementation of HasAPIErrorCode would fail this test
+	// rather than coincidentally pass it.
+	if strings.Contains(err.Error(), "idempotency_fingerprint_mismatch") {
+		t.Fatalf("precondition broken: the code now appears in the message (%q) — "+
+			"this test can no longer tell a code match from a message match", err.Error())
+	}
+	if !HasAPIErrorCode(err, "idempotency_fingerprint_mismatch") {
+		t.Errorf("must match on the parsed `code` member; err=%v", err)
+	}
+	if HasAPIErrorCode(err, "catalog_digest_mismatch") {
+		t.Error("must not match a different code")
+	}
+	if HasAPIErrorCode(nil, "anything") {
+		t.Error("a nil error carries no codes")
+	}
+	// An error with no JSON:API body in its chain must simply not match.
+	if HasAPIErrorCode(errs.New(errs.ExitServer, "transport failed"), "idempotency_fingerprint_mismatch") {
+		t.Error("a non-API error must not match any code")
 	}
 }
