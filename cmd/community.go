@@ -373,8 +373,57 @@ var communityDiscussionsListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		injectDiscussionDerivedStateAll(col)
 		return c.render(cmd, col)
 	},
+}
+
+// injectDiscussionDerivedState adds `deleted` — whether this discussion has been
+// soft-deleted — because nothing else in the payload says so plainly.
+//
+// The admin discussions views deliberately return soft-deleted rows: the
+// repository takes include_deleted and the admin router passes it True, which is
+// what makes this the one view carrying drafts, tombstoned AND moderation-removed
+// rows. The scaffold's welcome-post idempotency scan depends on that (MIO-2558),
+// so the rows must keep coming.
+//
+// The trap is that the API's computed `status` is only published/scheduled/draft
+// — it has no "deleted" value — so a tombstoned discussion reports
+// `status: "published"` with a non-null `deleted_at` beside it. Operators read
+// the status, conclude their delete failed, run it again, and get a legitimate
+// 404 the second time. That is MIO-3022: the delete verb was never broken, the
+// reads just could not show its effect.
+//
+// `status` is deliberately NOT overwritten. It is an API-provided value, and
+// rewriting it would discard whether the row was published or still a draft when
+// it was deleted. Same stance as injectHubDerivedState: derive alongside, never
+// replace. --raw bypasses this and renders the untouched envelope.
+//
+// Injected only when `deleted_at` is PRESENT. An absent key means the server did
+// not tell us, and a synthesized `deleted: false` would be indistinguishable from
+// a real one — the fail-closed mistake MIO-2991 made with registration_enabled.
+func injectDiscussionDerivedState(res *client.Resource) {
+	if res == nil || res.Attributes == nil {
+		return
+	}
+	v, present := res.Attributes["deleted_at"]
+	if !present {
+		return
+	}
+	res.Attributes["deleted"] = v != nil
+}
+
+// injectDiscussionDerivedStateAll applies it to every row in a collection.
+//
+// Indexed, not ranged by value: Attributes is a shared map so either works today,
+// but indexing stays correct if the helper ever assigns to the Resource itself.
+func injectDiscussionDerivedStateAll(col *client.Collection) {
+	if col == nil {
+		return
+	}
+	for i := range col.Data {
+		injectDiscussionDerivedState(&col.Data[i])
+	}
 }
 
 // ---- discussions create -----------------------------------------------------
@@ -426,6 +475,7 @@ immediately (the backend default); pass --is-published=false to leave a draft.`,
 		if err != nil {
 			return err
 		}
+		injectDiscussionDerivedState(res)
 		return c.render(cmd, res)
 	},
 }
@@ -448,6 +498,7 @@ var communityDiscussionsRetrieveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		injectDiscussionDerivedState(res)
 		return c.render(cmd, res)
 	},
 }
@@ -487,6 +538,7 @@ not title/body (those are authored by the member and are not admin-editable).`,
 		if err != nil {
 			return err
 		}
+		injectDiscussionDerivedState(res)
 		return c.render(cmd, res)
 	},
 }
