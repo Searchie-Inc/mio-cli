@@ -51,7 +51,11 @@ func init() {
 	mediaFilesUploadCmd.Flags().String("title", "", "File title (default: the file's base name).")
 	mediaFilesUploadCmd.Flags().String("mime-type", "", "Content type (default: sniffed from the file).")
 	mediaFilesUploadCmd.Flags().String("folder-id", "", "Place the file in this folder after upload.")
-	mediaFilesUploadCmd.Flags().Bool("wait", false, "Wait until the file finishes processing (upload/transcode READY).")
+	mediaFilesUploadCmd.Flags().Bool("wait", false,
+		"Wait until the file finishes processing (upload/transcode READY). For video, waits ~30s "+
+			"(or --timeout, whichever is smaller) for transcoding to START — bounds are checked at poll "+
+			"boundaries, so allow one extra poll interval; if it never starts — video processing "+
+			"disabled, or a backed-up queue — this warns and returns 0 rather than waiting out --timeout.")
 	mediaFilesUploadCmd.Flags().Duration("timeout", 5*time.Minute, "Max time to --wait for processing.")
 	mediaFilesUploadCmd.Flags().Bool("multipart", false, "Force a multipart (chunked) upload regardless of size.")
 	mediaFilesUploadCmd.Flags().Int("part-size-mb", 16, "Multipart chunk size in MB (min 5).")
@@ -80,8 +84,16 @@ var mediaFilesUploadCmd = &cobra.Command{
 	Use:   "upload <path>",
 	Short: "Upload a local file into the team media library.",
 	Long: `Ingest a local file end-to-end: create the file record, stream the bytes to
-the returned presigned URL, and finalize. For video, finalize auto-triggers
-transcoding; pass --wait to block until processing reaches READY.
+the returned presigned URL, and finalize. For video, finalize triggers transcoding
+asynchronously; pass --wait to block until processing reaches READY.
+
+--wait keeps polling a video whose transcode has not started yet, but waits at
+most 30s (or --timeout, whichever is smaller) for it to start, then warns and
+returns 0 — a backend with video processing disabled never sets a transcode
+status at all, so waiting longer would only burn --timeout and then fail. That
+warning is a bound, not a verdict: a busy transcode queue produces it too, so
+re-check with 'mio media files retrieve <id>' rather than reading exit 0 as
+"transcoded".
 
 Single-part upload only (multipart for very large files is a follow-on).
 
@@ -148,7 +160,7 @@ members). See the media-workflow guide's visibility section.`,
 		// Optional: block until processing reaches READY.
 		if wait, _ := cmd.Flags().GetBool("wait"); wait {
 			timeout, _ := cmd.Flags().GetDuration("timeout")
-			if res, err = waitForFileReady(c, teamID, fileID, timeout); err != nil {
+			if res, err = waitForFileReady(c, cmd.ErrOrStderr(), teamID, fileID, timeout); err != nil {
 				return err
 			}
 		}
@@ -553,10 +565,85 @@ func trimMediaType(ct string) string {
 	return strings.TrimSpace(ct)
 }
 
+// mediaPollInterval is the gap between status polls. A var, not a const, so
+// tests can drive the real loop without wall-clock sleeps.
+var mediaPollInterval = 2 * time.Second
+
+// transcodeStartGrace bounds how long --wait will sit on a VIDEO whose
+// status_transcode is still null, waiting for the transcode to be enqueued.
+//
+// It exists because null cannot be read as one thing (MIO-3001). The backend's
+// finalize sets status_upload=READY and EMITS MediaUploaded; a best-effort
+// handler enqueues the transcode job, and only that job sets status_transcode.
+// So a freshly finalized video reads null for a moment — but on a backend with
+// FEATURE_MEDIA_VIDEO_ENABLED off (its default, and production's setting until
+// P10) that handler returns early and the status stays null FOREVER. Waiting for
+// it unconditionally would burn the whole --timeout and then fail, turning every
+// production video upload from a fast success into a slow failure.
+//
+// The grace covers in-process dispatch plus the queue pickup, normally
+// sub-second, so this is ~2 orders of magnitude of headroom while keeping the
+// cost on a video-disabled backend small and bounded.
+var transcodeStartGrace = 30 * time.Second
+
+// transcribeSettled reports whether status_transcribe has reached a state that
+// will not change again.
+//
+// The same two-meanings trap as status_transcode, one field over: "" is "no
+// transcription applies", but READY is NOT the only terminal value. mio-backend
+// sets NOT_APPLICABLE ("READY" if words else "NOT_APPLICABLE",
+// app/media/admin_router.py) — the NORMAL outcome for a video with no speech —
+// and REJECTED (app/media/transcription_service.py). Waiting for those to become
+// READY burns the entire --timeout and then exits 1 on a fully successful
+// upload: the exact "fast success becomes a slow failure" shape this command was
+// fixed to stop producing.
+//
+// FAILED is deliberately absent: it is terminal too, but the caller reports it as
+// an error before reaching here. PENDING is the only in-flight value the backend
+// actually writes for this field — PROCESSING appears only in design docs — so it
+// is the case that matters when narrowing this set.
+//
+// (MIO-2571's "null means not applicable" reading is intended and unchanged; this
+// is about non-null terminal values, which is a different question.)
+func transcribeSettled(tr string) bool {
+	switch tr {
+	case "", "READY", "NOT_APPLICABLE", "REJECTED":
+		return true
+	}
+	return false // PENDING / PROCESSING — still moving
+}
+
+// awaitsTranscode reports whether a null status_transcode on THIS file means
+// "not enqueued yet" rather than "not applicable".
+//
+// It keys off mime_type because that is what the API exposes: asset_kind — the
+// field the backend itself branches on — is internal and never serialized. The
+// two agree exactly, since _asset_kind_from_mime maps mime.startswith("video/")
+// onto "video" (app/media/service.py).
+func awaitsTranscode(res *client.Resource) (waits, kindKnown bool) {
+	mime := strings.ToLower(resAttrString(res, "mime_type"))
+	return strings.HasPrefix(mime, "video/"), mime != ""
+}
+
 // waitForFileReady polls the file until upload/transcode/transcribe all reach a
 // terminal READY (or errors on FAILED / a --timeout).
-func waitForFileReady(c *cmdContext, teamID, fileID string, timeout time.Duration) (*client.Resource, error) {
-	deadline := time.Now().Add(timeout)
+//
+// A null status_transcode is treated as "nothing to wait for" for every asset
+// kind but video, and for video only once transcodeStartGrace has elapsed
+// without a transcode appearing — in which case it warns and returns rather than
+// failing, because the upload itself genuinely succeeded.
+func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID string, timeout time.Duration) (*client.Resource, error) {
+	start := time.Now()
+	deadline := start.Add(timeout)
+	// The transcode window opens when the UPLOAD is done, not when the command
+	// started: a slow upload would otherwise consume the transcode's grace before
+	// the transcode could possibly have been enqueued.
+	var windowStart, windowEnd time.Time
+	// Separate flags: one shared `warned` let an early unknown-mime note suppress
+	// the give-up note for a later poll's video, returning silently with an
+	// untranscoded file — the original bug wearing a different hat.
+	warnedUnknownKind, warnedGaveUp := false, false
+
 	for {
 		res, err := c.client.Retrieve(c.ctx, filesPath(teamID, fileID))
 		if err != nil {
@@ -570,7 +657,65 @@ func waitForFileReady(c *cmdContext, teamID, fileID string, timeout time.Duratio
 			return res, errs.New(errs.ExitGeneric, "processing failed (upload=%s transcode=%s transcribe=%s)",
 				statusOr(up), statusOr(tc), statusOr(tr))
 		}
-		if up == "READY" && (tc == "" || tc == "READY") && (tr == "" || tr == "READY") {
+
+		// Open the transcode window on the first READY observation, bounded by the
+		// caller's own deadline so a --timeout shorter than the grace still wins.
+		if up == "READY" && windowEnd.IsZero() {
+			// time.Until is NEGATIVE once the deadline has passed (a --timeout
+			// shorter than the upload itself). That needs no clamp: a windowEnd in
+			// the past simply means "give up on the transcode now", which is
+			// correct, and the give-up message reports time ELAPSED rather than
+			// this planned figure, so a negative value can never reach an operator.
+			windowStart = time.Now()
+			windowEnd = windowStart.Add(min(transcodeStartGrace, time.Until(deadline)))
+		}
+
+		transcodeDone := tc == "READY"
+		if tc == "" {
+			waits, kindKnown := awaitsTranscode(res)
+			switch {
+			case !kindKnown:
+				// No mime_type to classify by. DEFENSIVE: the media column is NOT
+				// NULL, so a real backend cannot serve this — but the published
+				// OpenAPI declares mime_type nullable and not required, so the
+				// contract we are handed permits it.
+				//
+				// Do not wait — but say so, because
+				// silence here is indistinguishable from "this kind never
+				// transcodes" and the file may well be an untranscoded video.
+				if !warnedUnknownKind {
+					fmt.Fprintf(w, "warning: this file reports no mime_type, so whether it transcodes "+
+						"cannot be determined; returning without waiting. Check with "+
+						"`mio media files retrieve %s`.\n", fileID)
+					warnedUnknownKind = true
+				}
+				transcodeDone = true
+			case !waits:
+				transcodeDone = true // this asset kind never transcodes
+			case !windowEnd.IsZero() && time.Now().After(windowEnd):
+				// Give up on the transcode, not on the upload. Exit 0 with a loud
+				// note: failing here would break every video upload on a backend
+				// with video processing disabled, where the file is nonetheless
+				// stored and usable.
+				//
+				// The reported duration is what was ACTUALLY waited — measured,
+				// not planned. Printing the constant would have a caller who
+				// passed --timeout 3s diagnose a disabled backend from a wait
+				// that never gave the queue a chance; printing the planned window
+				// would still be wrong by up to one poll interval, and negative
+				// when --timeout was already spent on the upload.
+				if !warnedGaveUp {
+					fmt.Fprintf(w, "warning: transcoding had not started for this video after %s — "+
+						"returning with status_transcode unset. The file uploaded fine, but it is NOT transcoded: "+
+						"video processing may be disabled on this backend, or its transcode queue may be backed up. "+
+						"Check with `mio media files retrieve %s`.\n", time.Since(windowStart).Round(time.Millisecond), fileID)
+					warnedGaveUp = true
+				}
+				transcodeDone = true
+			}
+		}
+
+		if up == "READY" && transcodeDone && transcribeSettled(tr) {
 			return res, nil
 		}
 		if time.Now().After(deadline) {
@@ -580,7 +725,7 @@ func waitForFileReady(c *cmdContext, teamID, fileID string, timeout time.Duratio
 		select {
 		case <-c.ctx.Done():
 			return nil, c.ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(mediaPollInterval):
 		}
 	}
 }
