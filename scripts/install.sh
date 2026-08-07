@@ -163,8 +163,27 @@ main() {
     info "Destination ${PREFIX} requires elevated permissions — running sudo..."
     SUDO="sudo"
   fi
-  $SUDO cp "$SRC" "$DEST"
-  $SUDO chmod +x "$DEST"
+  # Stage into the destination DIRECTORY and rename — never cp onto $DEST.
+  #
+  # On Linux, opening a file for writing while it is being EXECUTED fails with
+  # ETXTBSY ("Text file busy"), and `mio update` re-runs this installer from the
+  # very binary it is replacing — so `cp "$SRC" "$DEST"` fails for every
+  # self-update, while a fresh install (nothing running) succeeds. That is why
+  # this only ever bit the update path.
+  #
+  # rename(2) swaps the directory entry instead: the running process keeps its
+  # old inode and the next exec picks up the new one. Staging inside $PREFIX
+  # keeps it a true rename — a cross-filesystem `mv` degrades to copy-then-
+  # unlink, which would hit ETXTBSY all over again. chmod happens BEFORE the
+  # rename so $DEST is never briefly present and non-executable.
+  STAGED="${DEST}.new.$$"
+  # shellcheck disable=SC2064 # $STAGED/$SUDO are intentionally expanded now
+  trap "rm -rf '${TMP_DIR}'; ${SUDO} rm -f '${STAGED}'" EXIT
+  $SUDO cp "$SRC" "$STAGED"
+  $SUDO chmod +x "$STAGED"
+  $SUDO mv -f "$STAGED" "$DEST"
+  # shellcheck disable=SC2064
+  trap "rm -rf '${TMP_DIR}'" EXIT
 
   # macOS Gatekeeper mitigation (MIO-2603): the release binaries are not yet
   # notarized, so a freshly downloaded copy trips Gatekeeper — `mio version` can
@@ -181,7 +200,16 @@ main() {
     info "macOS: cleared quarantine + ad-hoc signed the binary. If mio ever hangs after an update, run: xattr -c \"$DEST\""
   fi
 
-  info "Installed: $(command -v "${BINARY}" 2>/dev/null || echo "${DEST}")"
+  # Report the path we actually wrote. `command -v` resolves against PATH, which
+  # may be a DIFFERENT binary entirely (an older copy earlier in PATH, or the
+  # system one when installing to a custom PREFIX) — it printed
+  # "/usr/local/bin/mio" during a --prefix install to a temp dir, which is a lie
+  # about what just happened.
+  info "Installed: ${DEST}"
+  RESOLVED="$(command -v "${BINARY}" 2>/dev/null || true)"
+  if [ -n "$RESOLVED" ] && [ "$RESOLVED" != "$DEST" ]; then
+    info "Note: '${BINARY}' on your PATH still resolves to ${RESOLVED} — put ${PREFIX} earlier in PATH to pick up this install."
+  fi
   printf '\n'
   printf '  \033[1mNext steps:\033[0m\n'
   printf '    1. Run \033[36mmio login\033[0m to authenticate with your Membership.io account.\n'
