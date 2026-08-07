@@ -208,6 +208,16 @@ func TestScaffold_CreateModeIgnoresConfiguredDefaultHub(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		// Whole-hub op (MIO-2976): absent here too, and for the same reason. The
+		// catch-all below answers ANY request with a hubs resource carrying an id,
+		// which the op path would otherwise accept as a successful whole-hub build
+		// — so without this the run never reaches stepHub and this test silently
+		// stops exercising the client-side pipeline it exists to pin.
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hubs/from-template") {
+			w.Header().Set("Allow", "GET")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":{"id":"hub_created","type":"hubs","attributes":{"slug":"x","is_private":true}}}`))
@@ -2417,6 +2427,15 @@ func fullScaffoldServerAll(t *testing.T, hubID string, isPrivate bool, catBody [
 			// W2b op probe (Task 9): absent on this backend — the full-run tests
 			// pin the CLIENT-SIDE pipeline, so the probe 404s and falls back.
 			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/hubs/from-template"):
+			// Whole-hub op probe (MIO-2976): absent on this backend. The shape is
+			// the REAL one and it matters — an op-less backend does not 404 here,
+			// it 405s with `Allow: GET`, because the admin router's
+			// GET|PATCH|DELETE /hubs/{identifier} matches the literal
+			// "from-template" segment. Only that shape sets ErrHubOpAbsent, which
+			// is what makes these tests exercise the client-side pipeline.
+			w.Header().Set("Allow", "GET")
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/discussions"): // welcome post (MIO-2558)
 			body, _ := io.ReadAll(r.Body)
 			rec.discussionPosts = append(rec.discussionPosts, body)
@@ -2994,6 +3013,12 @@ func TestScaffold_MidPipelineFailureNamesCreatedHub(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hubs/from-template"):
+			// No whole-hub op on this backend (MIO-2976) — 405 + Allow: GET, the
+			// real absence shape. This test is ABOUT the client-side pipeline
+			// failing mid-run, which only happens when the op is not taken.
+			w.Header().Set("Allow", "GET")
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hubs"):
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"data":{"id":"hub_partial","type":"hubs","attributes":{"slug":"my-community","is_private":true}}}`))

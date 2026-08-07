@@ -187,6 +187,12 @@ var typeOverrides = []struct {
 	// data.type Literal is "template_scaffolds"; the bare "pages" collection
 	// would derive "pages" without this override.
 	{"pages/scaffold-from-template", "template_scaffolds"},
+	// Whole-hub scaffold op (MIO-2926 / MIO-2976): POST
+	// .../teams/{team}/hubs/from-template binds a write schema whose data.type
+	// Literal is "hub_scaffolds" — a DIFFERENT operation from the page op's
+	// "template_scaffolds" above, and the backend rejects the wrong one. The
+	// bare "hubs" collection would derive "hubs" without this override.
+	{"hubs/from-template", "hub_scaffolds"},
 	{"teams/members", "team_members"},
 	// Hub membership authoring (MIO-2261 add, MIO-2263 set-role): the members
 	// collection under a hub is the hub_memberships resource, not team_members.
@@ -326,7 +332,11 @@ var knownCollections = map[string]bool{
 	// W2b one-step template scaffold op (MIO-2573 §5.1); maps to
 	// "template_scaffolds" via the pages/scaffold-from-template override.
 	"scaffold-from-template": true,
-	"users":                  true, "access-rules": true, "access-overrides": true,
+	// Whole-hub scaffold op (MIO-2926); maps to "hub_scaffolds" via the
+	// hubs/from-template override. Hyphenated action segment, so it needs a
+	// token here or the path walker stops at "hubs".
+	"from-template": true,
+	"users":         true, "access-rules": true, "access-overrides": true,
 	"drip-campaigns": true, "steps": true, "email-templates": true,
 	"enrollments": true, "orders": true, "subscriptions": true,
 	"payments": true, "refund": true, "attributes": true,
