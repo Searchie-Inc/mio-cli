@@ -123,6 +123,12 @@ func generatedBlockBodies(doc string) map[string]string {
 var valueBearingKinds = []string{
 	"headline", "text", "image", "video", "button", "icon", "divider",
 	"progress-ring", "quote",
+	// 0.18.1 sales-template leaves (mio-hub LeafKind grew to sixteen).
+	// Value-carrying: countdown (ISO deadline string) and plan-card
+	// ({name, price?, currency?, period?, ...} object). The other five are
+	// settings-only leaves listed in the table with "— (none)" like divider.
+	"countdown", "logo", "theme-toggle", "plan-card", "plan-price",
+	"doodle", "featured-icon",
 }
 
 func TestSkillDocValueBearingKinds(t *testing.T) {

@@ -1,0 +1,3584 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-sales",
+  "settings": {
+    "gap": 0
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "banner",
+      "settings": {
+        "sticky": true,
+        "appearance": "solid"
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "countdown",
+          "settings": {
+            "size": "small",
+            "ctaLabel": "Join now",
+            "ctaAction": {
+              "type": "page",
+              "value": "register"
+            }
+          },
+          "value": "2026-08-11T23:59:00-07:00"
+        }
+      ]
+    },
+    {
+      "id": "#3",
+      "kind": "banner",
+      "settings": {
+        "reveal": "after-scroll",
+        "appearance": "page",
+        "justify": "between",
+        "contentWidth": "content"
+      },
+      "children": [
+        {
+          "id": "#4",
+          "kind": "logo",
+          "settings": {}
+        },
+        {
+          "id": "#5",
+          "kind": "button",
+          "settings": {
+            "iconRight": "arrow-right",
+            "compactMobile": true,
+            "action": {
+              "type": "page",
+              "value": "register"
+            }
+          },
+          "value": "Start today"
+        }
+      ]
+    },
+    {
+      "id": "#6",
+      "kind": "container",
+      "template": "hero",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "32px 0 0",
+          "background": {
+            "type": "gradient-glow",
+            "glowTint": true
+          },
+          "minScreenHeight": 80,
+          "maxHeight": 1000
+        },
+        "slot": "sales-01",
+        "name": "hero",
+        "role": "connect",
+        "salesMeta": {
+          "section": 1,
+          "shape": "hero",
+          "compactGroup": null,
+          "prompt": "What is the one transformation this page promises?"
+        }
+      },
+      "children": [
+        {
+          "id": "#7",
+          "kind": "row",
+          "settings": {
+            "justify": "between",
+            "align": "start"
+          },
+          "children": [
+            {
+              "id": "#8",
+              "kind": "logo",
+              "settings": {
+                "height": "hero"
+              }
+            },
+            {
+              "id": "#9",
+              "kind": "theme-toggle",
+              "settings": {}
+            }
+          ]
+        },
+        {
+          "id": "#10",
+          "kind": "stack",
+          "settings": {
+            "grow": true,
+            "justify": "center",
+            "surface": {
+              "padding": "hero-mobile-insets"
+            }
+          },
+          "children": [
+            {
+              "id": "#11",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "split": true,
+                "gap": "section"
+              },
+              "children": [
+                {
+                  "id": "#12",
+                  "kind": "stack",
+                  "settings": {
+                    "gap": 8,
+                    "mobileGap": 6,
+                    "align": "start"
+                  },
+                  "children": [
+                    {
+                      "id": "#13",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 2.5,
+                        "align": "start"
+                      },
+                      "children": [
+                        {
+                          "id": "#14",
+                          "kind": "text",
+                          "settings": {
+                            "variant": "eyebrow",
+                            "marginBottom": 0
+                          },
+                          "value": "For [who this is for]"
+                        },
+                        {
+                          "id": "#15",
+                          "kind": "headline",
+                          "settings": {
+                            "level": 1,
+                            "weight": 700,
+                            "size": "xl-title",
+                            "slot": "sales-headline",
+                            "highlight": [
+                              "[The outcome]",
+                              "[the obstacle]"
+                            ],
+                            "highlightUnderline": true
+                          },
+                          "value": "[The outcome] without [the obstacle]"
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#16",
+                      "kind": "text",
+                      "settings": {
+                        "marginBottom": 0,
+                        "size": "body-big",
+                        "muted": true
+                      },
+                      "value": "One or two sentences that deepen the promise. Never repeat the headline."
+                    },
+                    {
+                      "id": "#17",
+                      "kind": "row",
+                      "settings": {
+                        "responsive": true,
+                        "fullWidth": true,
+                        "align": "start"
+                      },
+                      "children": [
+                        {
+                          "id": "#18",
+                          "kind": "stack",
+                          "settings": {
+                            "width": "fit",
+                            "fitMobile": true,
+                            "gap": 1.5,
+                            "align": "center"
+                          },
+                          "children": [
+                            {
+                              "id": "#19",
+                              "kind": "button",
+                              "settings": {
+                                "size": "lg",
+                                "action": {
+                                  "type": "page",
+                                  "value": "register"
+                                },
+                                "iconRight": "arrow-right"
+                              },
+                              "value": "Start your [outcome] today"
+                            },
+                            {
+                              "id": "#20",
+                              "kind": "doodle",
+                              "settings": {
+                                "draw": true,
+                                "variant": "underline"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "#21",
+                  "kind": "image",
+                  "settings": {
+                    "aspectRatio": "1:1",
+                    "radius": "m"
+                  },
+                  "value": ""
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#22",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "0 0 80px"
+        },
+        "slot": "sales-02",
+        "name": "the-struggle",
+        "role": "connect",
+        "salesMeta": {
+          "section": 2,
+          "shape": "narrative",
+          "compactGroup": null,
+          "prompt": "What is the big struggle or desire?"
+        }
+      },
+      "children": [
+        {
+          "id": "#23",
+          "kind": "stack",
+          "settings": {
+            "surface": {
+              "margin": "0 0 -87px",
+              "translate": "0 -50%",
+              "elevate": true
+            }
+          },
+          "children": [
+            {
+              "id": "#24",
+              "kind": "container",
+              "settings": {
+                "maxWidth": "content",
+                "padding": 8
+              },
+              "children": [
+                {
+                  "id": "#25",
+                  "kind": "doodle",
+                  "settings": {
+                    "draw": true,
+                    "variant": "arrow-straight",
+                    "size": "xl",
+                    "align": "center"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "#26",
+          "kind": "container",
+          "settings": {
+            "maxWidth": "4xl",
+            "padding": 0
+          },
+          "children": [
+            {
+              "id": "#27",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "gap": "section"
+              },
+              "children": [
+                {
+                  "id": "#28",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3"
+                  },
+                  "children": [
+                    {
+                      "id": "#29",
+                      "kind": "image",
+                      "settings": {
+                        "aspectRatio": "1:1",
+                        "radius": "m"
+                      },
+                      "value": ""
+                    }
+                  ]
+                },
+                {
+                  "id": "#30",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "2/3",
+                    "gap": 4
+                  },
+                  "children": [
+                    {
+                      "id": "#31",
+                      "kind": "text",
+                      "settings": {
+                        "variant": "eyebrow",
+                        "tone": "primary",
+                        "marginBottom": 0
+                      },
+                      "value": "[The struggle]"
+                    },
+                    {
+                      "id": "#32",
+                      "kind": "headline",
+                      "settings": {
+                        "weight": 700,
+                        "slot": "sales-headline"
+                      },
+                      "value": "Name the one struggle your members feel every day"
+                    },
+                    {
+                      "id": "#33",
+                      "kind": "text",
+                      "settings": {},
+                      "value": "Describe it in their words, not yours."
+                    },
+                    {
+                      "id": "#34",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true
+                      },
+                      "value": "One struggle, not five. They should think: that is me."
+                    },
+                    {
+                      "id": "#35",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true
+                      },
+                      "value": "A third short paragraph if the section needs it. Cut what does not earn its place."
+                    },
+                    {
+                      "id": "#36",
+                      "kind": "text",
+                      "settings": {
+                        "marginBottom": 0,
+                        "highlight": "The sentence they say out loud when it gets hard.",
+                        "highlightTone": "strong",
+                        "italic": true,
+                        "size": "body-big",
+                        "weight": 500
+                      },
+                      "value": "The sentence they say out loud when it gets hard."
+                    },
+                    {
+                      "id": "#37",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true,
+                        "marginBottom": 0
+                      },
+                      "value": "And it is not their fault. Here is why."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#38",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "0 0 80px"
+        },
+        "slot": "sales-03",
+        "name": "why-nothing-worked",
+        "role": "connect",
+        "salesMeta": {
+          "section": 3,
+          "shape": "narrative",
+          "compactGroup": "A",
+          "prompt": "Why haven't they solved it yet?"
+        }
+      },
+      "children": [
+        {
+          "id": "#39",
+          "kind": "container",
+          "settings": {
+            "maxWidth": "4xl",
+            "padding": 0
+          },
+          "children": [
+            {
+              "id": "#40",
+              "kind": "row",
+              "settings": {
+                "justify": "start"
+              },
+              "children": [
+                {
+                  "id": "#41",
+                  "kind": "stack",
+                  "settings": {
+                    "align": "center",
+                    "surface": {
+                      "padding": "25px 0",
+                      "margin": "0 0 -80px 22.94%",
+                      "translate": "0 -50%"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#42",
+                      "kind": "doodle",
+                      "settings": {
+                        "draw": true,
+                        "variant": "knot-curl",
+                        "size": "xl"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#43",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "gap": "section",
+                "reverse": true
+              },
+              "children": [
+                {
+                  "id": "#44",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3"
+                  },
+                  "children": [
+                    {
+                      "id": "#45",
+                      "kind": "image",
+                      "settings": {
+                        "aspectRatio": "1:1",
+                        "radius": "m"
+                      },
+                      "value": ""
+                    }
+                  ]
+                },
+                {
+                  "id": "#46",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "2/3",
+                    "gap": 4
+                  },
+                  "children": [
+                    {
+                      "id": "#47",
+                      "kind": "text",
+                      "settings": {
+                        "variant": "eyebrow",
+                        "tone": "primary",
+                        "marginBottom": 0
+                      },
+                      "value": "[Why nothing's worked]"
+                    },
+                    {
+                      "id": "#48",
+                      "kind": "headline",
+                      "settings": {
+                        "weight": 700,
+                        "slot": "sales-headline"
+                      },
+                      "value": "They have already tried. Here is why it did not stick"
+                    },
+                    {
+                      "id": "#49",
+                      "kind": "text",
+                      "settings": {},
+                      "value": "Validate the attempts they have already tried: [the usual fixes] and going it alone."
+                    },
+                    {
+                      "id": "#50",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true
+                      },
+                      "value": "Then reveal the real problem underneath."
+                    },
+                    {
+                      "id": "#51",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true
+                      },
+                      "value": "A third short paragraph if the section needs it. Cut what does not earn its place."
+                    },
+                    {
+                      "id": "#52",
+                      "kind": "text",
+                      "settings": {
+                        "marginBottom": 0,
+                        "highlight": "They did not fail. The approach did.",
+                        "highlightTone": "strong",
+                        "italic": true,
+                        "size": "body-big",
+                        "weight": 500
+                      },
+                      "value": "They did not fail. The approach did."
+                    },
+                    {
+                      "id": "#53",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true,
+                        "marginBottom": 0
+                      },
+                      "value": "A metaphor that makes the real problem obvious."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#54",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "0 0 80px"
+        },
+        "slot": "sales-04",
+        "name": "what-staying-stuck-costs",
+        "role": "connect",
+        "salesMeta": {
+          "section": 4,
+          "shape": "narrative",
+          "compactGroup": "A",
+          "prompt": "What does it feel like to be them?"
+        }
+      },
+      "children": [
+        {
+          "id": "#55",
+          "kind": "container",
+          "settings": {
+            "maxWidth": "4xl",
+            "padding": 0
+          },
+          "children": [
+            {
+              "id": "#56",
+              "kind": "row",
+              "settings": {
+                "justify": "end"
+              },
+              "children": [
+                {
+                  "id": "#57",
+                  "kind": "stack",
+                  "settings": {
+                    "align": "center",
+                    "surface": {
+                      "padding": "25px 0",
+                      "margin": "0 45.26% -80px 0",
+                      "translate": "0 -50%"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#58",
+                      "kind": "doodle",
+                      "settings": {
+                        "draw": true,
+                        "variant": "knot-curl",
+                        "size": "xl",
+                        "flip": true
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#59",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "gap": "section"
+              },
+              "children": [
+                {
+                  "id": "#60",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3"
+                  },
+                  "children": [
+                    {
+                      "id": "#61",
+                      "kind": "image",
+                      "settings": {
+                        "aspectRatio": "1:1",
+                        "radius": "m"
+                      },
+                      "value": ""
+                    }
+                  ]
+                },
+                {
+                  "id": "#62",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "2/3",
+                    "gap": 4
+                  },
+                  "children": [
+                    {
+                      "id": "#63",
+                      "kind": "text",
+                      "settings": {
+                        "variant": "eyebrow",
+                        "tone": "primary",
+                        "marginBottom": 0
+                      },
+                      "value": "[What staying stuck costs]"
+                    },
+                    {
+                      "id": "#64",
+                      "kind": "headline",
+                      "settings": {
+                        "weight": 700,
+                        "slot": "sales-headline"
+                      },
+                      "value": "What it quietly costs to stay where they are"
+                    },
+                    {
+                      "id": "#65",
+                      "kind": "text",
+                      "settings": {},
+                      "value": "Name the invisible feelings, not just the facts."
+                    },
+                    {
+                      "id": "#66",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true
+                      },
+                      "value": "Real, not dramatic. The stakes compound."
+                    },
+                    {
+                      "id": "#67",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true
+                      },
+                      "value": "A third short paragraph if the section needs it. Cut what does not earn its place."
+                    },
+                    {
+                      "id": "#68",
+                      "kind": "text",
+                      "settings": {
+                        "marginBottom": 0,
+                        "highlight": "The one-line gut punch they already believe.",
+                        "highlightTone": "strong",
+                        "italic": true,
+                        "size": "body-big",
+                        "weight": 500
+                      },
+                      "value": "The one-line gut punch they already believe."
+                    },
+                    {
+                      "id": "#69",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true,
+                        "marginBottom": 0
+                      },
+                      "value": "It does not have to go that way."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#70",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "0"
+        },
+        "slot": "sales-05",
+        "name": "what-they-want-and-why-now",
+        "role": "connect",
+        "salesMeta": {
+          "section": 5,
+          "shape": "narrative",
+          "compactGroup": null,
+          "prompt": "What do they actually want, and why is now the time?"
+        }
+      },
+      "children": [
+        {
+          "id": "#71",
+          "kind": "container",
+          "settings": {
+            "maxWidth": "4xl",
+            "padding": 0
+          },
+          "children": [
+            {
+              "id": "#72",
+              "kind": "row",
+              "settings": {
+                "justify": "start"
+              },
+              "children": [
+                {
+                  "id": "#73",
+                  "kind": "stack",
+                  "settings": {
+                    "align": "center",
+                    "surface": {
+                      "padding": "25px 0",
+                      "margin": "0 0 -80px 22.94%",
+                      "translate": "0 -50%"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#74",
+                      "kind": "doodle",
+                      "settings": {
+                        "draw": true,
+                        "variant": "knot-curl",
+                        "size": "xl"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#75",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "gap": "section",
+                "reverse": true
+              },
+              "children": [
+                {
+                  "id": "#76",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3"
+                  },
+                  "children": [
+                    {
+                      "id": "#77",
+                      "kind": "image",
+                      "settings": {
+                        "aspectRatio": "1:1",
+                        "radius": "m"
+                      },
+                      "value": ""
+                    }
+                  ]
+                },
+                {
+                  "id": "#78",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "2/3",
+                    "gap": 4
+                  },
+                  "children": [
+                    {
+                      "id": "#79",
+                      "kind": "text",
+                      "settings": {
+                        "variant": "eyebrow",
+                        "tone": "primary",
+                        "marginBottom": 0
+                      },
+                      "value": "[What they want, and why now]"
+                    },
+                    {
+                      "id": "#80",
+                      "kind": "headline",
+                      "settings": {
+                        "weight": 700,
+                        "slot": "sales-headline"
+                      },
+                      "value": "Paint the life they want, and show why starting now gets them there faster"
+                    },
+                    {
+                      "id": "#81",
+                      "kind": "text",
+                      "settings": {},
+                      "value": "Contrast the now-world with the future-world they actually want."
+                    },
+                    {
+                      "id": "#82",
+                      "kind": "text",
+                      "settings": {},
+                      "value": "Be specific. Small vivid details beat big claims."
+                    },
+                    {
+                      "id": "#83",
+                      "kind": "text",
+                      "settings": {},
+                      "value": "Then show what waiting costs, month by month, and what starting now unlocks."
+                    },
+                    {
+                      "id": "#84",
+                      "kind": "text",
+                      "settings": {
+                        "marginBottom": 0,
+                        "highlight": "The sooner they start, the sooner the future they want kicks in.",
+                        "highlightTone": "strong",
+                        "italic": true,
+                        "size": "body-big",
+                        "weight": 500
+                      },
+                      "value": "The sooner they start, the sooner the future they want kicks in."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "#85",
+          "kind": "stack",
+          "settings": {
+            "surface": {
+              "margin": "-87px 0 0",
+              "translate": "0 50%",
+              "elevate": true
+            }
+          },
+          "children": [
+            {
+              "id": "#86",
+              "kind": "container",
+              "settings": {
+                "maxWidth": "content",
+                "padding": 8
+              },
+              "children": [
+                {
+                  "id": "#87",
+                  "kind": "doodle",
+                  "settings": {
+                    "draw": true,
+                    "variant": "arrow-straight",
+                    "size": "xl",
+                    "align": "center"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#88",
+      "kind": "container",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0
+      },
+      "children": [
+        {
+          "id": "#89",
+          "kind": "container",
+          "template": "row",
+          "settings": {
+            "padding": 0,
+            "surface": {
+              "borderRadius": "48px",
+              "clip": true
+            }
+          },
+          "children": [
+            {
+              "id": "#90",
+              "kind": "container",
+              "template": "row",
+              "settings": {
+                "padding": 0,
+                "surface": {
+                  "padding": "80px 0",
+                  "background": {
+                    "type": "tint",
+                    "tone": "primary"
+                  }
+                },
+                "slot": "sales-07",
+                "name": "introducing",
+                "role": "reveal",
+                "salesMeta": {
+                  "section": 7,
+                  "shape": "narrative",
+                  "compactGroup": null,
+                  "prompt": "What is it?"
+                }
+              },
+              "children": [
+                {
+                  "id": "#91",
+                  "kind": "container",
+                  "settings": {
+                    "maxWidth": "search",
+                    "padding": 0
+                  },
+                  "children": [
+                    {
+                      "id": "#92",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 4,
+                        "align": "center",
+                        "surface": {
+                          "padding": "gutter"
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": "#93",
+                          "kind": "image",
+                          "settings": {
+                            "aspectRatio": "1:1",
+                            "radius": "m",
+                            "maxWidth": 352
+                          },
+                          "value": ""
+                        },
+                        {
+                          "id": "#94",
+                          "kind": "text",
+                          "settings": {
+                            "variant": "eyebrow",
+                            "tone": "primary",
+                            "align": "center",
+                            "marginBottom": 0
+                          },
+                          "value": "[Introducing the membership]"
+                        },
+                        {
+                          "id": "#95",
+                          "kind": "headline",
+                          "settings": {
+                            "weight": 700,
+                            "size": "large-title",
+                            "align": "center",
+                            "slot": "sales-headline",
+                            "highlight": "[the membership]",
+                            "highlightUnderline": true
+                          },
+                          "value": "Introduce [the membership] and its one-line promise"
+                        },
+                        {
+                          "id": "#96",
+                          "kind": "text",
+                          "settings": {
+                            "align": "center"
+                          },
+                          "value": "Name [the membership]. Say who it is for. State the promise."
+                        },
+                        {
+                          "id": "#97",
+                          "kind": "text",
+                          "settings": {
+                            "align": "center"
+                          },
+                          "value": "Promise before features. Features come later."
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#98",
+              "kind": "container",
+              "template": "row",
+              "settings": {
+                "padding": 0,
+                "surface": {
+                  "padding": "112px 0 128px",
+                  "margin": "-32px 0 0",
+                  "background": {
+                    "type": "color",
+                    "token": "primary"
+                  },
+                  "edge": {
+                    "top": "wave"
+                  },
+                  "elevate": true
+                },
+                "slot": "sales-08",
+                "name": "why-it-works",
+                "role": "reveal",
+                "salesMeta": {
+                  "section": 8,
+                  "shape": "narrative",
+                  "compactGroup": null,
+                  "prompt": "Why does it matter?"
+                }
+              },
+              "children": [
+                {
+                  "id": "#99",
+                  "kind": "container",
+                  "settings": {
+                    "maxWidth": "search",
+                    "padding": 0
+                  },
+                  "children": [
+                    {
+                      "id": "#100",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 4,
+                        "align": "center",
+                        "surface": {
+                          "padding": "gutter"
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": "#101",
+                          "kind": "image",
+                          "settings": {
+                            "aspectRatio": "1:1",
+                            "radius": "m",
+                            "maxWidth": 352
+                          },
+                          "value": ""
+                        },
+                        {
+                          "id": "#102",
+                          "kind": "text",
+                          "settings": {
+                            "variant": "eyebrow",
+                            "align": "center",
+                            "marginBottom": 0
+                          },
+                          "value": "[Why it works]"
+                        },
+                        {
+                          "id": "#103",
+                          "kind": "headline",
+                          "settings": {
+                            "weight": 700,
+                            "size": "large-title",
+                            "align": "center",
+                            "slot": "sales-headline"
+                          },
+                          "value": "Why this works when the other things did not"
+                        },
+                        {
+                          "id": "#104",
+                          "kind": "text",
+                          "settings": {
+                            "align": "center"
+                          },
+                          "value": "Name the mechanism, not the features."
+                        },
+                        {
+                          "id": "#105",
+                          "kind": "text",
+                          "settings": {
+                            "align": "center"
+                          },
+                          "value": "Tie it to the real problem from earlier."
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#106",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "0 0 80px"
+        },
+        "slot": "sales-09",
+        "name": "meet-your-guide",
+        "role": "reveal",
+        "salesMeta": {
+          "section": 9,
+          "shape": "narrative",
+          "compactGroup": null,
+          "prompt": "Who are you and why did you build this?"
+        }
+      },
+      "children": [
+        {
+          "id": "#107",
+          "kind": "stack",
+          "settings": {
+            "surface": {
+              "margin": "0 0 -87px",
+              "translate": "0 -50%",
+              "elevate": true
+            }
+          },
+          "children": [
+            {
+              "id": "#108",
+              "kind": "container",
+              "settings": {
+                "maxWidth": "content",
+                "padding": 8
+              },
+              "children": [
+                {
+                  "id": "#109",
+                  "kind": "doodle",
+                  "settings": {
+                    "draw": true,
+                    "variant": "arrow-straight",
+                    "size": "xl",
+                    "align": "center"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "#110",
+          "kind": "container",
+          "settings": {
+            "maxWidth": "4xl",
+            "padding": 0
+          },
+          "children": [
+            {
+              "id": "#111",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "gap": "section"
+              },
+              "children": [
+                {
+                  "id": "#112",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/2"
+                  },
+                  "children": [
+                    {
+                      "id": "#113",
+                      "kind": "image",
+                      "settings": {
+                        "aspectRatio": "1:1",
+                        "radius": "m"
+                      },
+                      "value": ""
+                    }
+                  ]
+                },
+                {
+                  "id": "#114",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/2",
+                    "gap": 4
+                  },
+                  "children": [
+                    {
+                      "id": "#115",
+                      "kind": "text",
+                      "settings": {
+                        "variant": "eyebrow",
+                        "tone": "primary",
+                        "marginBottom": 0
+                      },
+                      "value": "[Meet your guide]"
+                    },
+                    {
+                      "id": "#116",
+                      "kind": "headline",
+                      "settings": {
+                        "weight": 700,
+                        "slot": "sales-headline"
+                      },
+                      "value": "I am [your name], and here is why I built this"
+                    },
+                    {
+                      "id": "#117",
+                      "kind": "text",
+                      "settings": {},
+                      "value": "Start with a moment or a feeling, not a bio."
+                    },
+                    {
+                      "id": "#118",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true
+                      },
+                      "value": "The journey, then why you built it. 150 to 250 words."
+                    },
+                    {
+                      "id": "#119",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true
+                      },
+                      "value": "The proof, woven in: we have helped [number] members reach [outcome]."
+                    },
+                    {
+                      "id": "#120",
+                      "kind": "text",
+                      "settings": {
+                        "marginBottom": 0,
+                        "highlight": "The moment that made you build this, in one line.",
+                        "highlightTone": "strong",
+                        "italic": true,
+                        "size": "body-big",
+                        "weight": 500
+                      },
+                      "value": "The moment that made you build this, in one line."
+                    },
+                    {
+                      "id": "#121",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 2.5,
+                        "align": "start"
+                      },
+                      "children": [
+                        {
+                          "id": "#122",
+                          "kind": "headline",
+                          "settings": {
+                            "level": 3
+                          },
+                          "value": "This is the part where it starts"
+                        },
+                        {
+                          "id": "#123",
+                          "kind": "text",
+                          "settings": {
+                            "muted": true
+                          },
+                          "value": "Which brings us to what happens for members."
+                        },
+                        {
+                          "id": "#124",
+                          "kind": "stack",
+                          "settings": {
+                            "width": "fit",
+                            "fitMobile": true,
+                            "gap": 1.5,
+                            "align": "center"
+                          },
+                          "children": [
+                            {
+                              "id": "#125",
+                              "kind": "button",
+                              "settings": {
+                                "size": "lg",
+                                "action": {
+                                  "type": "page",
+                                  "value": "register"
+                                },
+                                "iconRight": "arrow-right"
+                              },
+                              "value": "Start your [outcome] today"
+                            },
+                            {
+                              "id": "#126",
+                              "kind": "doodle",
+                              "settings": {
+                                "draw": true,
+                                "variant": "underline"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#127",
+              "kind": "row",
+              "settings": {
+                "gap": "section",
+                "responsive": true
+              },
+              "children": [
+                {
+                  "id": "#128",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/2"
+                  },
+                  "children": []
+                },
+                {
+                  "id": "#129",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/2",
+                    "surface": {
+                      "margin": "18px 0 0"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#130",
+                      "kind": "doodle",
+                      "settings": {
+                        "draw": true,
+                        "variant": "knot-curl",
+                        "size": "xl",
+                        "rotate": 180,
+                        "align": "start"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#131",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "padding": 0,
+        "surface": {
+          "padding": "56px 0",
+          "background": {
+            "type": "color",
+            "token": "primary"
+          }
+        },
+        "slot": "sales-10",
+        "name": "real-results",
+        "role": "prove",
+        "salesMeta": {
+          "section": 10,
+          "shape": "proof",
+          "compactGroup": null,
+          "prompt": "What's possible?"
+        }
+      },
+      "children": [
+        {
+          "id": "#132",
+          "kind": "stack",
+          "settings": {
+            "gap": 2.5
+          },
+          "children": [
+            {
+              "id": "#133",
+              "kind": "container",
+              "settings": {
+                "maxWidth": "content",
+                "padding": 0
+              },
+              "children": [
+                {
+                  "id": "#134",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700,
+                    "slot": "sales-headline",
+                    "align": "center"
+                  },
+                  "value": "Show the transformation happening for people like them"
+                },
+                {
+                  "id": "#135",
+                  "kind": "text",
+                  "settings": {
+                    "align": "center",
+                    "muted": true
+                  },
+                  "value": "One line that distills what the story proves."
+                }
+              ]
+            },
+            {
+              "id": "#136",
+              "kind": "carousel",
+              "settings": {
+                "effect": "marquee"
+              },
+              "children": [
+                {
+                  "id": "#137",
+                  "kind": "quote",
+                  "settings": {},
+                  "value": {
+                    "quote": "Six weeks in, my open rate went from 12% to 41% just by following the playbook step by step. I'd tried three other courses before this and none of them broke it down like this one does.",
+                    "name": "Dana Okafor",
+                    "profession": "Email marketing consultant",
+                    "avatarFallback": "DO",
+                    "highlight": "open rate went from 12% to 41%",
+                    "imageSrc": ""
+                  }
+                },
+                {
+                  "id": "#138",
+                  "kind": "quote",
+                  "settings": {},
+                  "value": {
+                    "quote": "I used to dread Mondays because I never knew what to post. Now I have a full content calendar mapped out every week, and it takes me twenty minutes instead of two hours.",
+                    "name": "Leo Martins",
+                    "profession": "Independent photographer",
+                    "avatarFallback": "LM",
+                    "highlight": "twenty minutes instead of two hours",
+                    "imageSrc": ""
+                  }
+                },
+                {
+                  "id": "#139",
+                  "kind": "quote",
+                  "settings": {},
+                  "value": {
+                    "quote": "The templates alone paid for the membership in the first week. I plugged in my numbers, sent the first campaign, and closed two new clients before the month was out.",
+                    "name": "Sofia Reyes",
+                    "profession": "Freelance copywriter",
+                    "avatarFallback": "SR",
+                    "highlight": "closed two new clients",
+                    "imageSrc": ""
+                  }
+                },
+                {
+                  "id": "#140",
+                  "kind": "quote",
+                  "settings": {},
+                  "value": {
+                    "quote": "I've been stuck at the same revenue plateau for two years. Three months in this community and I finally broke through it — and it wasn't luck, I can point to exactly what changed.",
+                    "name": "Owen Bright",
+                    "profession": "Boutique agency owner",
+                    "avatarFallback": "OB",
+                    "highlight": "finally broke through it",
+                    "imageSrc": ""
+                  }
+                },
+                {
+                  "id": "#141",
+                  "kind": "quote",
+                  "settings": {},
+                  "value": {
+                    "quote": "What surprised me most wasn't the content, it was how fast people answered questions in the community. I posted at 11pm and had three replies before I woke up.",
+                    "name": "Priti Nair",
+                    "profession": "Solo consultant",
+                    "avatarFallback": "PN",
+                    "highlight": "three replies before I woke up",
+                    "imageSrc": ""
+                  }
+                },
+                {
+                  "id": "#142",
+                  "kind": "quote",
+                  "settings": {},
+                  "value": {
+                    "quote": "I almost didn't sign up because I'd been burned by courses that never got finished. This one is the opposite — I actually completed it, and I'm already applying it with real clients.",
+                    "name": "Marcus Chen",
+                    "profession": "Freelance web developer",
+                    "avatarFallback": "MC",
+                    "highlight": "I actually completed it",
+                    "imageSrc": ""
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#143",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "80px 0",
+          "background": {
+            "type": "tint",
+            "tone": "primary"
+          }
+        },
+        "slot": "sales-journey",
+        "name": "journey",
+        "role": "prove",
+        "salesMeta": {
+          "section": 10.5,
+          "shape": "journey",
+          "compactGroup": null,
+          "prompt": "What happens for them, in order, once they keep showing up?"
+        }
+      },
+      "children": [
+        {
+          "id": "#144",
+          "kind": "stack",
+          "settings": {
+            "gap": 8,
+            "mobileGap": 6
+          },
+          "children": [
+            {
+              "id": "#145",
+              "kind": "stack",
+              "settings": {
+                "gap": 2.5,
+                "align": "center"
+              },
+              "children": [
+                {
+                  "id": "#146",
+                  "kind": "text",
+                  "settings": {
+                    "variant": "eyebrow",
+                    "tone": "primary",
+                    "marginBottom": 0
+                  },
+                  "value": "[The path]"
+                },
+                {
+                  "id": "#147",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700,
+                    "align": "center",
+                    "slot": "sales-headline"
+                  },
+                  "value": "[The path your members follow]"
+                },
+                {
+                  "id": "#148",
+                  "kind": "text",
+                  "settings": {
+                    "align": "center",
+                    "marginBottom": 0
+                  },
+                  "value": "One line naming the three things that happen when a member keeps showing up."
+                }
+              ]
+            },
+            {
+              "id": "#149",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "align": "stretch",
+                "gap": 4,
+                "mobileGap": 6
+              },
+              "children": [
+                {
+                  "id": "#150",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3",
+                    "align": "center",
+                    "justify": "center",
+                    "gap": 6,
+                    "surface": {
+                      "background": {
+                        "type": "tint",
+                        "tone": "primary"
+                      },
+                      "borderRadius": "hub-m",
+                      "padding": "28px"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#151",
+                      "kind": "featured-icon",
+                      "settings": {
+                        "label": "1",
+                        "variant": "outline"
+                      }
+                    },
+                    {
+                      "id": "#152",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 1
+                      },
+                      "children": [
+                        {
+                          "id": "#153",
+                          "kind": "text",
+                          "settings": {
+                            "size": "body-big",
+                            "weight": 700,
+                            "align": "center",
+                            "marginBottom": 0
+                          },
+                          "value": "[Stage one, in a few words]"
+                        },
+                        {
+                          "id": "#154",
+                          "kind": "text",
+                          "settings": {
+                            "align": "center",
+                            "marginBottom": 0
+                          },
+                          "value": "What it looks like when they get there — one line."
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "#155",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3",
+                    "align": "center",
+                    "justify": "center",
+                    "gap": 6,
+                    "surface": {
+                      "background": {
+                        "type": "tint",
+                        "tone": "primary"
+                      },
+                      "borderRadius": "hub-m",
+                      "padding": "28px"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#156",
+                      "kind": "row",
+                      "settings": {
+                        "gap": 1
+                      },
+                      "children": [
+                        {
+                          "id": "#157",
+                          "kind": "stack",
+                          "settings": {
+                            "surface": {
+                              "margin": "-55px 147.77px -55px -178.9px",
+                              "elevate": true,
+                              "visibility": {
+                                "mobile": false
+                              }
+                            }
+                          },
+                          "children": [
+                            {
+                              "id": "#158",
+                              "kind": "doodle",
+                              "settings": {
+                                "hideOnMobile": true,
+                                "draw": true,
+                                "variant": "arrow-straight",
+                                "rotate": 270,
+                                "size": "xl"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "id": "#159",
+                          "kind": "featured-icon",
+                          "settings": {
+                            "label": "2",
+                            "variant": "outline"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#160",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 1
+                      },
+                      "children": [
+                        {
+                          "id": "#161",
+                          "kind": "text",
+                          "settings": {
+                            "size": "body-big",
+                            "weight": 700,
+                            "align": "center",
+                            "marginBottom": 0
+                          },
+                          "value": "[Stage two, in a few words]"
+                        },
+                        {
+                          "id": "#162",
+                          "kind": "text",
+                          "settings": {
+                            "align": "center",
+                            "marginBottom": 0
+                          },
+                          "value": "The middle beat — what changes because of stage one."
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "#163",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3",
+                    "align": "center",
+                    "justify": "center",
+                    "gap": 6,
+                    "surface": {
+                      "background": {
+                        "type": "tint",
+                        "tone": "primary"
+                      },
+                      "borderRadius": "hub-m",
+                      "padding": "28px"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#164",
+                      "kind": "row",
+                      "settings": {
+                        "gap": 1
+                      },
+                      "children": [
+                        {
+                          "id": "#165",
+                          "kind": "stack",
+                          "settings": {
+                            "surface": {
+                              "margin": "-55px 147.77px -55px -178.9px",
+                              "elevate": true,
+                              "visibility": {
+                                "mobile": false
+                              }
+                            }
+                          },
+                          "children": [
+                            {
+                              "id": "#166",
+                              "kind": "doodle",
+                              "settings": {
+                                "hideOnMobile": true,
+                                "draw": true,
+                                "variant": "arrow-straight",
+                                "rotate": 270,
+                                "size": "xl",
+                                "drawDelay": 1.2
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "id": "#167",
+                          "kind": "featured-icon",
+                          "settings": {
+                            "label": "3",
+                            "variant": "outline"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#168",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 1
+                      },
+                      "children": [
+                        {
+                          "id": "#169",
+                          "kind": "text",
+                          "settings": {
+                            "size": "body-big",
+                            "weight": 700,
+                            "align": "center",
+                            "marginBottom": 0
+                          },
+                          "value": "[Stage three, in a few words]"
+                        },
+                        {
+                          "id": "#170",
+                          "kind": "text",
+                          "settings": {
+                            "align": "center",
+                            "marginBottom": 0
+                          },
+                          "value": "The payoff — what it looks like once it sticks."
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#171",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "80px 0"
+        },
+        "slot": "sales-12",
+        "name": "everything-you-get",
+        "role": "prove",
+        "salesMeta": {
+          "section": 12,
+          "shape": "deliverables",
+          "compactGroup": null,
+          "prompt": "What's included?"
+        }
+      },
+      "children": [
+        {
+          "id": "#172",
+          "kind": "stack",
+          "settings": {
+            "gap": 8,
+            "mobileGap": 6
+          },
+          "children": [
+            {
+              "id": "#173",
+              "kind": "stack",
+              "settings": {
+                "gap": 2.5,
+                "align": "start"
+              },
+              "children": [
+                {
+                  "id": "#174",
+                  "kind": "text",
+                  "settings": {
+                    "variant": "eyebrow",
+                    "tone": "primary",
+                    "marginBottom": 0
+                  },
+                  "value": "What's included"
+                },
+                {
+                  "id": "#175",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700,
+                    "slot": "sales-headline"
+                  },
+                  "value": "Everything they get inside"
+                }
+              ]
+            },
+            {
+              "id": "#176",
+              "kind": "stack",
+              "settings": {
+                "gap": 3,
+                "mobileGap": 1.5
+              },
+              "children": [
+                {
+                  "id": "#177",
+                  "kind": "row",
+                  "settings": {
+                    "responsive": true,
+                    "wrap": true,
+                    "gap": 3,
+                    "mobileGap": 1.5,
+                    "align": "start"
+                  },
+                  "children": [
+                    {
+                      "id": "#178",
+                      "kind": "stack",
+                      "settings": {
+                        "width": "1/2",
+                        "align": "start",
+                        "gap": 5,
+                        "mobileGap": 4,
+                        "surface": {
+                          "background": {
+                            "type": "tint",
+                            "tone": "primary"
+                          },
+                          "borderRadius": "hub-m",
+                          "padding": "card"
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": "#179",
+                          "kind": "image",
+                          "value": "",
+                          "settings": {
+                            "aspectRatio": "1:1",
+                            "radius": "control",
+                            "outline": false,
+                            "maxWidth": 128,
+                            "alignX": "start"
+                          }
+                        },
+                        {
+                          "id": "#180",
+                          "kind": "stack",
+                          "settings": {
+                            "grow": true,
+                            "gap": 1
+                          },
+                          "children": [
+                            {
+                              "id": "#181",
+                              "kind": "text",
+                              "settings": {
+                                "size": "body-big",
+                                "weight": 700,
+                                "marginBottom": 0
+                              },
+                              "value": "[Deliverable name]"
+                            },
+                            {
+                              "id": "#182",
+                              "kind": "text",
+                              "settings": {
+                                "muted": true,
+                                "marginBottom": 0
+                              },
+                              "value": "Why it matters: the outcome this unlocks."
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#183",
+                      "kind": "stack",
+                      "settings": {
+                        "width": "1/2",
+                        "align": "start",
+                        "gap": 5,
+                        "mobileGap": 4,
+                        "surface": {
+                          "background": {
+                            "type": "tint",
+                            "tone": "primary"
+                          },
+                          "borderRadius": "hub-m",
+                          "padding": "card"
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": "#184",
+                          "kind": "image",
+                          "value": "",
+                          "settings": {
+                            "aspectRatio": "1:1",
+                            "radius": "control",
+                            "outline": false,
+                            "maxWidth": 128,
+                            "alignX": "start"
+                          }
+                        },
+                        {
+                          "id": "#185",
+                          "kind": "stack",
+                          "settings": {
+                            "grow": true,
+                            "gap": 1
+                          },
+                          "children": [
+                            {
+                              "id": "#186",
+                              "kind": "text",
+                              "settings": {
+                                "size": "body-big",
+                                "weight": 700,
+                                "marginBottom": 0
+                              },
+                              "value": "[Deliverable name]"
+                            },
+                            {
+                              "id": "#187",
+                              "kind": "text",
+                              "settings": {
+                                "muted": true,
+                                "marginBottom": 0
+                              },
+                              "value": "Why it matters: the outcome this unlocks."
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "#188",
+                  "kind": "row",
+                  "settings": {
+                    "responsive": true,
+                    "wrap": true,
+                    "gap": 3,
+                    "mobileGap": 1.5,
+                    "align": "start"
+                  },
+                  "children": [
+                    {
+                      "id": "#189",
+                      "kind": "stack",
+                      "settings": {
+                        "width": "1/2",
+                        "align": "start",
+                        "gap": 5,
+                        "mobileGap": 4,
+                        "surface": {
+                          "background": {
+                            "type": "tint",
+                            "tone": "primary"
+                          },
+                          "borderRadius": "hub-m",
+                          "padding": "card"
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": "#190",
+                          "kind": "image",
+                          "value": "",
+                          "settings": {
+                            "aspectRatio": "1:1",
+                            "radius": "control",
+                            "outline": false,
+                            "maxWidth": 128,
+                            "alignX": "start"
+                          }
+                        },
+                        {
+                          "id": "#191",
+                          "kind": "stack",
+                          "settings": {
+                            "grow": true,
+                            "gap": 1
+                          },
+                          "children": [
+                            {
+                              "id": "#192",
+                              "kind": "text",
+                              "settings": {
+                                "size": "body-big",
+                                "weight": 700,
+                                "marginBottom": 0
+                              },
+                              "value": "[Deliverable name]"
+                            },
+                            {
+                              "id": "#193",
+                              "kind": "text",
+                              "settings": {
+                                "muted": true,
+                                "marginBottom": 0
+                              },
+                              "value": "Why it matters: the outcome this unlocks."
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#194",
+                      "kind": "stack",
+                      "settings": {
+                        "width": "1/2",
+                        "align": "start",
+                        "gap": 5,
+                        "mobileGap": 4,
+                        "surface": {
+                          "background": {
+                            "type": "tint",
+                            "tone": "primary"
+                          },
+                          "borderRadius": "hub-m",
+                          "padding": "card"
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": "#195",
+                          "kind": "image",
+                          "value": "",
+                          "settings": {
+                            "aspectRatio": "1:1",
+                            "radius": "control",
+                            "outline": false,
+                            "maxWidth": 128,
+                            "alignX": "start"
+                          }
+                        },
+                        {
+                          "id": "#196",
+                          "kind": "stack",
+                          "settings": {
+                            "grow": true,
+                            "gap": 1
+                          },
+                          "children": [
+                            {
+                              "id": "#197",
+                              "kind": "text",
+                              "settings": {
+                                "size": "body-big",
+                                "weight": 700,
+                                "marginBottom": 0
+                              },
+                              "value": "[Deliverable name]"
+                            },
+                            {
+                              "id": "#198",
+                              "kind": "text",
+                              "settings": {
+                                "muted": true,
+                                "marginBottom": 0
+                              },
+                              "value": "Why it matters: the outcome this unlocks."
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#199",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "justify": "between",
+                "gap": 8,
+                "mobileGap": 6
+              },
+              "children": [
+                {
+                  "id": "#200",
+                  "kind": "stack",
+                  "settings": {
+                    "gap": 2.5
+                  },
+                  "children": [
+                    {
+                      "id": "#201",
+                      "kind": "headline",
+                      "settings": {
+                        "level": 3
+                      },
+                      "value": "Ready when they are"
+                    },
+                    {
+                      "id": "#202",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true
+                      },
+                      "value": "Everything above, from the moment they join."
+                    }
+                  ]
+                },
+                {
+                  "id": "#203",
+                  "kind": "row",
+                  "settings": {
+                    "gap": 6
+                  },
+                  "children": [
+                    {
+                      "id": "#204",
+                      "kind": "stack",
+                      "settings": {
+                        "align": "center",
+                        "surface": {
+                          "margin": "0 39px 20px 0"
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": "#205",
+                          "kind": "doodle",
+                          "settings": {
+                            "hideOnMobile": true,
+                            "draw": true,
+                            "variant": "arrow-straight",
+                            "rotate": 270,
+                            "size": "xl"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#206",
+                      "kind": "stack",
+                      "settings": {
+                        "width": "fit",
+                        "fitMobile": true,
+                        "gap": 1.5,
+                        "align": "center"
+                      },
+                      "children": [
+                        {
+                          "id": "#207",
+                          "kind": "button",
+                          "settings": {
+                            "size": "lg",
+                            "action": {
+                              "type": "page",
+                              "value": "register"
+                            },
+                            "iconRight": "arrow-right"
+                          },
+                          "value": "Start your [outcome] today"
+                        },
+                        {
+                          "id": "#208",
+                          "kind": "doodle",
+                          "settings": {
+                            "draw": true,
+                            "drawDelay": 0.3,
+                            "variant": "underline"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#209",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "80px 0",
+          "background": {
+            "type": "gradient-glow",
+            "glowTint": true,
+            "glowStrength": 2,
+            "glowSpread": 2
+          }
+        },
+        "slot": "sales-13",
+        "name": "price-guarantee",
+        "role": "close",
+        "salesMeta": {
+          "section": 13,
+          "shape": "price",
+          "compactGroup": null,
+          "prompt": "What is the price?"
+        }
+      },
+      "children": [
+        {
+          "id": "#210",
+          "kind": "stack",
+          "settings": {
+            "gap": 12,
+            "mobileGap": 6
+          },
+          "children": [
+            {
+              "id": "#211",
+              "kind": "stack",
+              "settings": {
+                "gap": 4
+              },
+              "children": [
+                {
+                  "id": "#212",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700,
+                    "size": "large-title",
+                    "slot": "sales-headline",
+                    "highlight": [
+                      "The real question",
+                      "costs to do nothing"
+                    ],
+                    "highlightStyle": "wash",
+                    "align": "center"
+                  },
+                  "value": "The real question is what it costs to do nothing"
+                },
+                {
+                  "id": "#213",
+                  "kind": "text",
+                  "settings": {
+                    "align": "center",
+                    "size": "body-big",
+                    "italic": true,
+                    "muted": true,
+                    "marginBottom": 0
+                  },
+                  "value": "[One line that reframes the price as a decision, not a cost.]"
+                }
+              ]
+            },
+            {
+              "id": "#214",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "gap": "section",
+                "align": "stretch"
+              },
+              "children": [
+                {
+                  "id": "#215",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/2",
+                    "gap": 4
+                  },
+                  "children": [
+                    {
+                      "id": "#216",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 3
+                      },
+                      "children": [
+                        {
+                          "id": "#217",
+                          "kind": "row",
+                          "settings": {
+                            "justify": "between",
+                            "align": "center"
+                          },
+                          "children": [
+                            {
+                              "id": "#218",
+                              "kind": "row",
+                              "settings": {
+                                "gap": 1.5,
+                                "align": "center"
+                              },
+                              "children": [
+                                {
+                                  "id": "#219",
+                                  "kind": "icon",
+                                  "settings": {
+                                    "size": 16,
+                                    "color": "primary"
+                                  },
+                                  "value": "completed-circle-fill"
+                                },
+                                {
+                                  "id": "#220",
+                                  "kind": "text",
+                                  "settings": {
+                                    "marginBottom": 0
+                                  },
+                                  "value": "[Deliverable one]"
+                                }
+                              ]
+                            },
+                            {
+                              "id": "#221",
+                              "kind": "text",
+                              "settings": {
+                                "marginBottom": 0
+                              },
+                              "value": "[$X] value"
+                            }
+                          ]
+                        },
+                        {
+                          "id": "#222",
+                          "kind": "row",
+                          "settings": {
+                            "justify": "between",
+                            "align": "center"
+                          },
+                          "children": [
+                            {
+                              "id": "#223",
+                              "kind": "row",
+                              "settings": {
+                                "gap": 1.5,
+                                "align": "center"
+                              },
+                              "children": [
+                                {
+                                  "id": "#224",
+                                  "kind": "icon",
+                                  "settings": {
+                                    "size": 16,
+                                    "color": "primary"
+                                  },
+                                  "value": "completed-circle-fill"
+                                },
+                                {
+                                  "id": "#225",
+                                  "kind": "text",
+                                  "settings": {
+                                    "marginBottom": 0
+                                  },
+                                  "value": "[Deliverable two]"
+                                }
+                              ]
+                            },
+                            {
+                              "id": "#226",
+                              "kind": "text",
+                              "settings": {
+                                "marginBottom": 0
+                              },
+                              "value": "[$X] value"
+                            }
+                          ]
+                        },
+                        {
+                          "id": "#227",
+                          "kind": "row",
+                          "settings": {
+                            "justify": "between",
+                            "align": "center"
+                          },
+                          "children": [
+                            {
+                              "id": "#228",
+                              "kind": "row",
+                              "settings": {
+                                "gap": 1.5,
+                                "align": "center"
+                              },
+                              "children": [
+                                {
+                                  "id": "#229",
+                                  "kind": "icon",
+                                  "settings": {
+                                    "size": 16,
+                                    "color": "primary"
+                                  },
+                                  "value": "completed-circle-fill"
+                                },
+                                {
+                                  "id": "#230",
+                                  "kind": "text",
+                                  "settings": {
+                                    "marginBottom": 0
+                                  },
+                                  "value": "[Deliverable three]"
+                                }
+                              ]
+                            },
+                            {
+                              "id": "#231",
+                              "kind": "text",
+                              "settings": {
+                                "marginBottom": 0
+                              },
+                              "value": "[$X] value"
+                            }
+                          ]
+                        },
+                        {
+                          "id": "#232",
+                          "kind": "divider",
+                          "settings": {
+                            "spacing": 0
+                          }
+                        },
+                        {
+                          "id": "#233",
+                          "kind": "row",
+                          "settings": {
+                            "justify": "between",
+                            "align": "center"
+                          },
+                          "children": [
+                            {
+                              "id": "#234",
+                              "kind": "text",
+                              "settings": {
+                                "weight": 700,
+                                "marginBottom": 0
+                              },
+                              "value": "Total value"
+                            },
+                            {
+                              "id": "#235",
+                              "kind": "text",
+                              "settings": {
+                                "size": "body-big",
+                                "weight": 700,
+                                "marginBottom": 0
+                              },
+                              "value": "[$XXX] / month"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#236",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true
+                      },
+                      "value": "Less than [an everyday comparison]."
+                    },
+                    {
+                      "id": "#237",
+                      "kind": "plan-price",
+                      "settings": {
+                        "groupId": "s13-plans",
+                        "fallback": {
+                          "price": "[490]",
+                          "period": "year"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "#238",
+                  "kind": "divider",
+                  "settings": {
+                    "variant": "wave",
+                    "orientation": "vertical",
+                    "opacity": 10
+                  }
+                },
+                {
+                  "id": "#239",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/2",
+                    "gap": 4,
+                    "justify": "between"
+                  },
+                  "children": [
+                    {
+                      "id": "#240",
+                      "kind": "plan-group",
+                      "settings": {
+                        "label": "Choose your plan"
+                      },
+                      "children": [
+                        {
+                          "id": "#241",
+                          "kind": "plan-card",
+                          "settings": {},
+                          "value": {
+                            "name": "Monthly",
+                            "price": "[49]",
+                            "currency": "USD",
+                            "period": "month"
+                          }
+                        },
+                        {
+                          "id": "#242",
+                          "kind": "plan-card",
+                          "settings": {
+                            "defaultSelected": true
+                          },
+                          "value": {
+                            "name": "Annual",
+                            "price": "[490]",
+                            "currency": "USD",
+                            "period": "year",
+                            "badge": "Best deal",
+                            "save": "Save 17%"
+                          }
+                        },
+                        {
+                          "id": "#243",
+                          "kind": "plan-card",
+                          "settings": {},
+                          "value": {
+                            "name": "VIP",
+                            "price": "[XXX]",
+                            "currency": "USD",
+                            "period": "year",
+                            "description": "Seats limited: [the genuine reason]."
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#244",
+                      "kind": "row",
+                      "settings": {
+                        "responsive": true,
+                        "fullWidth": true,
+                        "justify": "end",
+                        "gap": 6
+                      },
+                      "children": [
+                        {
+                          "id": "#245",
+                          "kind": "stack",
+                          "settings": {
+                            "align": "center",
+                            "surface": {
+                              "margin": "0 39px 20px 0"
+                            }
+                          },
+                          "children": [
+                            {
+                              "id": "#246",
+                              "kind": "doodle",
+                              "settings": {
+                                "hideOnMobile": true,
+                                "draw": true,
+                                "variant": "arrow-straight",
+                                "rotate": 270,
+                                "size": "xl"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "id": "#247",
+                          "kind": "stack",
+                          "settings": {
+                            "width": "fit",
+                            "fitMobile": true,
+                            "gap": 1.5,
+                            "align": "center"
+                          },
+                          "children": [
+                            {
+                              "id": "#248",
+                              "kind": "button",
+                              "settings": {
+                                "size": "lg",
+                                "action": {
+                                  "type": "page",
+                                  "value": "register"
+                                },
+                                "iconRight": "arrow-right"
+                              },
+                              "value": "Start your [outcome] today"
+                            },
+                            {
+                              "id": "#249",
+                              "kind": "doodle",
+                              "settings": {
+                                "draw": true,
+                                "drawDelay": 0.3,
+                                "variant": "underline"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#250",
+              "kind": "stack",
+              "settings": {
+                "surface": {
+                  "background": {
+                    "type": "tint",
+                    "tone": "primary"
+                  },
+                  "borderRadius": "hub-m",
+                  "padding": "md"
+                }
+              },
+              "children": [
+                {
+                  "id": "#251",
+                  "kind": "row",
+                  "settings": {
+                    "align": "start",
+                    "gap": 5,
+                    "mobileGap": 3
+                  },
+                  "children": [
+                    {
+                      "id": "#252",
+                      "kind": "stack",
+                      "settings": {
+                        "align": "center",
+                        "surface": {
+                          "background": {
+                            "type": "tint",
+                            "tone": "primary"
+                          },
+                          "borderRadius": "full",
+                          "padding": "sm"
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": "#253",
+                          "kind": "icon",
+                          "settings": {
+                            "color": "primary"
+                          },
+                          "value": "shield-user"
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#254",
+                      "kind": "stack",
+                      "settings": {
+                        "grow": true,
+                        "gap": 1
+                      },
+                      "children": [
+                        {
+                          "id": "#255",
+                          "kind": "text",
+                          "settings": {
+                            "size": "body-big",
+                            "weight": 700,
+                            "marginBottom": 0
+                          },
+                          "value": "The [Name] Guarantee"
+                        },
+                        {
+                          "id": "#256",
+                          "kind": "text",
+                          "settings": {
+                            "marginBottom": 0
+                          },
+                          "value": "Try it for [30 days]. Not happy for any reason? Full refund, no hoops."
+                        },
+                        {
+                          "id": "#257",
+                          "kind": "text",
+                          "settings": {
+                            "marginBottom": 0
+                          },
+                          "value": "I can promise that because [the reason you can]."
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#258",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "56px 0",
+          "minHeight": 440,
+          "background": {
+            "type": "gradient-tint"
+          },
+          "gradient": {
+            "type": "warm-shift"
+          }
+        },
+        "slot": "sales-11",
+        "name": "wall-of-love",
+        "role": "prove",
+        "salesMeta": {
+          "section": 11,
+          "shape": "wall-of-love",
+          "compactGroup": null,
+          "prompt": "Volume proof, quickly scanned."
+        }
+      },
+      "children": [
+        {
+          "id": "#259",
+          "kind": "stack",
+          "settings": {
+            "gap": 8,
+            "mobileGap": 6
+          },
+          "children": [
+            {
+              "id": "#260",
+              "kind": "stack",
+              "settings": {
+                "gap": 2.5
+              },
+              "children": [
+                {
+                  "id": "#261",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700,
+                    "align": "center",
+                    "slot": "sales-headline"
+                  },
+                  "value": "Here is what real members are saying"
+                },
+                {
+                  "id": "#262",
+                  "kind": "text",
+                  "settings": {
+                    "align": "center",
+                    "muted": true,
+                    "marginBottom": 0
+                  },
+                  "value": "[A line about the volume of member love — where these messages come from.]"
+                }
+              ]
+            },
+            {
+              "id": "#263",
+              "kind": "stack",
+              "settings": {
+                "surface": {
+                  "padding": "16px 0 0"
+                }
+              },
+              "children": [
+                {
+                  "id": "#264",
+                  "kind": "carousel",
+                  "settings": {
+                    "autoplay": true,
+                    "interval_ms": 6000,
+                    "bleed": true,
+                    "effect": "blur-fade"
+                  },
+                  "children": [
+                    {
+                      "id": "#265",
+                      "kind": "quote",
+                      "settings": {},
+                      "value": {
+                        "quote": "I finally feel like I know what to do every single day instead of guessing. Before this, I'd open my laptop and just stare at fifteen tabs, not sure where to even start. Now I have an actual plan, and I actually follow it.",
+                        "name": "Priya Shah",
+                        "profession": "Small business owner",
+                        "avatarFallback": "PS",
+                        "highlight": "know what to do"
+                      }
+                    },
+                    {
+                      "id": "#266",
+                      "kind": "quote",
+                      "settings": {},
+                      "value": {
+                        "quote": "The community alone was worth the price of admission. I've gotten more useful feedback on my work in six weeks here than in three years of posting into the void on social media. People actually show up for each other.",
+                        "name": "Marcus Webb",
+                        "profession": "Freelance designer",
+                        "avatarFallback": "MW",
+                        "highlight": "worth the price of admission"
+                      }
+                    },
+                    {
+                      "id": "#267",
+                      "kind": "quote",
+                      "settings": {},
+                      "value": {
+                        "quote": "Three months in and the results speak for themselves. My clients are hitting their goals faster, and I'm spending way less time reinventing the wheel every week. If you're on the fence about joining, just start — you'll wish you had sooner.",
+                        "name": "Elena Torres",
+                        "profession": "Fitness coach",
+                        "avatarFallback": "ET",
+                        "highlight": "results speak for themselves"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#268",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "80px 0"
+        },
+        "slot": "sales-precountdown",
+        "name": "join-the-parents",
+        "role": "close",
+        "salesMeta": {
+          "section": 13.5,
+          "shape": "close",
+          "compactGroup": null,
+          "prompt": "One last social-proof nudge before the deadline — who else already joined?"
+        }
+      },
+      "children": [
+        {
+          "id": "#269",
+          "kind": "row",
+          "settings": {
+            "responsive": true,
+            "justify": "between",
+            "gap": 8,
+            "mobileGap": 6
+          },
+          "children": [
+            {
+              "id": "#270",
+              "kind": "stack",
+              "settings": {
+                "gap": 2.5
+              },
+              "children": [
+                {
+                  "id": "#271",
+                  "kind": "headline",
+                  "settings": {
+                    "level": 3
+                  },
+                  "value": "Join the members who already started"
+                },
+                {
+                  "id": "#272",
+                  "kind": "text",
+                  "settings": {},
+                  "value": "Same content, same calls, same community. You are just not in it yet."
+                }
+              ]
+            },
+            {
+              "id": "#273",
+              "kind": "row",
+              "settings": {
+                "gap": 6
+              },
+              "children": [
+                {
+                  "id": "#274",
+                  "kind": "stack",
+                  "settings": {
+                    "align": "center",
+                    "surface": {
+                      "margin": "-66px 39px -44px 0"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#275",
+                      "kind": "doodle",
+                      "settings": {
+                        "hideOnMobile": true,
+                        "draw": true,
+                        "variant": "arrow-straight",
+                        "rotate": 270,
+                        "size": "xl"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "#276",
+                  "kind": "stack",
+                  "settings": {
+                    "align": "center",
+                    "gap": 2
+                  },
+                  "children": [
+                    {
+                      "id": "#277",
+                      "kind": "button",
+                      "settings": {
+                        "size": "lg",
+                        "action": {
+                          "type": "page",
+                          "value": "register"
+                        },
+                        "iconRight": "arrow-right"
+                      },
+                      "value": "Start your [outcome] today"
+                    },
+                    {
+                      "id": "#278",
+                      "kind": "doodle",
+                      "settings": {
+                        "draw": true,
+                        "drawDelay": 0.3,
+                        "variant": "underline"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#279",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "80px 0",
+          "background": {
+            "type": "color",
+            "token": "primary"
+          }
+        },
+        "slot": "sales-14",
+        "name": "join-now",
+        "role": "close",
+        "salesMeta": {
+          "section": 14,
+          "shape": "close",
+          "compactGroup": null,
+          "prompt": "What do you want them to do?"
+        }
+      },
+      "children": [
+        {
+          "id": "#280",
+          "kind": "stack",
+          "settings": {
+            "gap": 8
+          },
+          "children": [
+            {
+              "id": "#281",
+              "kind": "stack",
+              "settings": {
+                "gap": 4
+              },
+              "children": [
+                {
+                  "id": "#282",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700,
+                    "slot": "sales-headline",
+                    "align": "center"
+                  },
+                  "value": "Here is what happens the moment they join"
+                },
+                {
+                  "id": "#283",
+                  "kind": "countdown",
+                  "settings": {},
+                  "value": "2026-08-11T23:59:00-07:00"
+                }
+              ]
+            },
+            {
+              "id": "#284",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "wrap": true,
+                "gap": 5,
+                "mobileGap": 3,
+                "align": "stretch"
+              },
+              "children": [
+                {
+                  "id": "#285",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3",
+                    "gap": 2.5,
+                    "align": "start",
+                    "surface": {
+                      "background": {
+                        "type": "tint"
+                      },
+                      "borderRadius": "hub-m",
+                      "padding": "md"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#286",
+                      "kind": "image",
+                      "settings": {
+                        "radius": "m"
+                      },
+                      "value": ""
+                    },
+                    {
+                      "id": "#287",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 1,
+                        "align": "start"
+                      },
+                      "children": [
+                        {
+                          "id": "#288",
+                          "kind": "headline",
+                          "settings": {
+                            "level": 3,
+                            "weight": 700
+                          },
+                          "value": "The moment they click"
+                        },
+                        {
+                          "id": "#289",
+                          "kind": "text",
+                          "settings": {
+                            "marginBottom": 0
+                          },
+                          "value": "The first thing that happens after the click."
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "#290",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3",
+                    "gap": 2.5,
+                    "align": "start",
+                    "surface": {
+                      "background": {
+                        "type": "tint"
+                      },
+                      "borderRadius": "hub-m",
+                      "padding": "md"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#291",
+                      "kind": "image",
+                      "settings": {
+                        "radius": "m"
+                      },
+                      "value": ""
+                    },
+                    {
+                      "id": "#292",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 1,
+                        "align": "start"
+                      },
+                      "children": [
+                        {
+                          "id": "#293",
+                          "kind": "headline",
+                          "settings": {
+                            "level": 3,
+                            "weight": 700
+                          },
+                          "value": "The first small win"
+                        },
+                        {
+                          "id": "#294",
+                          "kind": "text",
+                          "settings": {
+                            "marginBottom": 0
+                          },
+                          "value": "The first small win, inside the first day."
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "#295",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3",
+                    "gap": 2.5,
+                    "align": "start",
+                    "surface": {
+                      "background": {
+                        "type": "tint"
+                      },
+                      "borderRadius": "hub-m",
+                      "padding": "md"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#296",
+                      "kind": "image",
+                      "settings": {
+                        "radius": "m"
+                      },
+                      "value": ""
+                    },
+                    {
+                      "id": "#297",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 1,
+                        "align": "start"
+                      },
+                      "children": [
+                        {
+                          "id": "#298",
+                          "kind": "headline",
+                          "settings": {
+                            "level": 3,
+                            "weight": 700
+                          },
+                          "value": "One week in"
+                        },
+                        {
+                          "id": "#299",
+                          "kind": "text",
+                          "settings": {
+                            "marginBottom": 0
+                          },
+                          "value": "Where they will be by the end of week one."
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#300",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "justify": "between",
+                "gap": 6
+              },
+              "children": [
+                {
+                  "id": "#301",
+                  "kind": "stack",
+                  "settings": {
+                    "gap": 1,
+                    "surface": {
+                      "margin": "0 0 20px"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#302",
+                      "kind": "headline",
+                      "settings": {
+                        "level": 3
+                      },
+                      "value": "All they need to start: [the low barrier]."
+                    }
+                  ]
+                },
+                {
+                  "id": "#303",
+                  "kind": "row",
+                  "settings": {
+                    "gap": 6
+                  },
+                  "children": [
+                    {
+                      "id": "#304",
+                      "kind": "stack",
+                      "settings": {
+                        "align": "center",
+                        "surface": {
+                          "margin": "0 39px 20px 0"
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": "#305",
+                          "kind": "doodle",
+                          "settings": {
+                            "hideOnMobile": true,
+                            "draw": true,
+                            "variant": "arrow-straight",
+                            "rotate": 270,
+                            "size": "xl"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#306",
+                      "kind": "stack",
+                      "settings": {
+                        "width": "fit",
+                        "fitMobile": true,
+                        "gap": 1.5,
+                        "align": "center"
+                      },
+                      "children": [
+                        {
+                          "id": "#307",
+                          "kind": "button",
+                          "settings": {
+                            "size": "lg",
+                            "action": {
+                              "type": "page",
+                              "value": "register"
+                            },
+                            "iconRight": "arrow-right"
+                          },
+                          "value": "Start your [outcome] today"
+                        },
+                        {
+                          "id": "#308",
+                          "kind": "doodle",
+                          "settings": {
+                            "draw": true,
+                            "drawDelay": 0.3,
+                            "variant": "underline"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#309",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "padding": 0,
+        "surface": {
+          "padding": "80px 0"
+        },
+        "slot": "sales-15",
+        "name": "faq-founder-note",
+        "role": "close",
+        "salesMeta": {
+          "section": 15,
+          "shape": "faq",
+          "compactGroup": null,
+          "prompt": "Clear the last objections, end personal."
+        }
+      },
+      "children": [
+        {
+          "id": "#310",
+          "kind": "stack",
+          "settings": {},
+          "children": [
+            {
+              "id": "#311",
+              "kind": "container",
+              "settings": {
+                "maxWidth": "content",
+                "padding": 0
+              },
+              "children": [
+                {
+                  "id": "#312",
+                  "kind": "container",
+                  "settings": {
+                    "maxWidth": "search",
+                    "padding": 0
+                  },
+                  "children": [
+                    {
+                      "id": "#313",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 8,
+                        "mobileGap": 6
+                      },
+                      "children": [
+                        {
+                          "id": "#314",
+                          "kind": "stack",
+                          "settings": {
+                            "gap": 4
+                          },
+                          "children": [
+                            {
+                              "id": "#315",
+                              "kind": "text",
+                              "settings": {
+                                "variant": "eyebrow",
+                                "tone": "primary",
+                                "marginBottom": 0
+                              },
+                              "value": "[Before you join]"
+                            },
+                            {
+                              "id": "#316",
+                              "kind": "headline",
+                              "settings": {
+                                "weight": 700,
+                                "slot": "sales-headline"
+                              },
+                              "value": "The questions everyone asks before joining"
+                            }
+                          ]
+                        },
+                        {
+                          "id": "#317",
+                          "kind": "accordion",
+                          "settings": {
+                            "expansion": "single"
+                          },
+                          "children": [
+                            {
+                              "id": "#318",
+                              "kind": "text",
+                              "settings": {
+                                "tab_label": "Why not just use free [alternative]?",
+                                "muted": true
+                              },
+                              "value": "Answer the alternative comparison honestly, then name what only this offers."
+                            },
+                            {
+                              "id": "#319",
+                              "kind": "text",
+                              "settings": {
+                                "tab_label": "What if I do not have time?",
+                                "muted": true
+                              },
+                              "value": "Answer the time objection the way a member would need to hear it."
+                            },
+                            {
+                              "id": "#320",
+                              "kind": "text",
+                              "settings": {
+                                "tab_label": "What if it does not work for someone like me?",
+                                "muted": true
+                              },
+                              "value": "Answer the edge-case worry with a real example."
+                            },
+                            {
+                              "id": "#321",
+                              "kind": "text",
+                              "settings": {
+                                "tab_label": "Can I cancel?",
+                                "muted": true
+                              },
+                              "value": "State the cancel policy plainly. No hoops."
+                            },
+                            {
+                              "id": "#322",
+                              "kind": "text",
+                              "settings": {
+                                "tab_label": "[The next most common question]",
+                                "muted": true
+                              },
+                              "value": "Answer it warmly, the way you would in a reply."
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

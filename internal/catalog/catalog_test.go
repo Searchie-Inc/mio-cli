@@ -48,14 +48,16 @@ func TestLoad_Counts(t *testing.T) {
 	if got := len(c.Templates); got != 9 {
 		t.Errorf("section templates = %d, want 9", got)
 	}
-	if got := len(c.PageTemplates); got != 13 {
-		t.Errorf("page templates = %d, want 13", got)
+	// 14 page templates / 13 page types as of the 0.18.1 pin (page-sales
+	// added by the sales-template vocabulary, MIO-2724).
+	if got := len(c.PageTemplates); got != 14 {
+		t.Errorf("page templates = %d, want 14", got)
 	}
 	if got := len(c.SectionTypes); got != 9 {
 		t.Errorf("section types = %d, want 9", got)
 	}
-	if got := len(c.PageTypes); got != 12 {
-		t.Errorf("page types = %d, want 12", got)
+	if got := len(c.PageTypes); got != 13 {
+		t.Errorf("page types = %d, want 13", got)
 	}
 }
 
