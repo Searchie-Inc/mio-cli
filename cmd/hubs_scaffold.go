@@ -1032,9 +1032,10 @@ const scaffoldHubPlaylistVisibility = "public"
 //     then declared `playlists: []`, so nothing ever executed this path.
 //  2. ATTACH its content — an item per file_ids entry (media that already
 //     exists), then one per documents[] entry, each of which is registered
-//     first as a synthetic READY document file (MIO-2285) and attached the same
-//     way. Order is file_ids then documents, which is the order the items land
-//     in the playlist.
+//     first as a synthetic READY document file (MIO-2285), given its own per-hub
+//     publication row (without which it is attached but invisible — see
+//     publishTemplateDocument) and attached the same way. Order is file_ids then
+//     documents, which is the order the items land in the playlist.
 //  3. PUBLISH it to the hub with published_at set to NOW unconditionally
 //     (sidesteps MIO-2536) and scaffoldHubPlaylistVisibility, POSTing
 //     playlist_id in the BODY to the hub-playlists COLLECTION path (design
@@ -1055,8 +1056,8 @@ func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	}
 	docDetail := ""
 	if docs > 0 {
-		docDetail = fmt.Sprintf(", register %d synthetic document file(s) at %s and add each as an item",
-			docs, syntheticFilesPath(sc.teamID))
+		docDetail = fmt.Sprintf(", register %d synthetic document file(s) at %s, publish each to the hub at %s and add each as an item",
+			docs, syntheticFilesPath(sc.teamID), hubMediaPath(sc.teamID, sc.hubIDOrPlaceholder(), ""))
 	}
 	detail := fmt.Sprintf("GET %s (gate — skip all if the hub already has published playlists) else create playlist(s) [%s] scoped to the hub (hub_id), add items per file%s, and publish each to the hub (playlist_id in body, visibility=%s, published_at=now)",
 		hubPlaylistsPath(sc.teamID, sc.hubIDOrPlaceholder(), ""), strings.Join(keys, ", "), docDetail, scaffoldHubPlaylistVisibility)
@@ -1091,6 +1092,9 @@ func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 				fileID, derr := createTemplateDocument(sc, p, d)
 				if derr != nil {
 					return derr
+				}
+				if perr := publishTemplateDocument(sc, fileID); perr != nil {
+					return perr
 				}
 				fileIDs = append(fileIDs, fileID)
 			}
@@ -1150,6 +1154,34 @@ func createTemplateDocument(sc *scaffoldContext, p catalog.TemplatePlaylist, d c
 		return "", cerr
 	}
 	return res.ID, nil
+}
+
+// publishTemplateDocument gives ONE scaffold-created document file its per-hub
+// publication row, at the same visibility the playlist's own row gets.
+//
+// Without it the file is attached to the playlist and INVISIBLE. mio-backend's
+// item-card projection (list_hub_playlist_item_cards_for_viewer) takes the
+// legacy branch for a file with no publication row, and that branch reads the
+// hub scope off `media.hub_id` — which a synthetic register cannot set — so it
+// falls back to hub_private=True and denies every anonymous viewer. Measured on
+// dev 2026-08-10: three attached documents, item-cards returned 0 rows to an
+// anonymous caller; publishing one file took it to 1 with can_access true.
+//
+// Scoped to the files this run CREATED. A template's file_ids[] names media the
+// author already owns, and publishing someone's existing library item to a hub
+// is a side effect the CLI has no business taking on their behalf — so those
+// keep today's behaviour and the author publishes them deliberately.
+//
+// This does not add a stray card to /content: that page renders the hub's
+// playlist-cards, not its media (mio-hub src/app/[hubSlug]/(public)/content).
+func publishTemplateDocument(sc *scaffoldContext, fileID string) error {
+	attrs, berr := buildHubMediaPublishAttrs(scaffoldHubPlaylistVisibility, time.Now().UTC(), nil)
+	if berr != nil {
+		return berr
+	}
+	attrs["file_id"] = fileID
+	_, err := sc.cl.Create(sc.ctx, hubMediaPath(sc.teamID, sc.hubID, ""), attrs)
+	return err
 }
 
 // attrInt coerces a JSON:API attribute to an int. JSON numbers decode as float64

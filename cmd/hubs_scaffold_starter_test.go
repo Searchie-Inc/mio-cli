@@ -77,10 +77,11 @@ func TestStepSpaces_SendsTheTemplateIcon(t *testing.T) {
 
 // playlistWire is the traffic stepPlaylists emits, split by endpoint.
 type playlistWire struct {
-	creates    [][]byte // POST …/playlists            — the team playlist create
-	synthetics [][]byte // POST …/files/synthetic      — one per documents[] entry
-	itemFiles  []string // POST …/playlists/{id}/items — file_id, in attach order
-	publishes  [][]byte // POST …/hubs/{hub}/playlists — the publication row
+	creates    [][]byte // POST …/playlists             — the team playlist create
+	synthetics [][]byte // POST …/files/synthetic       — one per documents[] entry
+	itemFiles  []string // POST …/playlists/{id}/items  — file_id, in attach order
+	publishes  [][]byte // POST …/hubs/{hub}/playlists  — the playlist's publication row
+	mediaPubs  [][]byte // POST …/hubs/{hub}/media      — a document file's publication row
 }
 
 func playlistWireServer(t *testing.T) (*httptest.Server, *playlistWire) {
@@ -105,6 +106,10 @@ func playlistWireServer(t *testing.T) (*httptest.Server, *playlistWire) {
 		case strings.Contains(path, "/hubs/") && r.Method == http.MethodGet:
 			rw.WriteHeader(http.StatusOK)
 			_, _ = rw.Write([]byte(`{"data":[]}`)) // O1 gate: hub has no playlists
+		case strings.HasSuffix(path, "/media") && r.Method == http.MethodPost:
+			w.mediaPubs = append(w.mediaPubs, body)
+			rw.WriteHeader(http.StatusCreated)
+			_, _ = rw.Write([]byte(`{"data":{"id":"hm_f","type":"hub_media","attributes":{}}}`))
 		case strings.Contains(path, "/hubs/") && r.Method == http.MethodPost:
 			w.publishes = append(w.publishes, body)
 			rw.WriteHeader(http.StatusCreated)
@@ -202,6 +207,30 @@ func TestStepPlaylists_MaterialisesDocumentsAsSyntheticItems(t *testing.T) {
 	want := []string{"file_existing", "file_syn1", "file_syn2"}
 	if strings.Join(w.itemFiles, ",") != strings.Join(want, ",") {
 		t.Errorf("attached file ids = %v, want %v (file_ids then documents, in order)", w.itemFiles, want)
+	}
+
+	// Each CREATED document gets a per-hub publication row. Without it the file
+	// is attached and invisible: measured on dev, the item-card projection
+	// returned zero rows to an anonymous viewer until the row existed.
+	if len(w.mediaPubs) != 2 {
+		t.Fatalf("hub-media publishes = %d, want 2 (one per created document)", len(w.mediaPubs))
+	}
+	pubFiles := []string{}
+	for _, b := range w.mediaPubs {
+		attrs := decodeHubAttrs(t, b)
+		id, _ := attrs["file_id"].(string)
+		pubFiles = append(pubFiles, id)
+		if attrs["visibility"] != scaffoldHubPlaylistVisibility {
+			t.Errorf("document publication visibility = %v, want %q (the same row visibility the playlist gets)", attrs["visibility"], scaffoldHubPlaylistVisibility)
+		}
+		if at, _ := attrs["published_at"].(string); at == "" {
+			t.Errorf("document publication must set published_at (a null one is a draft); attrs=%v", attrs)
+		}
+	}
+	// NOT the file_ids entry: publishing media the template author already owns
+	// is a side effect the scaffold does not take on their behalf.
+	if strings.Join(pubFiles, ",") != "file_syn1,file_syn2" {
+		t.Errorf("published file ids = %v, want only the files this run created", pubFiles)
 	}
 }
 
