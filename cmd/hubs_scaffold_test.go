@@ -3504,8 +3504,42 @@ func TestHubsTemplates_ListsFromLiveCatalog(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "the live catalog") {
 			t.Errorf("the message must attribute the hub-template-less catalog to its SOURCE (live); err=%v", err)
 		}
-		if err != nil && strings.Contains(err.Error(), "--catalog") {
-			t.Errorf("hubs templates has no --catalog flag, so its message must not advertise one; err=%v", err)
+		if err == nil || !strings.Contains(err.Error(), "--catalog") {
+			t.Errorf("the message must point at the --catalog escape hatch this command now has; err=%v", err)
+		}
+	})
+	// MIO-3065: --catalog lists a local artifact instead of the backend's, so a
+	// catalog branch's hub templates can be inspected before they are scaffolded.
+	// Exclusive, like the scaffold's: NO catalog GET fires beside it.
+	t.Run("--catalog lists a local artifact with no catalog fetch", func(t *testing.T) {
+		srv, fired := firedGuardServer(t)
+		res := runContract(t, scaffoldEnv(t, srv.URL),
+			"hubs", "templates", "--catalog", "../internal/catalog/testdata/catalog-2.1.json")
+		if res.Code != errs.ExitOK {
+			t.Fatalf("exit = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+		}
+		if !strings.Contains(res.Stdout, "community") {
+			t.Errorf("output must list the OVERRIDE artifact's hub templates; stdout=%q", res.Stdout)
+		}
+		if *fired {
+			t.Errorf("--catalog must fire NO HTTP (the override is exclusive — no catalog GET beside it)")
+		}
+	})
+	// The hint is help, not noise: an operator already passing --catalog must not
+	// be told to pass --catalog.
+	t.Run("--catalog artifact without hubTemplates does not advertise --catalog back", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "catalog.json")
+		if werr := os.WriteFile(path, noHubTemplatesCatalogBody(t), 0o600); werr != nil {
+			t.Fatalf("write catalog: %v", werr)
+		}
+		srv, _ := firedGuardServer(t)
+		err := executeCLI(t, scaffoldEnv(t, srv.URL), "hubs", "templates", "--catalog", path)
+		if err == nil || !strings.Contains(err.Error(), "contains no hub templates") {
+			t.Fatalf("an override artifact without hubTemplates[] must get the pin-hint explanation; err=%v", err)
+		}
+		if strings.Contains(err.Error(), "--catalog") {
+			t.Errorf("the operator already passed --catalog; the message must not point back at it; err=%v", err)
 		}
 	})
 }

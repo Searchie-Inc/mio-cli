@@ -567,6 +567,13 @@ func templateSpaceInput(s catalog.TemplateSpace) SpaceInput {
 	if s.PostingPermission != "" {
 		in.PostingPermission = &s.PostingPermission
 	}
+	// MIO-3065: the sprite name (MIO-2802) the template declares. It was the one
+	// modelled space field the mapping dropped, so every scaffolded space came out
+	// icon-less no matter what the catalog said — silently, because buildSpaceAttrs
+	// omits an unset field by design and nothing downstream reads it back.
+	if s.Icon != "" {
+		in.Icon = &s.Icon
+	}
 	return in
 }
 
@@ -989,24 +996,70 @@ func templateHubPolicy(key string, raw any) (hubPolicy, error) {
 	return p, nil
 }
 
-// stepPlaylists creates the template's playlists, adds their items, and publishes
-// them to the hub — GATED on the O1 decision (option c: playlists are create-only,
-// so if the hub already has ≥1 published playlist the ENTIRE step is skipped; that
+// scaffoldHubPlaylistVisibility is the per-hub visibility of the PUBLICATION row
+// every scaffolded playlist gets, and it is a deliberate constant, not a
+// placeholder (MIO-3065 item 6).
+//
+// Two different enums are in play and they are easy to confuse. The playlist's
+// own visibility (public|unlisted|private) IS template-expressible —
+// playlists[].visibility, applied at create. The per-hub row's visibility
+// (members|private|public) is NOT: no hubTemplates[] key carries it, so
+// "members-only day one" cannot be said in a manifest at all.
+//
+// The hardcode is RATIFIED here rather than quietly left in place, and stays
+// "public" for the reason the value was chosen: a scaffolded hub's playlists
+// must be reachable by the anonymous visitor the hub is being built for, and
+// the row's own default ("members") would leave every card locked on a hub
+// nobody has joined yet. The hub stays private until --publish regardless, so
+// this does not make anything public before the operator says so.
+//
+// Inventing a manifest key to express the other case is exactly the unilateral
+// vocabulary MIO-2812 exists to stop, so the ask sits with the catalog owners;
+// when a key lands, this constant becomes its default.
+const scaffoldHubPlaylistVisibility = "public"
+
+// stepPlaylists creates the template's playlists, fills them, and publishes them
+// to the hub — GATED on the O1 decision (option c: playlists are create-only, so
+// if the hub already has ≥1 published playlist the ENTIRE step is skipped; that
 // gate IS the idempotency mechanism — item-level idempotency is therefore N/A).
-// On a fresh hub it creates each team playlist, adds an item per file id, and
-// publishes it with published_at set to NOW unconditionally (sidesteps MIO-2536)
-// and visibility public, POSTing playlist_id in the BODY to the hub-playlists
-// COLLECTION path (design §Apply pipeline step 6, MIO-2543 Task 17).
+//
+// On a fresh hub, per template playlist:
+//
+//  1. CREATE the team playlist, scoped to the hub with hub_id. That scope is
+//     load-bearing, not cosmetic: without it the playlist is team-only and its
+//     hub detail page 404s for every viewer, however the publication row is
+//     configured. Latent until MIO-3065 because the only shipped template until
+//     then declared `playlists: []`, so nothing ever executed this path.
+//  2. ATTACH its content — an item per file_ids entry (media that already
+//     exists), then one per documents[] entry, each of which is registered
+//     first as a synthetic READY document file (MIO-2285) and attached the same
+//     way. Order is file_ids then documents, which is the order the items land
+//     in the playlist.
+//  3. PUBLISH it to the hub with published_at set to NOW unconditionally
+//     (sidesteps MIO-2536) and scaffoldHubPlaylistVisibility, POSTing
+//     playlist_id in the BODY to the hub-playlists COLLECTION path (design
+//     §Apply pipeline step 6, MIO-2543 Task 17).
+//
+// The created ids land in sc.playlistIDsByKey, which stepPages then resolves the
+// pages' playlist dataSource keys against (the MIO-3065 fill contract) — so this
+// step must run before pages, as the pipeline order has it.
 func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	if len(t.Playlists) == 0 {
 		return sc.step("playlists", "no playlists in template", func() error { return nil })
 	}
 	keys := make([]string, len(t.Playlists))
+	docs := 0
 	for i, p := range t.Playlists {
 		keys[i] = p.Key
+		docs += len(p.Documents)
 	}
-	detail := fmt.Sprintf("GET %s (gate — skip all if the hub already has published playlists) else create playlist(s) [%s], add items per file, and publish each to the hub (playlist_id in body, visibility=public, published_at=now)",
-		hubPlaylistsPath(sc.teamID, sc.hubIDOrPlaceholder(), ""), strings.Join(keys, ", "))
+	docDetail := ""
+	if docs > 0 {
+		docDetail = fmt.Sprintf(", register %d synthetic document file(s) at %s and add each as an item",
+			docs, syntheticFilesPath(sc.teamID))
+	}
+	detail := fmt.Sprintf("GET %s (gate — skip all if the hub already has published playlists) else create playlist(s) [%s] scoped to the hub (hub_id), add items per file%s, and publish each to the hub (playlist_id in body, visibility=%s, published_at=now)",
+		hubPlaylistsPath(sc.teamID, sc.hubIDOrPlaceholder(), ""), strings.Join(keys, ", "), docDetail, scaffoldHubPlaylistVisibility)
 	return sc.step("playlists", detail, func() error {
 		// O1 gate: if the hub already has ≥1 published playlist, skip the whole step.
 		// One page suffices — any data means non-empty (create-only, no resume merge).
@@ -1018,7 +1071,10 @@ func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 			return nil
 		}
 		for _, p := range t.Playlists {
-			in := PlaylistInput{Title: &p.Title}
+			// hub_id scopes the playlist to THIS hub — see the step doc: without it
+			// the playlist's hub detail page 404s.
+			hubID := sc.hubID
+			in := PlaylistInput{Title: &p.Title, HubID: &hubID}
 			if p.Visibility != "" {
 				vis := p.Visibility
 				in.Visibility = &vis
@@ -1030,7 +1086,15 @@ func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 			playlistID := res.ID
 			sc.playlistIDsByKey[p.Key] = playlistID
 
-			for _, fileID := range p.FileIDs {
+			fileIDs := append([]string(nil), p.FileIDs...)
+			for _, d := range p.Documents {
+				fileID, derr := createTemplateDocument(sc, p, d)
+				if derr != nil {
+					return derr
+				}
+				fileIDs = append(fileIDs, fileID)
+			}
+			for _, fileID := range fileIDs {
 				if _, ierr := sc.cl.Create(sc.ctx, playlistItemsPath(sc.teamID, playlistID, ""),
 					map[string]any{"file_id": fileID}); ierr != nil {
 					return ierr
@@ -1038,8 +1102,8 @@ func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 			}
 
 			// Publish to the hub: published_at set unconditionally (sidesteps
-			// MIO-2536), visibility public, playlist_id in the body → COLLECTION path.
-			pubAttrs, berr := buildHubMediaPublishAttrs("public", time.Now().UTC(), nil)
+			// MIO-2536), playlist_id in the body → COLLECTION path.
+			pubAttrs, berr := buildHubMediaPublishAttrs(scaffoldHubPlaylistVisibility, time.Now().UTC(), nil)
 			if berr != nil {
 				return berr
 			}
@@ -1050,6 +1114,42 @@ func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 		}
 		return nil
 	})
+}
+
+// createTemplateDocument registers ONE playlists[].documents[] entry as a
+// synthetic READY file and returns its id (MIO-2285, MIO-3065).
+//
+// `register-synthetic` is a 1:1 fit for a placeholder lesson: the endpoint mints
+// the storage key server-side and the file is READY on creation, so there is no
+// upload, no finalize and no transcode to wait on — which is why the template
+// can declare content that exists the moment the scaffold returns.
+//
+// The file's visibility MIRRORS its playlist's rather than taking the endpoint's
+// "private" default: a public playlist whose items are private discloses no
+// items at all to an anonymous viewer (mio-backend decide_access, media gate),
+// i.e. the template's own declaration would be quietly contradicted by a default
+// it never asked for. The two enums are the SAME set here (public|unlisted|
+// private), so the value passes through unchanged — no mapping to get wrong.
+func createTemplateDocument(sc *scaffoldContext, p catalog.TemplatePlaylist, d catalog.TemplateDocument) (string, error) {
+	kind := "document"
+	in := SyntheticFileInput{Title: d.Title, AssetKind: &kind}
+	if d.Description != "" {
+		desc := d.Description
+		in.Description = &desc
+	}
+	if p.Visibility != "" {
+		vis := p.Visibility
+		in.Visibility = &vis
+	}
+	attrs, berr := buildSyntheticFileAttrs(in)
+	if berr != nil {
+		return "", berr
+	}
+	res, cerr := sc.cl.Create(sc.ctx, syntheticFilesPath(sc.teamID), attrs)
+	if cerr != nil {
+		return "", cerr
+	}
+	return res.ID, nil
 }
 
 // attrInt coerces a JSON:API attribute to an int. JSON numbers decode as float64
@@ -2011,9 +2111,12 @@ var hubsTemplatesCmd = &cobra.Command{
 
 Templates live in the page-builder catalog served by the backend the CLI is
 pointed at, so this command needs credentials and lists exactly what a
-scaffold against that backend would see.`,
+scaffold against that backend would see. --catalog <file> lists a local
+artifact instead — the same escape hatch 'hubs scaffold' takes, so a catalog
+branch's templates can be inspected before they are scaffolded.`,
 	Example: `  mio hubs templates
-  mio hubs templates --output json`,
+  mio hubs templates --output json
+  mio hubs templates --catalog ./catalog.json`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
@@ -2023,18 +2126,32 @@ scaffold against that backend would see.`,
 		if err := c.requireAuth(); err != nil {
 			return err
 		}
-		cat, src, rerr := catalog.Resolve(c.ctx, catalog.ResolveOptions{
-			Mutating: true, // live-or-fail: a listing must never silently degrade to a stale copy
-			CacheDir: catalogCacheDirFor(c.client.BaseURL()),
-			Fetcher:  catalogFetcher{c: c.client},
-			Warnf:    catalogWarnf(cmd),
-		})
+		// MIO-3065: --catalog is EXCLUSIVE — an override file must not be
+		// second-guessed by a live fetch, the same rule scaffoldResolveOptions
+		// applies. Mutating stays true either way: for the live path it is
+		// live-or-fail (a listing must never silently degrade to a stale copy),
+		// and for the override it is what makes a digest mismatch fail closed
+		// rather than list a tampered artifact.
+		override := strings.TrimSpace(flagValue(cmd, "catalog"))
+		opts := catalog.ResolveOptions{
+			OverrideFile: override,
+			Mutating:     true,
+			CacheDir:     catalogCacheDirFor(c.client.BaseURL()),
+			Warnf:        catalogWarnf(cmd),
+		}
+		if override == "" {
+			opts.Fetcher = catalogFetcher{c: c.client}
+		}
+		cat, src, rerr := catalog.Resolve(c.ctx, opts)
 		if rerr != nil {
-			return wrapCatalogResolveErr(rerr, false) // no --catalog flag here
+			return wrapCatalogResolveErr(rerr, override != "")
 		}
 		printCatalogProvenance(cmd, src, cat)
 		if len(cat.HubTemplates) == 0 {
-			return errNoHubTemplates(cat, src, false) // this command has no --catalog flag to point at
+			// The --catalog hint is only useful when the operator is NOT already
+			// using it; pointing someone at the flag they just passed reads as a
+			// bug in the message.
+			return errNoHubTemplates(cat, src, override == "")
 		}
 		rows := make([]any, 0, len(cat.HubTemplates))
 		for _, ht := range cat.HubTemplates {
@@ -2082,6 +2199,12 @@ func init() {
 	// See hubs_scaffold_branding.go for the precedence order, the
 	// --primary-color → header_color cascade, and why no value format is checked.
 	registerScaffoldBrandingFlags(hubsScaffoldCmd)
+
+	// MIO-3065: the listing takes the SAME escape hatch as the scaffold. Without
+	// it a catalog branch's hub templates could be scaffolded (--catalog) but not
+	// listed — `hubs templates --catalog <file>` exited 2 on an unknown flag.
+	hubsTemplatesCmd.Flags().String("catalog", "",
+		"Path to a catalog.json file to list templates from instead of the backend's live catalog (digest-verified; fails closed on mismatch).")
 
 	hubsCmd.AddCommand(hubsScaffoldCmd)
 	hubsCmd.AddCommand(hubsTemplatesCmd)

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 	"github.com/Searchie-Inc/mio-cli/internal/client"
@@ -144,8 +145,12 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 		if pp.ref.IsHomepage {
 			home = ", homepage"
 		}
-		detail := fmt.Sprintf("page %q: apply via backend op if available, else create + set tree + publish + mark applied; re-runs follow §5.1 recovery (template %s%s)",
-			pp.ref.Slug, pp.ref.PageTemplate, home)
+		bind := ""
+		if keys := catalog.PlaylistDataSourceKeys(pp.rawTree); len(keys) > 0 {
+			bind = fmt.Sprintf(", binding playlist dataSource key(s) [%s] to the ids this run creates", strings.Join(keys, ", "))
+		}
+		detail := fmt.Sprintf("page %q: apply via backend op if available, else create + set tree%s + publish + mark applied; re-runs follow §5.1 recovery (template %s%s)",
+			pp.ref.Slug, bind, pp.ref.PageTemplate, home)
 		if err := sc.step("pages", detail, func() error { return applyPageClientSide(sc, pp) }); err != nil {
 			// Every per-page failure names its page EXACTLY ONCE: the messages
 			// below (including the conflict errors) are built without a slug
@@ -174,6 +179,22 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 	tree := catalog.CloneNode(pp.rawTree)
 	if ierr := catalog.InterpolateTreeValues(tree, sc.hubName, sc.hubSlug); ierr != nil {
 		return errs.Wrap(errs.ExitUsage, ierr)
+	}
+
+	// 1b. The MIO-3065 FILL CONTRACT: write the ids of the playlists THIS run
+	// created into the tree's playlist dataSources, keyed by the `key` the
+	// catalog declares beside the empty id. Done on the interpolated clone, so
+	// the plan's rawTree stays pristine for a resume, and BEFORE the tree PUT —
+	// the id has to be in the body the backend compiles, not patched in after.
+	//
+	// An unresolved key is a NOTE, not a failure: the only way to reach one on a
+	// valid template (Validate rejects a key naming no playlist) is the
+	// playlists step's O1 gate skipping on a hub that already had playlists, and
+	// aborting a resume over a band that renders empty would be a worse trade
+	// than saying so.
+	if bound, unresolved := catalog.BindPlaylistDataSources(tree, sc.playlistIDsByKey); len(unresolved) > 0 {
+		sc.notef("page %q: %d playlist dataSource(s) bound; no playlist created this run for key(s) %s — those sections will render unbound",
+			pp.ref.Slug, bound, strings.Join(unresolved, ", "))
 	}
 	treeObj := map[string]any{"root": tree}
 
