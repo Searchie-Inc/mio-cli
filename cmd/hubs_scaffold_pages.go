@@ -128,15 +128,27 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	//   - the sc.cat nil-check keeps hand-built step-test contexts (which have
 	//     no digest to send) out of the probe; production always has sc.cat —
 	//     scaffoldPreflight sets it, and the client-side markers require it.
+	//   - MIO-3065: a template whose pages bind a playlist dataSource by key
+	//     skips the probe too. The op writes the tree the CATALOG ships, so the
+	//     binding would keep the catalog's empty id and the section would compile
+	//     bound to nothing; only this side knows the ids stepPlaylists just
+	//     created. Unlike the whole-hub op's gate, icons and documents are NOT a
+	//     reason here — the client-side spaces and playlists steps have already
+	//     applied them by the time this step runs.
 	if !sc.dryRun && sc.catalogOverride == "" && sc.cat != nil {
-		done, err := applyViaServerOp(sc)
-		if err != nil {
-			return err
+		if keys := playlistBindingKeys(sc); len(keys) > 0 {
+			sc.notef("not using the scaffold-from-template op: the pages bind playlist dataSource key(s) %s, which the op does not fill (mio-backend parity: MIO-3080) — applying client-side",
+				strings.Join(keys, ", "))
+		} else {
+			done, err := applyViaServerOp(sc)
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
+			// Fall through: op absent (404/405) — client-side apply.
 		}
-		if done {
-			return nil
-		}
-		// Fall through: op absent (404/405) — client-side apply.
 	}
 
 	for i := range sc.pagePlan.pages {

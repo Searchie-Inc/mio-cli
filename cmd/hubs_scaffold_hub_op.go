@@ -113,6 +113,14 @@ func hubOpSkipReason(cmd *cobra.Command, sc *scaffoldContext) (reason string, an
 		return fmt.Sprintf("%s cannot be expressed in the op's overrides",
 			strings.Join(changed, ", ")), true
 	}
+	// MIO-3065 — same rule one level up from the flags: the op silently drops
+	// template vocabulary it does not model, and a hub that looks built but is
+	// not is worse than a slower client-side build. See
+	// hubOpUnappliedVocabulary for what and why.
+	if unapplied := hubOpUnappliedVocabulary(sc); len(unapplied) > 0 {
+		return fmt.Sprintf("the template declares %s, which the op does not apply (mio-backend parity: MIO-3080)",
+			strings.Join(unapplied, ", ")), true
+	}
 	// NOTE: an EMPTY --logo-url/--favicon-url does not appear here. It is not a
 	// reason to prefer the client path — the API rejects an empty branding *_url
 	// on hub create and hub update too — so it is refused outright, pre-HTTP, by

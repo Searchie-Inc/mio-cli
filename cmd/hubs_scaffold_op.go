@@ -22,6 +22,78 @@ import (
 // 404/405 and the freak retry miss (op disappeared between the two POSTs).
 const opAbsentNote = "scaffold-from-template op not available — applying client-side"
 
+// ---- what the server ops do not apply (MIO-3065) ------------------------------
+//
+// The ops are a SECOND implementation of this pipeline, in another repo, and
+// they were written against the vocabulary that existed then. Three
+// hubTemplates[] declarations are ignored by them today (verified on mio-backend
+// origin/main, 2026-08-10):
+//
+//   - spaces[].icon           — app/hub_scaffold/service.py `_TemplateSpace`
+//                               models name/slug/description/access_level/
+//                               posting_permission and no icon;
+//   - playlists[].documents   — its `_TemplatePlaylist` models key/title/
+//                               visibility/file_ids and no documents;
+//   - a playlist dataSource   — `dataSource` appears nowhere in app/ outside the
+//     `key`                     vendored catalog itself, on either op path.
+//
+// Taking an op that drops what the template asked for produces a hub that looks
+// built and is not — the one outcome hubOpUnsupportedFlags already calls worse
+// than not using the op. So a template declaring any of them takes the
+// client-side path, ANNOUNCED, until mio-backend reaches parity (MIO-3080).
+//
+// Both functions are deliberately data-driven off the resolved template rather
+// than keyed on a template id: when a template stops declaring these, or the ops
+// start applying them and these checks are deleted, nothing about `starter` is
+// special-cased anywhere.
+
+// playlistBindingKeys returns the playlist dataSource keys the planned pages
+// declare — the fill contract the CLIENT resolves after stepPlaylists. Any at
+// all means a server-applied page would be written with the catalog's empty id
+// and compile to a section bound to nothing.
+func playlistBindingKeys(sc *scaffoldContext) []string {
+	if sc.pagePlan == nil {
+		return nil
+	}
+	var keys []string
+	seen := map[string]bool{}
+	for _, pp := range sc.pagePlan.pages {
+		for _, k := range catalog.PlaylistDataSourceKeys(pp.rawTree) {
+			if !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	return keys
+}
+
+// hubOpUnappliedVocabulary lists, in template order, every declaration the
+// WHOLE-HUB op would drop. Empty means the op can express this template.
+//
+// The pages op gets its own, narrower check (see stepPages): by the time it is
+// probed the client-side spaces and playlists steps have already run, so the
+// only thing still at stake there is the fill contract.
+func hubOpUnappliedVocabulary(sc *scaffoldContext) []string {
+	var out []string
+	for _, s := range sc.hubTmpl.Spaces {
+		if s.Icon != "" {
+			out = append(out, "spaces[].icon")
+			break
+		}
+	}
+	for _, p := range sc.hubTmpl.Playlists {
+		if len(p.Documents) > 0 {
+			out = append(out, "playlists[].documents")
+			break
+		}
+	}
+	if len(playlistBindingKeys(sc)) > 0 {
+		out = append(out, "a playlist dataSource key")
+	}
+	return out
+}
+
 // applyViaServerOp tries the backend op for the WHOLE pages[] plan. Returns
 // (true, nil) when the op handled it (stepPages is done), (false, nil) when
 // the op is absent — the 404/405 probe signal, surfaced by the client as

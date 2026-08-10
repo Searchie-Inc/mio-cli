@@ -41,8 +41,15 @@ type hubOpCapture struct {
 // client-side fallback can complete a real run.
 func hubOpScaffoldServer(t *testing.T, opStatus int, opBody string) (*httptest.Server, *hubOpCapture) {
 	t.Helper()
+	return hubOpScaffoldServerWithCatalog(t, opStatus, opBody, catalog21Body(t))
+}
+
+// hubOpScaffoldServerWithCatalog is hubOpScaffoldServer over a caller-supplied
+// catalog artifact, for the tests that need the SERVED template to declare
+// something specific (MIO-3065's op gate).
+func hubOpScaffoldServerWithCatalog(t *testing.T, opStatus int, opBody string, catBody []byte) (*httptest.Server, *hubOpCapture) {
+	t.Helper()
 	rec := &hubOpCapture{}
-	catBody := catalog21Body(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serveCatalogGET(w, r, catBody) {
