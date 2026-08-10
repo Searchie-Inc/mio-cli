@@ -128,6 +128,26 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	//   - the sc.cat nil-check keeps hand-built step-test contexts (which have
 	//     no digest to send) out of the probe; production always has sc.cat —
 	//     scaffoldPreflight sets it, and the client-side markers require it.
+	// MIO-3065: refuse to apply a page whose declared binding cannot be filled,
+	// BEFORE any page is created. Writing it would publish a section bound to the
+	// empty string — a permanently blank band — and then flip the provenance
+	// marker to "applied", at which point §5.1 reads the page as converged and NO
+	// re-run ever repairs it. Failing here costs a re-run; succeeding here costs a
+	// hub that silently renders wrong forever.
+	//
+	// Reachable only on a resume whose playlists step skipped (the O1 gate) and
+	// whose ids recoverPlaylistIDsForBindings could not recover unambiguously —
+	// a key naming no playlist of this template is already an ExitUsage in the
+	// write-free preflight. Never in dry-run, where no playlist has been created
+	// by construction and every key would read as missing.
+	if !sc.dryRun {
+		if missing := unresolvedBindingKeys(sc); len(missing) > 0 {
+			return errs.New(errs.ExitUsage,
+				"pages bind playlist dataSource key(s) %s, but this run created no playlist for them and none could be matched on the hub by title — the section(s) would render empty and be marked applied, so no page was written. Re-run against a hub without conflicting playlists, or give the hub a playlist titled as the template's so it can be matched",
+				strings.Join(missing, ", "))
+		}
+	}
+
 	//   - MIO-3065: a template whose pages bind a playlist dataSource by key
 	//     skips the probe too. The op writes the tree the CATALOG ships, so the
 	//     binding would keep the catalog's empty id and the section would compile
@@ -199,11 +219,13 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 	// the plan's rawTree stays pristine for a resume, and BEFORE the tree PUT —
 	// the id has to be in the body the backend compiles, not patched in after.
 	//
-	// An unresolved key is a NOTE, not a failure: the only way to reach one on a
-	// valid template (Validate rejects a key naming no playlist) is the
-	// playlists step's O1 gate skipping on a hub that already had playlists, and
-	// aborting a resume over a band that renders empty would be a worse trade
-	// than saying so.
+	// An unresolved key CANNOT reach here through the pipeline — stepPages
+	// refuses the whole step before any page is written, and a key naming no
+	// playlist of the template is an ExitUsage in the write-free preflight. The
+	// note stays because this function is also driven directly by step tests and
+	// because a silent empty binding is precisely the failure this change exists
+	// to end: if it ever becomes reachable again, it says so instead of shipping
+	// a blank band.
 	if bound, unresolved := catalog.BindPlaylistDataSources(tree, sc.playlistIDsByKey); len(unresolved) > 0 {
 		sc.notef("page %q: %d playlist dataSource(s) bound; no playlist created this run for key(s) %s — those sections will render unbound",
 			pp.ref.Slug, bound, strings.Join(unresolved, ", "))

@@ -15,9 +15,11 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
@@ -549,4 +551,205 @@ func unboundPagePlan() *scaffoldPlan {
 	kids, _ := p.pages[0].rawTree["children"].([]any)
 	delete(kids[0].(map[string]any), "dataSource")
 	return p
+}
+
+// ─── round 2: resume, and the gate on the op-retry path ───────────────────────
+
+// resumeWireServer answers the O1 gate with an EXISTING hub playlist row (so
+// stepPlaylists skips the create loop) and serves each playlist's title on
+// retrieve. Records every POST so a "skip" that still writes can never pass.
+func resumeWireServer(t *testing.T, titlesByID map[string]string) (*httptest.Server, *int) {
+	t.Helper()
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if r.Method == http.MethodPost {
+			posts++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"unexpected","type":"x","attributes":{}}}`))
+			return
+		}
+		path := r.URL.Path
+		// A team playlist retrieve: …/teams/{team}/playlists/{id}
+		if strings.Contains(path, "/playlists/") && !strings.Contains(path, "/hubs/") {
+			id := path[strings.LastIndex(path, "/")+1:]
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"playlists","attributes":{"title":%q}}}`, id, titlesByID[id])
+			return
+		}
+		// The O1 gate listing: hub publication rows, one per known playlist.
+		rows := make([]string, 0, len(titlesByID))
+		ids := make([]string, 0, len(titlesByID))
+		for id := range titlesByID {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids) // deterministic order
+		for _, id := range ids {
+			rows = append(rows, fmt.Sprintf(`{"id":"hm_%s","type":"hub_media","attributes":{"playlist_id":%q}}`, id, id))
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"data":[%s]}`, strings.Join(rows, ","))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &posts
+}
+
+// TestStepPlaylists_ResumeRecoversBindingIDsByTitle: the ORDINARY resume — a
+// first run created the playlists and died before the pages. The O1 gate skips
+// the create loop, so nothing records the ids; without recovery the pages step
+// can never fill its bindings and the resume can never finish.
+//
+// The join is by TITLE (`key` is manifest vocabulary, never stored server-side)
+// and only where unambiguous, so the second subtest is the one that matters: a
+// hub carrying TWO playlists with the template's title must recover NOTHING,
+// because a wrong id would be acted on where a missing one is reported.
+func TestStepPlaylists_ResumeRecoversBindingIDsByTitle(t *testing.T) {
+	tmpl := func() *catalog.HubTemplate {
+		return &catalog.HubTemplate{
+			ID: "starter",
+			Playlists: []catalog.TemplatePlaylist{
+				{Title: "Getting Started", Key: "getting-started", Visibility: "public"},
+				{Title: "Add another playlist", Key: "placeholder-2", Visibility: "public"},
+				{Title: "Add another playlist", Key: "placeholder-3", Visibility: "public"},
+			},
+		}
+	}
+
+	t.Run("unambiguous title recovers the id", func(t *testing.T) {
+		srv, posts := resumeWireServer(t, map[string]string{
+			"pl_gs":  "Getting Started",
+			"pl_ph1": "Add another playlist",
+			"pl_ph2": "Add another playlist",
+		})
+		sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+		sc.pagePlan = bandPagePlan()
+		if err := stepPlaylists(sc, tmpl()); err != nil {
+			t.Fatalf("stepPlaylists: %v", err)
+		}
+		if *posts != 0 {
+			t.Errorf("the O1 gate must still skip every write; got %d POST(s)", *posts)
+		}
+		if sc.playlistIDsByKey["getting-started"] != "pl_gs" {
+			t.Errorf("recovered id = %q, want pl_gs", sc.playlistIDsByKey["getting-started"])
+		}
+		// Only the BOUND key is looked up: the two duplicate-titled playlists are
+		// not needed by the plan, so their ambiguity is nobody's problem.
+		if len(sc.playlistIDsByKey) != 1 {
+			t.Errorf("recovered %v, want only the bound key", sc.playlistIDsByKey)
+		}
+	})
+
+	t.Run("ambiguous title recovers nothing", func(t *testing.T) {
+		srv, _ := resumeWireServer(t, map[string]string{
+			"pl_a": "Getting Started",
+			"pl_b": "Getting Started", // a second playlist with the same title
+		})
+		sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+		sc.pagePlan = bandPagePlan()
+		if err := stepPlaylists(sc, tmpl()); err != nil {
+			t.Fatalf("stepPlaylists: %v", err)
+		}
+		if id, ok := sc.playlistIDsByKey["getting-started"]; ok {
+			t.Errorf("recovered %q from an AMBIGUOUS title — a wrong id is worse than a missing one", id)
+		}
+	})
+
+	t.Run("no bindings in the plan spends no requests", func(t *testing.T) {
+		srv, _ := resumeWireServer(t, map[string]string{"pl_gs": "Getting Started"})
+		sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+		sc.pagePlan = unboundPagePlan()
+		if err := stepPlaylists(sc, tmpl()); err != nil {
+			t.Fatalf("stepPlaylists: %v", err)
+		}
+		if len(sc.playlistIDsByKey) != 0 {
+			t.Errorf("nothing binds a playlist, so nothing needs recovering; got %v", sc.playlistIDsByKey)
+		}
+	})
+}
+
+// TestStepPages_RefusesAnUnfillableBinding: when a declared binding cannot be
+// filled, the step exits 2 and writes NOTHING.
+//
+// The failure it prevents is the quiet one: a page written with the catalog's
+// empty id renders a permanently blank band AND gets its provenance marker
+// flipped to "applied", after which §5.1 reads it as converged and no re-run
+// ever repairs it. So the assertion is on the wire — zero page creates — not
+// merely on the error.
+func TestStepPages_RefusesAnUnfillableBinding(t *testing.T) {
+	creates := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pages") {
+			creates++
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	cat, _, _ := scaffoldFixture(t)
+	sc.cat, sc.pagePlan = cat, bandPagePlan()
+	sc.hubTmpl = catalog.HubTemplate{ID: "starter", Pages: []catalog.PageRef{sc.pagePlan.pages[0].ref}}
+	// playlistIDsByKey deliberately left EMPTY — the resume case where recovery
+	// found nothing.
+
+	err := stepPages(sc, &sc.hubTmpl)
+	if err == nil {
+		t.Fatal("stepPages must FAIL rather than publish a section bound to the empty string")
+	}
+	if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
+	}
+	if !strings.Contains(err.Error(), "getting-started") {
+		t.Errorf("the error must name the key that could not be filled; err=%v", err)
+	}
+	if creates != 0 {
+		t.Errorf("page creates = %d, want 0 — the refusal must precede every write", creates)
+	}
+}
+
+// TestStepPages_Op409RefetchIntoABindingFallsBackClientSide: the one path that
+// rebuilds the plan AFTER the op gate already ran. A 409 triggers a catalog
+// refetch; if the fresh catalog's template binds a playlist by key, retrying
+// the op would apply pages the op cannot fill — so the retry must be abandoned
+// for the client-side apply of the NEW plan.
+func TestStepPages_Op409RefetchIntoABindingFallsBackClientSide(t *testing.T) {
+	t.Setenv("MIO_CATALOG_CACHE_DIR", t.TempDir())
+	bindingBody := vocabCatalogBody(t, func(ht map[string]any, cat map[string]any) {
+		ht["playlists"] = []any{map[string]any{
+			"title": "Getting Started", "key": "getting-started", "visibility": "public",
+		}}
+		pts, _ := cat["pageTemplates"].([]any)
+		for _, raw := range pts {
+			pt, _ := raw.(map[string]any)
+			if pt["id"] != "page-homepage-community" {
+				continue
+			}
+			starter, _ := pt["starter"].(map[string]any)
+			starter["dataSource"] = map[string]any{"type": "playlist", "id": "", "key": "getting-started"}
+		}
+	})
+
+	srv, be := newRecoveryBackend(t, nil, nil)
+	be.catalogBody = bindingBody
+	be.opHandler = func(w http.ResponseWriter, _ int) { opConflict409(w) }
+
+	sc, err := driveStepPagesCfg(t, srv.URL, func(sc *scaffoldContext) {
+		// The ids the client-side apply will bind with — in production the
+		// playlists step recorded (or recovered) them before pages ran.
+		sc.playlistIDsByKey["getting-started"] = "pl_made"
+	})
+	if err != nil {
+		t.Fatalf("stepPages: %v", err)
+	}
+	if be.opPosts != 1 {
+		t.Errorf("op POSTs = %d, want 1 — the retry must be abandoned once the fresh plan needs a fill the op cannot do", be.opPosts)
+	}
+	if be.mutations == 0 {
+		t.Error("the run must apply the NEW plan client-side; no client-side write fired")
+	}
+	if !strings.Contains(stepNotes(sc), "getting-started") {
+		t.Errorf("the abandoned retry must say which binding forced it; notes=%q", stepNotes(sc))
+	}
 }

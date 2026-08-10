@@ -12,6 +12,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 	"github.com/Searchie-Inc/mio-cli/internal/client"
@@ -172,6 +173,19 @@ func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTempl
 		return false, perr
 	}
 	sc.cat = cat
+
+	// MIO-3065: the plan just changed under us, so the op gate has to be asked
+	// again. stepPages decided to probe against the OLD plan; if the fresh
+	// catalog's template binds a playlist by key, retrying the op would apply
+	// pages the op cannot fill — the exact silent breakage the gate exists to
+	// prevent, arriving through the one path that rebuilds the plan after the
+	// gate ran. Falling back client-side is always safe here: the op has not
+	// applied anything (it rejected the request).
+	if keys := playlistBindingKeys(sc); len(keys) > 0 {
+		sc.notef("the refetched catalog's template binds playlist dataSource key(s) %s, which the op does not fill (mio-backend parity: MIO-3073) — applying the new plan client-side instead of retrying",
+			strings.Join(keys, ", "))
+		return false, nil
+	}
 
 	req.CatalogDigest = cat.Meta.Digest
 	res, err := sc.cl.ScaffoldFromTemplate(sc.ctx, sc.teamID, sc.hubID, req)

@@ -1069,7 +1069,10 @@ func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 			return err
 		}
 		if len(existing.Data) > 0 {
-			return nil
+			// Skipped — but the pages step may still need these ids to fill its
+			// dataSource bindings, and this is the ORDINARY resume: a first run
+			// that got through playlists and died before pages.
+			return recoverPlaylistIDsForBindings(sc, t)
 		}
 		for _, p := range t.Playlists {
 			// hub_id scopes the playlist to THIS hub — see the step doc: without it
@@ -1118,6 +1121,107 @@ func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 		}
 		return nil
 	})
+}
+
+// recoverPlaylistIDsForBindings resolves the playlist ids the PAGE PLAN needs
+// from the playlists already published on the hub, when the O1 gate skipped the
+// create loop that would normally have recorded them.
+//
+// Why it has to exist: the gate is create-only, so a resume onto a hub that
+// already has playlists leaves playlistIDsByKey empty. Without recovery, the
+// ordinary resume — a first run that created the playlists and died before the
+// pages — could never finish, because stepPages now refuses to write a page
+// whose declared binding it cannot fill.
+//
+// TITLE is the only handle. `key` is manifest vocabulary and is never stored
+// server-side, so the join is template title → playlist title, and it is taken
+// ONLY where unambiguous on both sides: a title two template playlists share
+// cannot say which key it belongs to, and a title two hub playlists share
+// cannot say which row is ours. The starter template ships two playlists both
+// titled "Add another playlist", so this is the shipped case, not a hypothetical
+// — neither is bound by a dataSource, so neither is ever looked up. Same
+// only-when-unambiguous discipline as templateSlugForRole: a MISSING id is
+// reported and stops the run, a WRONG one would be acted on.
+//
+// It runs ONLY when the plan declares bindings — a resume of a template with no
+// bound sections spends no requests here.
+func recoverPlaylistIDsForBindings(sc *scaffoldContext, t *catalog.HubTemplate) error {
+	needed := map[string]bool{}
+	for _, k := range playlistBindingKeys(sc) {
+		needed[k] = true
+	}
+	if len(needed) == 0 {
+		return nil
+	}
+
+	// Template side: title → the single key that claims it.
+	keyForTitle := map[string]string{}
+	for _, p := range t.Playlists {
+		if !needed[p.Key] {
+			continue
+		}
+		if _, dup := keyForTitle[p.Title]; dup {
+			keyForTitle[p.Title] = "" // ambiguous — two needed keys share a title
+			continue
+		}
+		keyForTitle[p.Title] = p.Key
+	}
+
+	// Hub side: walk the publication rows, read each playlist's title back.
+	idsForTitle := map[string][]string{}
+	query := url.Values{}
+	seen := map[string]bool{}
+	const maxPages = 1000
+	for page := 0; page < maxPages; page++ {
+		col, lerr := sc.cl.List(sc.ctx, hubPlaylistsPath(sc.teamID, sc.hubID, ""), query)
+		if lerr != nil {
+			return lerr
+		}
+		for _, row := range col.Data {
+			playlistID, _ := row.Attributes["playlist_id"].(string)
+			if playlistID == "" {
+				continue
+			}
+			res, rerr := sc.cl.Retrieve(sc.ctx, playlistsPath(sc.teamID, playlistID))
+			if rerr != nil {
+				return rerr
+			}
+			title, _ := res.Attributes["title"].(string)
+			idsForTitle[title] = append(idsForTitle[title], playlistID)
+		}
+		next := nextPageCursor(col)
+		if next == "" || seen[next] {
+			break
+		}
+		seen[next] = true
+		query = url.Values{}
+		query.Set("page[after]", next)
+	}
+
+	for title, key := range keyForTitle {
+		if key == "" {
+			continue
+		}
+		ids := idsForTitle[title]
+		if len(ids) != 1 {
+			continue // absent, or ambiguous on the hub — stepPages reports it
+		}
+		sc.playlistIDsByKey[key] = ids[0]
+		sc.notef("playlist %q recovered from the hub as %s (the playlists step skipped — this hub already has published playlists)", key, ids[0])
+	}
+	return nil
+}
+
+// unresolvedBindingKeys returns the playlist dataSource keys the planned pages
+// declare that this run cannot fill — the keys with no id in playlistIDsByKey.
+func unresolvedBindingKeys(sc *scaffoldContext) []string {
+	var missing []string
+	for _, k := range playlistBindingKeys(sc) {
+		if sc.playlistIDsByKey[k] == "" {
+			missing = append(missing, k)
+		}
+	}
+	return missing
 }
 
 // createTemplateDocument registers ONE playlists[].documents[] entry as a
