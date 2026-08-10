@@ -1154,14 +1154,19 @@ func recoverPlaylistIDsForBindings(sc *scaffoldContext, t *catalog.HubTemplate) 
 		return nil
 	}
 
-	// Template side: title → the single key that claims it.
+	// Template side: title → the single key that claims it, computed over EVERY
+	// template playlist and not just the bound ones. A title an UNBOUND playlist
+	// also carries cannot identify the bound one: a partial prior run that
+	// published only the unbound playlist would leave exactly one hub row with
+	// that title, and filtering to needed keys first would read it as an
+	// unambiguous match and bind the page to the wrong playlist. Deciding
+	// ambiguity across the whole template, then recovering only what is needed,
+	// is what keeps that case a MISSING id (reported, stops the run) rather than
+	// a WRONG one (acted on, marked applied).
 	keyForTitle := map[string]string{}
 	for _, p := range t.Playlists {
-		if !needed[p.Key] {
-			continue
-		}
 		if _, dup := keyForTitle[p.Title]; dup {
-			keyForTitle[p.Title] = "" // ambiguous — two needed keys share a title
+			keyForTitle[p.Title] = "" // two template playlists share this title
 			continue
 		}
 		keyForTitle[p.Title] = p.Key
@@ -1199,7 +1204,7 @@ func recoverPlaylistIDsForBindings(sc *scaffoldContext, t *catalog.HubTemplate) 
 	}
 
 	for title, key := range keyForTitle {
-		if key == "" {
+		if key == "" || !needed[key] {
 			continue
 		}
 		ids := idsForTitle[title]

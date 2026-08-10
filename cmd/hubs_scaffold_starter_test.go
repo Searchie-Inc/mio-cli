@@ -654,6 +654,32 @@ func TestStepPlaylists_ResumeRecoversBindingIDsByTitle(t *testing.T) {
 		}
 	})
 
+	// The subtle one (codex R2): ambiguity is decided across the WHOLE template,
+	// not just its bound playlists. Here the bound "getting-started" and the
+	// unbound "placeholder-2" share a title, and a partial prior run published
+	// only the unbound one — so the hub carries exactly ONE row with that title.
+	// Filtering to needed keys before deciding ambiguity would read that row as
+	// an unambiguous match and bind the page to the WRONG playlist, then mark it
+	// applied.
+	t.Run("a title shared with an UNBOUND template playlist recovers nothing", func(t *testing.T) {
+		srv, _ := resumeWireServer(t, map[string]string{"pl_other": "Shared Title"})
+		sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+		sc.pagePlan = bandPagePlan()
+		shared := &catalog.HubTemplate{
+			ID: "starter",
+			Playlists: []catalog.TemplatePlaylist{
+				{Title: "Shared Title", Key: "getting-started", Visibility: "public"},
+				{Title: "Shared Title", Key: "placeholder-2", Visibility: "public"},
+			},
+		}
+		if err := stepPlaylists(sc, shared); err != nil {
+			t.Fatalf("stepPlaylists: %v", err)
+		}
+		if id, ok := sc.playlistIDsByKey["getting-started"]; ok {
+			t.Errorf("recovered %q for the BOUND key from a title an unbound playlist also carries — that row may be the other playlist", id)
+		}
+	})
+
 	t.Run("no bindings in the plan spends no requests", func(t *testing.T) {
 		srv, _ := resumeWireServer(t, map[string]string{"pl_gs": "Getting Started"})
 		sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
