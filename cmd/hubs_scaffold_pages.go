@@ -137,7 +137,7 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	//     applied them by the time this step runs.
 	if !sc.dryRun && sc.catalogOverride == "" && sc.cat != nil {
 		if keys := playlistBindingKeys(sc); len(keys) > 0 {
-			sc.notef("not using the scaffold-from-template op: the pages bind playlist dataSource key(s) %s, which the op does not fill (mio-backend parity: MIO-3080) — applying client-side",
+			sc.notef("not using the scaffold-from-template op: the pages bind playlist dataSource key(s) %s, which the op does not fill (mio-backend parity: MIO-3073) — applying client-side",
 				strings.Join(keys, ", "))
 		} else {
 			done, err := applyViaServerOp(sc)

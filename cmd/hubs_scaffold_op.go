@@ -40,7 +40,7 @@ const opAbsentNote = "scaffold-from-template op not available — applying clien
 // Taking an op that drops what the template asked for produces a hub that looks
 // built and is not — the one outcome hubOpUnsupportedFlags already calls worse
 // than not using the op. So a template declaring any of them takes the
-// client-side path, ANNOUNCED, until mio-backend reaches parity (MIO-3080).
+// client-side path, ANNOUNCED, until mio-backend reaches parity (MIO-3073).
 //
 // Both functions are deliberately data-driven off the resolved template rather
 // than keyed on a template id: when a template stops declaring these, or the ops

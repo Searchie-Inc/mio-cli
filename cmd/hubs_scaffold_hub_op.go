@@ -118,7 +118,7 @@ func hubOpSkipReason(cmd *cobra.Command, sc *scaffoldContext) (reason string, an
 	// not is worse than a slower client-side build. See
 	// hubOpUnappliedVocabulary for what and why.
 	if unapplied := hubOpUnappliedVocabulary(sc); len(unapplied) > 0 {
-		return fmt.Sprintf("the template declares %s, which the op does not apply (mio-backend parity: MIO-3080)",
+		return fmt.Sprintf("the template declares %s, which the op does not apply (mio-backend parity: MIO-3073)",
 			strings.Join(unapplied, ", ")), true
 	}
 	// NOTE: an EMPTY --logo-url/--favicon-url does not appear here. It is not a
