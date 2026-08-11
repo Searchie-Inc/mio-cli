@@ -853,17 +853,20 @@ const playlistsListNotHubScopedMsg = "--hub does not scope this listing: GET /pl
 // warnIfHubIgnoredOnPlaylistsList warns when the operator EXPLICITLY passed
 // --hub to a listing that cannot honour it.
 //
-// It keys on flags.hub — set only by the flag itself — and never on the
-// resolved hub, because the resolved value merges the config/profile default
-// (`mio config set current_hub`). Warning on that would fire on every
-// invocation for anyone with a default hub configured, which trains people to
-// ignore the warning and is how a real signal becomes noise.
+// explicitHub is a PARAMETER rather than a read of flags.hub inside the body,
+// so the discriminator this function turns on is visible in its signature and
+// at its call site. The caller must pass the flag value — never the RESOLVED
+// hub, which merges the config/profile default (`mio config set current_hub`).
+// Warning on the resolved value would fire on every invocation for anyone with
+// a default hub configured, which trains people to ignore the warning and is
+// how a real signal becomes noise. TestPlaylistsList_ConfiguredHubDoesNotWarn
+// is the guard for exactly that substitution.
 //
 // A warning, not an error: the listing is correct and useful, exit stays 0, and
 // stdout stays a single parseable value so `--jq` pipelines are unaffected.
 // Same shape as the MIO-2811 policies-on-update warning.
-func warnIfHubIgnoredOnPlaylistsList(w io.Writer) {
-	if flags.hub == "" {
+func warnIfHubIgnoredOnPlaylistsList(w io.Writer, explicitHub string) {
+	if explicitHub == "" {
 		return
 	}
 	fmt.Fprintf(w, "warning: %s\n", playlistsListNotHubScopedMsg)
@@ -887,7 +890,7 @@ on the team. To list the playlists published to ONE hub, use
 		if err != nil {
 			return err
 		}
-		warnIfHubIgnoredOnPlaylistsList(cmd.ErrOrStderr())
+		warnIfHubIgnoredOnPlaylistsList(cmd.ErrOrStderr(), flags.hub)
 
 		query := url.Values{}
 		addPageFlags(cmd, query)

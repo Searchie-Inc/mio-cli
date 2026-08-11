@@ -11,6 +11,7 @@ package cmd
 // the listing alone is what the pre-MIO-3100 behaviour already satisfied.
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,6 +66,45 @@ func TestPlaylistsList_ExplicitHubWarnsAndStaysTeamWide(t *testing.T) {
 	// …and no invented filter reached the wire.
 	if strings.Contains(query, "hub") {
 		t.Errorf("query = %q, want no hub filter — the API offers none, so sending one is inventing contract", query)
+	}
+	// stdout must remain ONE parseable JSON value. A substring check alone would
+	// pass a "fix" that echoed the warning to stdout as well as stderr, which is
+	// exactly what breaks the `--jq` pipelines the agent contract promises.
+	var parsed []map[string]any
+	if err := json.Unmarshal([]byte(res.Stdout), &parsed); err != nil {
+		t.Errorf("stdout must parse as a single JSON value; err=%v stdout=%q", err, res.Stdout)
+	}
+	if len(parsed) != 2 {
+		t.Errorf("stdout listed %d playlists, want 2 (the team-wide set, unfiltered)", len(parsed))
+	}
+	if strings.Contains(res.Stdout, "warning") {
+		t.Errorf("the warning belongs on stderr ONLY — stdout carries the value; stdout=%q", res.Stdout)
+	}
+}
+
+// TestPlaylistsList_ConfiguredHubDoesNotWarn is THE discriminating case, and the
+// one the sibling below cannot cover: a config-file current_hub with no --hub on
+// the command line.
+//
+// Without this, "keys on the explicit flag" is an untested claim — a fix that
+// warned on the RESOLVED hub passes every other test in this file, because they
+// all run with no configured hub at all, so explicit and resolved are both
+// empty. That is the "probe set smaller than the claim" shape in
+// .claude/rules/verifying-guards.md, and it was in this file until codex-review
+// caught it.
+func TestPlaylistsList_ConfiguredHubDoesNotWarn(t *testing.T) {
+	var query string
+	srv := playlistsListServer(t, &query)
+
+	res := runContract(t, append(baseEnv(srv.URL), seedConfigHub(t, "019f0000-0000-7000-8000-000000000000")),
+		withTeam("t_team1", "media", "playlists", "list", "-o", "json")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+	}
+	if strings.Contains(res.Stderr, playlistsListNotHubScopedMsg) {
+		t.Errorf("a CONFIGURED current_hub is not an explicit --hub: warning on it would fire on every "+
+			"invocation for anyone with a default hub, which is how a real signal becomes noise; stderr=%q", res.Stderr)
 	}
 }
 

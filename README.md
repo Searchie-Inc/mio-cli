@@ -436,7 +436,7 @@ Scripts and agents can branch on these stable codes.
 | `media files` | `list`, `retrieve`, `durable-url` (non-expiring hub-scoped image URL for page trees), `update`, `delete`; ingest from the CLI: `upload` (create → presigned S3 PUT → finalize; auto-multipart), `replace`, `finalize`, `transcode`, `register-synthetic`; `cards get/set`, `chapters get/set` |
 | `media folders` | `list`, `create`, `retrieve`, `update`, `delete`, `move` (`--parent-id`/`--to-root`) |
 | `media search` | hybrid search over the team's transcripts (`--query`, `--hub-id`, `--limit`) |
-| `media playlists` | `list`, `create`, `retrieve`, `update`, `delete`, `set-cover` (`--file-id`); `items add/list/remove/reorder` — populate a playlist with media files (`--playlist-id`, `--file-id`, `--position`) |
+| `media playlists` | `list`, `create`, `retrieve`, `update`, `delete`, `set-cover` (`--file-id`); `items add/list/remove/reorder` — populate a playlist with media files (`--playlist-id`, `--file-id`, `--position`). **`list` is TEAM-wide** — the API's team-playlists route has no hub filter, so `--hub` warns on stderr and you still get every playlist on the team; use `media hub-playlists list --hub <id>` for one hub's. On `create`, `--hub-id` sets which hub the playlist belongs to and is not the `--hub` scope flag |
 | `media hub-media` | `publish`, `list`, `unpublish` — publish standalone files to a hub (`--file-id`) |
 | `media hub-playlists` | `publish`, `list`, `unpublish` — publish playlists to a hub (`--playlist-id`) |
 | `media attachments` | `list`, `show`, `update`, `delete` |
