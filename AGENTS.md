@@ -166,7 +166,7 @@ Every implemented resource and its verbs.
 | `media files chapters` | `get` `set` (`--chapters` JSON array/@file) |
 | `media folders` | `list` `create` `retrieve` `update` `delete` `move` (`--parent-id`/`--to-root`) |
 | `media search` | hybrid transcript search (`--query` `--hub-id` `--limit`) |
-| `media playlists` | `list` `create` `retrieve` `update` `delete` `set-cover` (`--file-id`) |
+| `media playlists` | `list` `create` `retrieve` `update` `delete` `set-cover` (`--file-id`). **`list` is TEAM-wide, not hub-scoped (MIO-3100)** — the API's team-playlists route offers no hub filter, so an explicit `--hub` warns on stderr and you still get every playlist on the team (exit 0, stdout unchanged and parseable). Use `media hub-playlists list --hub <id>` for one hub's playlists. On `create`, `--hub-id` is a WRITE ATTRIBUTE (which hub the playlist belongs to), not the `--hub` scope flag |
 | `media playlists items` | `add` `list` `remove` `reorder` (populate a playlist: `--playlist-id` `--file-id` `--position`) |
 | `media hub-media` | `publish` `list` `unpublish` (standalone files → hub; `--file-id`) |
 | `media hub-playlists` | `publish` `list` `unpublish` (playlists → hub; `--playlist-id`) |

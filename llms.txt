@@ -192,8 +192,8 @@ mio media folders update — rename a folder; --name
 mio media folders delete — soft-delete an empty folder; --yes
 mio media folders move — move a folder subtree to a new parent or root; folder id POSITIONAL; exactly one of --parent-id / --to-root
 mio media search — hybrid (lexical+semantic) search over the team's media transcripts; --query (required) --hub-id --limit (1-100)
-mio media playlists list — list team media playlists (cursor-paginated); --limit --after
-mio media playlists create — create a playlist; --title (required) --description --visibility --hub-id
+mio media playlists list — list TEAM media playlists (cursor-paginated); --limit --after. NOT hub-scoped (MIO-3100): the API's team-playlists route has no hub filter, so an explicit --hub is WARNED about on stderr and the listing still returns every playlist on the team (exit 0, stdout unchanged). For one hub's playlists use `mio media hub-playlists list --hub <hub_id>`
+mio media playlists create — create a playlist; --title (required) --description --visibility --hub-id. --hub-id is a WRITE ATTRIBUTE (which hub the playlist belongs to), NOT the global --hub scope flag; they are deliberately separate, since feeding --hub in would silently scope every playlist created by anyone with `config set current_hub`
 mio media playlists retrieve — retrieve a playlist by id (POSITIONAL)
 mio media playlists update — update a playlist; --title --description --visibility --hub-id --podcast-feed-enabled
 mio media playlists delete — soft-delete a playlist; --yes
