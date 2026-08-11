@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -82,6 +83,7 @@ type playlistWire struct {
 	creates    [][]byte // POST …/playlists             — the team playlist create
 	synthetics [][]byte // POST …/files/synthetic       — one per documents[] entry
 	itemFiles  []string // POST …/playlists/{id}/items  — file_id, in attach order
+	itemPos    []int    // …and the position each attach declared
 	publishes  [][]byte // POST …/hubs/{hub}/playlists  — the playlist's publication row
 	mediaPubs  [][]byte // POST …/hubs/{hub}/media      — a document file's publication row
 }
@@ -101,8 +103,14 @@ func playlistWireServer(t *testing.T) (*httptest.Server, *playlistWire) {
 			rw.WriteHeader(http.StatusCreated)
 			_, _ = rw.Write([]byte(`{"data":{"id":"file_syn` + string(rune('0'+syn)) + `","type":"files","attributes":{}}}`))
 		case strings.Contains(path, "/items"):
-			fid, _ := decodeHubAttrs(t, body)["file_id"].(string)
+			attrs := decodeHubAttrs(t, body)
+			fid, _ := attrs["file_id"].(string)
 			w.itemFiles = append(w.itemFiles, fid)
+			pos, ok := attrs["position"].(float64)
+			if !ok {
+				pos = -1 // absent: the collision shape — recorded, never silently 0
+			}
+			w.itemPos = append(w.itemPos, int(pos))
 			rw.WriteHeader(http.StatusCreated)
 			_, _ = rw.Write([]byte(`{"data":{"id":"it_1","type":"playlist_items","attributes":{}}}`))
 		case strings.Contains(path, "/hubs/") && r.Method == http.MethodGet:
@@ -209,6 +217,15 @@ func TestStepPlaylists_MaterialisesDocumentsAsSyntheticItems(t *testing.T) {
 	want := []string{"file_existing", "file_syn1", "file_syn2"}
 	if strings.Join(w.itemFiles, ",") != strings.Join(want, ",") {
 		t.Errorf("attached file ids = %v, want %v (file_ids then documents, in order)", w.itemFiles, want)
+	}
+	// Every attach declares a DISTINCT, incrementing position. The endpoint
+	// defaults to 0 and does not shift siblings, and mio-hub joins the item-card
+	// projection to the files rows BY POSITION — so N items all at 0 collapse to
+	// ONE rendered card, last-write-wins, while the API still reports N rows and
+	// file_count N. Asserting the positions on the wire is the only thing here
+	// that can see it: every API-level assertion in this file passes either way.
+	if !reflect.DeepEqual(w.itemPos, []int{0, 1, 2}) {
+		t.Errorf("attach positions = %v, want [0 1 2] — colliding positions render as a single card", w.itemPos)
 	}
 
 	// Each CREATED document gets a per-hub publication row. Without it the file

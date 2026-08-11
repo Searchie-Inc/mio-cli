@@ -1101,9 +1101,28 @@ func stepPlaylists(sc *scaffoldContext, t *catalog.HubTemplate) error {
 				}
 				fileIDs = append(fileIDs, fileID)
 			}
-			for _, fileID := range fileIDs {
+			// EXPLICIT, INCREMENTING position per item. The attach endpoint
+			// defaults position to 0 and does NOT shift siblings (`playlist items
+			// add` says so in its own flag help), so attaching N items without one
+			// leaves all N at position 0 — and mio-hub's data binding joins the
+			// item-card projection to the files rows BY POSITION, not by id
+			// (src/lib/page-tree/data-binding/use-data-source.ts: PlaylistItemPlayback
+			// carries no resource id to join against, so the union is a
+			// Set<number> of positions). Colliding positions therefore dedupe
+			// last-write-wins and the band renders ONE card no matter how many
+			// items exist.
+			//
+			// Nothing on the API side reveals this: the item-card projection still
+			// returns N rows and the playlist card still reports file_count N, which
+			// is why the header reads "3 Content Pieces" over a single card and why
+			// an acceptance check written against the API passes while the render
+			// is wrong. Found by field-testing the RENDER (Marius, PR #104 review).
+			//
+			// The index is the file_ids-then-documents order the step already
+			// promises, so position is exactly that documented order.
+			for i, fileID := range fileIDs {
 				if _, ierr := sc.cl.Create(sc.ctx, playlistItemsPath(sc.teamID, playlistID, ""),
-					map[string]any{"file_id": fileID}); ierr != nil {
+					map[string]any{"file_id": fileID, "position": i}); ierr != nil {
 					return ierr
 				}
 			}
