@@ -217,6 +217,8 @@ plain JSON.
 
 ## media playlists  (`cmd/media.go`, `cmd/media_playlist_cover.go`)
 - playlists: `list/create/retrieve/update/delete` `/api/teams/{team_id}/playlists[/{id}]`
+  - `list` is TEAM-wide and CANNOT be hub-scoped (MIO-3100): `list_playlists` (app/media/router.py) accepts `page[size]`/`page[after]` and nothing else — there is no hub filter to pass. `--hub` is a persistent ROOT flag so the command accepts it regardless; an EXPLICIT one now warns on stderr naming `media hub-playlists list`, and the listing is returned unchanged (exit 0). Keyed on `flags.hub`, never the resolved hub, so a configured `current_hub` does not warn on every invocation. Deliberately NOT client-side filtered: the route is keyset-paginated, so filtering a page under-reports silently (same reasoning as the absent `--include-deleted` on `community discussions list`).
+  - on create/update, `--hub-id` is a WRITE ATTRIBUTE (`hub_id` on the playlist) and is NOT the `--hub` scope flag; kept separate so a configured `current_hub` cannot silently scope created playlists.
   - create/update flags: `--title` `--description` `--visibility` `--hub-id`; update also `--podcast-feed-enabled`
 - set-cover POST `/api/teams/{team_id}/playlist-cover-attachments` (type `attachments`; playlist id POSITIONAL; `--file-id` required — the CLI GETs `…/files/{file_id}`, resolves its `media_id`, and sends `media_id`+`target_type=playlist`+`role=thumbnail` [pinned by the backend], optional `--position`). Role IS `thumbnail`, not `cover`: the cover mechanism keys on `role='thumbnail'` (router 422 guard, `ck_attachment_role` CHECK, `uq_playlist_cover_attachment` partial index, `resolve_cover_url`). (MIO-2289, MIO-2519)
 
