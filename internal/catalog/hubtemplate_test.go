@@ -412,3 +412,145 @@ func TestCloneNode_DeepCopies(t *testing.T) {
 		t.Errorf("orig.children[0].id = %v, mutated through clone", got)
 	}
 }
+
+// ─── MIO-3065: the vocabulary the starter hubTemplate is the first to use ─────
+
+// TestParseHubTemplate_IconAndDocuments: spaces[].icon and playlists[].
+// documents[] reach the typed model. Both were dropped SILENTLY before — the
+// parser is tolerant by design, so an unmodelled key is simply gone, and
+// nothing downstream can tell "the template said nothing" from "we ignored it".
+func TestParseHubTemplate_IconAndDocuments(t *testing.T) {
+	h := parseHubTemplate(Node{
+		"id": "starter",
+		"spaces": []any{
+			map[string]any{"name": "Announcements", "slug": "announcements", "icon": "megaphone"},
+			map[string]any{"name": "General", "slug": "general"},
+		},
+		"playlists": []any{
+			map[string]any{
+				"title": "Getting Started", "key": "getting-started", "visibility": "public",
+				"documents": []any{
+					map[string]any{"title": "Add your first lesson", "description": "A placeholder lesson."},
+					map[string]any{"title": "Add another lesson"},
+				},
+			},
+			map[string]any{"title": "Second", "key": "second", "visibility": "public"},
+		},
+	})
+	if got := h.Spaces[0].Icon; got != "megaphone" {
+		t.Errorf("spaces[0].Icon = %q, want megaphone", got)
+	}
+	if got := h.Spaces[1].Icon; got != "" {
+		t.Errorf("spaces[1].Icon = %q, want empty (the template declares none)", got)
+	}
+	want := []TemplateDocument{
+		{Title: "Add your first lesson", Description: "A placeholder lesson."},
+		{Title: "Add another lesson"},
+	}
+	if !reflect.DeepEqual(h.Playlists[0].Documents, want) {
+		t.Errorf("playlists[0].Documents = %+v, want %+v", h.Playlists[0].Documents, want)
+	}
+	if h.Playlists[1].Documents != nil {
+		t.Errorf("playlists[1].Documents = %+v, want nil (declares none)", h.Playlists[1].Documents)
+	}
+}
+
+// TestHubTemplateValidate_PlaylistVisibilityIsTheCreateEnum: playlists[].
+// visibility is validated against the enum it is SENT to — playlist CREATE
+// (public|unlisted|private) — not the hub-media publish enum
+// (members|private|public) it was checked against before.
+//
+// The two sets agree on public and private, so only the two values they
+// disagree on can tell the implementations apart. Both are asserted, and in
+// the direction that matters: "members" reaching apply meant a 422 AFTER the
+// hub, blobs, spaces, onboarding and policies were written.
+func TestHubTemplateValidate_PlaylistVisibilityIsTheCreateEnum(t *testing.T) {
+	c := load21ForTest(t)
+	base, ok := c.HubTemplateByID("community")
+	if !ok {
+		t.Fatal("community hub template missing from the 2.1 fixture")
+	}
+	for _, tc := range []struct {
+		visibility string
+		wantErr    bool
+	}{
+		{"public", false},
+		{"private", false},
+		{"unlisted", false}, // accepted by CREATE; the OLD hub-media set rejected it
+		{"members", true},   // rejected by CREATE; the OLD hub-media set accepted it
+		{"everyone", true},
+	} {
+		h := base
+		h.Playlists = []TemplatePlaylist{{Title: "Welcome", Key: "welcome", Visibility: tc.visibility}}
+		err := h.Validate(c)
+		if tc.wantErr && err == nil {
+			t.Errorf("visibility %q: Validate returned nil, want an error (playlist CREATE rejects it)", tc.visibility)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("visibility %q: Validate = %v, want nil (playlist CREATE accepts it)", tc.visibility, err)
+		}
+	}
+}
+
+func TestHubTemplateValidate_DocumentNeedsATitle(t *testing.T) {
+	c := load21ForTest(t)
+	base, _ := c.HubTemplateByID("community")
+	h := base
+	h.Playlists = []TemplatePlaylist{{
+		Title: "Welcome", Key: "welcome", Visibility: "public",
+		Documents: []TemplateDocument{{Title: "Fine"}, {Title: "  ", Description: "blank after strip"}},
+	}}
+	err := h.Validate(c)
+	if err == nil || !strings.Contains(err.Error(), "documents[1]") {
+		t.Errorf("Validate = %v, want an error naming documents[1] (the synthetic-file register requires a title)", err)
+	}
+}
+
+// TestHubTemplateValidate_PlaylistDataSourceKeyMustResolve: the FILL CONTRACT's
+// write-free half. A page template binding a playlist by a key no playlists[]
+// entry declares can never be filled, so the section would compile bound to the
+// empty string and the band render empty — caught before the hub exists.
+func TestHubTemplateValidate_PlaylistDataSourceKeyMustResolve(t *testing.T) {
+	bound := Node{
+		"kind": "stack",
+		"children": []any{
+			map[string]any{
+				"kind":       "section",
+				"dataSource": map[string]any{"type": "playlist", "id": "", "key": "getting-started"},
+			},
+		},
+	}
+	c := &Catalog{PageTemplates: []Template{{ID: "page-band", IsPage: true, Starter: bound}}}
+	base := HubTemplate{
+		ID: "starter",
+		Pages: []PageRef{{
+			Role: "homepage", PageTemplate: "page-band", Slug: "homepage",
+			Title: "Home", Privacy: "public", IsHomepage: true,
+		}},
+	}
+
+	h := base
+	h.Playlists = []TemplatePlaylist{{Title: "Getting Started", Key: "getting-started", Visibility: "public"}}
+	if err := h.Validate(c); err != nil {
+		t.Fatalf("a key naming one of the template's own playlists must validate, got %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		playlists []TemplatePlaylist
+	}{
+		{"no playlists at all", nil},
+		{"a playlist under a different key", []TemplatePlaylist{{Title: "Other", Key: "other", Visibility: "public"}}},
+	} {
+		h := base
+		h.Playlists = tc.playlists
+		err := h.Validate(c)
+		if err == nil {
+			t.Errorf("%s: Validate returned nil, want an error — the key can never be filled", tc.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "getting-started") {
+			t.Errorf("%s: error must name the unresolvable key; got %v", tc.name, err)
+		}
+	}
+}

@@ -78,6 +78,52 @@ func syntheticFilesPath(teamID string) string {
 	return fmt.Sprintf("/api/admin/teams/%s/files/synthetic", teamID)
 }
 
+// SyntheticFileInput is the register-synthetic write body as data (MIO-3065).
+// Title is required; every pointer field is sent only when non-nil, so an
+// omitted one keeps the endpoint's own default (asset_kind "document",
+// visibility "private", mime_type application/octet-stream, original_filename =
+// title). Same unset-means-omit convention as SpaceInput/PlaylistInput.
+type SyntheticFileInput struct {
+	Title            string
+	AssetKind        *string
+	Visibility       *string
+	MimeType         *string
+	OriginalFilename *string
+	Description      *string
+}
+
+// buildSyntheticFileAttrs assembles the synthetic-file register body from s and
+// applies the two checks the CLI can make without a request: a title (the
+// endpoint's own min_length 1) and, when asset_kind is given, one the endpoint
+// accepts. A pure builder — it takes data, not flags — so the SCAFFOLD's
+// playlist documents get exactly the checks `files register-synthetic` does,
+// the arrangement buildSpaceAttrs / buildPageAttrs / buildPlaylistCreateAttrs
+// already have.
+func buildSyntheticFileAttrs(s SyntheticFileInput) (map[string]any, error) {
+	if s.Title == "" {
+		return nil, errs.New(errs.ExitUsage, "--title is required")
+	}
+	if s.AssetKind != nil && *s.AssetKind != "" && !syntheticAssetKinds[*s.AssetKind] {
+		return nil, errs.New(errs.ExitUsage, "invalid --asset-kind %q: must be document or pdf", *s.AssetKind)
+	}
+	attrs := map[string]any{"title": s.Title}
+	for _, f := range []struct {
+		key string
+		val *string
+	}{
+		{"asset_kind", s.AssetKind},
+		{"visibility", s.Visibility},
+		{"mime_type", s.MimeType},
+		{"original_filename", s.OriginalFilename},
+		{"description", s.Description},
+	} {
+		if f.val != nil {
+			attrs[f.key] = *f.val
+		}
+	}
+	return attrs, nil
+}
+
 // ---- upload -----------------------------------------------------------------
 
 var mediaFilesUploadCmd = &cobra.Command{
@@ -284,20 +330,19 @@ seeder's stub-document path; requires a team-owner key.`,
 	Example: `  mio media files register-synthetic --title "Terms.pdf" --asset-kind pdf`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate before resolving auth/team so a bad flag fires no request.
-		title := flagValue(cmd, "title")
-		if title == "" {
-			return errs.New(errs.ExitUsage, "--title is required")
+		// Validate before resolving auth/team so a bad flag fires no request. The
+		// checks and the omit-if-unchanged mapping both live in the shared builder.
+		attrs, berr := buildSyntheticFileAttrs(SyntheticFileInput{
+			Title:            flagValue(cmd, "title"),
+			AssetKind:        changedString(cmd, "asset-kind"),
+			Visibility:       changedString(cmd, "visibility"),
+			MimeType:         changedString(cmd, "mime-type"),
+			OriginalFilename: changedString(cmd, "original-filename"),
+			Description:      changedString(cmd, "description"),
+		})
+		if berr != nil {
+			return berr
 		}
-		if k := flagValue(cmd, "asset-kind"); k != "" && !syntheticAssetKinds[k] {
-			return errs.New(errs.ExitUsage, "invalid --asset-kind %q: must be document or pdf", k)
-		}
-		attrs := map[string]any{"title": title}
-		setStringFlag(cmd, attrs, "asset-kind")
-		setStringFlag(cmd, attrs, "visibility")
-		setStringFlag(cmd, attrs, "mime-type")
-		setStringFlag(cmd, attrs, "original-filename")
-		setStringFlag(cmd, attrs, "description")
 
 		c, teamID, err := mediaContext(cmd)
 		if err != nil {

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 	"github.com/Searchie-Inc/mio-cli/internal/client"
@@ -127,15 +128,47 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	//   - the sc.cat nil-check keeps hand-built step-test contexts (which have
 	//     no digest to send) out of the probe; production always has sc.cat —
 	//     scaffoldPreflight sets it, and the client-side markers require it.
+	// MIO-3065: refuse to apply a page whose declared binding cannot be filled,
+	// BEFORE any page is created. Writing it would publish a section bound to the
+	// empty string — a permanently blank band — and then flip the provenance
+	// marker to "applied", at which point §5.1 reads the page as converged and NO
+	// re-run ever repairs it. Failing here costs a re-run; succeeding here costs a
+	// hub that silently renders wrong forever.
+	//
+	// Reachable only on a resume whose playlists step skipped (the O1 gate) and
+	// whose ids recoverPlaylistIDsForBindings could not recover unambiguously —
+	// a key naming no playlist of this template is already an ExitUsage in the
+	// write-free preflight. Never in dry-run, where no playlist has been created
+	// by construction and every key would read as missing.
+	if !sc.dryRun {
+		if missing := unresolvedBindingKeys(sc); len(missing) > 0 {
+			return errs.New(errs.ExitUsage,
+				"pages bind playlist dataSource key(s) %s, but this run created no playlist for them and none could be matched on the hub by title — the section(s) would render empty and be marked applied, so no page was written. Re-run against a hub without conflicting playlists, or give the hub a playlist titled as the template's so it can be matched",
+				strings.Join(missing, ", "))
+		}
+	}
+
+	//   - MIO-3065: a template whose pages bind a playlist dataSource by key
+	//     skips the probe too. The op writes the tree the CATALOG ships, so the
+	//     binding would keep the catalog's empty id and the section would compile
+	//     bound to nothing; only this side knows the ids stepPlaylists just
+	//     created. Unlike the whole-hub op's gate, icons and documents are NOT a
+	//     reason here — the client-side spaces and playlists steps have already
+	//     applied them by the time this step runs.
 	if !sc.dryRun && sc.catalogOverride == "" && sc.cat != nil {
-		done, err := applyViaServerOp(sc)
-		if err != nil {
-			return err
+		if keys := playlistBindingKeys(sc); len(keys) > 0 {
+			sc.notef("not using the scaffold-from-template op: the pages bind playlist dataSource key(s) %s, which the op does not fill (mio-backend parity: MIO-3073) — applying client-side",
+				strings.Join(keys, ", "))
+		} else {
+			done, err := applyViaServerOp(sc)
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
+			// Fall through: op absent (404/405) — client-side apply.
 		}
-		if done {
-			return nil
-		}
-		// Fall through: op absent (404/405) — client-side apply.
 	}
 
 	for i := range sc.pagePlan.pages {
@@ -144,8 +177,12 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 		if pp.ref.IsHomepage {
 			home = ", homepage"
 		}
-		detail := fmt.Sprintf("page %q: apply via backend op if available, else create + set tree + publish + mark applied; re-runs follow §5.1 recovery (template %s%s)",
-			pp.ref.Slug, pp.ref.PageTemplate, home)
+		bind := ""
+		if keys := catalog.PlaylistDataSourceKeys(pp.rawTree); len(keys) > 0 {
+			bind = fmt.Sprintf(", binding playlist dataSource key(s) [%s] to the ids this run creates", strings.Join(keys, ", "))
+		}
+		detail := fmt.Sprintf("page %q: apply via backend op if available, else create + set tree%s + publish + mark applied; re-runs follow §5.1 recovery (template %s%s)",
+			pp.ref.Slug, bind, pp.ref.PageTemplate, home)
 		if err := sc.step("pages", detail, func() error { return applyPageClientSide(sc, pp) }); err != nil {
 			// Every per-page failure names its page EXACTLY ONCE: the messages
 			// below (including the conflict errors) are built without a slug
@@ -174,6 +211,24 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 	tree := catalog.CloneNode(pp.rawTree)
 	if ierr := catalog.InterpolateTreeValues(tree, sc.hubName, sc.hubSlug); ierr != nil {
 		return errs.Wrap(errs.ExitUsage, ierr)
+	}
+
+	// 1b. The MIO-3065 FILL CONTRACT: write the ids of the playlists THIS run
+	// created into the tree's playlist dataSources, keyed by the `key` the
+	// catalog declares beside the empty id. Done on the interpolated clone, so
+	// the plan's rawTree stays pristine for a resume, and BEFORE the tree PUT —
+	// the id has to be in the body the backend compiles, not patched in after.
+	//
+	// An unresolved key CANNOT reach here through the pipeline — stepPages
+	// refuses the whole step before any page is written, and a key naming no
+	// playlist of the template is an ExitUsage in the write-free preflight. The
+	// note stays because this function is also driven directly by step tests and
+	// because a silent empty binding is precisely the failure this change exists
+	// to end: if it ever becomes reachable again, it says so instead of shipping
+	// a blank band.
+	if bound, unresolved := catalog.BindPlaylistDataSources(tree, sc.playlistIDsByKey); len(unresolved) > 0 {
+		sc.notef("page %q: %d playlist dataSource(s) bound; no playlist created this run for key(s) %s — those sections will render unbound",
+			pp.ref.Slug, bound, strings.Join(unresolved, ", "))
 	}
 	treeObj := map[string]any{"root": tree}
 

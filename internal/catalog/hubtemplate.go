@@ -27,13 +27,25 @@ import (
 // hub template can never carry a value the individual commands would reject:
 //   - hubSpaceAccessLevels / hubSpacePostingPermissions: cmd/community_spaces.go setSpaceWriteAttrs
 //   - hubPagePrivacyValues:                              cmd/pages_write.go setPageWriteAttrs
-//   - hubPlaylistVisibilityValues:                       cmd/media.go applyHubMediaOptions
+//   - hubPlaylistVisibilityValues:                       mio-backend PlaylistCreateAttributes
 //   - hubAttrFieldTypes:                                 cmd/contactattributes.go (field-type help)
 var (
-	hubSpaceAccessLevels        = map[string]bool{"public": true, "restricted": true}
-	hubSpacePostingPermissions  = map[string]bool{"any_member": true, "admins_only": true, "segment": true}
-	hubPagePrivacyValues        = map[string]bool{"public": true, "members": true, "private": true}
-	hubPlaylistVisibilityValues = map[string]bool{"members": true, "private": true, "public": true}
+	hubSpaceAccessLevels       = map[string]bool{"public": true, "restricted": true}
+	hubSpacePostingPermissions = map[string]bool{"any_member": true, "admins_only": true, "segment": true}
+	hubPagePrivacyValues       = map[string]bool{"public": true, "members": true, "private": true}
+	// hubPlaylistVisibilityValues is the enum the value is actually SENT to:
+	// playlist CREATE (mio-backend PlaylistCreateAttributes.visibility —
+	// public|unlisted|private, default private), which is also what the
+	// synthetic-file register takes for a playlist's documents.
+	//
+	// It used to be the HUB-MEDIA enum (members|private|public), which this
+	// template value is never sent to — stepPlaylists sends it to CREATE and
+	// hardcodes the hub-publish row. The two sets overlap on private/public and
+	// differ on members/unlisted, so the mismatch was invisible until a template
+	// declared one of those two: "members" passed preflight and 422'd at apply,
+	// after the hub, its blobs, spaces, onboarding and policies were already
+	// written (MIO-3065, found by field-testing the starter template).
+	hubPlaylistVisibilityValues = map[string]bool{"public": true, "unlisted": true, "private": true}
 	hubAttrFieldTypes           = map[string]bool{"text": true, "number": true, "boolean": true, "date": true, "multiple": true}
 	// hubPolicyFieldKeys is the accepted field set for each policies value: the
 	// fields the scaffold's policy step reads (content + require_acceptance and
@@ -83,7 +95,22 @@ type PageRef struct {
 }
 
 // TemplateSpace is a community discussion space to create.
-type TemplateSpace struct{ Name, Slug, Description, AccessLevel, PostingPermission string }
+//
+// Icon is a SPRITE NAME, not an emoji (MIO-2802): the value is whatever the hub
+// frontend's icon registry accepts (mio-hub components/ui/icon.tsx ICON_NAMES),
+// and it passes through to the space's `icon` attribute untouched. The CLI does
+// not police the registry — that list lives in another repo and moves
+// independently, so an unknown name is the API's rejection to make, not ours.
+type TemplateSpace struct{ Name, Slug, Description, AccessLevel, PostingPermission, Icon string }
+
+// TemplateDocument is one `playlists[].documents[]` entry: a placeholder text
+// document the scaffold registers as a SYNTHETIC file (MIO-2285 — READY on
+// creation, no upload/finalize/transcode) and attaches to the playlist.
+//
+// The two fields ARE the vocabulary the catalog declares (its own pin asserts
+// each entry has exactly title + description). They map onto the synthetic-file
+// register's `title` and `description`; asset_kind is always "document".
+type TemplateDocument struct{ Title, Description string }
 
 // TemplateAttrDef is a contact-attribute definition, optionally surfaced in
 // onboarding.
@@ -94,9 +121,21 @@ type TemplateAttrDef struct {
 
 // TemplatePlaylist is a media playlist published onto the hub (mirrors the
 // retired internal/hubtemplate Playlist shape).
+//
+// Visibility is the PLAYLIST's own visibility (public|unlisted|private) — see
+// hubPlaylistVisibilityValues. The per-hub publication row's visibility is a
+// different enum and is NOT template-expressible today; stepPlaylists documents
+// the hardcode.
+//
+// FileIDs and Documents are two ways to fill the same playlist and compose:
+// FileIDs attaches media that already exists (a team-scoped id the template
+// author knows), Documents CREATES placeholder text files first. A template
+// that ships neither gets an empty playlist, which is a legitimate day-one
+// "add your content here" state.
 type TemplatePlaylist struct {
 	Title, Key, Visibility string
 	FileIDs                []string
+	Documents              []TemplateDocument
 }
 
 // DiscussionTitleMaxCP mirrors mio-backend's DISCUSSION_TITLE_MAX_LENGTH
@@ -214,6 +253,7 @@ func parseHubTemplate(n Node) HubTemplate {
 			Description:       str(m["description"]),
 			AccessLevel:       str(m["access_level"]),
 			PostingPermission: str(m["posting_permission"]),
+			Icon:              str(m["icon"]),
 		})
 	}
 	for _, v := range slice(n["onboarding"]) {
@@ -234,12 +274,23 @@ func parseHubTemplate(n Node) HubTemplate {
 		if !ok {
 			continue
 		}
-		h.Playlists = append(h.Playlists, TemplatePlaylist{
+		p := TemplatePlaylist{
 			Title:      str(m["title"]),
 			Key:        str(m["key"]),
 			Visibility: str(m["visibility"]),
 			FileIDs:    strSlice(m["file_ids"]),
-		})
+		}
+		for _, d := range slice(m["documents"]) {
+			dm, ok := d.(map[string]any)
+			if !ok {
+				continue
+			}
+			p.Documents = append(p.Documents, TemplateDocument{
+				Title:       str(dm["title"]),
+				Description: str(dm["description"]),
+			})
+		}
+		h.Playlists = append(h.Playlists, p)
 	}
 	// welcomePost (MIO-2558): OPTIONAL, so an absent key leaves WelcomePost nil
 	// and the scaffold's welcome-post step a no-op. is_published defaults to the
@@ -287,13 +338,43 @@ func parseHubTemplate(n Node) HubTemplate {
 // template's own spaces; every policies value an object
 // whose fields are within hubPolicyFieldKeys (a typo must fail preflight, not
 // silently reset policy content); playlist titles non-empty and keys unique
-// and non-empty with enum-valid visibility. Slug/key uniqueness matters
+// and non-empty with enum-valid visibility, and every declared document
+// carrying a title; and every playlist dataSource `key` a referenced page
+// template declares naming a playlist THIS template creates. Slug/key
+// uniqueness matters
 // because each pipeline step snapshots existing server slugs ONCE and
 // skip-if-exists against that snapshot — a duplicate would issue a duplicate
 // create mid-pipeline.
 func (h HubTemplate) Validate(c *Catalog) error {
 	if len(h.Pages) == 0 {
 		return fmt.Errorf("hub template %q: pages must not be empty", h.ID)
+	}
+	// Playlists FIRST: the pages loop below checks each page template's playlist
+	// dataSource keys against this template's own playlist keys, so the key set
+	// has to exist before the pages are walked.
+	seenPlaylistKeys := map[string]bool{}
+	for i, p := range h.Playlists {
+		if p.Title == "" {
+			return fmt.Errorf("hub template %q: playlists[%d] missing title", h.ID, i)
+		}
+		if p.Key == "" {
+			return fmt.Errorf("hub template %q: playlists[%d] missing key", h.ID, i)
+		}
+		if seenPlaylistKeys[p.Key] {
+			return fmt.Errorf("hub template %q: playlists[%d] duplicate key %q", h.ID, i, p.Key)
+		}
+		seenPlaylistKeys[p.Key] = true
+		if p.Visibility != "" && !hubPlaylistVisibilityValues[p.Visibility] {
+			return fmt.Errorf("hub template %q: playlists[%d] invalid visibility %q (must be public, unlisted, or private)", h.ID, i, p.Visibility)
+		}
+		// A document with no title cannot be registered at all — the synthetic-file
+		// endpoint requires one (min_length 1). Catching it here means the playlists
+		// step never creates half a playlist's documents and then 422s on the rest.
+		for j, d := range p.Documents {
+			if strings.TrimSpace(d.Title) == "" {
+				return fmt.Errorf("hub template %q: playlists[%d].documents[%d] missing title", h.ID, i, j)
+			}
+		}
 	}
 	homepages := 0
 	seenPageSlugs := map[string]bool{}
@@ -317,6 +398,21 @@ func (h HubTemplate) Validate(c *Catalog) error {
 		}
 		if !tmpl.IsPage {
 			return fmt.Errorf("hub template %q: pages[%d] pageTemplate %q is not a page template", h.ID, i, p.PageTemplate)
+		}
+		// The FILL CONTRACT (MIO-3065): a playlist dataSource carrying a `key`
+		// declares "bind me to the playlist this hub template creates under that
+		// key". A key naming no such playlist can never be filled, so the section
+		// would compile as a container bound to the empty string and render empty —
+		// a page that silently looks broken. Preflight is write-free, so this fails
+		// before the hub exists rather than after.
+		//
+		// Scoped to the template's OWN playlists deliberately: that is the only id
+		// source the scaffold has. If a future catalog wants keys resolved from
+		// somewhere else, this error is the signal that the contract changed.
+		for _, key := range PlaylistDataSourceKeys(tmpl.Starter) {
+			if !seenPlaylistKeys[key] {
+				return fmt.Errorf("hub template %q: pages[%d] pageTemplate %q binds a playlist dataSource key %q, which is not one of this template's playlists[].key", h.ID, i, p.PageTemplate, key)
+			}
 		}
 		if p.IsHomepage {
 			homepages++
@@ -413,22 +509,6 @@ func (h HubTemplate) Validate(c *Catalog) error {
 		// the template itself declares — the only one the scaffold guarantees exists.
 		case !seenSpaceSlugs[wp.Space]:
 			return fmt.Errorf("hub template %q: welcomePost space %q is not one of this template's spaces", h.ID, wp.Space)
-		}
-	}
-	seenPlaylistKeys := map[string]bool{}
-	for i, p := range h.Playlists {
-		if p.Title == "" {
-			return fmt.Errorf("hub template %q: playlists[%d] missing title", h.ID, i)
-		}
-		if p.Key == "" {
-			return fmt.Errorf("hub template %q: playlists[%d] missing key", h.ID, i)
-		}
-		if seenPlaylistKeys[p.Key] {
-			return fmt.Errorf("hub template %q: playlists[%d] duplicate key %q", h.ID, i, p.Key)
-		}
-		seenPlaylistKeys[p.Key] = true
-		if p.Visibility != "" && !hubPlaylistVisibilityValues[p.Visibility] {
-			return fmt.Errorf("hub template %q: playlists[%d] invalid visibility %q", h.ID, i, p.Visibility)
 		}
 	}
 	return nil

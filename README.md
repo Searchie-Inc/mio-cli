@@ -302,6 +302,10 @@ mio hubs scaffold --template community --name "Acme" --slug acme \
   --branding-json @branding.json --primary-color '#B91C1C'
 # Preview first — the plan names the palette it would apply, and changes nothing.
 mio hubs scaffold --template community --name "Acme" --slug acme --primary-color '#B91C1C' --dry-run
+# Try a catalog that is not deployed yet: list its templates, then scaffold from it.
+# Both are digest-verified and fail closed on a mismatch.
+mio hubs templates --catalog ./catalog.json
+mio hubs scaffold --template starter --name "Acme" --slug acme --catalog ./catalog.json --dry-run
 
 # Pages & page trees
 # --privacy defaults to `members`: omit it and the page is behind the login wall.
