@@ -396,6 +396,28 @@ func TestFilesRegisterSynthetic_Body(t *testing.T) {
 	if attrs["asset_kind"] != "pdf" {
 		t.Errorf("asset_kind=%v want pdf", attrs["asset_kind"])
 	}
+	if _, present := attrs["mime_type"]; present {
+		t.Errorf("mime_type=%v, want the key omitted when --mime-type is not passed (endpoint default applies)", attrs["mime_type"])
+	}
+}
+
+// TestFilesRegisterSynthetic_MimeType: --mime-type reaches the request body
+// unchanged (MIO-3116). This is the flag `hub scaffold` relies on to declare
+// text/markdown for template placeholder lessons — a caller building the same
+// convention by hand needs it to actually reach the wire, not just parse.
+func TestFilesRegisterSynthetic_MimeType(t *testing.T) {
+	srv, _, _, _, body := captureAdminReq(t, http.StatusCreated,
+		`{"data":{"id":"file_syn","type":"files","attributes":{"status_upload":"READY"}}}`)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "media", "files", "register-synthetic",
+			"--title", "Add your first lesson", "--mime-type", "text/markdown")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	_, attrs := decodeDataTypeAttrs(t, *body)
+	if attrs["mime_type"] != "text/markdown" {
+		t.Errorf("mime_type=%v want text/markdown", attrs["mime_type"])
+	}
 }
 
 func TestFilesRegisterSynthetic_RequiresTitle(t *testing.T) {

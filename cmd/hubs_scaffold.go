@@ -1248,8 +1248,18 @@ func unresolvedBindingKeys(sc *scaffoldContext) []string {
 	return missing
 }
 
+// templateDocumentMimeType is the mime the scaffold declares for every
+// documents[] placeholder (MIO-3116). The register-synthetic endpoint defaults
+// an unset mime_type to application/octet-stream, which defeats every
+// mime-based branch downstream (mio-hub's document viewer, the mime-keyed
+// awaitsTranscode check in media_upload.go) — the same gap the backend's own
+// scaffold path is being fixed to close in parallel. Synthetic template
+// documents carry no bytes; the body IS the catalog-declared description
+// rendered as markdown, so text/markdown is the accurate mime, not a stand-in.
+const templateDocumentMimeType = "text/markdown"
+
 // createTemplateDocument registers ONE playlists[].documents[] entry as a
-// synthetic READY file and returns its id (MIO-2285, MIO-3065).
+// synthetic READY file and returns its id (MIO-2285, MIO-3065, MIO-3116).
 //
 // `register-synthetic` is a 1:1 fit for a placeholder lesson: the endpoint mints
 // the storage key server-side and the file is READY on creation, so there is no
@@ -1264,7 +1274,8 @@ func unresolvedBindingKeys(sc *scaffoldContext) []string {
 // private), so the value passes through unchanged — no mapping to get wrong.
 func createTemplateDocument(sc *scaffoldContext, p catalog.TemplatePlaylist, d catalog.TemplateDocument) (string, error) {
 	kind := "document"
-	in := SyntheticFileInput{Title: d.Title, AssetKind: &kind}
+	mimeType := templateDocumentMimeType
+	in := SyntheticFileInput{Title: d.Title, AssetKind: &kind, MimeType: &mimeType}
 	if d.Description != "" {
 		desc := d.Description
 		in.Description = &desc

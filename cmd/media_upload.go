@@ -326,9 +326,17 @@ var mediaFilesRegisterSyntheticCmd = &cobra.Command{
 	Short: "Register a synthetic READY file (no upload).",
 	Long: `Register a synthetic document file that is immediately READY with a
 server-generated storage path — no upload/finalize/transcode. Mirrors the
-seeder's stub-document path; requires a team-owner key.`,
-	Example: `  mio media files register-synthetic --title "Terms.pdf" --asset-kind pdf`,
-	Args:    cobra.NoArgs,
+seeder's stub-document path; requires a team-owner key.
+
+--mime-type defaults to the endpoint's own application/octet-stream when
+omitted. For a placeholder text lesson (no real bytes — the body IS its
+description), pass --mime-type text/markdown: that is the convention 'hub
+scaffold' uses for playlists[].documents[] template placeholders (MIO-3116),
+and mime_type is the field mime-keyed branches downstream (document viewers,
+transcode-wait checks) actually read.`,
+	Example: `  mio media files register-synthetic --title "Terms.pdf" --asset-kind pdf
+  mio media files register-synthetic --title "Add your first lesson" --mime-type text/markdown --description "A placeholder lesson."`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		// Validate before resolving auth/team so a bad flag fires no request. The
 		// checks and the omit-if-unchanged mapping both live in the shared builder.
