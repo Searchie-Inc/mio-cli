@@ -52,6 +52,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -842,18 +843,51 @@ func playlistsPath(teamID, id string) string {
 
 // ---- playlists list ---------------------------------------------------------
 
+// playlistsListNotHubScopedMsg is emitted when `media playlists list` is given
+// an explicit --hub (MIO-3100). Anchored on a const so a reworded message stops
+// matching its test rather than quietly emitting stale advice — the same reason
+// strictKeyDropHint is a const.
+const playlistsListNotHubScopedMsg = "--hub does not scope this listing: GET /playlists is team-wide and the API offers no hub filter for it. " +
+	"Every playlist on the team is returned. For one hub's playlists use `mio media hub-playlists list --hub <hub_id>`."
+
+// warnIfHubIgnoredOnPlaylistsList warns when the operator EXPLICITLY passed
+// --hub to a listing that cannot honour it.
+//
+// It keys on flags.hub — set only by the flag itself — and never on the
+// resolved hub, because the resolved value merges the config/profile default
+// (`mio config set current_hub`). Warning on that would fire on every
+// invocation for anyone with a default hub configured, which trains people to
+// ignore the warning and is how a real signal becomes noise.
+//
+// A warning, not an error: the listing is correct and useful, exit stays 0, and
+// stdout stays a single parseable value so `--jq` pipelines are unaffected.
+// Same shape as the MIO-2811 policies-on-update warning.
+func warnIfHubIgnoredOnPlaylistsList(w io.Writer) {
+	if flags.hub == "" {
+		return
+	}
+	fmt.Fprintf(w, "warning: %s\n", playlistsListNotHubScopedMsg)
+}
+
 var mediaPlaylistsListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List media playlists.",
-	Long:  "List all non-deleted playlists for the active team, cursor-paginated.",
+	Short: "List media playlists (TEAM-wide, not hub-scoped).",
+	Long: `List all non-deleted playlists for the active team, cursor-paginated.
+
+This listing is TEAM-wide. --hub does not scope it — the API's team-playlists
+route offers no hub filter — so passing --hub warns and returns every playlist
+on the team. To list the playlists published to ONE hub, use
+'mio media hub-playlists list --hub <hub_id>'.`,
 	Example: `  mio media playlists list
-  mio media playlists list --limit 50`,
+  mio media playlists list --limit 50
+  mio media hub-playlists list --hub hub_123   # one hub's playlists`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, err := mediaContext(cmd)
 		if err != nil {
 			return err
 		}
+		warnIfHubIgnoredOnPlaylistsList(cmd.ErrOrStderr())
 
 		query := url.Values{}
 		addPageFlags(cmd, query)
@@ -1023,7 +1057,12 @@ func init() {
 		cmd.Flags().String("title", "", "Playlist title.")
 		cmd.Flags().String("description", "", "Playlist description.")
 		cmd.Flags().String("visibility", "", "Visibility: public or private.")
-		cmd.Flags().String("hub-id", "", "Hub id to associate the playlist with.")
+		// NOT the same thing as the global --hub (MIO-3100). This is a WRITE
+		// ATTRIBUTE — which hub the playlist belongs to — while --hub is the scope
+		// flag naming which hub a hub-scoped command operates on. They are kept
+		// separate deliberately: feeding --hub in here would mean anyone with
+		// `config set current_hub` silently scoped every playlist they create.
+		cmd.Flags().String("hub-id", "", "Hub id to SET on the playlist (a write attribute, not the --hub scope flag).")
 	}
 
 	mediaPlaylistsUpdateCmd.Flags().Bool("podcast-feed-enabled", false, "Whether to enable the podcast RSS feed for this playlist.")
