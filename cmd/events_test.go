@@ -795,11 +795,81 @@ func TestEventsContext_UsesContactTokenBearer(t *testing.T) {
 	}
 }
 
+// TestEventsContext_ScopeResolutionUsesAPIKeyClient is the regression guard
+// for the Important finding in Codex round 2 (MIO-3173): team/hub SCOPE
+// RESOLUTION (--hub given as a name/slug rather than a raw id) must use the
+// team-API-key client, never the contact-token client. Before the fix,
+// eventsContext swapped in the contact bearer before calling
+// requireTeam/requireHub, so a hub-slug lookup sent the contact JWT to the
+// platform-scoped GET /api/teams/{team_id}/hubs route — a different expected
+// audience than the contact-JWT-only Events v1 routes, which the backend
+// rejects.
+//
+// --hub is passed as a SLUG ("my-hub", not "hub_123") specifically to force
+// requireHub to actually call ResolveHub (an id-shaped value like "hub_123"
+// passes through with no API call at all — see internal/client/resolve.go —
+// so it wouldn't exercise this path).
+func TestEventsContext_ScopeResolutionUsesAPIKeyClient(t *testing.T) {
+	var gotHubListAuth, gotHubListPath string
+	var gotEventsAuth, gotEventsPath string
+
+	const hubListBody = `{
+		"data": [
+			{"id": "hub_abc", "type": "hubs", "attributes": {"name": "My Hub", "slug": "my-hub"}}
+		],
+		"meta": {"page": {"has_more": false}}
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		if strings.Contains(r.URL.Path, "/teams/") {
+			// Hub-slug resolution: GET /api/teams/{team_id}/hubs.
+			gotHubListAuth = r.Header.Get("Authorization")
+			gotHubListPath = r.URL.Path
+			_, _ = w.Write([]byte(hubListBody))
+			return
+		}
+		// The actual Events v1 request: GET /api/hubs/{hub_id}/events.
+		gotEventsAuth = r.Header.Get("Authorization")
+		gotEventsPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"data":[],"meta":{"page":{"has_more":false}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, eventsEnv(srv.URL),
+		withTeam("t_team1", "--hub", "my-hub", "events", "list")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !strings.Contains(gotHubListPath, "/teams/t_team1/hubs") {
+		t.Fatalf("hub-slug resolution never happened (or hit the wrong path); gotHubListPath=%q", gotHubListPath)
+	}
+	if gotHubListAuth != "Bearer test-key-contract" {
+		t.Errorf("hub-slug resolution Authorization = %q, want the TEAM API KEY bearer "+
+			"(%q) — scope resolution must never use the contact token", gotHubListAuth, "Bearer test-key-contract")
+	}
+	if !strings.HasSuffix(gotEventsPath, "/hubs/hub_abc/events") {
+		t.Errorf("events path %q does not end with /hubs/hub_abc/events (the resolved hub id)", gotEventsPath)
+	}
+	if gotEventsAuth != "Bearer test-contact-token" {
+		t.Errorf("events request Authorization = %q, want the CONTACT TOKEN bearer (%q)",
+			gotEventsAuth, "Bearer test-contact-token")
+	}
+}
+
 // TestEventsContext_NoContactToken_FailsFast verifies that with only a team
 // API key configured (no MIO_CONTACT_TOKEN) events commands fail fast with
 // ExitAuth and never reach the network — instead of round-tripping to a
 // guaranteed 401 on every single command.
 func TestEventsContext_NoContactToken_FailsFast(t *testing.T) {
+	// Guard against ambient-environment leakage: if the machine running this
+	// test happens to have MIO_CONTACT_TOKEN exported (e.g. a developer's own
+	// shell profile), baseEnv alone would not clear it and this test's
+	// "team key only" premise would silently stop being tested.
+	t.Setenv(eventsContactTokenEnv, "")
+
 	srv := newMockServer(t, nil) // must not be called
 
 	res := runContract(t, baseEnv(srv.URL), // API key only, no MIO_CONTACT_TOKEN
@@ -857,21 +927,19 @@ func TestEventsContext_NoContactToken_HonestErrorMessage(t *testing.T) {
 	}
 }
 
-// TestEventsContext_NoCredentialsAtAll_FailsFast verifies the same fail-fast
-// gate fires when NEITHER a team API key NOR a contact token is configured
-// (as opposed to an API key being present but insufficient).
-func TestEventsContext_NoCredentialsAtAll_FailsFast(t *testing.T) {
-	srv := newMockServer(t, nil) // must not be called
-
-	// "MIO_API_KEY=" (empty value) unsets the var via overlayEnv's convention,
-	// guarding against ambient-environment leakage into the test.
-	res := runContract(t, []string{"MIO_API_BASE_URL=" + srv.URL, "MIO_API_KEY="}, // no key, no token
-		withTeam("t_team1", "--hub", "hub_123", "events", "list")...)
-
-	if res.Code != errs.ExitAuth {
-		t.Errorf("exit code = %d, want %d (ExitAuth); stderr=%q", res.Code, errs.ExitAuth, res.Stderr)
-	}
-}
+// NOTE: an earlier version of this file had a
+// TestEventsContext_NoCredentialsAtAll_FailsFast test (no API key AND no
+// contact token, not anonymous). It was removed: with no MIO_API_KEY env var
+// and no --api-key flag, config.Resolve falls through to the real OS
+// keychain (GetAPIKey), which on an interactive macOS dev machine can block
+// indefinitely on a Keychain access prompt that never gets a response in an
+// automated/headless run — observed as a real >120s hang while gating round
+// 3. eventsContext's fail-fast check (Step 1) never inspects
+// c.resolved.APIKey at all, so that test exercised the exact same branch as
+// TestEventsContext_NoContactToken_FailsFast below (API key present, no
+// token) with zero additional code-path coverage — not worth the flake risk.
+// The internal/config package's own tests already cover the real
+// GetAPIKey/keychain behavior hermetically via withFileBackendOnly.
 
 // TestEventsContext_AnonymousBypassesGate verifies --anonymous is honoured as
 // a deliberate unauthenticated probe (mirroring requireAuth's MIO-2694
@@ -879,6 +947,11 @@ func TestEventsContext_NoCredentialsAtAll_FailsFast(t *testing.T) {
 // request reaches the server with no Authorization header, rather than being
 // blocked by the events-specific auth gate.
 func TestEventsContext_AnonymousBypassesGate(t *testing.T) {
+	// Guard against ambient-environment leakage (see the identical comment in
+	// TestEventsContext_NoContactToken_FailsFast) — this test's premise is
+	// specifically "no contact token", so an ambient one must not leak in.
+	t.Setenv(eventsContactTokenEnv, "")
+
 	var called bool
 	var gotAuth string
 
@@ -902,5 +975,42 @@ func TestEventsContext_AnonymousBypassesGate(t *testing.T) {
 	}
 	if gotAuth != "" {
 		t.Errorf("Authorization header = %q, want empty under --anonymous", gotAuth)
+	}
+}
+
+// TestEventsContext_AnonymousWinsOverContactToken is the regression guard for
+// the Critical finding in Codex round 2 (MIO-3173): --anonymous MUST win over
+// an ambient MIO_CONTACT_TOKEN, not the other way around. Before the fix, the
+// switch checked "contactToken != \"\"" before "--anonymous", so a real
+// contact token configured in the environment silently defeated an explicit
+// --anonymous request and leaked a live bearer credential to whatever
+// --api-base was in play. This test sets a real contact token (via eventsEnv)
+// AND --anonymous together and asserts the request still carries NO
+// Authorization header.
+func TestEventsContext_AnonymousWinsOverContactToken(t *testing.T) {
+	var called bool
+	var gotAuth string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[],"meta":{"page":{"has_more":false}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, eventsEnv(srv.URL), // MIO_CONTACT_TOKEN IS set here
+		withTeam("t_team1", "--hub", "hub_123", "--anonymous", "events", "list")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !called {
+		t.Fatal("--anonymous must still reach the server (deliberate unauthenticated probe)")
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization header = %q, want empty — --anonymous must win over a "+
+			"configured MIO_CONTACT_TOKEN, never send it despite an explicit --anonymous request", gotAuth)
 	}
 }

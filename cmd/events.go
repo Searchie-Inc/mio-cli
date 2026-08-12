@@ -42,7 +42,9 @@ package cmd
 // eventsContext below reads a member access token from MIO_CONTACT_TOKEN —
 // the minimal, precedent-setting escape hatch, mirroring the MIO_API_KEY /
 // MIO_EMAIL / MIO_PASSWORD env-var pattern already used by config.EnvAPIKey
-// and login.go — and swaps it in as the bearer for every events request. With
+// and login.go — and swaps it in as the bearer for the events request itself
+// (see eventsContext's doc comment for the precise, load-bearing ORDER this
+// happens in relative to team/hub scope resolution and --anonymous). With
 // only a team API key configured, eventsContext fails fast with an actionable
 // error rather than letting every command round-trip to a guaranteed 401.
 //
@@ -69,11 +71,13 @@ import (
 )
 
 // eventsContactTokenEnv is the environment variable holding a member/contact
-// access token (a JWT minted by POST /api/auth/login for an account that
-// resolves to a contact — the same login route login.go's `mio login` calls,
-// just without discarding the token afterward). Events v1 requires a contact
-// identity on every route; see the package doc comment above for why a team
-// API key cannot be used instead.
+// access token. NOTE: this is NOT the same JWT `mio login` deals with —
+// POST /api/auth/login (login.go's mintAndStore) authenticates a TEAM
+// principal and mints a team API key; a contact/member identity comes from
+// the separate /api/contact-auth flow (mio-backend app/contact_auth), which
+// this CLI has no command for yet (tracked as MIO-3178). Events v1 requires a
+// contact identity on every route; see the package doc comment above for why
+// a team API key cannot be used instead.
 const eventsContactTokenEnv = "MIO_CONTACT_TOKEN"
 
 func init() {
@@ -150,11 +154,27 @@ func eventsRSVPsPath(hubID, eventID string) string {
 // comment); a team API key cannot satisfy it. So unlike every other
 // eventsContext-shaped helper in this CLI, this one does NOT call
 // c.requireAuth() (which only checks for a team API key) — it has its own
-// three-way gate: a configured contact token wins, --anonymous is honoured
-// as a deliberate unauthenticated probe (mirroring requireAuth's own
-// precedent, MIO-2694), and anything else (an API key alone, or nothing at
-// all) fails fast with an actionable error instead of round-tripping to a
-// guaranteed 401.
+// gate, in a specific, load-bearing ORDER (Codex round 2, MIO-3173):
+//
+//  1. Fail fast, before any network call, unless EITHER --anonymous or a
+//     configured contact token is present. An API key alone (or nothing at
+//     all) round-trips to a guaranteed 401 on every Events v1 route, so this
+//     is rejected locally with an actionable error instead.
+//  2. Resolve team + hub scope (requireTeam/requireHub) using the CLIENT
+//     newContext BUILT — the team-API-key client (or an unauthenticated one
+//     under --anonymous) — never the contact-token client. /api/teams and
+//     /api/teams/{id}/hubs are platform-scoped routes with a DIFFERENT
+//     expected audience than the contact-JWT-only Events v1 routes; sending
+//     the contact bearer there gets rejected by the backend (round 2
+//     Important finding — swapping the bearer before scope resolution broke
+//     hub-slug/name lookups and auto-default).
+//  3. Only THEN swap the bearer to the contact token for the actual Events
+//     request — and only when --anonymous was NOT passed. --anonymous ALWAYS
+//     wins over an ambient MIO_CONTACT_TOKEN: a deliberately unauthenticated
+//     probe must never leak a real bearer credential to a custom (possibly
+//     attacker-controlled) --api-base origin (round 2 Critical finding —
+//     checking the token before --anonymous let an ambient token defeat an
+//     explicit --anonymous request).
 func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -162,17 +182,14 @@ func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	}
 
 	contactToken := strings.TrimSpace(os.Getenv(eventsContactTokenEnv))
-	switch {
-	case contactToken != "":
-		c.client = client.New(c.resolved.APIBase, contactToken, client.WithDebug(flags.debug))
-	case c.resolved.Anonymous:
-		// Deliberate unauthenticated probe — let it through so the caller can
-		// observe the API's own answer, exactly like requireAuth's ordering
-		// contract for every other resource (MIO-2694).
-	default:
-		// Do NOT tell the user to "run `mio login`" here — that command mints
-		// and stores only a team API key (see the package doc comment above),
-		// never a contact token, so that advice would be actively misleading.
+
+	// Step 1: fail fast, before touching the network, if there is no way to
+	// even attempt an Events v1 request.
+	if !c.resolved.Anonymous && contactToken == "" {
+		// Do NOT tell the user to "run `mio login`" here — that command
+		// mints and stores only a team API key (see the package doc comment
+		// above), never a contact token, so that advice would be actively
+		// misleading.
 		return nil, "", errs.New(errs.ExitAuth,
 			"mio events requires a member (contact) token. Set MIO_CONTACT_TOKEN with a "+
 				"member access token (member login for the CLI is tracked in MIO-3178); "+
@@ -180,6 +197,8 @@ func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 				"on the Events v1 API")
 	}
 
+	// Step 2: resolve scope with the team-API-key (or anonymous) client —
+	// the contact-token swap below must not happen before this.
 	if _, err := c.requireTeam(); err != nil {
 		return nil, "", err
 	}
@@ -187,6 +206,13 @@ func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+
+	// Step 3: swap to the contact-token bearer for the Events request itself.
+	// --anonymous wins unconditionally, even over an ambient contact token.
+	if !c.resolved.Anonymous && contactToken != "" {
+		c.client = client.New(c.resolved.APIBase, contactToken, client.WithDebug(flags.debug))
+	}
+
 	return c, hubID, nil
 }
 
