@@ -810,6 +810,53 @@ func TestEventsContext_NoContactToken_FailsFast(t *testing.T) {
 	}
 }
 
+// TestEventsContext_NoContactToken_HonestErrorMessage pins the exact guidance
+// of the fail-fast auth error: it must point the caller at MIO_CONTACT_TOKEN
+// and must NOT tell them to "run `mio login`" — that command mints and stores
+// only a team API key today (see the package doc comment in events.go) and
+// can never satisfy this precondition, so that advice would be actively
+// misleading (corrective round, MIO-3173). Drives the real binary via
+// buildBinary/runBinary (like the TestContract_ErrorEnvelope_* tests in
+// contract_test.go) because the rendered JSON:API envelope is written by
+// main.go to os.Stderr after os.Exit — only a subprocess can capture it; the
+// in-process runContract harness never populates res.Stderr for a RunE error.
+func TestEventsContext_NoContactToken_HonestErrorMessage(t *testing.T) {
+	bin := buildBinary(t)
+
+	_, stderr, exitCode := runBinary(t, bin, []string{
+		"MIO_API_KEY=test-key",
+		// No MIO_CONTACT_TOKEN. The auth gate fires before any network call,
+		// so the API base is never actually dialed.
+		"MIO_API_BASE_URL=http://127.0.0.1:1",
+	}, "--team", "t_team1", "--hub", "hub_123", "events", "list")
+
+	if exitCode != errs.ExitAuth {
+		t.Fatalf("exit code = %d, want %d (ExitAuth); stderr=%q", exitCode, errs.ExitAuth, stderr)
+	}
+
+	raw := strings.TrimSpace(stderr)
+	var envelope struct {
+		Errors []struct {
+			Detail string `json:"detail"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		t.Fatalf("stderr not valid JSON:API envelope: %v; stderr=%q", err, raw)
+	}
+	if len(envelope.Errors) == 0 {
+		t.Fatalf("error envelope has empty errors array; stderr=%q", raw)
+	}
+	detail := envelope.Errors[0].Detail
+
+	if !strings.Contains(detail, "MIO_CONTACT_TOKEN") {
+		t.Errorf("error detail does not mention MIO_CONTACT_TOKEN; detail=%q", detail)
+	}
+	if strings.Contains(detail, "run `mio login`") {
+		t.Errorf("error detail must NOT tell the caller to run `mio login` — that command "+
+			"cannot produce a contact token; detail=%q", detail)
+	}
+}
+
 // TestEventsContext_NoCredentialsAtAll_FailsFast verifies the same fail-fast
 // gate fires when NEITHER a team API key NOR a contact token is configured
 // (as opposed to an API key being present but insufficient).

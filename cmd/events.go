@@ -170,10 +170,14 @@ func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 		// observe the API's own answer, exactly like requireAuth's ordering
 		// contract for every other resource (MIO-2694).
 	default:
+		// Do NOT tell the user to "run `mio login`" here — that command mints
+		// and stores only a team API key (see the package doc comment above),
+		// never a contact token, so that advice would be actively misleading.
 		return nil, "", errs.New(errs.ExitAuth,
-			"mio events requires a member login — run `mio login`, or set MIO_CONTACT_TOKEN "+
-				"to a member access token; a team API key cannot act as a specific contact "+
-				"(RSVP, event authorship) on the Events v1 API")
+			"mio events requires a member (contact) token. Set MIO_CONTACT_TOKEN with a "+
+				"member access token (member login for the CLI is tracked in MIO-3178); "+
+				"a team API key cannot act as a specific contact (RSVP, event authorship) "+
+				"on the Events v1 API")
 	}
 
 	if _, err := c.requireTeam(); err != nil {
