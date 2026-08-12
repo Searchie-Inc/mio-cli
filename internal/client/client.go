@@ -250,6 +250,17 @@ var typeOverrides = []struct {
 	// .../hubs/{hub}/email-suppressions binds HubCreateSuppressionData whose
 	// type is "email_suppressions"; the hyphenated segment would not match.
 	{"email-suppressions", "email_suppressions"},
+	// Hub events (Events v1, MIO-3173): events is the first resource whose
+	// base route has NO /teams/{team_id} segment — /api/hubs/{hub_id}/events
+	// only (see cmd/events.go). The bare "events" segment is already claimed
+	// by automations' fire-event route (.../automations/events), so this
+	// two-segment override disambiguates by the hubs/ parent and resolves
+	// to the backend HubEventCreateAttributes/HubEventUpdateAttributes type
+	// Literal "hub_events".
+	{"hubs/events", "hub_events"},
+	// Event RSVP set (PUT .../events/{id}/rsvp): backend EventRSVPSetAttributes
+	// type Literal is "event_rsvps", not the bare "rsvp" segment.
+	{"events/rsvp", "event_rsvps"},
 	// Community moderation report-reasons (MIO-2265): the create POST derives
 	// its JSON:API type from the .../report-reasons collection tail. The URL
 	// segment uses hyphens; the backend ReportReasonCreateData type Literal is
@@ -390,6 +401,11 @@ var knownCollections = map[string]bool{
 	// Long-tail admin bundle (MIO-2269): hub policy gate, redirect-origin
 	// allowlist, and hub-scoped email-suppression admin surfaces.
 	"gate": true, "redirect-origins": true, "email-suppressions": true,
+	// Hub events (Events v1, MIO-3173): PUT .../events/{id}/rsvp needs "rsvp"
+	// as a known token so the two-segment "events/rsvp" override above can
+	// match; without it the write's last collection resolves to "events" and
+	// the backend rejects the wrong envelope type.
+	"rsvp": true,
 }
 
 // collectionSegments returns the path segments that are static collection
