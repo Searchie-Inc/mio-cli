@@ -28,6 +28,24 @@ package cmd
 // auth) — they operate on the calling contact's own RSVP, not an arbitrary one,
 // and do NOT require hub owner/admin/mod permissions.
 //
+// AUTH (Codex round 1, MIO-3173): every Events v1 route — including
+// create/update/cancel — is gated by a contact-identity dependency
+// (require_hub_elevated_contact / member deps on the backend). A team API key
+// authenticates as the TEAM, not an individual contact, so it cannot satisfy
+// that dependency: every command in this file 401s under a plain team key.
+//
+// `mio login` (see login.go mintAndStore) mints and stores ONLY a team-scoped
+// API key today — the JWT obtained from POST /api/auth/login is used once to
+// mint that key and then discarded; the CLI has no existing mechanism that
+// persists a contact/member access token, and no other command consumes one.
+// Until the CLI grows a dedicated member-login flow (tracked as a follow-up),
+// eventsContext below reads a member access token from MIO_CONTACT_TOKEN —
+// the minimal, precedent-setting escape hatch, mirroring the MIO_API_KEY /
+// MIO_EMAIL / MIO_PASSWORD env-var pattern already used by config.EnvAPIKey
+// and login.go — and swaps it in as the bearer for every events request. With
+// only a team API key configured, eventsContext fails fast with an actionable
+// error rather than letting every command round-trip to a guaranteed 401.
+//
 // OUT OF SCOPE (deferred to a follow-up ticket): GET .../events/{id}/calendar.ics
 // — a raw text/calendar download that needs a new raw-response client method
 // distinct from the JSON:API decoders used everywhere else in this file.
@@ -41,12 +59,22 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
+
+// eventsContactTokenEnv is the environment variable holding a member/contact
+// access token (a JWT minted by POST /api/auth/login for an account that
+// resolves to a contact — the same login route login.go's `mio login` calls,
+// just without discarding the token afterward). Events v1 requires a contact
+// identity on every route; see the package doc comment above for why a team
+// API key cannot be used instead.
+const eventsContactTokenEnv = "MIO_CONTACT_TOKEN"
 
 func init() {
 	// events <action>
@@ -112,17 +140,42 @@ func eventsRSVPsPath(hubID, eventID string) string {
 }
 
 // eventsContext is the shared boilerplate for events sub-commands: builds the
-// context, requires auth, and resolves both team id (for context/UX
-// consistency — see the package doc comment) and hub id. Only hubID is
-// returned; the events API path never interpolates a team id.
+// context, resolves both team id (for context/UX consistency — see the
+// package doc comment) and hub id, and — critically for this resource —
+// swaps the HTTP client's bearer to a member/contact access token when one is
+// configured via MIO_CONTACT_TOKEN. Only hubID is returned; the events API
+// path never interpolates a team id.
+//
+// Every Events v1 route requires a contact identity (see the package doc
+// comment); a team API key cannot satisfy it. So unlike every other
+// eventsContext-shaped helper in this CLI, this one does NOT call
+// c.requireAuth() (which only checks for a team API key) — it has its own
+// three-way gate: a configured contact token wins, --anonymous is honoured
+// as a deliberate unauthenticated probe (mirroring requireAuth's own
+// precedent, MIO-2694), and anything else (an API key alone, or nothing at
+// all) fails fast with an actionable error instead of round-tripping to a
+// guaranteed 401.
 func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
 		return nil, "", err
 	}
-	if err := c.requireAuth(); err != nil {
-		return nil, "", err
+
+	contactToken := strings.TrimSpace(os.Getenv(eventsContactTokenEnv))
+	switch {
+	case contactToken != "":
+		c.client = client.New(c.resolved.APIBase, contactToken, client.WithDebug(flags.debug))
+	case c.resolved.Anonymous:
+		// Deliberate unauthenticated probe — let it through so the caller can
+		// observe the API's own answer, exactly like requireAuth's ordering
+		// contract for every other resource (MIO-2694).
+	default:
+		return nil, "", errs.New(errs.ExitAuth,
+			"mio events requires a member login — run `mio login`, or set MIO_CONTACT_TOKEN "+
+				"to a member access token; a team API key cannot act as a specific contact "+
+				"(RSVP, event authorship) on the Events v1 API")
 	}
+
 	if _, err := c.requireTeam(); err != nil {
 		return nil, "", err
 	}
@@ -214,7 +267,10 @@ Requires hub owner/admin/moderator permissions.`,
 var eventsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List events in a hub.",
-	Long:  "List all events in the active hub, optionally filtered by status and sorted.",
+	Long: `List all events in the active hub, optionally filtered by status and sorted.
+
+Allowed values for --status: upcoming, past.
+Allowed values for --sort:   starts_at, -starts_at.`,
 	Example: `  mio events list --hub hub_123
   mio events list --hub hub_123 --status upcoming --sort starts_at
   mio events list --hub hub_123 --status past --sort -starts_at --limit 25`,
@@ -228,14 +284,30 @@ var eventsListCmd = &cobra.Command{
 		query := url.Values{}
 		addPageFlags(cmd, query)
 
+		// Validate --status/--sort client-side: the backend silently mistreats
+		// unrecognised values (Codex round 1, MIO-3173) rather than rejecting
+		// them, so a typo would otherwise return an unexpectedly-unfiltered/
+		// unsorted result instead of a clear error.
 		if cmd.Flags().Changed("status") {
-			if v, ferr := cmd.Flags().GetString("status"); ferr == nil && v != "" {
-				query.Set("filter[status]", v)
+			v, ferr := cmd.Flags().GetString("status")
+			if ferr == nil {
+				switch v {
+				case "upcoming", "past":
+					query.Set("filter[status]", v)
+				default:
+					return errs.New(errs.ExitUsage, "--status must be one of: upcoming, past (got %q)", v)
+				}
 			}
 		}
 		if cmd.Flags().Changed("sort") {
-			if v, ferr := cmd.Flags().GetString("sort"); ferr == nil && v != "" {
-				query.Set("sort", v)
+			v, ferr := cmd.Flags().GetString("sort")
+			if ferr == nil {
+				switch v {
+				case "starts_at", "-starts_at":
+					query.Set("sort", v)
+				default:
+					return errs.New(errs.ExitUsage, "--sort must be one of: starts_at, -starts_at (got %q)", v)
+				}
 			}
 		}
 
@@ -441,13 +513,22 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 var eventsRSVPsCmd = &cobra.Command{
 	Use:   "rsvps",
 	Short: "Read RSVPs recorded for an event.",
-	Long:  "List every RSVP recorded for an event. Requires hub owner/admin/moderator permissions.",
+	Long: `List RSVPs recorded for an event. Only "going" RSVPs are returned — a
+withdrawn or "not_going" RSVP never appears here.
+
+Hub owners/admins/moderators can always list. An ordinary active member can
+list too when the host left the attendee list visible for this event
+(--attendee-list-visible on create/update) — this is not an admin-only read.`,
 }
 
 var eventsRSVPsListCmd = &cobra.Command{
-	Use:     "list <event_id>",
-	Short:   "List RSVPs for an event.",
-	Long:    "List every RSVP recorded for the given event.",
+	Use:   "list <event_id>",
+	Short: "List RSVPs for an event.",
+	Long: `List the "going" RSVPs recorded for the given event. Withdrawn and
+"not_going" RSVPs are never included in the response.
+
+Hub owners/admins/moderators can always list; an ordinary active member can
+list too when the host left the attendee list visible for this event.`,
 	Example: `  mio events rsvps list evt_abc123 --hub hub_123`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

@@ -8,14 +8,20 @@ package cmd
 //     snake_case attrs), required-flag validation, and the NO team_id segment
 //     path shape (regression guard — events is the first resource whose base
 //     path is /api/hubs/{hub_id}/events with no /teams/{team_id} prefix).
-//   - events list: filter[status]/sort query params
-//   - events retrieve / update: GET/PATCH path + partial-update semantics
+//   - events list: filter[status]/sort query params, --status/--sort
+//     enum validation, --after cursor
+//   - events retrieve / update: GET/PATCH path + partial-update semantics,
+//     including that an explicit --attendee-list-visible=false serializes
 //   - events cancel: POST .../cancel action verb (nil body)
 //   - events rsvp set: PUT .../rsvp, body type "event_rsvps", --status validation
 //   - events rsvp withdraw: DELETE .../rsvp, --yes gate, and that the response
 //     body IS rendered (the API returns 200 with an RSVP body, not 204 — this
 //     command must use client.Action, never client.Delete, which would discard it)
 //   - events rsvps list: GET .../rsvps
+//   - eventsContext auth: MIO_CONTACT_TOKEN is used as the bearer (Authorization
+//     header) instead of the team API key, and every command fails fast with
+//     ExitAuth when only a team API key is configured (Codex round 1, MIO-3173 —
+//     every Events v1 route requires a contact identity a team key cannot provide)
 //
 // Reuses the in-process harness from contract_test.go (runContract,
 // newMockServer, baseEnv, withTeam).
@@ -31,8 +37,21 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
+// eventsEnv returns the env vars needed for `mio events` commands: the usual
+// API-key/base-url pair PLUS MIO_CONTACT_TOKEN. Every Events v1 route requires
+// a contact identity (see eventsContext in events.go) — a team API key alone
+// 401s on all of them, so every events test that expects to reach the mock
+// server must supply a contact token. Tests that specifically exercise the
+// no-contact-token failure path use baseEnv directly instead.
+func eventsEnv(apiBase string) []string {
+	return append(baseEnv(apiBase), "MIO_CONTACT_TOKEN=test-contact-token")
+}
+
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
+// hubEventBody uses "scheduled" for status — the real backend event-status
+// enum is scheduled|cancelled (never "upcoming"; "upcoming"/"past" are only
+// --status FILTER values on list, not attribute values on a resource).
 const hubEventBody = `{
 	"data": {
 		"id": "evt_1",
@@ -43,7 +62,7 @@ const hubEventBody = `{
 			"ends_at": "2026-09-01T20:00:00Z",
 			"timezone": "America/New_York",
 			"location_type": "url",
-			"status": "upcoming"
+			"status": "scheduled"
 		}
 	}
 }`
@@ -78,7 +97,7 @@ func TestEventsCreate_BodyShape(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"events", "create",
@@ -144,7 +163,7 @@ func TestEventsCreate_BodyShape(t *testing.T) {
 func TestEventsCreate_MissingRequiredFlags(t *testing.T) {
 	srv := newMockServer(t, nil) // must not be called
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"events", "create",
@@ -172,7 +191,7 @@ func TestEventsCreate_OptionalAttrs(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"events", "create",
@@ -248,7 +267,7 @@ func TestEventsList_QueryParams(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"events", "list",
@@ -293,7 +312,7 @@ func TestEventsRetrieve_Path(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "retrieve", "evt_1")...)
 
 	if res.Code != errs.ExitOK {
@@ -325,7 +344,7 @@ func TestEventsUpdate_BodyShape(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"events", "update", "evt_1",
@@ -371,7 +390,7 @@ func TestEventsUpdate_BodyShape(t *testing.T) {
 func TestEventsUpdate_NothingToUpdate(t *testing.T) {
 	srv := newMockServer(t, nil) // must not be called
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "update", "evt_1")...)
 
 	if res.Code != errs.ExitUsage {
@@ -405,7 +424,7 @@ func TestEventsCancel_PostToCancelPath(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "cancel", "evt_1", "--yes")...)
 
 	if res.Code != errs.ExitOK {
@@ -430,7 +449,7 @@ func TestEventsCancel_PostToCancelPath(t *testing.T) {
 func TestEventsCancel_RequiresYes(t *testing.T) {
 	srv := newMockServer(t, nil) // must not be called
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "cancel", "evt_1")...)
 
 	if res.Code != errs.ExitNeedsConfir {
@@ -456,7 +475,7 @@ func TestEventsRSVPSet_BodyShape(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"events", "rsvp", "set", "evt_1",
@@ -506,7 +525,7 @@ func TestEventsRSVPSet_NotGoing(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"events", "rsvp", "set", "evt_1",
@@ -533,7 +552,7 @@ func TestEventsRSVPSet_NotGoing(t *testing.T) {
 func TestEventsRSVPSet_MissingStatus(t *testing.T) {
 	srv := newMockServer(t, nil) // must not be called
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "rsvp", "set", "evt_1")...)
 
 	if res.Code != errs.ExitUsage {
@@ -546,7 +565,7 @@ func TestEventsRSVPSet_MissingStatus(t *testing.T) {
 func TestEventsRSVPSet_InvalidStatus(t *testing.T) {
 	srv := newMockServer(t, nil) // must not be called
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"events", "rsvp", "set", "evt_1",
@@ -565,7 +584,7 @@ func TestEventsRSVPSet_InvalidStatus(t *testing.T) {
 func TestEventsRSVPWithdraw_RequiresYes(t *testing.T) {
 	srv := newMockServer(t, nil) // DELETE must not be called
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "rsvp", "withdraw", "evt_1")...)
 
 	if res.Code != errs.ExitNeedsConfir {
@@ -574,9 +593,11 @@ func TestEventsRSVPWithdraw_RequiresYes(t *testing.T) {
 }
 
 // TestEventsRSVPWithdraw_WithYes_RendersBody is the regression guard for the
-// 200-with-body contract: the withdraw endpoint returns 200 with the withdrawn
-// RSVP resource, NOT 204. The command must render it (client.Action), not
-// discard it (client.Delete would swallow the body on a 200).
+// 200-with-body contract: the withdraw endpoint returns 200 with the RSVP
+// resource transitioned to "not_going" (the real backend RSVP-status enum is
+// going|not_going — there is no separate "withdrawn" status), NOT 204. The
+// command must render it (client.Action), not discard it (client.Delete
+// would swallow the body on a 200).
 func TestEventsRSVPWithdraw_WithYes_RendersBody(t *testing.T) {
 	var gotMethod, gotPath string
 
@@ -584,7 +605,7 @@ func TestEventsRSVPWithdraw_WithYes_RendersBody(t *testing.T) {
 		"data": {
 			"id": "rsvp_1",
 			"type": "event_rsvps",
-			"attributes": {"status": "withdrawn"}
+			"attributes": {"status": "not_going"}
 		}
 	}`
 
@@ -597,7 +618,7 @@ func TestEventsRSVPWithdraw_WithYes_RendersBody(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "rsvp", "withdraw", "evt_1", "--yes")...)
 
 	if res.Code != errs.ExitOK {
@@ -610,8 +631,8 @@ func TestEventsRSVPWithdraw_WithYes_RendersBody(t *testing.T) {
 		t.Errorf("path %q does not end with /hubs/hub_123/events/evt_1/rsvp", gotPath)
 	}
 	// The 200 response body must be rendered, not discarded.
-	if !strings.Contains(res.Stdout, "withdrawn") {
-		t.Errorf("stdout does not contain the rendered RSVP body (status=withdrawn); stdout=%q", res.Stdout)
+	if !strings.Contains(res.Stdout, "not_going") {
+		t.Errorf("stdout does not contain the rendered RSVP body (status=not_going); stdout=%q", res.Stdout)
 	}
 }
 
@@ -631,7 +652,7 @@ func TestEventsRSVPsList_GetPath(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL),
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "rsvps", "list", "evt_1", "--limit", "5")...)
 
 	if res.Code != errs.ExitOK {
@@ -642,5 +663,197 @@ func TestEventsRSVPsList_GetPath(t *testing.T) {
 	}
 	if !strings.HasSuffix(gotPath, "/hubs/hub_123/events/evt_1/rsvps") {
 		t.Errorf("path %q does not end with /hubs/hub_123/events/evt_1/rsvps", gotPath)
+	}
+}
+
+// ── events list: --status / --sort enum validation ───────────────────────────
+
+// TestEventsList_InvalidStatus verifies an out-of-enum --status value exits 2
+// without hitting the API — the backend silently mistreats unknown values
+// rather than rejecting them (Codex round 1, MIO-3173).
+func TestEventsList_InvalidStatus(t *testing.T) {
+	srv := newMockServer(t, nil) // must not be called
+
+	res := runContract(t, eventsEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123", "events", "list", "--status", "live")...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
+
+// TestEventsList_InvalidSort verifies an out-of-enum --sort value exits 2
+// without hitting the API.
+func TestEventsList_InvalidSort(t *testing.T) {
+	srv := newMockServer(t, nil) // must not be called
+
+	res := runContract(t, eventsEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123", "events", "list", "--sort", "title")...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
+
+// TestEventsList_AfterCursor verifies --after maps to page[after], alongside
+// --limit → page[size] (already covered by TestEventsList_QueryParams).
+func TestEventsList_AfterCursor(t *testing.T) {
+	var gotQuery string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[],"meta":{"page":{"has_more":false}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, eventsEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123", "events", "list", "--after", "cursor_abc123")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !strings.Contains(gotQuery, "page%5Bafter%5D=cursor_abc123") {
+		t.Errorf("query %q missing page[after]=cursor_abc123", gotQuery)
+	}
+}
+
+// ── events update: explicit --attendee-list-visible=false ────────────────────
+
+// TestEventsUpdate_AttendeeListVisibleFalseSerializes verifies that an
+// EXPLICIT --attendee-list-visible=false is sent in the request body (present
+// with value false), not silently dropped because false looks like the flag's
+// zero value. setBoolFlag gates on cmd.Flags().Changed, not on the value, so
+// this should already work — this test pins it as a regression guard.
+func TestEventsUpdate_AttendeeListVisibleFalseSerializes(t *testing.T) {
+	var gotBody []byte
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(hubEventBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, eventsEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"events", "update", "evt_1",
+			"--attendee-list-visible=false",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	var doc struct {
+		Data struct {
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(gotBody, &doc); err != nil {
+		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
+	}
+	v, ok := doc.Data.Attributes["attendee_list_visible"]
+	if !ok {
+		t.Fatalf("attributes.attendee_list_visible is absent, want explicit false present; body=%q", gotBody)
+	}
+	if v != false {
+		t.Errorf("attributes.attendee_list_visible = %v, want false", v)
+	}
+}
+
+// ── eventsContext auth: contact-token bearer swap ─────────────────────────────
+
+// TestEventsContext_UsesContactTokenBearer is the regression guard for the
+// Critical finding in Codex round 1 (MIO-3173): every Events v1 route requires
+// a contact identity, which a team API key cannot provide. When
+// MIO_CONTACT_TOKEN is configured, events commands MUST send it as the
+// Authorization bearer — not the team API key.
+func TestEventsContext_UsesContactTokenBearer(t *testing.T) {
+	var gotAuth string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[],"meta":{"page":{"has_more":false}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, eventsEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123", "events", "list")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if gotAuth != "Bearer test-contact-token" {
+		t.Errorf("Authorization header = %q, want %q (must bearer-swap to the contact token, "+
+			"never the team API key)", gotAuth, "Bearer test-contact-token")
+	}
+}
+
+// TestEventsContext_NoContactToken_FailsFast verifies that with only a team
+// API key configured (no MIO_CONTACT_TOKEN) events commands fail fast with
+// ExitAuth and never reach the network — instead of round-tripping to a
+// guaranteed 401 on every single command.
+func TestEventsContext_NoContactToken_FailsFast(t *testing.T) {
+	srv := newMockServer(t, nil) // must not be called
+
+	res := runContract(t, baseEnv(srv.URL), // API key only, no MIO_CONTACT_TOKEN
+		withTeam("t_team1", "--hub", "hub_123", "events", "list")...)
+
+	if res.Code != errs.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth); stderr=%q", res.Code, errs.ExitAuth, res.Stderr)
+	}
+}
+
+// TestEventsContext_NoCredentialsAtAll_FailsFast verifies the same fail-fast
+// gate fires when NEITHER a team API key NOR a contact token is configured
+// (as opposed to an API key being present but insufficient).
+func TestEventsContext_NoCredentialsAtAll_FailsFast(t *testing.T) {
+	srv := newMockServer(t, nil) // must not be called
+
+	// "MIO_API_KEY=" (empty value) unsets the var via overlayEnv's convention,
+	// guarding against ambient-environment leakage into the test.
+	res := runContract(t, []string{"MIO_API_BASE_URL=" + srv.URL, "MIO_API_KEY="}, // no key, no token
+		withTeam("t_team1", "--hub", "hub_123", "events", "list")...)
+
+	if res.Code != errs.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth); stderr=%q", res.Code, errs.ExitAuth, res.Stderr)
+	}
+}
+
+// TestEventsContext_AnonymousBypassesGate verifies --anonymous is honoured as
+// a deliberate unauthenticated probe (mirroring requireAuth's MIO-2694
+// precedent elsewhere in the CLI) even with no contact token configured: the
+// request reaches the server with no Authorization header, rather than being
+// blocked by the events-specific auth gate.
+func TestEventsContext_AnonymousBypassesGate(t *testing.T) {
+	var called bool
+	var gotAuth string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[],"meta":{"page":{"has_more":false}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runContract(t, baseEnv(srv.URL), // API key present, but --anonymous overrides it
+		withTeam("t_team1", "--hub", "hub_123", "--anonymous", "events", "list")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !called {
+		t.Fatal("--anonymous must still reach the server (deliberate unauthenticated probe)")
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization header = %q, want empty under --anonymous", gotAuth)
 	}
 }
