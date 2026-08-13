@@ -203,6 +203,15 @@ func TestStepPlaylists_MaterialisesDocumentsAsSyntheticItems(t *testing.T) {
 	if first["asset_kind"] != "document" {
 		t.Errorf("document 1 asset_kind = %v, want document (no upload/finalize/transcode)", first["asset_kind"])
 	}
+	// MIO-3116: every scaffolded placeholder declares text/markdown explicitly —
+	// left unset, the endpoint defaults to application/octet-stream, which
+	// defeats every mime-keyed branch downstream (document viewers,
+	// awaitsTranscode's mime prefix check). Sent regardless of whether the
+	// template supplied a description, so document 2 (no description) must carry
+	// it too.
+	if first["mime_type"] != templateDocumentMimeType {
+		t.Errorf("document 1 mime_type = %v, want %q", first["mime_type"], templateDocumentMimeType)
+	}
 	// The file mirrors its playlist's visibility: a public playlist whose items
 	// are private (the endpoint's default) discloses no items to an anonymous
 	// viewer, quietly contradicting the template.
@@ -212,6 +221,9 @@ func TestStepPlaylists_MaterialisesDocumentsAsSyntheticItems(t *testing.T) {
 	second := decodeHubAttrs(t, w.synthetics[1])
 	if _, present := second["description"]; present {
 		t.Errorf("a document with no description must omit the key; got %v", second["description"])
+	}
+	if second["mime_type"] != templateDocumentMimeType {
+		t.Errorf("document 2 mime_type = %v, want %q (sent even with no description)", second["mime_type"], templateDocumentMimeType)
 	}
 	// file_ids first, then documents — the order the items land in.
 	want := []string{"file_existing", "file_syn1", "file_syn2"}
