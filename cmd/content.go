@@ -100,7 +100,7 @@ recorded workshop or webinar replay). Upload the file first with
 file id) from 'mio media files retrieve <file_id>' as --media-id here.`,
 	Example: `  mio content create --hub hub_abc --title "Module 1" --node-type container
   mio content create --hub hub_abc --title "Welcome Video" --node-type lesson --content-type video --parent-id cnt_xyz
-  mio content create --hub hub_abc --title "Workshop Replay" --node-type lesson --content-type video --media-id media_abc123`,
+  mio content create --hub hub_abc --title "Workshop Replay" --node-type lesson --content-type video --parent-id cnt_xyz --media-id media_abc123`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := contentContext(cmd)
