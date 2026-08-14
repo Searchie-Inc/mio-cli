@@ -412,7 +412,7 @@ var accessRulesOverridesDeleteCmd = &cobra.Command{
 
 func init() {
 	// Rules create flags.
-	accessRulesRulesCreateCmd.Flags().String("target-type", "", "Target type to gate (section or content_node).")
+	accessRulesRulesCreateCmd.Flags().String("target-type", "", "Target type to gate (section, content_node, or node — node is the page-builder tree-node gate).")
 	accessRulesRulesCreateCmd.Flags().String("target-id", "", "Id of the target section or content node.")
 	accessRulesRulesCreateCmd.Flags().String("logic-operator", "", "Condition logic operator: any (default) or all.")
 	accessRulesRulesCreateCmd.Flags().String("conditions", "", "JSON array of condition objects [{condition_type, condition_data, position}].")
