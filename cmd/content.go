@@ -92,9 +92,15 @@ var contentCreateCmd = &cobra.Command{
   container  — a folder or module that holds other items
   lesson     — a leaf content item (video, audio, pdf, text, etc.)
 
---content-type is an optional sub-type for leaf items (e.g. video, audio, pdf, text).`,
+--content-type is an optional sub-type for leaf items (e.g. video, audio, pdf, text).
+
+--media-id links this content item to an already-uploaded media asset (e.g. a
+recorded workshop or webinar replay). Upload the file first with
+'mio media files upload', then pass its .media_id (NOT its .id — that is the
+file id) from 'mio media files retrieve <file_id>' as --media-id here.`,
 	Example: `  mio content create --hub hub_abc --title "Module 1" --node-type container
-  mio content create --hub hub_abc --title "Welcome Video" --node-type lesson --content-type video --parent-id cnt_xyz`,
+  mio content create --hub hub_abc --title "Welcome Video" --node-type lesson --content-type video --parent-id cnt_xyz
+  mio content create --hub hub_abc --title "Workshop Replay" --node-type lesson --content-type video --parent-id cnt_xyz --media-id media_abc123`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := contentContext(cmd)
@@ -124,6 +130,7 @@ var contentCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "privacy")
 		setMappedString(cmd, attrs, "published-at", "published_at")
+		setStringFlag(cmd, attrs, "media-id")
 
 		res, err := c.client.Create(c.ctx, contentBasePath(teamID, hubID, ""), attrs)
 		if err != nil {
@@ -231,6 +238,7 @@ Note: node_type and parent_id are immutable after create and cannot be changed v
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "privacy")
 		setMappedString(cmd, attrs, "published-at", "published_at")
+		setStringFlag(cmd, attrs, "media-id")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -368,6 +376,7 @@ func init() {
 	contentCreateCmd.Flags().String("description", "", "Content item description.")
 	contentCreateCmd.Flags().String("privacy", "", `Privacy setting for the content item (e.g. "members", "public").`)
 	contentCreateCmd.Flags().String("published-at", "", "Publish timestamp in RFC 3339 format (e.g. 2026-06-11T00:00:00Z). The item is visible to members once this time has passed.")
+	contentCreateCmd.Flags().String("media-id", "", "Id of the media asset backing this content item (the .media_id from 'mio media files retrieve', NOT the file id).")
 
 	// Flags for update (node_type and parent_id are immutable after create).
 	contentUpdateCmd.Flags().String("title", "", "Content item title.")
@@ -375,6 +384,7 @@ func init() {
 	contentUpdateCmd.Flags().String("description", "", "Content item description.")
 	contentUpdateCmd.Flags().String("privacy", "", `Privacy setting for the content item (e.g. "members", "public").`)
 	contentUpdateCmd.Flags().String("published-at", "", "Publish timestamp in RFC 3339 format (e.g. 2026-06-11T00:00:00Z). The item is visible to members once this time has passed.")
+	contentUpdateCmd.Flags().String("media-id", "", "Id of the media asset backing this content item (the .media_id from 'mio media files retrieve', NOT the file id).")
 
 	// Pagination for list and children.
 	addPaginationFlags(contentListCmd)
