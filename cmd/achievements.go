@@ -186,8 +186,9 @@ const achievementsEarn404Hint = "this 404 is ambiguous by design; it can mean " 
 	"setting and the hub's settings.achievements.enabled flag must BOTH be on " +
 	"for earn routes, (b) the achievement does not exist, is inactive, or is " +
 	"not offered in this hub, or (c) the contact id is in the wrong namespace " +
-	"— these routes need the GLOBAL contact id (the .attributes.contact_id " +
-	"from `mio contacts`, NOT its .id)"
+	"— these routes need the GLOBAL contact id: capture it with " +
+	"`mio contacts retrieve <team-contact-id> -o plain --jq .contact_id` " +
+	"(the flattened contact_id field, NOT the row's .id)"
 
 // hintAchievementsEarn404 appends achievementsEarn404Hint to a not-found
 // (exit 4) error, preserving the exit code. Any other error (or nil) passes
@@ -639,7 +640,7 @@ func init() {
 	// it differently, so the help must not share one claim — Jay-r review,
 	// PR #109).
 	for _, cmd := range []*cobra.Command{achievementsGrantCmd, achievementsRevokeCmd, achievementsRestoreCmd} {
-		cmd.Flags().String("contact-id", "", "GLOBAL contact id (.attributes.contact_id from 'mio contacts', NOT its .id) of the hub member. Required.")
+		cmd.Flags().String("contact-id", "", "GLOBAL contact id of the hub member — capture with `mio contacts retrieve <team-contact-id> -o plain --jq .contact_id` (the flattened contact_id field, NOT the row's .id). Required.")
 	}
 	achievementsGrantCmd.Flags().String("reason", "", "Forwarded as award_reason. The Phase 1 backend accepts but does NOT persist it (award_reason is always recorded as \"manual\").")
 	achievementsRevokeCmd.Flags().String("reason", "", "Audit reason recorded as the earn's revoke_reason (sent as the ?reason= query parameter).")
