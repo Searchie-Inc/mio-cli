@@ -152,9 +152,10 @@ mio achievements offerings attach — offer a badge in a hub; positional achieve
 mio achievements offerings list — list a hub's offered badges; --hub
 mio achievements offerings detach — stop offering a badge; --hub --yes
 mio achievements grant — manually award a badge to a member; --hub --contact-id (GLOBAL contact id: mio contacts retrieve <team-contact-id> -o plain --jq .contact_id — the flattened top-level contact_id field, NOT the row's .id); idempotent; 409 over a revoked earn (use restore)
-mio achievements revoke — soft-revoke an earn; --hub --contact-id --yes; --reason goes as the ?reason= query param
+mio achievements revoke — soft-revoke an earn; --hub --contact-id --yes; --reason goes as the ?reason= query param; 204 is idempotent and does NOT confirm an earn existed (wrong contact id answers 204 too)
 mio achievements restore — restore a revoked earn; --hub --contact-id
 # GATES: definitions need only the backend global ACHIEVEMENTS_ENABLED; offerings/earns additionally need hub settings.achievements.enabled (mio hubs update <hub> --settings-json with achievements.enabled true). A closed gate answers a GENERIC 404 (exit 4) BY DESIGN — not a routing bug.
+# WRONG CONTACT ID never 404s on earn verbs: grant 422s (not an active member), revoke 204s (idempotent no-op), restore 409s (no earn exists). A 404 means gates/achievement/hub.
 
 mio content create — create a content node in a hub
 mio content list — list root-level content nodes in a hub

@@ -580,8 +580,14 @@ func TestAchievementsRevoke_ReasonAsQuery(t *testing.T) {
 	if len(strings.TrimSpace(string(cap.Body))) != 0 {
 		t.Errorf("revoke request body = %q, want empty (reason travels as a query param)", cap.Body)
 	}
-	if !strings.Contains(res.Stdout, "Revoked achievement ach_1") {
-		t.Errorf("stdout missing confirmation; got %q", res.Stdout)
+	// The 204 is idempotent server-side (a nonexistent earn — wrong contact
+	// id included — answers the same), so the message must disclose that
+	// rather than claim an earn was revoked (blind review, PR #109).
+	if !strings.Contains(res.Stdout, "Revoke accepted") || !strings.Contains(res.Stdout, "does not confirm") {
+		t.Errorf("stdout must disclose the idempotent 204 (\"Revoke accepted\" + \"does not confirm\"); got %q", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, "Revoked achievement") {
+		t.Errorf("stdout must not flatly claim an earn was revoked — 204 does not confirm one existed; got %q", res.Stdout)
 	}
 }
 
@@ -660,22 +666,42 @@ func TestAchievementsRestore_WithReason(t *testing.T) {
 	}
 }
 
-// ── earn-verb 404 hint ───────────────────────────────────────────────────────
+// ── earn-verb error hints (status-keyed) ─────────────────────────────────────
 
-// TestAchievementsEarn404_AmbiguousHint pins the earn verbs' 404 hint contract
-// (Jay-r review, PR #109): the backend deliberately collapses "feature gates
-// off", "achievement missing/not offered" and "wrong contact-id namespace"
-// into one generic 404, so the hint must name ALL the possibilities — in
-// particular the gates — and must not assert the contact id is wrong. The
-// generic hintGlobalContactID would fail this test: it names only the contact
-// id. Driven as a subprocess because the JSON:API error envelope is written by
-// main.go after os.Exit.
-func TestAchievementsEarn404_AmbiguousHint(t *testing.T) {
-	srv := newMockServer(t, []mockHandler{
-		{Status: 404, Body: `{"errors":[{"status":"404","detail":"Not found."}]}`},
-	})
+// earnHintDetail runs an earn verb against a server answering the given
+// status/body and returns the rendered error-envelope detail. Subprocess-
+// driven because the JSON:API error envelope is written by main.go after
+// os.Exit.
+func earnHintDetail(t *testing.T, status int, body string, args ...string) (string, int) {
+	t.Helper()
+	srv := newMockServer(t, []mockHandler{{Status: status, Body: body}})
 	bin := buildBinary(t)
+	_, stderr, exitCode := runBinary(t, bin, []string{
+		"MIO_API_KEY=test-key",
+		"MIO_API_BASE_URL=" + srv.URL,
+	}, args...)
+	raw := strings.TrimSpace(stderr)
+	var envelope struct {
+		Errors []struct {
+			Detail string `json:"detail"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		t.Fatalf("stderr not valid JSON:API envelope: %v; stderr=%q", err, raw)
+	}
+	if len(envelope.Errors) == 0 {
+		t.Fatalf("error envelope empty; stderr=%q", raw)
+	}
+	return envelope.Errors[0].Detail, exitCode
+}
 
+// TestAchievementsEarn404_AmbiguousHint pins the earn verbs' 404 hint
+// contract (Jay-r + blind review, PR #109): the 404 must name the causes a
+// 404 CAN have (gates, achievement, hub containment) and must say a wrong
+// contact id is NOT among them — a wrong contact id answers 422/204/409 on
+// grant/revoke/restore respectively, never 404, so any contact-id capture
+// instruction here would have zero recall and pure false-positive cost.
+func TestAchievementsEarn404_AmbiguousHint(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -685,40 +711,56 @@ func TestAchievementsEarn404_AmbiguousHint(t *testing.T) {
 		{"restore", []string{"--team", "t_team1", "--hub", "hub_1", "achievements", "restore", "ach_1", "--contact-id", "ct_1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, stderr, exitCode := runBinary(t, bin, []string{
-				"MIO_API_KEY=test-key",
-				"MIO_API_BASE_URL=" + srv.URL,
-			}, tc.args...)
-
+			detail, exitCode := earnHintDetail(t, 404,
+				`{"errors":[{"status":"404","detail":"Not found."}]}`, tc.args...)
 			if exitCode != errs.ExitNotFound {
-				t.Fatalf("exit code = %d, want %d (ExitNotFound); stderr=%q", exitCode, errs.ExitNotFound, stderr)
+				t.Fatalf("exit code = %d, want %d (ExitNotFound)", exitCode, errs.ExitNotFound)
 			}
-			var envelope struct {
-				Errors []struct {
-					Detail string `json:"detail"`
-				} `json:"errors"`
-			}
-			raw := strings.TrimSpace(stderr)
-			if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
-				t.Fatalf("stderr not valid JSON:API envelope: %v; stderr=%q", err, raw)
-			}
-			if len(envelope.Errors) == 0 {
-				t.Fatalf("error envelope empty; stderr=%q", raw)
-			}
-			detail := envelope.Errors[0].Detail
-			// The hint must name the FEATURE GATES — the piece the generic
-			// contact-id hint lacks — so a gate-off 404 is not misread as a
-			// wrong contact id.
-			for _, want := range []string{"ACHIEVEMENTS_ENABLED", "settings.achievements.enabled", "GLOBAL contact id"} {
+			for _, want := range []string{"ACHIEVEMENTS_ENABLED", "settings.achievements.enabled", "wrong contact id never answers 404"} {
 				if !strings.Contains(detail, want) {
 					t.Errorf("404 detail must mention %q; got %q", want, detail)
 				}
 			}
-			// And it must not issue the old false instruction that the contact
-			// id IS the problem.
-			if strings.Contains(detail, "this verb needs the GLOBAL contact id") {
-				t.Errorf("404 detail asserts the contact id is wrong — the earn 404 is ambiguous and the hint must not diagnose; got %q", detail)
+			// No capture instruction on 404 — that diagnosis belongs to the
+			// grant 422 / restore 409, where it has actual recall.
+			if strings.Contains(detail, "--jq .contact_id") {
+				t.Errorf("404 detail must not carry the contact-id capture instruction; got %q", detail)
 			}
 		})
+	}
+}
+
+// TestAchievementsGrant_Membership422_NamespaceHint pins the wrong-namespace
+// guidance where it actually surfaces on grant: the backend's 422
+// achievement_membership_required. Keyed on the transport status, never the
+// message string.
+func TestAchievementsGrant_Membership422_NamespaceHint(t *testing.T) {
+	detail, exitCode := earnHintDetail(t, 422,
+		`{"errors":[{"status":"422","code":"achievement_membership_required","detail":"Contact 'ct_1' is not an active member of hub 'hub_1'."}]}`,
+		"--team", "t_team1", "--hub", "hub_1", "achievements", "grant", "ach_1", "--contact-id", "ct_1")
+	if exitCode != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage, from 422)", exitCode, errs.ExitUsage)
+	}
+	for _, want := range []string{"GLOBAL contact id", "--jq .contact_id", "team-contact"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("grant 422 detail must mention %q; got %q", want, detail)
+		}
+	}
+}
+
+// TestAchievementsRestore_NoEarn409_NamespaceHint pins the same guidance on
+// restore's 409 ("No earn exists"), the other place a wrong contact id
+// actually lands.
+func TestAchievementsRestore_NoEarn409_NamespaceHint(t *testing.T) {
+	detail, exitCode := earnHintDetail(t, 409,
+		`{"errors":[{"status":"409","code":"achievement_not_revoked","detail":"No earn exists for achievement 'ach_1', contact 'ct_1', hub 'hub_1'."}]}`,
+		"--team", "t_team1", "--hub", "hub_1", "achievements", "restore", "ach_1", "--contact-id", "ct_1")
+	if exitCode != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage, from 409)", exitCode, errs.ExitUsage)
+	}
+	for _, want := range []string{"GLOBAL contact id", "--jq .contact_id", "nothing to restore"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("restore 409 detail must mention %q; got %q", want, detail)
+		}
 	}
 }

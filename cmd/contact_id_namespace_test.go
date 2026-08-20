@@ -47,14 +47,12 @@ func TestContract_MemberVerb404_HintsGlobalContactID(t *testing.T) {
 		{"email enrollments create", []string{"--team", "t_team1", "--hub", "hub_1", "email", "enrollments", "create", "dc_1", "--contact-id", "contact_x"}},
 		{"email enrollments list-by-contact", []string{"--team", "t_team1", "--hub", "hub_1", "email", "enrollments", "list-by-contact", "contact_x"}},
 		{"access-rules overrides create", []string{"--team", "t_team1", "--hub", "hub_1", "access-rules", "overrides", "create", "--contact-id", "contact_x", "--scope", "full"}},
-		// Achievements earn verbs (MIO-3412) route on the GLOBAL {contact_id}
-		// too — and their 404 is extra-ambiguous (feature gates off, missing
-		// achievement, or the wrong id namespace all return the same generic
-		// 404), so the hint matters even more here.
-		{"achievements grant", []string{"--team", "t_team1", "--hub", "hub_1", "achievements", "grant", "ach_1", "--contact-id", "contact_x"}},
-		{"achievements revoke", []string{"--team", "t_team1", "--hub", "hub_1", "achievements", "revoke", "ach_1", "--contact-id", "contact_x", "--yes"}},
-		{"achievements restore", []string{"--team", "t_team1", "--hub", "hub_1", "achievements", "restore", "ach_1", "--contact-id", "contact_x"}},
 	}
+	// NOTE (MIO-3412): the achievements earn verbs are deliberately NOT in
+	// this list. A wrong contact id never produces a 404 on them (grant 422s,
+	// revoke 204s, restore 409s — verified against the backend service), so
+	// their 404 hint must not claim the contact id; their namespace guidance
+	// rides the grant 422 / restore 409 instead. See achievements_test.go.
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

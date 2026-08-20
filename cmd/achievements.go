@@ -174,30 +174,70 @@ func achievementsHubContext(cmd *cobra.Command) (*cmdContext, string, string, er
 	return c, teamID, hubID, nil
 }
 
-// achievementsEarn404Hint is appended to a not-found (exit 4) from the earn
-// verbs. Their 404 is deliberately ambiguous SERVER-SIDE — the backend
-// collapses "feature gates off", "achievement missing / not offered here" and
-// "no such member" into one generic 404 so a response never discloses which
-// (app/achievements/feature_flag.py). The generic hintGlobalContactID would
-// therefore misdiagnose a gate-off 404 as a wrong contact id (Jay-r review,
-// PR #109); this hint names every possibility and asserts none.
+// Earn-verb error hints — STATUS-KEYED and verb-aware, because the backend's
+// answer shapes differ per verb and a wrong contact id NEVER produces a 404
+// (verified against app/achievements/{admin_router,service}.py, and flagged
+// by the blind review on PR #109 — the earlier 404-only contact-id hint had
+// zero recall):
+//
+//	wrong contact id on grant   → 422 achievement_membership_required
+//	wrong contact id on revoke  → 204 (idempotent no-op — success!)
+//	wrong contact id on restore → 409 achievement_not_revoked ("No earn exists")
+//
+// The 404 hint therefore names only the causes a 404 CAN have (gates,
+// achievement, hub containment) and explicitly says the contact id is not
+// among them; the namespace guidance rides the grant 422 and restore 409
+// instead, and revoke's success message carries its own idempotency
+// disclosure. Hints key off errs.HTTPStatusOf — the transport status — never
+// off backend message strings.
+
 const achievementsEarn404Hint = "this 404 is ambiguous by design; it can mean " +
 	"(a) the achievements feature is off — the global ACHIEVEMENTS_ENABLED " +
 	"setting and the hub's settings.achievements.enabled flag must BOTH be on " +
-	"for earn routes, (b) the achievement does not exist, is inactive, or is " +
-	"not offered in this hub, or (c) the contact id is in the wrong namespace " +
-	"— these routes need the GLOBAL contact id: capture it with " +
+	"for earn routes — or the hub is not in this team, or (b) the achievement " +
+	"does not exist in this team, is inactive, or (on grant) is not offered " +
+	"in this hub. A wrong contact id never answers 404 here: grant answers " +
+	"422 (not an active member), revoke answers 204 (idempotent no-op), " +
+	"restore answers 409 (no earn exists)"
+
+const achievementsContactCapture = "these routes need the GLOBAL contact id: capture it with " +
 	"`mio contacts retrieve <team-contact-id> -o plain --jq .contact_id` " +
 	"(the flattened contact_id field, NOT the row's .id)"
 
-// hintAchievementsEarn404 appends achievementsEarn404Hint to a not-found
-// (exit 4) error, preserving the exit code. Any other error (or nil) passes
-// through untouched. Mirrors hintGlobalContactID (cmd/contactid.go) in shape.
-func hintAchievementsEarn404(err error) error {
-	if err == nil || errs.CodeOf(err) != errs.ExitNotFound {
+const achievementsGrant422Hint = "if this 422 says the contact is not an active member and you " +
+	"believe they are, check the id namespace first — passing the team-contact " +
+	"row's .id produces exactly that symptom; " + achievementsContactCapture
+
+const achievementsRestore409Hint = "if this 409 says no earn exists and you believe one does, " +
+	"check the contact-id namespace first — passing the team-contact row's .id " +
+	"produces exactly that symptom (" + achievementsContactCapture + "). " +
+	"If the earn exists but is not currently revoked, there is nothing to restore"
+
+// hintAchievementsEarnErr appends the status-appropriate hint above to an
+// earn-verb error, preserving the transport status (and therefore the exit
+// code). verb is "grant", "revoke" or "restore". Any other error (or nil)
+// passes through untouched.
+func hintAchievementsEarnErr(verb string, err error) error {
+	if err == nil {
 		return err
 	}
-	return errs.New(errs.ExitNotFound, "%s\nhint: %s", err.Error(), achievementsEarn404Hint)
+	var hint string
+	switch errs.HTTPStatusOf(err) {
+	case 404:
+		hint = achievementsEarn404Hint
+	case 422:
+		if verb == "grant" {
+			hint = achievementsGrant422Hint
+		}
+	case 409:
+		if verb == "restore" {
+			hint = achievementsRestore409Hint
+		}
+	}
+	if hint == "" {
+		return err
+	}
+	return errs.NewHTTP(errs.HTTPStatusOf(err), "%s\nhint: %s", err.Error(), hint)
 }
 
 // requireContactID reads the required --contact-id flag for the earn verbs.
@@ -528,7 +568,7 @@ grant_manual hardcodes it; revoke/restore reasons ARE persisted).`,
 
 		res, err := c.client.Create(c.ctx, achievementsEarnPath(teamID, hubID, contactID, ""), attrs)
 		if err != nil {
-			return hintAchievementsEarn404(err)
+			return hintAchievementsEarnErr("grant", err)
 		}
 		return c.render(cmd, res)
 	},
@@ -538,7 +578,9 @@ var achievementsRevokeCmd = &cobra.Command{
 	Use:   "revoke <achievement_id>",
 	Short: "Revoke a member's earned achievement.",
 	Long: `Soft-revoke a member's earned achievement. Idempotent — revoking an
-already-revoked earn still succeeds. Reversible via 'mio achievements restore'.
+already-revoked or NONEXISTENT earn also answers 204, so a success here does
+not confirm an earn existed (a wrong contact id is not an error on this verb).
+Reversible via 'mio achievements restore'.
 
 --reason travels as the ?reason= query parameter (the DELETE has no body).
 
@@ -567,9 +609,16 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 		}
 
 		if err := c.client.DeleteWithQuery(c.ctx, achievementsEarnPath(teamID, hubID, contactID, args[0]), query); err != nil {
-			return hintAchievementsEarn404(err)
+			return hintAchievementsEarnErr("revoke", err)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Revoked achievement %s for contact %s.\n", args[0], contactID)
+		// 204 is idempotent server-side: a nonexistent earn — including a
+		// contact id in the wrong namespace — answers the same 204 as a real
+		// revoke, so this message must not claim an earn was revoked (blind
+		// review, PR #109).
+		fmt.Fprintf(cmd.OutOrStdout(),
+			"Revoke accepted for achievement %s, contact %s. Note: the API is idempotent — "+
+				"204 does not confirm a live earn existed (a nonexistent earn, an already-revoked "+
+				"earn, or a wrong contact id all answer the same).\n", args[0], contactID)
 		return nil
 	},
 }
@@ -604,7 +653,7 @@ an accidental revoke. Restoring an earn that is not revoked is a 409.
 		path := achievementsEarnPath(teamID, hubID, contactID, args[0]) + "/restore"
 		res, err := c.client.Action(c.ctx, "POST", path, attrs)
 		if err != nil {
-			return hintAchievementsEarn404(err)
+			return hintAchievementsEarnErr("restore", err)
 		}
 		if res == nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Restored achievement %s for contact %s.\n", args[0], contactID)

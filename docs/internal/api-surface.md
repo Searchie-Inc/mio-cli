@@ -334,8 +334,8 @@ path resolves through `members/achievements` because `restore` is not a collecti
 - `offerings list`    GET    `/api/teams/{team_id}/hubs/{hub_id}/achievements`  query: page[size], page[after]
 - `offerings attach`  POST   `/api/teams/{team_id}/hubs/{hub_id}/achievements`  body: envelope `achievement_hubs` {achievement_id}
 - `offerings detach`  DELETE `/api/teams/{team_id}/hubs/{hub_id}/achievements/{achievement_id}`  → 204
-- `grant`             POST   `/api/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/achievements`  body: envelope `achievement_earns` {achievement_id, award_reason?}; 201 new / 200 idempotent repeat; 409 over a revoked earn. `{contact_id}` is the GLOBAL contact id (flattened `.contact_id` from `mio contacts`, not the row `.id`). NOTE: P1 backend persists award_reason="manual" regardless
-- `revoke`            DELETE `/api/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/achievements/{achievement_id}`  → 204, idempotent; NO body — optional `?reason=` query (alias for revoke_reason)
+- `grant`             POST   `/api/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/achievements`  body: envelope `achievement_earns` {achievement_id, award_reason?}; 201 new / 200 idempotent repeat; 409 over a revoked earn; 422 achievement_membership_required when the contact is not an active hub member — the WRONG-NAMESPACE symptom (the CLI hints there, not on 404). `{contact_id}` is the GLOBAL contact id (flattened `.contact_id` from `mio contacts`, not the row `.id`). NOTE: P1 backend persists award_reason="manual" regardless
+- `revoke`            DELETE `/api/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/achievements/{achievement_id}`  → 204, idempotent — a nonexistent earn (wrong contact id included) also 204s, so success ≠ an earn existed; NO body — optional `?reason=` query (alias for revoke_reason)
 - `restore`           POST   `/api/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/achievements/{achievement_id}/restore`  body: envelope `achievement_earns` {restore_reason?} — envelope REQUIRED even with empty attributes; 409 if not revoked
 
 ---
