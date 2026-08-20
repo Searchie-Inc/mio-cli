@@ -71,8 +71,10 @@ var brandingKeys = map[string]bool{
 // Provenance: app/seeders/hub_seeder.py _DEMO_HUB_SETTINGS (customCss/menu/
 // header/footer/background/appearance/policies) plus the backend-read sections
 // registration (app/hubs/registration.py, MIO-761), email (app/hubs/service.py
-// settings.email.{from_name,reply_to}, MIO-1229) and auth (app/hubs/service.py
-// settings.auth.allowed_redirect_origins, MIO-616).
+// settings.email.{from_name,reply_to}, MIO-1229), auth (app/hubs/service.py
+// settings.auth.allowed_redirect_origins, MIO-616) and achievements
+// (app/achievements/feature_flag.py settings.achievements.enabled — the
+// per-hub gate for the achievements module, MIO-3054/MIO-3412).
 var settingsKeys = map[string]bool{
 	"customCss":    true,
 	"menu":         true,
@@ -84,6 +86,7 @@ var settingsKeys = map[string]bool{
 	"registration": true,
 	"email":        true,
 	"auth":         true,
+	"achievements": true,
 }
 
 // metaKeys is the accepted TOP-LEVEL key set for --meta-json (feature guards).
@@ -106,6 +109,8 @@ var metaKeys = map[string]bool{
 //     `hubs email-settings update`.
 //   - auth{allowed_redirect_origins} — app/hubs/service.py (MIO-616); stripped on
 //     write and managed via `hubs redirect-origins set`, but a valid key.
+//   - achievements{enabled} — app/achievements/feature_flag.py (MIO-3054): the
+//     per-hub gate is an IDENTITY check (`is True`), read from exactly this key.
 //
 // Branding, meta, and the other settings sections are FE-owned / still evolving,
 // so they are validated only at the top level (no nested map here).
@@ -114,6 +119,7 @@ var settingsNestedKeys = map[string]map[string]bool{
 	"registration": {"enabled": true},
 	"email":        {"from_name": true, "reply_to": true},
 	"auth":         {"allowed_redirect_origins": true},
+	"achievements": {"enabled": true},
 }
 
 // *KeysHelp are the accepted top-level key sets rendered as sorted,

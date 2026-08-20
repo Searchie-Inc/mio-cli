@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -146,6 +147,33 @@ func TestClient_DeleteSuccess(t *testing.T) {
 	c := newTestClient(srv, "k")
 	if err := c.Delete(context.Background(), "/x/1"); err != nil {
 		t.Fatalf("Delete error: %v", err)
+	}
+}
+
+// TestClient_DeleteWithQuerySendsQuery verifies DeleteWithQuery URL-encodes
+// and sends the query string on a body-less DELETE (the achievements revoke
+// ?reason= contract, MIO-3412).
+func TestClient_DeleteWithQuerySendsQuery(t *testing.T) {
+	var gotQuery, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv, "k")
+	q := url.Values{}
+	q.Set("reason", "granted in error")
+	if err := c.DeleteWithQuery(context.Background(), "/x/1", q); err != nil {
+		t.Fatalf("DeleteWithQuery error: %v", err)
+	}
+	if gotQuery != "reason=granted+in+error" {
+		t.Errorf("query = %q, want reason=granted+in+error", gotQuery)
+	}
+	if gotBody != "" {
+		t.Errorf("body = %q, want empty", gotBody)
 	}
 }
 
@@ -348,6 +376,17 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/hubs/h1/redirect-origins", "hub_redirect_origin_allowlists"},
 		{"/v1/hubs/h1/email-suppressions", "email_suppressions"},
 		{"/v1/hubs/h1/email-suppressions/esp1", "email_suppressions"},
+		// Achievements admin surface (MIO-3054/MIO-3412). Definitions
+		// self-derive; the hub-offering attach and the earn writes carry
+		// different backend Literals than the shared "achievements" URL
+		// segment. The restore action path resolves through the SAME
+		// members/achievements override because "restore" is deliberately
+		// not a known collection token.
+		{"/api/teams/t1/achievements", "achievements"},
+		{"/api/teams/t1/achievements/a1", "achievements"},
+		{"/api/teams/t1/hubs/h1/achievements", "achievement_hubs"},
+		{"/api/teams/t1/hubs/h1/members/c1/achievements", "achievement_earns"},
+		{"/api/teams/t1/hubs/h1/members/c1/achievements/a1/restore", "achievement_earns"},
 	}
 	for _, tc := range cases {
 		if got := resourceTypeFromPath(tc.path); got != tc.want {

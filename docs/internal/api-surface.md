@@ -320,6 +320,24 @@ plain JSON.
 - `list`   GET    `/api/teams/{team_id}/hubs/{hub_id}/webhook-endpoints`
 - `delete` DELETE `/api/teams/{team_id}/hubs/{hub_id}/webhook-endpoints/{id}`  → 204
 
+## achievements  (`cmd/achievements.go`) — MIO-3412; backend app/achievements (MIO-3054 P1)
+SPLIT GATE: definition routes need only the global `ACHIEVEMENTS_ENABLED` setting; hub-scoped
+offering/earn routes additionally need `hub.settings.achievements.enabled is True`. Any closed
+gate → generic 404 by design. Types: `achievements` / `achievement_hubs` / `achievement_earns`
+(the latter two via typeOverrides `hubs/achievements` and `members/achievements`; the restore
+path resolves through `members/achievements` because `restore` is not a collection token).
+- `create`            POST   `/api/teams/{team_id}/achievements`  body: envelope `achievements` {title, description?, award_mode?, category?, points?, is_secret?, is_active?, email_notification_enabled?, appearance?}
+- `list`              GET    `/api/teams/{team_id}/achievements`  query: page[size], page[after], filter[award_mode], filter[category]
+- `retrieve`          GET    `/api/teams/{team_id}/achievements/{id}`
+- `update`            PATCH  `/api/teams/{team_id}/achievements/{id}`  partial: envelope `achievements`
+- `archive`           DELETE `/api/teams/{team_id}/achievements/{id}`  → 204 (soft-delete)
+- `offerings list`    GET    `/api/teams/{team_id}/hubs/{hub_id}/achievements`  query: page[size], page[after]
+- `offerings attach`  POST   `/api/teams/{team_id}/hubs/{hub_id}/achievements`  body: envelope `achievement_hubs` {achievement_id}
+- `offerings detach`  DELETE `/api/teams/{team_id}/hubs/{hub_id}/achievements/{achievement_id}`  → 204
+- `grant`             POST   `/api/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/achievements`  body: envelope `achievement_earns` {achievement_id, award_reason?}; 201 new / 200 idempotent repeat; 409 over a revoked earn; 422 achievement_membership_required when the contact is not an active hub member — the WRONG-NAMESPACE symptom (the CLI hints there, not on 404). `{contact_id}` is the GLOBAL contact id (flattened `.contact_id` from `mio contacts`, not the row `.id`). NOTE: P1 backend persists award_reason="manual" regardless
+- `revoke`            DELETE `/api/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/achievements/{achievement_id}`  → 204, idempotent — a nonexistent earn (wrong contact id included) also 204s, so success ≠ an earn existed; NO body — optional `?reason=` query (alias for revoke_reason)
+- `restore`           POST   `/api/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/achievements/{achievement_id}/restore`  body: envelope `achievement_earns` {restore_reason?} — envelope REQUIRED even with empty attributes; 409 if not revoked
+
 ---
 
 ## Out of scope (v1)
