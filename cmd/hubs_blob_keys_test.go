@@ -14,6 +14,7 @@ package cmd
 //   the warning goes to STDERR only, never stdout, so --output json/yaml is safe
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -246,5 +247,75 @@ func TestHubsCreate_LogoURLDoesNotTripKeyValidation(t *testing.T) {
 	}
 	if *gotMethod != http.MethodPost {
 		t.Errorf("the POST must fire; got method %q", *gotMethod)
+	}
+}
+
+// TestHubsUpdate_AchievementsSettingsKeyAccepted (MIO-3412) verifies
+// `achievements` is an accepted --settings-json key — it is the per-hub gate
+// for the achievements module (backend reads
+// hub.settings.achievements.enabled IS TRUE, app/achievements/feature_flag.py).
+// It must pass under --strict-keys, produce no unknown-key warning, and the
+// PATCH must carry settings.achievements.enabled=true after the
+// read-modify-write merge.
+func TestHubsUpdate_AchievementsSettingsKeyAccepted(t *testing.T) {
+	srv, patchBody := rmwServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"hubs", "update", "hub_abc123",
+			"--settings-json", `{"achievements":{"enabled":true}}`,
+			"--strict-keys",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK) for the achievements settings key under --strict-keys; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if strings.Contains(res.Stderr, "Warning") {
+		t.Errorf("achievements must not warn as an unknown settings key; stderr=%q", res.Stderr)
+	}
+	if len(*patchBody) == 0 {
+		t.Fatal("the PATCH must fire for the achievements settings key")
+	}
+
+	var doc struct {
+		Data struct {
+			Attributes struct {
+				Settings map[string]any `json:"settings"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(*patchBody, &doc); err != nil {
+		t.Fatalf("PATCH body is not valid JSON: %v; body=%q", err, *patchBody)
+	}
+	ach, ok := doc.Data.Attributes.Settings["achievements"].(map[string]any)
+	if !ok {
+		t.Fatalf("settings.achievements missing from PATCH body; settings=%v", doc.Data.Attributes.Settings)
+	}
+	if ach["enabled"] != true {
+		t.Errorf("settings.achievements.enabled = %v, want true", ach["enabled"])
+	}
+}
+
+// TestHubsUpdate_AchievementsUnknownNestedKeyWarns verifies the achievements
+// section is deep-validated: a misspelled sub-key (settings.achievements.enabld)
+// warns by name in default mode — the backend's gate is an identity check on
+// exactly `enabled`, so a typo here silently leaves the feature off.
+func TestHubsUpdate_AchievementsUnknownNestedKeyWarns(t *testing.T) {
+	srv, patchBody := rmwServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"hubs", "update", "hub_abc123",
+			"--settings-json", `{"achievements":{"enabld":true}}`,
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "settings.achievements.enabld") {
+		t.Errorf("stderr should name the misspelled nested key settings.achievements.enabld; got %q", res.Stderr)
+	}
+	if len(*patchBody) == 0 {
+		t.Error("the PATCH must still fire in warn mode")
 	}
 }

@@ -261,6 +261,17 @@ var typeOverrides = []struct {
 	// Event RSVP set (PUT .../events/{id}/rsvp): backend EventRSVPSetAttributes
 	// type Literal is "event_rsvps", not the bare "rsvp" segment.
 	{"events/rsvp", "event_rsvps"},
+	// Achievements (MIO-3054/MIO-3412): the bare "achievements" segment
+	// self-derives the definitions type, but the hub-offering attach (POST
+	// .../hubs/{hub}/achievements) binds AchievementAttachData (Literal
+	// "achievement_hubs") and the earn writes — manual grant (POST
+	// .../members/{contact}/achievements) AND restore (POST
+	// .../achievements/{id}/restore) — bind Literals "achievement_earns".
+	// "restore" is deliberately NOT a known collection token (the
+	// transcript/revert precedent), so the restore path's collection tail is
+	// still members/achievements and resolves through the same entry.
+	{"hubs/achievements", "achievement_hubs"},
+	{"members/achievements", "achievement_earns"},
 	// Community moderation report-reasons (MIO-2265): the create POST derives
 	// its JSON:API type from the .../report-reasons collection tail. The URL
 	// segment uses hyphens; the backend ReportReasonCreateData type Literal is
@@ -406,6 +417,13 @@ var knownCollections = map[string]bool{
 	// match; without it the write's last collection resolves to "events" and
 	// the backend rejects the wrong envelope type.
 	"rsvp": true,
+	// Achievements admin surface (MIO-3054/MIO-3412): definitions
+	// (.../teams/{id}/achievements), hub offerings (.../hubs/{id}/achievements)
+	// and earns (.../members/{id}/achievements). Without this token the
+	// definitions PATCH path's last collection resolves to "teams" and the
+	// backend 422s the wrong envelope type. "restore" (the earn-restore action
+	// segment) is deliberately NOT a token — see the typeOverrides entry.
+	"achievements": true,
 }
 
 // collectionSegments returns the path segments that are static collection
@@ -559,6 +577,14 @@ func NewRawEnvelope(typ string, attributes any) RawEnvelope {
 // Delete performs a DELETE and discards any body. A 204 (or any 2xx) is success.
 func (c *Client) Delete(ctx context.Context, path string) error {
 	_, err := c.do(ctx, http.MethodDelete, path, nil, nil, contentTypeJSONAPI)
+	return err
+}
+
+// DeleteWithQuery is Delete with query parameters — for the DELETE routes
+// whose modifiers travel in the query string rather than a body (e.g. the
+// achievements earn revoke's ?reason=, MIO-3412). Mirrors RetrieveWithQuery.
+func (c *Client) DeleteWithQuery(ctx context.Context, path string, query url.Values) error {
+	_, err := c.do(ctx, http.MethodDelete, path, query, nil, contentTypeJSONAPI)
 	return err
 }
 
