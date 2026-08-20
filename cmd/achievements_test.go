@@ -143,8 +143,8 @@ func TestAchievementsCreate_BodyShape(t *testing.T) {
 	if cap.Method != http.MethodPost {
 		t.Errorf("HTTP method = %q, want POST", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/achievements") {
-		t.Errorf("path %q does not end with /teams/t_team1/achievements", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/achievements" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/achievements", cap.Path)
 	}
 
 	typ, attrs := decodeEnvelope(t, cap.Body)
@@ -236,8 +236,8 @@ func TestAchievementsList_QueryParams(t *testing.T) {
 	if cap.Method != http.MethodGet {
 		t.Errorf("HTTP method = %q, want GET", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/achievements") {
-		t.Errorf("path %q does not end with /teams/t_team1/achievements", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/achievements" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/achievements", cap.Path)
 	}
 	for _, want := range []string{
 		"filter%5Baward_mode%5D=manual",
@@ -267,8 +267,8 @@ func TestAchievementsRetrieve_Path(t *testing.T) {
 	if cap.Method != http.MethodGet {
 		t.Errorf("HTTP method = %q, want GET", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/achievements/ach_1") {
-		t.Errorf("path %q does not end with /teams/t_team1/achievements/ach_1", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/achievements/ach_1" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/achievements/ach_1", cap.Path)
 	}
 }
 
@@ -293,8 +293,8 @@ func TestAchievementsUpdate_PartialBody(t *testing.T) {
 	if cap.Method != http.MethodPatch {
 		t.Errorf("HTTP method = %q, want PATCH", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/achievements/ach_1") {
-		t.Errorf("path %q does not end with /teams/t_team1/achievements/ach_1", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/achievements/ach_1" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/achievements/ach_1", cap.Path)
 	}
 
 	typ, attrs := decodeEnvelope(t, cap.Body)
@@ -360,8 +360,8 @@ func TestAchievementsArchive_WithYes(t *testing.T) {
 	if cap.Method != http.MethodDelete {
 		t.Errorf("HTTP method = %q, want DELETE", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/achievements/ach_1") {
-		t.Errorf("path %q does not end with /teams/t_team1/achievements/ach_1", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/achievements/ach_1" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/achievements/ach_1", cap.Path)
 	}
 	if !strings.Contains(res.Stdout, "Archived achievement ach_1") {
 		t.Errorf("stdout missing confirmation; got %q", res.Stdout)
@@ -384,8 +384,8 @@ func TestAchievementsOfferingsList_Path(t *testing.T) {
 	if cap.Method != http.MethodGet {
 		t.Errorf("HTTP method = %q, want GET", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/hubs/hub_123/achievements") {
-		t.Errorf("path %q does not end with /teams/t_team1/hubs/hub_123/achievements", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/hubs/hub_123/achievements" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/hubs/hub_123/achievements", cap.Path)
 	}
 	if !strings.Contains(cap.RawQuery, "page%5Bsize%5D=5") {
 		t.Errorf("query %q missing page[size]=5", cap.RawQuery)
@@ -407,8 +407,8 @@ func TestAchievementsOfferingsAttach_BodyShape(t *testing.T) {
 	if cap.Method != http.MethodPost {
 		t.Errorf("HTTP method = %q, want POST", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/hubs/hub_123/achievements") {
-		t.Errorf("path %q does not end with /teams/t_team1/hubs/hub_123/achievements", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/hubs/hub_123/achievements" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/hubs/hub_123/achievements", cap.Path)
 	}
 
 	typ, attrs := decodeEnvelope(t, cap.Body)
@@ -450,8 +450,8 @@ func TestAchievementsOfferingsDetach_WithYes(t *testing.T) {
 	if cap.Method != http.MethodDelete {
 		t.Errorf("HTTP method = %q, want DELETE", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/hubs/hub_123/achievements/ach_1") {
-		t.Errorf("path %q does not end with /teams/t_team1/hubs/hub_123/achievements/ach_1", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/hubs/hub_123/achievements/ach_1" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/hubs/hub_123/achievements/ach_1", cap.Path)
 	}
 }
 
@@ -476,8 +476,8 @@ func TestAchievementsGrant_BodyShape(t *testing.T) {
 	if cap.Method != http.MethodPost {
 		t.Errorf("HTTP method = %q, want POST", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/hubs/hub_123/members/ct_456/achievements") {
-		t.Errorf("path %q does not end with .../hubs/hub_123/members/ct_456/achievements", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/hubs/hub_123/members/ct_456/achievements" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/hubs/hub_123/members/ct_456/achievements", cap.Path)
 	}
 
 	typ, attrs := decodeEnvelope(t, cap.Body)
@@ -570,8 +570,8 @@ func TestAchievementsRevoke_ReasonAsQuery(t *testing.T) {
 	if cap.Method != http.MethodDelete {
 		t.Errorf("HTTP method = %q, want DELETE", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/hubs/hub_123/members/ct_456/achievements/ach_1") {
-		t.Errorf("path %q does not end with .../members/ct_456/achievements/ach_1", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/hubs/hub_123/members/ct_456/achievements/ach_1" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/hubs/hub_123/members/ct_456/achievements/ach_1", cap.Path)
 	}
 	if !strings.Contains(cap.RawQuery, "reason=granted+in+error") &&
 		!strings.Contains(cap.RawQuery, "reason=granted%20in%20error") {
@@ -624,8 +624,8 @@ func TestAchievementsRestore_EnvelopeAlwaysSent(t *testing.T) {
 	if cap.Method != http.MethodPost {
 		t.Errorf("HTTP method = %q, want POST", cap.Method)
 	}
-	if !strings.HasSuffix(cap.Path, "/teams/t_team1/hubs/hub_123/members/ct_456/achievements/ach_1/restore") {
-		t.Errorf("path %q does not end with .../achievements/ach_1/restore", cap.Path)
+	if cap.Path != "/api/v1/teams/t_team1/hubs/hub_123/members/ct_456/achievements/ach_1/restore" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/hubs/hub_123/members/ct_456/achievements/ach_1/restore", cap.Path)
 	}
 
 	typ, attrs := decodeEnvelope(t, cap.Body)

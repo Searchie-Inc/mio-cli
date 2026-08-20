@@ -498,7 +498,10 @@ grant_manual hardcodes it; revoke/restore reasons ARE persisted).`,
 
 		res, err := c.client.Create(c.ctx, achievementsEarnPath(teamID, hubID, contactID, ""), attrs)
 		if err != nil {
-			return err
+			// 404 here is ambiguous (gates off, achievement missing, or the
+			// TEAM-contact id passed where the GLOBAL one is routed) — append
+			// the namespace hint like every other member-shaped verb (MIO-2504).
+			return hintGlobalContactID(err)
 		}
 		return c.render(cmd, res)
 	},
@@ -537,7 +540,7 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 		}
 
 		if err := c.client.DeleteWithQuery(c.ctx, achievementsEarnPath(teamID, hubID, contactID, args[0]), query); err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Revoked achievement %s for contact %s.\n", args[0], contactID)
 		return nil
@@ -574,7 +577,7 @@ an accidental revoke. Restoring an earn that is not revoked is a 409.
 		path := achievementsEarnPath(teamID, hubID, contactID, args[0]) + "/restore"
 		res, err := c.client.Action(c.ctx, "POST", path, attrs)
 		if err != nil {
-			return err
+			return hintGlobalContactID(err)
 		}
 		if res == nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Restored achievement %s for contact %s.\n", args[0], contactID)
