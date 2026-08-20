@@ -477,7 +477,9 @@ The achievement must be offered in the hub (see 'mio achievements offerings')
 and its award_mode must be manual. Granting over a previously REVOKED earn is
 a 409 — use 'mio achievements restore' instead.
 
---reason is stored as the earn's award_reason (defaults to "manual").`,
+--reason is forwarded as award_reason, which the request schema accepts — but
+the Phase 1 backend records award_reason="manual" regardless (verified live:
+grant_manual hardcodes it; revoke/restore reasons ARE persisted).`,
 	Example: `  mio achievements grant ach_abc123 --hub hub_123 --contact-id ct_456
   mio achievements grant ach_abc123 --hub hub_123 --contact-id ct_456 --reason "manual: community week winner"`,
 	Args: cobra.ExactArgs(1),
