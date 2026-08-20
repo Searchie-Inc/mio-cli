@@ -190,6 +190,9 @@ Every implemented resource and its verbs.
 | `access-rules rules` | `create` `list` `retrieve` `update` `delete` |
 | `access-rules overrides` | `create` `list` `retrieve` `update` `delete` |
 | `activity` | `contact` `top-engaged` |
+| `achievements` | `create` `list` `retrieve` `update` `archive` — team-scoped badge definitions. **SPLIT GATE**: these five need only the backend's global `ACHIEVEMENTS_ENABLED` setting; the hub-scoped verbs below additionally need `settings.achievements.enabled` on the hub (flip it with `mio hubs update <hub> --settings-json '{"achievements":{"enabled":true}}'` — an allowlisted key, read-modify-write). Any closed gate answers a **generic 404 (exit 4) by design** — it is indistinguishable from a missing resource, so do not chase it as a routing bug. `create` requires `--title`; `--appearance-json` is forwarded wholesale (backend validates strictly) |
+| `achievements offerings` | `list` `attach` `detach` — which badges a hub offers (`--hub`); `detach` needs `--yes` in non-interactive shells |
+| `achievements grant/revoke/restore` | manual earns, hub-scoped; `--contact-id` is the **GLOBAL** contact id (`.attributes.contact_id` from `mio contacts`, NOT its `.id`). `grant` is idempotent (re-grant returns the same earn); granting over a REVOKED earn is a 409 — use `restore`. `revoke` needs `--yes`; its `--reason` travels as the `?reason=` query param. `grant --reason` is accepted by the API schema but the Phase 1 backend records `award_reason="manual"` regardless (revoke/restore reasons ARE persisted) |
 
 ---
 

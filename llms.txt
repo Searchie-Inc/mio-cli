@@ -143,6 +143,19 @@ mio webhook-endpoints create — register an outbound webhook endpoint (SSRF-gua
 mio webhook-endpoints list — list webhook endpoints in a hub
 mio webhook-endpoints delete — delete a webhook endpoint by id; --yes in non-interactive shells
 
+mio achievements create — create a badge definition; --title (required) --description --award-mode --category --points --is-secret --is-active --email-notification-enabled --appearance-json (object, backend-validated)
+mio achievements list — list the team's badge definitions; --award-mode --category filters
+mio achievements retrieve — retrieve a definition by id
+mio achievements update — partial-update a definition (only supplied flags are sent)
+mio achievements archive — soft-delete a definition; --yes in non-interactive shells
+mio achievements offerings attach — offer a badge in a hub; positional achievement id, --hub
+mio achievements offerings list — list a hub's offered badges; --hub
+mio achievements offerings detach — stop offering a badge; --hub --yes
+mio achievements grant — manually award a badge to a member; --hub --contact-id (GLOBAL contact id, the .attributes.contact_id from mio contacts, NOT .id); idempotent; 409 over a revoked earn (use restore)
+mio achievements revoke — soft-revoke an earn; --hub --contact-id --yes; --reason goes as the ?reason= query param
+mio achievements restore — restore a revoked earn; --hub --contact-id
+# GATES: definitions need only the backend global ACHIEVEMENTS_ENABLED; offerings/earns additionally need hub settings.achievements.enabled (mio hubs update <hub> --settings-json with achievements.enabled true). A closed gate answers a GENERIC 404 (exit 4) BY DESIGN — not a routing bug.
+
 mio content create — create a content node in a hub
 mio content list — list root-level content nodes in a hub
 mio content retrieve — retrieve a content node by id

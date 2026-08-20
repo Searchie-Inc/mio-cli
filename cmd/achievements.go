@@ -26,13 +26,15 @@ package cmd
 // contact identity instead and are deliberately NOT covered here — same
 // boundary as `mio events` (MIO-3173), see that file's package doc comment.
 //
-// FEATURE GATES: the module ships dark behind TWO backend gates that must both
-// pass — the global ACHIEVEMENTS_ENABLED setting (app/config.py, default
-// False) and the per-hub `hub.settings.achievements.enabled is True` flag.
-// While either gate is closed every route above 404s with one generic message
-// (deliberately indistinguishable from a missing hub), so `mio achievements *`
-// exits 4 — that is the backend's answer, not a CLI defect. The per-hub flag
-// is set with:
+// FEATURE GATES — the gate model is SPLIT (app/achievements/feature_flag.py):
+// the team-scoped DEFINITION routes (create/list/retrieve/update/archive) are
+// gated on the global ACHIEVEMENTS_ENABLED setting ONLY — they have no hub in
+// the path and never read the per-hub flag. The hub-scoped OFFERING and EARN
+// routes additionally require the per-hub
+// `hub.settings.achievements.enabled is True` flag. A closed gate 404s with
+// one generic message (deliberately indistinguishable from a missing hub), so
+// `mio achievements *` exits 4 — that is the backend's answer, not a CLI
+// defect. The per-hub flag is set with:
 //
 //	mio hubs update <hub> --settings-json '{"achievements":{"enabled":true}}'
 //
@@ -96,9 +98,11 @@ var achievementsCmd = &cobra.Command{
 	Long: `Manage the team's achievement badge definitions, attach them to hubs as
 offerings, and manually grant/revoke/restore member earns.
 
-The achievements module ships dark: the backend 404s every route below until
-BOTH its global ACHIEVEMENTS_ENABLED setting and the per-hub flag are on. Turn
-the per-hub flag on with:
+The achievements module ships dark, behind a SPLIT gate: the team-scoped
+definition commands (create/list/retrieve/update/archive) need only the
+backend's global ACHIEVEMENTS_ENABLED setting; the hub-scoped offerings and
+earn commands additionally need the per-hub flag. Any closed gate answers a
+generic 404 (exit 4) by design. Turn the per-hub flag on with:
 
   mio hubs update <hub> --settings-json '{"achievements":{"enabled":true}}'
 
@@ -168,6 +172,31 @@ func achievementsHubContext(cmd *cobra.Command) (*cmdContext, string, string, er
 		return nil, "", "", err
 	}
 	return c, teamID, hubID, nil
+}
+
+// achievementsEarn404Hint is appended to a not-found (exit 4) from the earn
+// verbs. Their 404 is deliberately ambiguous SERVER-SIDE — the backend
+// collapses "feature gates off", "achievement missing / not offered here" and
+// "no such member" into one generic 404 so a response never discloses which
+// (app/achievements/feature_flag.py). The generic hintGlobalContactID would
+// therefore misdiagnose a gate-off 404 as a wrong contact id (Jay-r review,
+// PR #109); this hint names every possibility and asserts none.
+const achievementsEarn404Hint = "this 404 is ambiguous by design; it can mean " +
+	"(a) the achievements feature is off — the global ACHIEVEMENTS_ENABLED " +
+	"setting and the hub's settings.achievements.enabled flag must BOTH be on " +
+	"for earn routes, (b) the achievement does not exist, is inactive, or is " +
+	"not offered in this hub, or (c) the contact id is in the wrong namespace " +
+	"— these routes need the GLOBAL contact id (the .attributes.contact_id " +
+	"from `mio contacts`, NOT its .id)"
+
+// hintAchievementsEarn404 appends achievementsEarn404Hint to a not-found
+// (exit 4) error, preserving the exit code. Any other error (or nil) passes
+// through untouched. Mirrors hintGlobalContactID (cmd/contactid.go) in shape.
+func hintAchievementsEarn404(err error) error {
+	if err == nil || errs.CodeOf(err) != errs.ExitNotFound {
+		return err
+	}
+	return errs.New(errs.ExitNotFound, "%s\nhint: %s", err.Error(), achievementsEarn404Hint)
 }
 
 // requireContactID reads the required --contact-id flag for the earn verbs.
@@ -498,10 +527,7 @@ grant_manual hardcodes it; revoke/restore reasons ARE persisted).`,
 
 		res, err := c.client.Create(c.ctx, achievementsEarnPath(teamID, hubID, contactID, ""), attrs)
 		if err != nil {
-			// 404 here is ambiguous (gates off, achievement missing, or the
-			// TEAM-contact id passed where the GLOBAL one is routed) — append
-			// the namespace hint like every other member-shaped verb (MIO-2504).
-			return hintGlobalContactID(err)
+			return hintAchievementsEarn404(err)
 		}
 		return c.render(cmd, res)
 	},
@@ -540,7 +566,7 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 		}
 
 		if err := c.client.DeleteWithQuery(c.ctx, achievementsEarnPath(teamID, hubID, contactID, args[0]), query); err != nil {
-			return hintGlobalContactID(err)
+			return hintAchievementsEarn404(err)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Revoked achievement %s for contact %s.\n", args[0], contactID)
 		return nil
@@ -577,7 +603,7 @@ an accidental revoke. Restoring an earn that is not revoked is a 409.
 		path := achievementsEarnPath(teamID, hubID, contactID, args[0]) + "/restore"
 		res, err := c.client.Action(c.ctx, "POST", path, attrs)
 		if err != nil {
-			return hintGlobalContactID(err)
+			return hintAchievementsEarn404(err)
 		}
 		if res == nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Restored achievement %s for contact %s.\n", args[0], contactID)
@@ -609,9 +635,13 @@ func init() {
 	achievementsListCmd.Flags().String("category", "", "Filter by category (filter[category]).")
 	addPaginationFlags(achievementsOfferingsListCmd)
 
-	// Earn verbs: contact scope + reason.
+	// Earn verbs: contact scope + a per-verb reason (the three backends treat
+	// it differently, so the help must not share one claim — Jay-r review,
+	// PR #109).
 	for _, cmd := range []*cobra.Command{achievementsGrantCmd, achievementsRevokeCmd, achievementsRestoreCmd} {
 		cmd.Flags().String("contact-id", "", "GLOBAL contact id (.attributes.contact_id from 'mio contacts', NOT its .id) of the hub member. Required.")
-		cmd.Flags().String("reason", "", "Audit reason recorded with the action.")
 	}
+	achievementsGrantCmd.Flags().String("reason", "", "Forwarded as award_reason. The Phase 1 backend accepts but does NOT persist it (award_reason is always recorded as \"manual\").")
+	achievementsRevokeCmd.Flags().String("reason", "", "Audit reason recorded as the earn's revoke_reason (sent as the ?reason= query parameter).")
+	achievementsRestoreCmd.Flags().String("reason", "", "Audit reason recorded as the earn's restore_reason.")
 }

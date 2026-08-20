@@ -447,6 +447,7 @@ Scripts and agents can branch on these stable codes.
 | `email` | `drip-campaigns create/list/retrieve/update/delete/activate/pause` (create/update now accept `--enrollment-mode`, `--trigger-event-type`, `--segment-id`, `--segment-check-interval-minutes`, `--allow-reenrollment`); `steps create/list/update/delete`; `templates create/list/retrieve/update/delete/preview`; `config set/get/delete/test`; `enrollments list/exit`; `stats get` |
 | `access-rules` | `rules create/list/retrieve/update/delete`; `overrides create/list/retrieve/update/delete` |
 | `activity` | `contact`, `top-engaged` |
+| `achievements` | `create`, `list`, `retrieve`, `update`, `archive` (definitions — need only the backend's global `ACHIEVEMENTS_ENABLED` gate); `offerings list/attach/detach` and `grant`/`revoke`/`restore` (hub-scoped — additionally need the hub's `settings.achievements.enabled` flag, settable via `mio hubs update <hub> --settings-json '{"achievements":{"enabled":true}}'`). Any closed gate answers a generic 404 (exit 4) by design. Earn verbs take the GLOBAL contact id (`--contact-id`) |
 
 Run `mio <resource> --help` or `mio <resource> <action> --help` for flag details on any command, or `mio gen-docs --dir ./docs` to generate the complete reference.
 

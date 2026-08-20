@@ -659,3 +659,66 @@ func TestAchievementsRestore_WithReason(t *testing.T) {
 		t.Errorf("attributes.restore_reason = %v, want the --reason value", attrs["restore_reason"])
 	}
 }
+
+// ── earn-verb 404 hint ───────────────────────────────────────────────────────
+
+// TestAchievementsEarn404_AmbiguousHint pins the earn verbs' 404 hint contract
+// (Jay-r review, PR #109): the backend deliberately collapses "feature gates
+// off", "achievement missing/not offered" and "wrong contact-id namespace"
+// into one generic 404, so the hint must name ALL the possibilities — in
+// particular the gates — and must not assert the contact id is wrong. The
+// generic hintGlobalContactID would fail this test: it names only the contact
+// id. Driven as a subprocess because the JSON:API error envelope is written by
+// main.go after os.Exit.
+func TestAchievementsEarn404_AmbiguousHint(t *testing.T) {
+	srv := newMockServer(t, []mockHandler{
+		{Status: 404, Body: `{"errors":[{"status":"404","detail":"Not found."}]}`},
+	})
+	bin := buildBinary(t)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"grant", []string{"--team", "t_team1", "--hub", "hub_1", "achievements", "grant", "ach_1", "--contact-id", "ct_1"}},
+		{"revoke", []string{"--team", "t_team1", "--hub", "hub_1", "achievements", "revoke", "ach_1", "--contact-id", "ct_1", "--yes"}},
+		{"restore", []string{"--team", "t_team1", "--hub", "hub_1", "achievements", "restore", "ach_1", "--contact-id", "ct_1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, stderr, exitCode := runBinary(t, bin, []string{
+				"MIO_API_KEY=test-key",
+				"MIO_API_BASE_URL=" + srv.URL,
+			}, tc.args...)
+
+			if exitCode != errs.ExitNotFound {
+				t.Fatalf("exit code = %d, want %d (ExitNotFound); stderr=%q", exitCode, errs.ExitNotFound, stderr)
+			}
+			var envelope struct {
+				Errors []struct {
+					Detail string `json:"detail"`
+				} `json:"errors"`
+			}
+			raw := strings.TrimSpace(stderr)
+			if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+				t.Fatalf("stderr not valid JSON:API envelope: %v; stderr=%q", err, raw)
+			}
+			if len(envelope.Errors) == 0 {
+				t.Fatalf("error envelope empty; stderr=%q", raw)
+			}
+			detail := envelope.Errors[0].Detail
+			// The hint must name the FEATURE GATES — the piece the generic
+			// contact-id hint lacks — so a gate-off 404 is not misread as a
+			// wrong contact id.
+			for _, want := range []string{"ACHIEVEMENTS_ENABLED", "settings.achievements.enabled", "GLOBAL contact id"} {
+				if !strings.Contains(detail, want) {
+					t.Errorf("404 detail must mention %q; got %q", want, detail)
+				}
+			}
+			// And it must not issue the old false instruction that the contact
+			// id IS the problem.
+			if strings.Contains(detail, "this verb needs the GLOBAL contact id") {
+				t.Errorf("404 detail asserts the contact id is wrong — the earn 404 is ambiguous and the hint must not diagnose; got %q", detail)
+			}
+		})
+	}
+}
