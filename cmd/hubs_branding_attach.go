@@ -111,6 +111,16 @@ func validateBrandingRole(role string) error {
 // comment). It returns the media_id, or a usage error naming exactly what
 // makes the file ineligible. Attributes the file read does not carry are
 // skipped — the backend stays the authority.
+//
+// COVERAGE vs the backend predicate (Codex round 1): the server checks four
+// properties — not deleted, READY, asset_kind=="image", safe MIME. The admin
+// file resource serializes neither asset_kind nor deleted state, so the two
+// "missing" checks are covered structurally instead: a soft-deleted file 404s
+// at the GET this preflight reads from, and asset_kind is DERIVED server-side
+// from the MIME type (_asset_kind_from_mime: any image/* → "image"), so every
+// MIME in the raster allowlist below implies asset_kind=="image" — the MIME
+// check subsumes it exactly. Only a file with NO mime_type on the wire skips
+// the MIME check, and the backend remains the authority there.
 func brandingAttachPreflight(fileID string, attrs map[string]any) (string, error) {
 	mediaID, _ := attrs["media_id"].(string)
 	if mediaID == "" {
