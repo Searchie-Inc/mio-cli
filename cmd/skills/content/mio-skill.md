@@ -187,7 +187,7 @@ mio hubs update hub_abc123 \
   the blob is stored verbatim, but the backend applies a URL rule to **any** key whose
   name ends in `_url`, case-insensitively, present or future (MIO-2658). On the CLI's
   allowlist that is `logo_url`, `favicon_url`, `social_image_url`,
-  `custom_login_logo_url` and `custom_font_url`. Each must be `null` or a **string**
+  `auth_logo_url`, `custom_login_logo_url` and `custom_font_url`. Each must be `null` or a **string**
   (a list or object raises) and, if a string, an **absolute `https://` URL**. Rejected:
   any other scheme — including plain `http://`, `data:` and `javascript:` — plus
   protocol-relative `//host/x`, relative paths, whitespace or control characters (raw

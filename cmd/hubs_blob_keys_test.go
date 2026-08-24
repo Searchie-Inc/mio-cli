@@ -250,6 +250,33 @@ func TestHubsCreate_LogoURLDoesNotTripKeyValidation(t *testing.T) {
 	}
 }
 
+// TestHubsCreate_AuthLogoURLIsKnownBrandingKey (MIO-3464) verifies the
+// canonical login/register-panel logo key auth_logo_url (MIO-3354) is on the
+// branding allowlist, so authoring it does not warn (and does not error under
+// --strict-keys) the way it did when only the deprecated alias
+// custom_login_logo_url was listed.
+func TestHubsCreate_AuthLogoURLIsKnownBrandingKey(t *testing.T) {
+	srv, gotMethod, _, _ := captureHubRequest(t, http.StatusCreated)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"hubs", "create",
+			"--name", "X",
+			"--branding-json", `{"auth_logo_url":"https://x/a.png"}`,
+			"--strict-keys",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK) — auth_logo_url is a known branding key; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if strings.Contains(res.Stderr, "Warning") {
+		t.Errorf("auth_logo_url is a known key and must not warn; stderr=%q", res.Stderr)
+	}
+	if *gotMethod != http.MethodPost {
+		t.Errorf("the POST must fire; got method %q", *gotMethod)
+	}
+}
+
 // TestHubsUpdate_AchievementsSettingsKeyAccepted (MIO-3412) verifies
 // `achievements` is an accepted --settings-json key — it is the per-hub gate
 // for the achievements module (backend reads
