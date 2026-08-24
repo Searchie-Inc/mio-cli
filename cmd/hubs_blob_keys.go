@@ -37,9 +37,13 @@ import (
 // --logo-url flag target logo_url.
 var brandingKeys = map[string]bool{
 	// Logo / imagery.
-	"logo_url":              true,
-	"favicon_url":           true,
-	"social_image_url":      true,
+	"logo_url":         true,
+	"favicon_url":      true,
+	"social_image_url": true,
+	// Canonical login/register-panel logo key (MIO-3354); its deprecated
+	// alias custom_login_logo_url below stays accepted for back-compat (the
+	// backend dual-writes the alias during the MIO-3354 transition).
+	"auth_logo_url":         true,
 	"custom_login_logo_url": true,
 	"custom_font_url":       true,
 	// Core palette (FE Epic 2 short-form, canonical going forward).

@@ -357,8 +357,8 @@ frontend like this:
   frontend's render contract, not the API's.
 - **Every `*_url` branding key is validated server-side** — the rule applies to ANY key
   ending `_url` (case-insensitive, present or future); on the CLI's allowlist that is
-  `logo_url`, `favicon_url`, `social_image_url`, `custom_login_logo_url` and
-  `custom_font_url` (MIO-2658). Each must be `null` or a string, and a string must be an
+  `logo_url`, `favicon_url`, `social_image_url`, `auth_logo_url`,
+  `custom_login_logo_url` and `custom_font_url` (MIO-2658). Each must be `null` or a string, and a string must be an
   absolute `https://` URL: plain `http://`, `data:`, `javascript:`, protocol-relative,
   relative paths, whitespace/control characters (raw or percent-decoded), backslashes,
   `user:pass@` credentials, percent-encoded hosts and bad ports are all rejected (422).
