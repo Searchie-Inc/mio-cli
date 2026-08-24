@@ -289,6 +289,9 @@ var typeOverrides = []struct {
 	// the AttachmentCreateRequest whose type Literal is "attachments"; the
 	// hyphenated segment would not match without this override.
 	{"playlist-cover-attachments", "attachments"},
+	// Hub branding attach (MIO-3465): POST .../hub-branding-attachments binds
+	// the same AttachmentCreateRequest (type Literal "attachments").
+	{"hub-branding-attachments", "attachments"},
 }
 
 // resourceTypeFromPath returns the JSON:API resource `type` for a write to the
@@ -401,6 +404,9 @@ var knownCollections = map[string]bool{
 	// (via the typeOverride below).
 	"attachments":                true,
 	"playlist-cover-attachments": true,
+	// Hub branding attach create collection (MIO-3465) — same "attachments"
+	// type via the typeOverride above.
+	"hub-branding-attachments": true,
 	// Contact-scoped drip enrollment reader (email enrollments list-by-contact).
 	"drip-enrollments": true,
 	// OAuth client management (Hub-as-IdP SSO, 2026-06-24).
