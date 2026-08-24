@@ -27,7 +27,7 @@ import (
 var attachmentRoles = map[string]bool{
 	"main": true, "thumbnail": true, "logo": true, "favicon": true,
 	"attachment": true, "social_image": true, "background_image": true,
-	"widget_logo": true, "widget_background": true,
+	"widget_logo": true, "widget_background": true, "auth_logo": true,
 }
 
 func init() {
@@ -45,7 +45,7 @@ func init() {
 	addPaginationFlags(mediaAttachmentsListCmd)
 
 	mediaAttachmentsUpdateCmd.Flags().Int("position", 0, "New display position (>= 0).")
-	mediaAttachmentsUpdateCmd.Flags().String("role", "", "New attachment role: main, thumbnail, logo, favicon, attachment, social_image, background_image, widget_logo, widget_background.")
+	mediaAttachmentsUpdateCmd.Flags().String("role", "", "New attachment role: main, thumbnail, logo, favicon, attachment, social_image, background_image, widget_logo, widget_background, auth_logo.")
 }
 
 // attachmentsPath returns /api/teams/{team}/attachments[/{id}].
@@ -134,7 +134,7 @@ var mediaAttachmentsUpdateCmd = &cobra.Command{
 		if cmd.Flags().Changed("role") {
 			role, _ := cmd.Flags().GetString("role")
 			if !attachmentRoles[role] {
-				return errs.New(errs.ExitUsage, "invalid --role %q: must be one of main, thumbnail, logo, favicon, attachment, social_image, background_image, widget_logo, widget_background", role)
+				return errs.New(errs.ExitUsage, "invalid --role %q: must be one of main, thumbnail, logo, favicon, attachment, social_image, background_image, widget_logo, widget_background, auth_logo", role)
 			}
 			attrs["role"] = role
 		}

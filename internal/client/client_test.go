@@ -357,6 +357,8 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/attachments", "attachments"},
 		{"/api/teams/t1/attachments/att1", "attachments"},
 		{"/api/teams/t1/playlist-cover-attachments", "attachments"},
+		// Hub branding attach (MIO-3465): hyphenated create collection → "attachments".
+		{"/api/teams/t1/hub-branding-attachments", "attachments"},
 		// Media files, folders, playlists (MIO-811).
 		{"/api/teams/t1/files", "files"},
 		{"/api/teams/t1/files/f1", "files"},
