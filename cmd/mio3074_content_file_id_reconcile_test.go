@@ -243,6 +243,49 @@ func TestContentReconcile_BlankPlaylistIDsRejectedLocally(t *testing.T) {
 	}
 }
 
+// CONTRACT (MIO-3074): --playlist-id is a cobra StringSlice, so ONE flag
+// carrying a comma-separated list expands to several ids, and surrounding
+// whitespace is trimmed. llms.txt documents the flag as repeatable; this pins
+// the comma form too, since an agent may reach for either.
+func TestContentReconcile_CommaSeparatedAndTrimmed(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(reconcileResponse))
+	}))
+	defer srv.Close()
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_abc", "content", "reconcile",
+			"--playlist-id", " pl_a , pl_b ")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	assertExactBody(t, body, `{
+		"data": {
+			"type": "content_node_reconciliations",
+			"attributes": { "playlist_ids": ["pl_a", "pl_b"] }
+		}
+	}`)
+}
+
+// CONTRACT (MIO-3074): an empty-string --playlist-id is the same usage error as
+// an all-blank one — never a silently-empty list the backend would 422.
+func TestContentReconcile_EmptyStringPlaylistIDRejected(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_abc", "content", "reconcile",
+			"--playlist-id", "")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("an empty --playlist-id must exit before any HTTP request")
+	}
+}
+
 // Guard against the wire body silently drifting to a bare array/string shape.
 func TestContentReconcile_PlaylistIDsIsAStringArray(t *testing.T) {
 	var body []byte
