@@ -116,7 +116,7 @@ a whole hub's playlists one each, see 'mio content reconcile'.`,
 		// Flag-shape validation runs BEFORE contentContext so a contradictory
 		// pair fires no request even when --hub is a name (see
 		// validateContentMediaFlags).
-		if err := validateContentMediaFlags(cmd, false); err != nil {
+		if err := validateContentMediaFlags(cmd); err != nil {
 			return err
 		}
 
@@ -147,7 +147,7 @@ a whole hub's playlists one each, see 'mio content reconcile'.`,
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "privacy")
 		setMappedString(cmd, attrs, "published-at", "published_at")
-		if err := applyContentMediaFlags(cmd, c, teamID, attrs, false); err != nil {
+		if err := applyContentMediaFlags(cmd, c, teamID, attrs); err != nil {
 			return err
 		}
 
@@ -241,12 +241,18 @@ var contentUpdateCmd = &cobra.Command{
 	Short: "Update a content item by id.",
 	Long: `Partially update a content item. Only the flags you supply are changed (PATCH semantics).
 
+Media binding takes EITHER --file-id (preferred; its media_id is resolved for
+you) OR --media-id. An EMPTY value for either is rejected rather than treated as
+"unlink" — 'mio content update $ID --media-id "$MEDIA"' with $MEDIA unset would
+otherwise destroy a working link and exit 0. To unlink deliberately, pass
+--unset-media.
+
 Note: node_type and parent_id are immutable after create and cannot be changed via update.`,
 	Example: `  mio content update cnt_abc123 --hub hub_abc --title "New Title"
   mio content update cnt_abc123 --hub hub_abc --content-type audio --privacy members`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := validateContentMediaFlags(cmd, true); err != nil {
+		if err := validateContentMediaFlags(cmd); err != nil {
 			return err
 		}
 
@@ -261,7 +267,7 @@ Note: node_type and parent_id are immutable after create and cannot be changed v
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "privacy")
 		setMappedString(cmd, attrs, "published-at", "published_at")
-		if err := applyContentMediaFlags(cmd, c, teamID, attrs, true); err != nil {
+		if err := applyContentMediaFlags(cmd, c, teamID, attrs); err != nil {
 			return err
 		}
 
@@ -349,7 +355,7 @@ var contentRestoreCmd = &cobra.Command{
 // addresses their hub by name pays a round trip before being told their flags
 // contradict each other. `media playlists set-cover` already establishes the
 // rule: "Validate before resolving auth/team so a bad flag fires no request."
-func validateContentMediaFlags(cmd *cobra.Command, allowEmptyMediaAsClear bool) error {
+func validateContentMediaFlags(cmd *cobra.Command) error {
 	hasMedia := cmd.Flags().Changed("media-id")
 	hasFile := cmd.Flags().Changed("file-id")
 
@@ -363,28 +369,43 @@ func validateContentMediaFlags(cmd *cobra.Command, allowEmptyMediaAsClear bool) 
 	// --media-id needs the same guard, and for a sharper reason: setStringFlag
 	// neither trims nor rejects empty, and the backend stores media_id WITHOUT
 	// validating it (MIO-3432) — so `--media-id ""` would create a lesson
-	// pointing at nothing, with a 201 and no error. That is the exact failure
-	// this command's --file-id path exists to prevent.
+	// pointing at nothing, with a 201 and no error.
 	//
-	// `content update` is the one exception: there an explicit empty value is a
-	// deliberate CLEAR, sent as JSON null by setNullableMappedString.
-	if hasMedia && !allowEmptyMediaAsClear && flagValue(cmd, "media-id") == "" {
+	// This applies to UPDATE too, and that is a deliberate reversal. Treating an
+	// empty value as "clear the link" reads well until you write the shell that
+	// most people write:
+	//
+	//	mio content update $ID --media-id "$MEDIA"    # $MEDIA unset upstream
+	//
+	// cobra sees the flag as Changed with an empty value, so a Changed-based
+	// guard does not catch it, and a silent clear DESTROYS a working link while
+	// exiting 0. An empty value is far more often a broken variable than an
+	// intent to unlink, so it must fail loudly. Clearing is available, but only
+	// through a flag a variable cannot accidentally become: --unset-media.
+	if hasMedia && flagValue(cmd, "media-id") == "" {
 		return errs.New(errs.ExitUsage,
-			"--media-id was set but is empty (pass a media PK, or use --file-id to resolve one from a file id)")
+			"--media-id was set but is empty (pass a media PK, use --file-id to resolve one from a file id, or --unset-media to unlink)")
+	}
+	if cmd.Flags().Changed("unset-media") {
+		if hasMedia || hasFile {
+			return errs.New(errs.ExitUsage,
+				"--unset-media cannot be combined with --media-id or --file-id: unlink or relink, not both")
+		}
 	}
 	return nil
 }
 
-func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, attrs map[string]any, emptyMediaClears bool) error {
-	if cmd.Flags().Changed("media-id") {
-		if emptyMediaClears {
-			// `--media-id ""` on update means UNLINK. setNullableMappedString
-			// sends JSON null, which the backend's `media_id: str | None`
-			// clears under exclude_unset semantics; "" would store an empty
-			// string instead.
-			setNullableMappedString(cmd, attrs, "media-id", "media_id")
+func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, attrs map[string]any) error {
+	// Explicit unlink. JSON null is what the backend's `media_id: str | None`
+	// clears on under exclude_unset semantics; "" would store an empty string.
+	// This is a boolean precisely so no shell variable can expand into it.
+	if cmd.Flags().Changed("unset-media") {
+		if unset, _ := cmd.Flags().GetBool("unset-media"); unset {
+			attrs["media_id"] = nil
 			return nil
 		}
+	}
+	if cmd.Flags().Changed("media-id") {
 		setStringFlag(cmd, attrs, "media-id")
 		return nil
 	}
@@ -483,6 +504,7 @@ func init() {
 	contentUpdateCmd.Flags().String("privacy", "", `Privacy setting for the content item (e.g. "members", "public").`)
 	contentUpdateCmd.Flags().String("published-at", "", "Publish timestamp in RFC 3339 format (e.g. 2026-06-11T00:00:00Z). The item is visible to members once this time has passed.")
 	contentUpdateCmd.Flags().String("media-id", "", "Id of the media asset backing this content item (the .media_id from 'mio media files retrieve', NOT the file id).")
+	contentUpdateCmd.Flags().Bool("unset-media", false, "Unlink this content item's media, sending an explicit null. A boolean so no shell variable can expand into it; use this rather than an empty --media-id.")
 	contentUpdateCmd.Flags().String("file-id", "", "Id of the FILE backing this content item (the .id from 'mio media files list'); its media_id is resolved for you. Mutually exclusive with --media-id.")
 
 	// Reconcile: repeatable --playlist-id. Omitted entirely means "use this

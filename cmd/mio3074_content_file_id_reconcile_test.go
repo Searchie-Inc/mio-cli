@@ -248,10 +248,35 @@ func TestContentCreate_EmptyMediaIDRejected(t *testing.T) {
 	}
 }
 
-// CONTRACT: on UPDATE an explicit empty --media-id is a deliberate CLEAR, sent
-// as JSON null — the documented contract of setNullableMappedString. "" would
-// store an empty string instead of unlinking.
-func TestContentUpdate_EmptyMediaIDClearsWithNull(t *testing.T) {
+// CONTRACT: an empty --media-id is rejected on UPDATE too, and that reversal is
+// deliberate. Treating empty as "unlink" reads well until you write the shell
+// most people write:
+//
+//	mio content update $ID --media-id "$MEDIA"   # $MEDIA unset upstream
+//
+// cobra reports the flag as Changed with an empty value, so a Changed-based
+// guard does NOT catch it — a silent clear would destroy a working link and
+// exit 0. Verified: before this guard that call sent {"media_id":null} and
+// returned success. An empty value is far more often a broken variable than an
+// intent to unlink.
+//
+// Raised by a blind review lane on PR #112 (Jarius's successor, 2026-08-26).
+func TestContentUpdate_EmptyMediaIDRejectedNotTreatedAsClear(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_abc", "content", "update", "cnt_1",
+			"--title", "Keep This", "--media-id", "")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("an unset shell variable must never silently clear a working media link")
+	}
+}
+
+// CONTRACT: unlinking is available, but only through a boolean no shell
+// variable can expand into. It sends an explicit JSON null.
+func TestContentUpdate_UnsetMediaSendsNull(t *testing.T) {
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ = io.ReadAll(r.Body)
@@ -262,7 +287,7 @@ func TestContentUpdate_EmptyMediaIDClearsWithNull(t *testing.T) {
 	defer srv.Close()
 
 	res := runContract(t, baseEnv(srv.URL),
-		withTeam("t_team1", "--hub", "hub_abc", "content", "update", "cnt_1", "--media-id", "")...)
+		withTeam("t_team1", "--hub", "hub_abc", "content", "update", "cnt_1", "--unset-media")...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
 	}
@@ -272,6 +297,20 @@ func TestContentUpdate_EmptyMediaIDClearsWithNull(t *testing.T) {
 			"attributes": { "media_id": null }
 		}
 	}`)
+}
+
+// CONTRACT: --unset-media and a relink flag together are contradictory.
+func TestContentUpdate_UnsetMediaConflictsWithRelink(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_abc", "content", "update", "cnt_1",
+			"--unset-media", "--media-id", "media_1")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("contradictory unlink/relink flags must fire before any request")
+	}
 }
 
 // CONTRACT: a blank --playlist-id among good ones is an ERROR, not a silent
