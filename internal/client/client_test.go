@@ -389,6 +389,14 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/hubs/h1/achievements", "achievement_hubs"},
 		{"/api/teams/t1/hubs/h1/members/c1/achievements", "achievement_earns"},
 		{"/api/teams/t1/hubs/h1/members/c1/achievements/a1/restore", "achievement_earns"},
+		// Content-node reconcile (MIO-3074): the heal op POSTs to
+		// .../content/reconcile and binds HubContentReconcileResource, whose
+		// type Literal is "content_node_reconciliations". Deriving from the
+		// path would give the "content" parent type, which the backend
+		// (extra="forbid") rejects. Plain content writes must be unaffected.
+		{"/api/teams/t1/hubs/h1/content", "content_nodes"},
+		{"/api/teams/t1/hubs/h1/content/cnt1", "content_nodes"},
+		{"/api/teams/t1/hubs/h1/content/reconcile", "content_node_reconciliations"},
 	}
 	for _, tc := range cases {
 		if got := resourceTypeFromPath(tc.path); got != tc.want {

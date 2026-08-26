@@ -14,6 +14,7 @@ package cmd
 //	delete   DELETE /api/teams/{team_id}/hubs/{hub_id}/content/{id}
 //	restore  POST   /api/teams/{team_id}/hubs/{hub_id}/content/{id}/restore
 //	reorder  POST   /api/teams/{team_id}/hubs/{hub_id}/content/reorder
+//	reconcile POST  /api/teams/{team_id}/hubs/{hub_id}/content/reconcile
 
 import (
 	"fmt"
@@ -37,6 +38,7 @@ func init() {
 		contentDeleteCmd,
 		contentRestoreCmd,
 		contentReorderCmd,
+		contentReconcileCmd,
 	)
 
 	// Self-register the whole tree on root.
@@ -48,7 +50,7 @@ func init() {
 var contentCmd = &cobra.Command{
 	Use:   "content",
 	Short: "Manage hub content items.",
-	Long:  "Create, list, retrieve, update, delete, restore, and reorder content items within a hub.",
+	Long:  "Create, list, retrieve, update, delete, restore, reorder, and reconcile content items within a hub.",
 }
 
 // contentBasePath returns /api/teams/{team_id}/hubs/{hub_id}/content[/{id}].
@@ -130,7 +132,9 @@ file id) from 'mio media files retrieve <file_id>' as --media-id here.`,
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "privacy")
 		setMappedString(cmd, attrs, "published-at", "published_at")
-		setStringFlag(cmd, attrs, "media-id")
+		if err := applyContentMediaFlags(cmd, c, teamID, attrs); err != nil {
+			return err
+		}
 
 		res, err := c.client.Create(c.ctx, contentBasePath(teamID, hubID, ""), attrs)
 		if err != nil {
@@ -238,7 +242,9 @@ Note: node_type and parent_id are immutable after create and cannot be changed v
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "privacy")
 		setMappedString(cmd, attrs, "published-at", "published_at")
-		setStringFlag(cmd, attrs, "media-id")
+		if err := applyContentMediaFlags(cmd, c, teamID, attrs); err != nil {
+			return err
+		}
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -303,6 +309,43 @@ var contentRestoreCmd = &cobra.Command{
 		}
 		return c.render(cmd, res)
 	},
+}
+
+// applyContentMediaFlags resolves the content node's media binding for `create`
+// and `update`.
+//
+// --media-id takes the Media PK directly. --file-id takes the FILE id — the id
+// a creator actually holds after `mio media files upload` — and resolves it to
+// the Media PK here (MIO-3074). That resolution matters more than convenience:
+// the backend stores media_id verbatim WITHOUT validating it (MIO-3432), so a
+// file id passed to --media-id yields a lesson silently pointing at nothing
+// rather than an error. The two flags are mutually exclusive.
+func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, attrs map[string]any) error {
+	hasMedia := cmd.Flags().Changed("media-id")
+	hasFile := cmd.Flags().Changed("file-id")
+
+	if hasMedia && hasFile {
+		return errs.New(errs.ExitUsage,
+			"--media-id and --file-id are mutually exclusive: pass the media PK or the file id, not both")
+	}
+	if hasMedia {
+		setStringFlag(cmd, attrs, "media-id")
+		return nil
+	}
+	if !hasFile {
+		return nil
+	}
+
+	fileID := flagValue(cmd, "file-id")
+	if fileID == "" {
+		return errs.New(errs.ExitUsage, "--file-id was set but is empty")
+	}
+	mediaID, err := resolveFileMediaID(c, teamID, fileID, "this content item's media")
+	if err != nil {
+		return err
+	}
+	attrs["media_id"] = mediaID
+	return nil
 }
 
 // ---- reorder ----------------------------------------------------------------
@@ -377,6 +420,7 @@ func init() {
 	contentCreateCmd.Flags().String("privacy", "", `Privacy setting for the content item (e.g. "members", "public").`)
 	contentCreateCmd.Flags().String("published-at", "", "Publish timestamp in RFC 3339 format (e.g. 2026-06-11T00:00:00Z). The item is visible to members once this time has passed.")
 	contentCreateCmd.Flags().String("media-id", "", "Id of the media asset backing this content item (the .media_id from 'mio media files retrieve', NOT the file id).")
+	contentCreateCmd.Flags().String("file-id", "", "Id of the FILE backing this content item (the .id from 'mio media files list'); its media_id is resolved for you. Mutually exclusive with --media-id.")
 
 	// Flags for update (node_type and parent_id are immutable after create).
 	contentUpdateCmd.Flags().String("title", "", "Content item title.")
@@ -385,6 +429,12 @@ func init() {
 	contentUpdateCmd.Flags().String("privacy", "", `Privacy setting for the content item (e.g. "members", "public").`)
 	contentUpdateCmd.Flags().String("published-at", "", "Publish timestamp in RFC 3339 format (e.g. 2026-06-11T00:00:00Z). The item is visible to members once this time has passed.")
 	contentUpdateCmd.Flags().String("media-id", "", "Id of the media asset backing this content item (the .media_id from 'mio media files retrieve', NOT the file id).")
+	contentUpdateCmd.Flags().String("file-id", "", "Id of the FILE backing this content item (the .id from 'mio media files list'); its media_id is resolved for you. Mutually exclusive with --media-id.")
+
+	// Reconcile: repeatable --playlist-id. Omitted entirely means "use this
+	// hub's scaffold provenance" (the backend derives the set); an empty list
+	// is rejected server-side, so the command refuses to send one.
+	contentReconcileCmd.Flags().StringSlice("playlist-id", nil, "Playlist id to reconcile; repeatable. Omit to use the playlists this hub was scaffolded with.")
 
 	// Pagination for list and children.
 	addPaginationFlags(contentListCmd)
@@ -395,4 +445,72 @@ func init() {
 	// determines each node's parent from item context, so a parent flag would
 	// be a misleading no-op that the API rejects.
 	contentReorderCmd.Flags().String("order", "", "Comma-separated list of content ids in the desired display order (position = 0-based index).")
+}
+
+// ---- reconcile --------------------------------------------------------------
+
+var contentReconcileCmd = &cobra.Command{
+	Use:   "reconcile",
+	Short: "Create content items for a hub's playlists so their lessons are trackable.",
+	Long: `Materialise content items for a hub's media playlists: one container per
+playlist, one lesson per playlist item.
+
+Why this exists: media playlists and content items are two separate surfaces. A
+file that lives only in a playlist has no content item, and everything keyed on
+one is therefore missing for it — progress and completion tracking, "My List"
+saves, comments, and the page builder's single-file feature binding.
+
+This is a HEAL action, not a sync: it is never run for you, so a hub stays
+un-reconciled until you call it. It is also additive — existing content items
+are adopted rather than duplicated.
+
+With no --playlist-id it reconciles the playlists this hub was scaffolded with.
+Pass --playlist-id explicitly for a hub that was not built from a template, or
+to reconcile a chosen subset.
+
+Two limits worth knowing before you run it:
+
+  - A playlist must belong to this hub. A team-library playlist that was merely
+    published into the hub is rejected with 422 playlist_not_in_hub.
+  - Lessons are created unpublished unless the file AND its playlist are each
+    already published to the hub, so publish first if you want them visible.`,
+	Example: `  mio content reconcile --hub hub_abc
+  mio content reconcile --hub hub_abc --playlist-id pl_a --playlist-id pl_b`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		c, teamID, hubID, err := contentContext(cmd)
+		if err != nil {
+			return err
+		}
+
+		// The backend accepts a bodyless POST and derives the playlist set from
+		// the hub's scaffold provenance; an explicitly EMPTY list is rejected
+		// (min_length=1) rather than read as "no override". So send a body only
+		// when the caller actually named playlists.
+		var body map[string]any
+		if cmd.Flags().Changed("playlist-id") {
+			ids, _ := cmd.Flags().GetStringSlice("playlist-id")
+			cleaned := make([]string, 0, len(ids))
+			for _, raw := range ids {
+				if id := strings.TrimSpace(raw); id != "" {
+					cleaned = append(cleaned, id)
+				}
+			}
+			if len(cleaned) == 0 {
+				return errs.New(errs.ExitUsage, "--playlist-id was set but no non-empty id was given")
+			}
+			body = map[string]any{"playlist_ids": cleaned}
+		}
+
+		path := contentBasePath(teamID, hubID, "") + "/reconcile"
+		res, err := c.client.Action(c.ctx, http.MethodPost, path, body)
+		if err != nil {
+			return err
+		}
+		if res == nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "Reconciled content items for hub %s.\n", hubID)
+			return nil
+		}
+		return c.render(cmd, res)
+	},
 }

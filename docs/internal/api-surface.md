@@ -177,7 +177,7 @@ plain JSON.
 - `count`    GET `/api/teams/{team_id}/segments/{id}/members/count`
 
 ## content  (`cmd/content.go`)
-- `create`   POST `/api/teams/{team_id}/hubs/{hub_id}/content`
+- `create`   POST `/api/teams/{team_id}/hubs/{hub_id}/content` — `--media-id` sends `attributes.media_id` verbatim; `--file-id` GETs `/teams/{team_id}/files/{file_id}` first and sends the resolved `media_id` (shared `resolveFileMediaID`, the MIO-2519 `set-cover` precedent). Mutually exclusive (MIO-3074).
 - `list`     GET `/api/teams/{team_id}/hubs/{hub_id}/content` (roots)
 - `retrieve` GET `/api/teams/{team_id}/hubs/{hub_id}/content/{id}`
 - `children` GET `/api/teams/{team_id}/hubs/{hub_id}/content/{id}/children`
@@ -185,6 +185,7 @@ plain JSON.
 - `delete`   DELETE `/api/teams/{team_id}/hubs/{hub_id}/content/{id}`
 - `restore`  POST `/api/teams/{team_id}/hubs/{hub_id}/content/{id}/restore`
 - `reorder`  POST `/api/teams/{team_id}/hubs/{hub_id}/content/reorder` — envelope `content_nodes`; body `{data:{type:content_nodes,attributes:{items:[{id,position}, …]}}}`. `--order` (comma-separated ids) becomes the `items` array with `position` = 0-based index. No `--parent-id`: `ReorderAttributes` is `extra="forbid"` (only `items`) and the backend derives each node's parent from item context (MIO-2500).
+- `reconcile` POST `/api/teams/{team_id}/hubs/{hub_id}/content/reconcile` — envelope `content_node_reconciliations` (NOT the `content` parent type; resolved by the `content/reconcile` `typeOverride` plus `reconcile` in `knownCollections`). Body is OMITTED entirely when `--playlist-id` is not given: the backend derives the playlist set from the hub's `HubTemplateApplication` provenance and REJECTS an explicitly empty list (`min_length=1`), so a bodyless POST is the common case. With ids: `{data:{type:content_node_reconciliations,attributes:{playlist_ids:[…]}}}`. Backend MIO-3258; CLI MIO-3074. Constraints: each playlist must satisfy `playlist.hub_id == hub_id` (422 `playlist_not_in_hub`; `Playlist.hub_id` is nullable, so a library playlist published via `hub_media` cannot be reconciled here), and created lessons are unpublished unless the file AND playlist each carry a published `hub_media` row.
 
 ## pages  (`cmd/pages.go`)
 - pages:    `create/list/retrieve/update/delete` `/api/teams/{team_id}/hubs/{hub_id}/pages[/{id}]`; `home` GET `…/pages/home`

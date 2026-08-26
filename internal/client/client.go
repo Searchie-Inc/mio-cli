@@ -165,6 +165,10 @@ var typeOverrides = []struct {
 	// plurals, not the "cards"/"chapters" URL segments.
 	{"files/cards", "file_cards"},
 	{"files/chapters", "file_chapters"},
+	// Content-node reconcile (MIO-3074): POST .../content/reconcile binds
+	// HubContentReconcileResource whose type Literal is
+	// "content_node_reconciliations", NOT the "content" parent segment.
+	{"content/reconcile", "content_node_reconciliations"},
 	// Folder subtree move (MIO-2266): POST .../folders/{id}/move binds the
 	// FolderMove schema whose type Literal is "folders" (NOT "move"). "move" is
 	// a known collection token so it is not mistaken for the {id}; this override
@@ -353,7 +357,13 @@ var knownCollections = map[string]bool{
 	"members": true, "contacts": true, "content": true, "children": true,
 	"tags": true, "contact-attributes": true, "options": true,
 	"reorder": true,
-	"pages":   true, "sections": true, "tree": true, "api-keys": true, "roles": true,
+	// Content-node heal op (MIO-3074): POST .../hubs/{hub}/content/reconcile
+	// materialises content_nodes for a hub's playlists (backend MIO-3258).
+	// Without "reconcile" as a known token the walker stops at "content" and
+	// the write type derives as "content" instead of the reconciliation type;
+	// the content/reconcile override below then resolves the two-segment tail.
+	"reconcile": true,
+	"pages":     true, "sections": true, "tree": true, "api-keys": true, "roles": true,
 	// W2b one-step template scaffold op (MIO-2573 §5.1); maps to
 	// "template_scaffolds" via the pages/scaffold-from-template override.
 	"scaffold-from-template": true,

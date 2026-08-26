@@ -158,14 +158,15 @@ mio achievements restore — restore a revoked earn; --hub --contact-id
 # GATES: definitions need only the backend global ACHIEVEMENTS_ENABLED; offerings/earns additionally need hub settings.achievements.enabled (mio hubs update <hub> --settings-json with achievements.enabled true). A closed gate answers a GENERIC 404 (exit 4) BY DESIGN — not a routing bug.
 # WRONG CONTACT ID never 404s on earn verbs: grant 422s (not an active member), revoke 204s (idempotent no-op), restore 409s (no earn exists). A 404 means gates/achievement/hub.
 
-mio content create — create a content node in a hub
+mio content create — create a content node in a hub; media binding takes EITHER --media-id (the Media PK, .media_id from 'mio media files retrieve') OR --file-id (the FILE id, resolved to the Media PK for you) — mutually exclusive. PREFER --file-id: the backend stores media_id WITHOUT validating it (MIO-3432), so a file id passed to --media-id yields a lesson silently pointing at nothing (MIO-3074)
 mio content list — list root-level content nodes in a hub
 mio content retrieve — retrieve a content node by id
 mio content children — list child nodes of a content node
-mio content update — update a content node
+mio content update — update a content node; same --media-id / --file-id media binding as create (mutually exclusive; prefer --file-id)
 mio content delete — soft-delete a content node
 mio content restore — restore a soft-deleted content node
 mio content reorder — reorder content nodes within a parent
+mio content reconcile — create content nodes for a hub's media playlists (one container per playlist, one lesson per item) so their files gain progress/completion tracking, My List saves, comments, and the page builder's single-file feature binding; flags: --playlist-id (repeatable). Omit --playlist-id to use the playlists the hub was SCAFFOLDED with. A file living ONLY in a playlist has no content node and gets none of the above until this is run — and it is NEVER run for you. Additive: existing nodes are adopted, not duplicated. TWO LIMITS: a playlist must satisfy playlist.hub_id == this hub (a team-library playlist merely PUBLISHED into the hub 422s playlist_not_in_hub), and lessons land UNPUBLISHED unless the file AND its playlist are each already published to the hub (MIO-3074; backend MIO-3258)
 
 mio pages create — create a page in a hub; flags: --title --slug --type --privacy (public|members|private) --position --is-home (sends is_homepage) --settings/--meta (@file). NO --published/--description/--layout (not in schema). --privacy DEFAULTS TO members: omit it and the page is login-walled, which is how a hub ships looking public and isn't (hubs scaffold sets it, MIO-2563; this manual path does not). `home` is a RESERVED slug (rejected) and an omitted --slug fails "Field required" — use a real slug (welcome/start/about) and designate the homepage with --is-home
 mio pages list — list pages in a hub
