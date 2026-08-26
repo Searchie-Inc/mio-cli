@@ -96,24 +96,27 @@ var contentCreateCmd = &cobra.Command{
 
 --content-type is an optional sub-type for leaf items (e.g. video, audio, pdf, text).
 
---media-id links this content item to an already-uploaded media asset (e.g. a
-recorded workshop or webinar replay). Upload the file first with
-'mio media files upload', then pass its .media_id (NOT its .id — that is the
-file id) from 'mio media files retrieve <file_id>' as --media-id here.`,
+Link an already-uploaded media asset with EITHER --file-id or --media-id
+(mutually exclusive):
+
+  --file-id    the FILE id, straight from 'mio media files upload' or
+               'mio media files list'. Its media_id is resolved for you.
+               PREFER THIS.
+  --media-id   the Media PK, from a file's .media_id attribute. The backend
+               does NOT validate this value, so a file id passed here is
+               stored verbatim and yields a lesson pointing at nothing.
+
+A file that lives only in a media playlist has no content item at all. To give
+a whole hub's playlists one each, see 'mio content reconcile'.`,
 	Example: `  mio content create --hub hub_abc --title "Module 1" --node-type container
   mio content create --hub hub_abc --title "Welcome Video" --node-type lesson --content-type video --parent-id cnt_xyz
-  mio content create --hub hub_abc --title "Workshop Replay" --node-type lesson --content-type video --parent-id cnt_xyz --media-id media_abc123`,
+  mio content create --hub hub_abc --title "Workshop Replay" --node-type lesson --content-type video --parent-id cnt_xyz --file-id file_abc123`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		// Flag-shape validation runs BEFORE contentContext so a contradictory
 		// pair fires no request even when --hub is a name (see
 		// validateContentMediaFlags).
-		if err := validateContentMediaFlags(cmd); err != nil {
-			return err
-		}
-
-		c, teamID, hubID, err := contentContext(cmd)
-		if err != nil {
+		if err := validateContentMediaFlags(cmd, false); err != nil {
 			return err
 		}
 
@@ -131,6 +134,11 @@ file id) from 'mio media files retrieve <file_id>' as --media-id here.`,
 			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
 		}
 
+		c, teamID, hubID, err := contentContext(cmd)
+		if err != nil {
+			return err
+		}
+
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "title")
 		setMappedString(cmd, attrs, "node-type", "node_type")
@@ -139,7 +147,7 @@ file id) from 'mio media files retrieve <file_id>' as --media-id here.`,
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "privacy")
 		setMappedString(cmd, attrs, "published-at", "published_at")
-		if err := applyContentMediaFlags(cmd, c, teamID, attrs); err != nil {
+		if err := applyContentMediaFlags(cmd, c, teamID, attrs, false); err != nil {
 			return err
 		}
 
@@ -238,7 +246,7 @@ Note: node_type and parent_id are immutable after create and cannot be changed v
   mio content update cnt_abc123 --hub hub_abc --content-type audio --privacy members`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := validateContentMediaFlags(cmd); err != nil {
+		if err := validateContentMediaFlags(cmd, true); err != nil {
 			return err
 		}
 
@@ -253,7 +261,7 @@ Note: node_type and parent_id are immutable after create and cannot be changed v
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "privacy")
 		setMappedString(cmd, attrs, "published-at", "published_at")
-		if err := applyContentMediaFlags(cmd, c, teamID, attrs); err != nil {
+		if err := applyContentMediaFlags(cmd, c, teamID, attrs, true); err != nil {
 			return err
 		}
 
@@ -341,7 +349,7 @@ var contentRestoreCmd = &cobra.Command{
 // addresses their hub by name pays a round trip before being told their flags
 // contradict each other. `media playlists set-cover` already establishes the
 // rule: "Validate before resolving auth/team so a bad flag fires no request."
-func validateContentMediaFlags(cmd *cobra.Command) error {
+func validateContentMediaFlags(cmd *cobra.Command, allowEmptyMediaAsClear bool) error {
 	hasMedia := cmd.Flags().Changed("media-id")
 	hasFile := cmd.Flags().Changed("file-id")
 
@@ -352,11 +360,31 @@ func validateContentMediaFlags(cmd *cobra.Command) error {
 	if hasFile && flagValue(cmd, "file-id") == "" {
 		return errs.New(errs.ExitUsage, "--file-id was set but is empty")
 	}
+	// --media-id needs the same guard, and for a sharper reason: setStringFlag
+	// neither trims nor rejects empty, and the backend stores media_id WITHOUT
+	// validating it (MIO-3432) — so `--media-id ""` would create a lesson
+	// pointing at nothing, with a 201 and no error. That is the exact failure
+	// this command's --file-id path exists to prevent.
+	//
+	// `content update` is the one exception: there an explicit empty value is a
+	// deliberate CLEAR, sent as JSON null by setNullableMappedString.
+	if hasMedia && !allowEmptyMediaAsClear && flagValue(cmd, "media-id") == "" {
+		return errs.New(errs.ExitUsage,
+			"--media-id was set but is empty (pass a media PK, or use --file-id to resolve one from a file id)")
+	}
 	return nil
 }
 
-func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, attrs map[string]any) error {
+func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, attrs map[string]any, emptyMediaClears bool) error {
 	if cmd.Flags().Changed("media-id") {
+		if emptyMediaClears {
+			// `--media-id ""` on update means UNLINK. setNullableMappedString
+			// sends JSON null, which the backend's `media_id: str | None`
+			// clears under exclude_unset semantics; "" would store an empty
+			// string instead.
+			setNullableMappedString(cmd, attrs, "media-id", "media_id")
+			return nil
+		}
 		setStringFlag(cmd, attrs, "media-id")
 		return nil
 	}
@@ -498,6 +526,9 @@ Two limits worth knowing before you run it:
 
   - A playlist must belong to this hub. A team-library playlist that was merely
     published into the hub is rejected with 422 playlist_not_in_hub.
+  - A hub that was not built from a template has no scaffold provenance to
+    derive from, so a bare run rejects with 422 no_playlist_provenance — pass
+    --playlist-id explicitly for those.
   - Lessons are created unpublished unless the file AND its playlist are each
     already published to the hub, so publish first if you want them visible.`,
 	Example: `  mio content reconcile --hub hub_abc
@@ -517,9 +548,15 @@ Two limits worth knowing before you run it:
 			ids, _ := cmd.Flags().GetStringSlice("playlist-id")
 			cleaned := make([]string, 0, len(ids))
 			for _, raw := range ids {
-				if id := strings.TrimSpace(raw); id != "" {
-					cleaned = append(cleaned, id)
+				id := strings.TrimSpace(raw)
+				if id == "" {
+					// Dropping a blank silently would reconcile a SHORTER set
+					// than the caller named and still report success — the
+					// caller would have no way to notice the omission.
+					return errs.New(errs.ExitUsage,
+						"--playlist-id contains an empty value; remove it or supply a real playlist id")
 				}
+				cleaned = append(cleaned, id)
 			}
 			if len(cleaned) == 0 {
 				return errs.New(errs.ExitUsage, "--playlist-id was set but no non-empty id was given")

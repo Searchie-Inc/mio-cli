@@ -404,7 +404,6 @@ Ingest:   upload (create → presigned S3 PUT → finalize, auto-multipart for l
 Enrich:   cards (in-video CTAs) and chapters, each get/set.`,
 }
 
-// filesPath returns /api/teams/{team_id}/files[/{id}].
 // resolveFileMediaID resolves a FILE id to its Media PK — the `media_id`
 // attribute on the admin file resource. Several write surfaces key on the Media
 // PK rather than the file id: the backend does a Media-table lookup, so a file
@@ -429,6 +428,7 @@ func resolveFileMediaID(c *cmdContext, teamID, fileID, purpose string) (string, 
 	return mediaID, nil
 }
 
+// filesPath returns /api/teams/{team_id}/files[/{id}].
 func filesPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/files", teamID)
 	if id != "" {

@@ -221,6 +221,90 @@ func TestContentReconcile_BlankPlaylistIDFiresBeforeHubResolution(t *testing.T) 
 	}
 }
 
+// Findings from a blind review lane on PR #112 (Jarius, 2026-08-26). Each of
+// these described a real defect that the first round of tests did not cover.
+
+// CONTRACT: --media-id "" (or whitespace) must NOT reach the wire. setStringFlag
+// neither trims nor rejects empty, and the backend stores media_id WITHOUT
+// validating it (MIO-3432) — so an empty value created a lesson pointing at
+// nothing, with a 201 and no error. That is the exact failure --file-id exists
+// to prevent, through the flag the original guard forgot.
+func TestContentCreate_EmptyMediaIDRejected(t *testing.T) {
+	for _, val := range []string{"", "   "} {
+		srv, fired := firedGuardServer(t)
+		res := runContract(t, baseEnv(srv.URL),
+			withTeam("t_team1",
+				"--hub", "hub_abc",
+				"content", "create",
+				"--title", "X", "--node-type", "lesson",
+				"--media-id", val,
+			)...)
+		if res.Code != errs.ExitUsage {
+			t.Errorf("--media-id %q: exit=%d want ExitUsage; stderr=%q", val, res.Code, res.Stderr)
+		}
+		if *fired {
+			t.Errorf("--media-id %q: an empty media id must never reach the wire", val)
+		}
+	}
+}
+
+// CONTRACT: on UPDATE an explicit empty --media-id is a deliberate CLEAR, sent
+// as JSON null — the documented contract of setNullableMappedString. "" would
+// store an empty string instead of unlinking.
+func TestContentUpdate_EmptyMediaIDClearsWithNull(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(minimalContentBody))
+	}))
+	defer srv.Close()
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_abc", "content", "update", "cnt_1", "--media-id", "")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	assertExactBody(t, body, `{
+		"data": {
+			"type": "content_nodes",
+			"attributes": { "media_id": null }
+		}
+	}`)
+}
+
+// CONTRACT: a blank --playlist-id among good ones is an ERROR, not a silent
+// drop. Dropping it would reconcile a shorter set than the caller named and
+// still report success, with no way for them to notice.
+func TestContentReconcile_BlankAmongGoodIDsRejected(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_abc", "content", "reconcile",
+			"--playlist-id", "pl_a", "--playlist-id", "  ", "--playlist-id", "pl_b")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("a blank id among good ones must not silently reconcile a shorter set")
+	}
+}
+
+// CONTRACT: the validate-before-resolve rule covers ALL of create's guards, not
+// only the media pair. --title/--node-type are required client-side; they must
+// fire before the hub-name resolution round trip too.
+func TestContentCreate_MissingRequiredFlagsFireBeforeHubResolution(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "my-hub-by-name", "content", "create", "--node-type", "lesson")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("a missing required flag must fire before the hub-name resolution request")
+	}
+}
+
 const reconcileResponse = `{"data":{"id":"hub_abc","type":"content_node_reconciliations","attributes":{"hub_id":"hub_abc","reconciliations":[]}}}`
 
 // CONTRACT (MIO-3074): with no --playlist-id the command sends a BODYLESS POST.
