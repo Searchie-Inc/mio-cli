@@ -105,6 +105,13 @@ file id) from 'mio media files retrieve <file_id>' as --media-id here.`,
   mio content create --hub hub_abc --title "Workshop Replay" --node-type lesson --content-type video --parent-id cnt_xyz --media-id media_abc123`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Flag-shape validation runs BEFORE contentContext so a contradictory
+		// pair fires no request even when --hub is a name (see
+		// validateContentMediaFlags).
+		if err := validateContentMediaFlags(cmd); err != nil {
+			return err
+		}
+
 		c, teamID, hubID, err := contentContext(cmd)
 		if err != nil {
 			return err
@@ -231,6 +238,10 @@ Note: node_type and parent_id are immutable after create and cannot be changed v
   mio content update cnt_abc123 --hub hub_abc --content-type audio --privacy members`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateContentMediaFlags(cmd); err != nil {
+			return err
+		}
+
 		c, teamID, hubID, err := contentContext(cmd)
 		if err != nil {
 			return err
@@ -320,7 +331,17 @@ var contentRestoreCmd = &cobra.Command{
 // the backend stores media_id verbatim WITHOUT validating it (MIO-3432), so a
 // file id passed to --media-id yields a lesson silently pointing at nothing
 // rather than an error. The two flags are mutually exclusive.
-func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, attrs map[string]any) error {
+// validateContentMediaFlags checks the --media-id/--file-id pairing with NO
+// network access, so it can run BEFORE contentContext.
+//
+// That ordering is the whole point. contentContext resolves the team and hub,
+// and requireTeam/requireHub LIST over HTTP whenever either was given as a name
+// or slug rather than an id (internal/client/resolve.go — an id-shaped value
+// short-circuits, a name does not). Validating after it means a user who
+// addresses their hub by name pays a round trip before being told their flags
+// contradict each other. `media playlists set-cover` already establishes the
+// rule: "Validate before resolving auth/team so a bad flag fires no request."
+func validateContentMediaFlags(cmd *cobra.Command) error {
 	hasMedia := cmd.Flags().Changed("media-id")
 	hasFile := cmd.Flags().Changed("file-id")
 
@@ -328,18 +349,23 @@ func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, at
 		return errs.New(errs.ExitUsage,
 			"--media-id and --file-id are mutually exclusive: pass the media PK or the file id, not both")
 	}
-	if hasMedia {
+	if hasFile && flagValue(cmd, "file-id") == "" {
+		return errs.New(errs.ExitUsage, "--file-id was set but is empty")
+	}
+	return nil
+}
+
+func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, attrs map[string]any) error {
+	if cmd.Flags().Changed("media-id") {
 		setStringFlag(cmd, attrs, "media-id")
 		return nil
 	}
-	if !hasFile {
+	if !cmd.Flags().Changed("file-id") {
 		return nil
 	}
 
+	// Shape already validated by validateContentMediaFlags before any request.
 	fileID := flagValue(cmd, "file-id")
-	if fileID == "" {
-		return errs.New(errs.ExitUsage, "--file-id was set but is empty")
-	}
 	mediaID, err := resolveFileMediaID(c, teamID, fileID, "this content item's media")
 	if err != nil {
 		return err
@@ -478,11 +504,10 @@ Two limits worth knowing before you run it:
   mio content reconcile --hub hub_abc --playlist-id pl_a --playlist-id pl_b`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		c, teamID, hubID, err := contentContext(cmd)
-		if err != nil {
-			return err
-		}
-
+		// Built BEFORE contentContext so a bad --playlist-id fires no request
+		// even when --hub is a name that would otherwise be resolved over HTTP
+		// (same rule as validateContentMediaFlags).
+		//
 		// The backend accepts a bodyless POST and derives the playlist set from
 		// the hub's scaffold provenance; an explicitly EMPTY list is rejected
 		// (min_length=1) rather than read as "no override". So send a body only
@@ -500,6 +525,11 @@ Two limits worth knowing before you run it:
 				return errs.New(errs.ExitUsage, "--playlist-id was set but no non-empty id was given")
 			}
 			body = map[string]any{"playlist_ids": cleaned}
+		}
+
+		c, teamID, hubID, err := contentContext(cmd)
+		if err != nil {
+			return err
 		}
 
 		path := contentBasePath(teamID, hubID, "") + "/reconcile"

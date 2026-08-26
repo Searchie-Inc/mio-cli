@@ -165,6 +165,62 @@ func TestContentCreate_FileWithoutMediaIsRejected(t *testing.T) {
 	}
 }
 
+// The guards above are exercised with id-shaped --team/--hub values, which
+// `isIDShaped` short-circuits with no API call (internal/client/resolve.go).
+// That is the ONE path where an after-the-fact guard would still look correct.
+// These use a hub NAME — a supported form that makes requireHub LIST over HTTP —
+// so they fail if flag validation ever slips back behind contentContext.
+//
+// Found by Codex review; the original tests passed while the ordering was wrong.
+
+func TestContentCreate_MutualExclusionFiresBeforeHubResolution(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "my-hub-by-name",
+			"content", "create",
+			"--title", "X", "--node-type", "lesson",
+			"--media-id", "media_pk_1",
+			"--file-id", "file_x",
+		)...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("contradictory flags must fire before the hub-name resolution request")
+	}
+}
+
+func TestContentUpdate_MutualExclusionFiresBeforeHubResolution(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "my-hub-by-name",
+			"content", "update", "cnt_1",
+			"--media-id", "media_pk_1",
+			"--file-id", "file_x",
+		)...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("contradictory flags must fire before the hub-name resolution request")
+	}
+}
+
+func TestContentReconcile_BlankPlaylistIDFiresBeforeHubResolution(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "my-hub-by-name", "content", "reconcile",
+			"--playlist-id", "  ")...)
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("an all-blank --playlist-id must fire before the hub-name resolution request")
+	}
+}
+
 const reconcileResponse = `{"data":{"id":"hub_abc","type":"content_node_reconciliations","attributes":{"hub_id":"hub_abc","reconciliations":[]}}}`
 
 // CONTRACT (MIO-3074): with no --playlist-id the command sends a BODYLESS POST.

@@ -34,8 +34,10 @@ plain JSON.
   replay`, `content/contacts restore`, `email drip-campaigns activate/pause`.
 - **Body-carrying action endpoints:** `checkout payments refund` (envelope
   `refunds`; body REQUIRED — `--reason` mandatory, `--amount` optional and
-  omitted for a full refund), `content reorder` (envelope `content_nodes`), and
-  `checkout accounts onboarding-link` (envelope `onboarding_links`, ALL of
+  omitted for a full refund), `content reorder` (envelope `content_nodes`),
+  `content reconcile` (envelope `content_node_reconciliations`; body OPTIONAL —
+  omitted entirely unless `--playlist-id` is given, see the content section),
+  and `checkout accounts onboarding-link` (envelope `onboarding_links`, ALL of
   `--hub-id`/`--return-url`/`--refresh-url` required — `hub-id` must be the
   hub's canonical UUID, slugs are NOT resolved for this endpoint). **This
   command is web/JWT-only (MIO-2655) and always fails fast client-side with
