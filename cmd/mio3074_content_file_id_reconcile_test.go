@@ -274,8 +274,11 @@ func TestContentUpdate_EmptyMediaIDRejectedNotTreatedAsClear(t *testing.T) {
 	}
 }
 
-// CONTRACT: unlinking is available, but only through a boolean no shell
-// variable can expand into. It sends an explicit JSON null.
+// CONTRACT: unlinking is available, but only through a boolean no shell variable
+// can expand into — AND it is destructive, so it carries the same
+// confirmDestructive bar `content delete` uses. In a non-interactive shell that
+// means --yes. Being un-typo-able is not the same as being safe to run
+// unattended in a loop.
 func TestContentUpdate_UnsetMediaSendsNull(t *testing.T) {
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -287,7 +290,7 @@ func TestContentUpdate_UnsetMediaSendsNull(t *testing.T) {
 	defer srv.Close()
 
 	res := runContract(t, baseEnv(srv.URL),
-		withTeam("t_team1", "--hub", "hub_abc", "content", "update", "cnt_1", "--unset-media")...)
+		withTeam("t_team1", "--hub", "hub_abc", "content", "update", "cnt_1", "--unset-media", "--yes")...)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
 	}
@@ -299,12 +302,30 @@ func TestContentUpdate_UnsetMediaSendsNull(t *testing.T) {
 	}`)
 }
 
+// CONTRACT: --unset-media in a non-interactive shell WITHOUT --yes refuses with
+// the destructive-confirm exit code, and sends nothing. This is the guard that
+// stops an unattended CI loop unlinking many lessons in one pass.
+//
+// Suggested by a blind review lane on PR #112: confirmDestructive already exists
+// and `content delete` two commands over already uses it.
+func TestContentUpdate_UnsetMediaNeedsConfirmation(t *testing.T) {
+	srv, fired := firedGuardServer(t)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_abc", "content", "update", "cnt_1", "--unset-media")...)
+	if res.Code != errs.ExitNeedsConfir {
+		t.Errorf("exit=%d want ExitNeedsConfir; stderr=%q", res.Code, res.Stderr)
+	}
+	if *fired {
+		t.Error("an unconfirmed unlink must send nothing")
+	}
+}
+
 // CONTRACT: --unset-media and a relink flag together are contradictory.
 func TestContentUpdate_UnsetMediaConflictsWithRelink(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_abc", "content", "update", "cnt_1",
-			"--unset-media", "--media-id", "media_1")...)
+			"--unset-media", "--media-id", "media_1", "--yes")...)
 	if res.Code != errs.ExitUsage {
 		t.Errorf("exit=%d want ExitUsage; stderr=%q", res.Code, res.Stderr)
 	}

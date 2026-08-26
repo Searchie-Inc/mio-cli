@@ -245,7 +245,8 @@ Media binding takes EITHER --file-id (preferred; its media_id is resolved for
 you) OR --media-id. An EMPTY value for either is rejected rather than treated as
 "unlink" — 'mio content update $ID --media-id "$MEDIA"' with $MEDIA unset would
 otherwise destroy a working link and exit 0. To unlink deliberately, pass
---unset-media.
+--unset-media, which prompts before unlinking (or needs --yes when not on a
+terminal) because the lesson stops playing.
 
 Note: node_type and parent_id are immutable after create and cannot be changed via update.`,
 	Example: `  mio content update cnt_abc123 --hub hub_abc --title "New Title"
@@ -399,8 +400,16 @@ func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, at
 	// Explicit unlink. JSON null is what the backend's `media_id: str | None`
 	// clears on under exclude_unset semantics; "" would store an empty string.
 	// This is a boolean precisely so no shell variable can expand into it.
+	//
+	// It is ALSO gated by confirmDestructive, the same bar `content delete` uses
+	// two commands over: a live lesson stops playing the moment its media is
+	// unlinked, and a non-interactive shell must pass --yes to do that. Being
+	// un-typo-able is not the same as being safe to run unattended in a loop.
 	if cmd.Flags().Changed("unset-media") {
 		if unset, _ := cmd.Flags().GetBool("unset-media"); unset {
+			if err := confirmDestructive(cmd, "Unlink this content item's media? The lesson will stop playing"); err != nil {
+				return err
+			}
 			attrs["media_id"] = nil
 			return nil
 		}
@@ -503,8 +512,8 @@ func init() {
 	contentUpdateCmd.Flags().String("description", "", "Content item description.")
 	contentUpdateCmd.Flags().String("privacy", "", `Privacy setting for the content item (e.g. "members", "public").`)
 	contentUpdateCmd.Flags().String("published-at", "", "Publish timestamp in RFC 3339 format (e.g. 2026-06-11T00:00:00Z). The item is visible to members once this time has passed.")
-	contentUpdateCmd.Flags().String("media-id", "", "Id of the media asset backing this content item (the .media_id from 'mio media files retrieve', NOT the file id).")
-	contentUpdateCmd.Flags().Bool("unset-media", false, "Unlink this content item's media, sending an explicit null. A boolean so no shell variable can expand into it; use this rather than an empty --media-id.")
+	contentUpdateCmd.Flags().String("media-id", "", "Id of the media asset backing this content item (the .media_id from 'mio media files retrieve', NOT the file id). An empty value is REJECTED, never read as 'unlink' — use --unset-media for that.")
+	contentUpdateCmd.Flags().Bool("unset-media", false, "Unlink this content item's media, sending an explicit null — the lesson stops playing. A boolean so no shell variable can expand into it, and destructive, so it prompts (or needs --yes in a non-interactive shell).")
 	contentUpdateCmd.Flags().String("file-id", "", "Id of the FILE backing this content item (the .id from 'mio media files list'); its media_id is resolved for you. Mutually exclusive with --media-id.")
 
 	// Reconcile: repeatable --playlist-id. Omitted entirely means "use this

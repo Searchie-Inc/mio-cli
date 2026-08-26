@@ -162,7 +162,7 @@ mio content create — create a content node in a hub; media binding takes EITHE
 mio content list — list root-level content nodes in a hub
 mio content retrieve — retrieve a content node by id
 mio content children — list child nodes of a content node
-mio content update — update a content node; same --media-id / --file-id media binding as create (mutually exclusive; prefer --file-id). An EMPTY value for either is REJECTED, not treated as 'unlink' — 'mio content update $ID --media-id "$MEDIA"' with $MEDIA unset would otherwise destroy a working link and exit 0 (cobra reports the flag as Changed, so a Changed-based guard does not catch it). To unlink deliberately pass --unset-media, a boolean no shell variable can expand into (MIO-3074)
+mio content update — update a content node; same --media-id / --file-id media binding as create (mutually exclusive; prefer --file-id). An EMPTY value for either is REJECTED, not treated as 'unlink' — 'mio content update $ID --media-id "$MEDIA"' with $MEDIA unset would otherwise destroy a working link and exit 0 (cobra reports the flag as Changed, so a Changed-based guard does not catch it). To unlink deliberately pass --unset-media: a boolean no shell variable can expand into, and DESTRUCTIVE — it prompts, so a non-interactive shell must add --yes or it exits 5 having sent nothing (MIO-3074)
 mio content delete — soft-delete a content node
 mio content restore — restore a soft-deleted content node
 mio content reorder — reorder content nodes within a parent
