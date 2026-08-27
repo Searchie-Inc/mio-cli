@@ -328,8 +328,10 @@ mio content reconcile --hub hub_abc123 --playlist-id pl_abc
 
 **Pass `--playlist-id` explicitly for a hub you built by hand.** With no
 `--playlist-id` the backend reconciles the playlists the hub was *scaffolded*
-with, derived from scaffold provenance — a hub created with `mio hubs create` has
-none, so the bodyless form reconciles nothing and still exits 0. It is additive
+with, derived from its `HubTemplateApplication` provenance. A hub created with
+`mio hubs create` has no such row, so a bare run is **rejected with `422
+no_playlist_provenance` (exit 2)** — it does not silently do nothing, and it
+never falls back to "every playlist on the hub". Name the playlists. It is additive
 and safe to re-run: it creates one container per playlist and one lesson per
 item, and leaves existing items alone. Created lessons land **unpublished**
 unless the file *and* the playlist are each already published to the hub — so run

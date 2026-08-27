@@ -365,7 +365,10 @@ func TestContentCreate_MissingRequiredFlagsFireBeforeHubResolution(t *testing.T)
 	}
 }
 
-const reconcileResponse = `{"data":{"id":"hub_abc","type":"content_node_reconciliations","attributes":{"hub_id":"hub_abc","reconciliations":[]}}}`
+// Mirrors the backend's HubContentReconcileResultAttributes: the entry list is
+// `results` (app/hub_scaffold/schemas.py), NOT "reconciliations". A stub that
+// renames a server field quietly documents a shape the server never sends.
+const reconcileResponse = `{"data":{"id":"hub_abc","type":"content_node_reconciliations","attributes":{"hub_id":"hub_abc","results":[]}}}`
 
 // CONTRACT (MIO-3074): with no --playlist-id the command sends a BODYLESS POST.
 // The backend derives the playlist set from scaffold provenance, and rejects an
@@ -564,4 +567,26 @@ func TestContentUpdate_NodeAddressedAsReconcile_SendsNodeType(t *testing.T) {
 			"attributes": { "title": "Renamed" }
 		}
 	}`)
+}
+
+// CONTRACT (MIO-3074, Codex round 2 [Important]): a bodyless reconcile against a
+// hub with no HubTemplateApplication provenance is REJECTED — backend
+// reconcile_service raises ValidationError code="no_playlist_provenance" (422),
+// and the service never falls back to "every playlist on the hub" (D4). The
+// agent-facing docs tell callers to branch on that, so pin it: 422 maps to
+// ExitUsage, and the backend's code reaches the user rather than being
+// swallowed. Documented in llms.txt, AGENTS.md, api-surface.md and the skill.
+func TestContentReconcile_NoProvenance422IsUsageExit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"errors":[{"status":"422","code":"no_playlist_provenance","detail":"Hub 'hub_abc' has no HubTemplateApplication provenance for playlists, and no playlist_ids were supplied."}]}`))
+	}))
+	defer srv.Close()
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_abc", "content", "reconcile")...)
+	if res.Code != errs.ExitUsage {
+		t.Fatalf("exit=%d want %d (ExitUsage) for a 422; stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
 }
