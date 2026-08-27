@@ -77,14 +77,10 @@ for the playlist is replaced.`,
 
 		// Resolve the file's media_id — the cover attachment keys on the Media PK,
 		// not the file id. A missing/foreign file 404s here naming the --file-id.
-		file, err := c.client.Retrieve(c.ctx, filesPath(teamID, fileID))
+		// Shared with `content create/update` since MIO-3074.
+		mediaID, err := resolveFileMediaID(c, teamID, fileID, "a cover")
 		if err != nil {
 			return err
-		}
-		mediaID, _ := file.Attributes["media_id"].(string)
-		if mediaID == "" {
-			return errs.New(errs.ExitUsage,
-				"file %s has no media yet (it may still be processing) — cannot use it as a cover", fileID)
 		}
 
 		attrs := map[string]any{

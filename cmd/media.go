@@ -404,6 +404,30 @@ Ingest:   upload (create → presigned S3 PUT → finalize, auto-multipart for l
 Enrich:   cards (in-video CTAs) and chapters, each get/set.`,
 }
 
+// resolveFileMediaID resolves a FILE id to its Media PK — the `media_id`
+// attribute on the admin file resource. Several write surfaces key on the Media
+// PK rather than the file id: the backend does a Media-table lookup, so a file
+// id either 404s ("Media '<id>' not found") or, worse, is stored verbatim
+// without validation (MIO-3432) and the row then points at nothing. Taking a
+// --file-id and resolving it here gives the caller a self-naming error instead
+// of an opaque backend one.
+//
+// MIO-2519 established this for `media playlists set-cover`; MIO-3074 reuses it
+// for `content create/update`. purpose names what the media was wanted for so
+// the still-processing message reads naturally at each call site.
+func resolveFileMediaID(c *cmdContext, teamID, fileID, purpose string) (string, error) {
+	file, err := c.client.Retrieve(c.ctx, filesPath(teamID, fileID))
+	if err != nil {
+		return "", err
+	}
+	mediaID, _ := file.Attributes["media_id"].(string)
+	if mediaID == "" {
+		return "", errs.New(errs.ExitUsage,
+			"file %s has no media yet (it may still be processing) — cannot use it as %s", fileID, purpose)
+	}
+	return mediaID, nil
+}
+
 // filesPath returns /api/teams/{team_id}/files[/{id}].
 func filesPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/files", teamID)

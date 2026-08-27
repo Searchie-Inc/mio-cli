@@ -34,8 +34,10 @@ plain JSON.
   replay`, `content/contacts restore`, `email drip-campaigns activate/pause`.
 - **Body-carrying action endpoints:** `checkout payments refund` (envelope
   `refunds`; body REQUIRED — `--reason` mandatory, `--amount` optional and
-  omitted for a full refund), `content reorder` (envelope `content_nodes`), and
-  `checkout accounts onboarding-link` (envelope `onboarding_links`, ALL of
+  omitted for a full refund), `content reorder` (envelope `content_nodes`),
+  `content reconcile` (envelope `content_node_reconciliations`; body OPTIONAL —
+  omitted entirely unless `--playlist-id` is given, see the content section),
+  and `checkout accounts onboarding-link` (envelope `onboarding_links`, ALL of
   `--hub-id`/`--return-url`/`--refresh-url` required — `hub-id` must be the
   hub's canonical UUID, slugs are NOT resolved for this endpoint). **This
   command is web/JWT-only (MIO-2655) and always fails fast client-side with
@@ -177,7 +179,7 @@ plain JSON.
 - `count`    GET `/api/teams/{team_id}/segments/{id}/members/count`
 
 ## content  (`cmd/content.go`)
-- `create`   POST `/api/teams/{team_id}/hubs/{hub_id}/content`
+- `create`   POST `/api/teams/{team_id}/hubs/{hub_id}/content` — `--media-id` sends `attributes.media_id` verbatim; `--file-id` GETs `/teams/{team_id}/files/{file_id}` first and sends the resolved `media_id` (shared `resolveFileMediaID`, the MIO-2519 `set-cover` precedent). Mutually exclusive (MIO-3074).
 - `list`     GET `/api/teams/{team_id}/hubs/{hub_id}/content` (roots)
 - `retrieve` GET `/api/teams/{team_id}/hubs/{hub_id}/content/{id}`
 - `children` GET `/api/teams/{team_id}/hubs/{hub_id}/content/{id}/children`
@@ -185,6 +187,7 @@ plain JSON.
 - `delete`   DELETE `/api/teams/{team_id}/hubs/{hub_id}/content/{id}`
 - `restore`  POST `/api/teams/{team_id}/hubs/{hub_id}/content/{id}/restore`
 - `reorder`  POST `/api/teams/{team_id}/hubs/{hub_id}/content/reorder` — envelope `content_nodes`; body `{data:{type:content_nodes,attributes:{items:[{id,position}, …]}}}`. `--order` (comma-separated ids) becomes the `items` array with `position` = 0-based index. No `--parent-id`: `ReorderAttributes` is `extra="forbid"` (only `items`) and the backend derives each node's parent from item context (MIO-2500).
+- `reconcile` POST `/api/teams/{team_id}/hubs/{hub_id}/content/reconcile` — envelope `content_node_reconciliations` (NOT the `content` parent type). The type is named EXPLICITLY at the call site via `client.ActionWithType`, and there is deliberately NO `content/reconcile` `typeOverride` and no `reconcile` token in `knownCollections`: the tail is ambiguous, because the backend resolves a node by slug/legacy-hash as well as by id, so `PATCH .../content/reconcile` is a valid update of a node addressed as `reconcile` and a path-keyed rule (which cannot see the method) would send it the reconciliation type and 422 it (MIO-3074). Body is OMITTED entirely when `--playlist-id` is not given: the backend derives the playlist set from the hub's `HubTemplateApplication` provenance and REJECTS an explicitly empty list (`min_length=1`), so a bodyless POST is the common case for a SCAFFOLDED hub. A hub with no `HubTemplateApplication` row (hand-built, or a CLI run that skipped the server-side scaffold op) has no provenance to derive from and a bodyless POST there is rejected `422 no_playlist_provenance` — the service never falls back to every playlist on the hub (backend D4). With ids: `{data:{type:content_node_reconciliations,attributes:{playlist_ids:[…]}}}`. Backend MIO-3258; CLI MIO-3074. Constraints: each playlist must satisfy `playlist.hub_id == hub_id` (422 `playlist_not_in_hub`; `Playlist.hub_id` is nullable, so a library playlist published via `hub_media` cannot be reconciled here), and created lessons are unpublished unless the file AND playlist each carry a published `hub_media` row.
 
 ## pages  (`cmd/pages.go`)
 - pages:    `create/list/retrieve/update/delete` `/api/teams/{team_id}/hubs/{hub_id}/pages[/{id}]`; `home` GET `…/pages/home`
