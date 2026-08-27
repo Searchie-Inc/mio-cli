@@ -315,6 +315,26 @@ mio media hub-playlists publish --hub hub_abc123 --playlist-id pl_abc \
 `set-cover` and `items add` take the **file id**; `items remove`/`reorder` take the
 **item id** (the `id` from `items list`), not the file id.
 
+**A published playlist is not yet trackable content.** Playlists and content items
+are two separate surfaces: a file that lives only in a playlist has **no content
+item**, so everything keyed on one is missing for it — progress and completion
+tracking, "My List" saves, comments, and the page builder's single-file
+`dataSource: {"type":"file"}` binding. The card appears on `/content` and plays,
+which is exactly why this is easy to miss. Materialise the content items:
+
+```bash
+mio content reconcile --hub hub_abc123 --playlist-id pl_abc
+```
+
+**Pass `--playlist-id` explicitly for a hub you built by hand.** With no
+`--playlist-id` the backend reconciles the playlists the hub was *scaffolded*
+with, derived from scaffold provenance — a hub created with `mio hubs create` has
+none, so the bodyless form reconciles nothing and still exits 0. It is additive
+and safe to re-run: it creates one container per playlist and one lesson per
+item, and leaves existing items alone. Created lessons land **unpublished**
+unless the file *and* the playlist are each already published to the hub — so run
+it after the `hub-playlists publish` above, not before.
+
 ### 5. Images in page trees — use durable URLs, never `variants`
 
 Page-tree image nodes must reference a URL that does not expire. The `variants` map

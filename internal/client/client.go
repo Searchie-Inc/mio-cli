@@ -165,10 +165,15 @@ var typeOverrides = []struct {
 	// plurals, not the "cards"/"chapters" URL segments.
 	{"files/cards", "file_cards"},
 	{"files/chapters", "file_chapters"},
-	// Content-node reconcile (MIO-3074): POST .../content/reconcile binds
-	// HubContentReconcileResource whose type Literal is
-	// "content_node_reconciliations", NOT the "content" parent segment.
-	{"content/reconcile", "content_node_reconciliations"},
+	// NOTE (MIO-3074): the content reconcile op deliberately has NO entry here.
+	// Its path tail .../content/reconcile is AMBIGUOUS — the backend's
+	// get_by_identifier resolves a content node by slug or legacy hash as well
+	// as by id, so PATCH .../content/reconcile is a legitimate update of a node
+	// whose identifier happens to be "reconcile". A path-keyed override cannot
+	// tell the two apart (derivation sees no HTTP method), so it would send
+	// that PATCH the reconciliation type and the backend's extra="forbid"
+	// schema would 422 a valid update. The reconcile command names its type
+	// explicitly via ActionWithType instead; see cmd/content.go.
 	// Folder subtree move (MIO-2266): POST .../folders/{id}/move binds the
 	// FolderMove schema whose type Literal is "folders" (NOT "move"). "move" is
 	// a known collection token so it is not mistaken for the {id}; this override
@@ -357,13 +362,11 @@ var knownCollections = map[string]bool{
 	"members": true, "contacts": true, "content": true, "children": true,
 	"tags": true, "contact-attributes": true, "options": true,
 	"reorder": true,
-	// Content-node heal op (MIO-3074): POST .../hubs/{hub}/content/reconcile
-	// materialises content_nodes for a hub's playlists (backend MIO-3258).
-	// Without "reconcile" as a known token the walker stops at "content" and
-	// the write type derives as "content" instead of the reconciliation type;
-	// the content/reconcile override below then resolves the two-segment tail.
-	"reconcile": true,
-	"pages":     true, "sections": true, "tree": true, "api-keys": true, "roles": true,
+	// NOTE (MIO-3074): "reconcile" is deliberately NOT a token here — see the
+	// typeOverrides note above. Leaving it out is what keeps
+	// PATCH .../content/reconcile (a node addressed by the slug "reconcile")
+	// deriving the correct "content_nodes" type.
+	"pages": true, "sections": true, "tree": true, "api-keys": true, "roles": true,
 	// W2b one-step template scaffold op (MIO-2573 §5.1); maps to
 	// "template_scaffolds" via the pages/scaffold-from-template override.
 	"scaffold-from-template": true,
@@ -623,6 +626,33 @@ func (c *Client) Action(ctx context.Context, method, path string, body map[strin
 // (email-config PUT is a JSON:API envelope endpoint — StyleEnvelope, MIO-2640.)
 func (c *Client) ActionWith(ctx context.Context, style BodyStyle, method, path string, body map[string]any) (*Resource, error) {
 	payload := buildWriteBody(style, path, body)
+	raw, err := c.do(ctx, method, path, nil, payload, contentTypeJSONAPI)
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	return decodeResourceWrapped(raw)
+}
+
+// ActionWithType is Action with an EXPLICIT JSON:API resource `type` instead of
+// one derived from the request path. It exists for action routes whose path
+// tail is ambiguous — where the same URL shape can also address an ordinary
+// resource, so no path-keyed rule in typeOverrides could serve both without
+// misfiring on one of them (MIO-3074: .../content/reconcile is both the heal op
+// and a valid content node addressed by the slug "reconcile", because the
+// backend resolves nodes by slug as well as by id).
+//
+// Prefer Action/ActionWith when the path tail is unambiguous; naming the type at
+// the call site is the escape hatch, not the default. A nil body sends NO
+// request body at all (not an empty envelope), preserving the bodyless-POST
+// contract some action routes rely on.
+func (c *Client) ActionWithType(ctx context.Context, method, path, typ string, body map[string]any) (*Resource, error) {
+	var payload any
+	if body != nil {
+		payload = NewRawEnvelope(typ, body)
+	}
 	raw, err := c.do(ctx, method, path, nil, payload, contentTypeJSONAPI)
 	if err != nil {
 		return nil, err

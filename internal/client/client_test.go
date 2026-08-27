@@ -389,14 +389,17 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/hubs/h1/achievements", "achievement_hubs"},
 		{"/api/teams/t1/hubs/h1/members/c1/achievements", "achievement_earns"},
 		{"/api/teams/t1/hubs/h1/members/c1/achievements/a1/restore", "achievement_earns"},
-		// Content-node reconcile (MIO-3074): the heal op POSTs to
-		// .../content/reconcile and binds HubContentReconcileResource, whose
-		// type Literal is "content_node_reconciliations". Deriving from the
-		// path would give the "content" parent type, which the backend
-		// (extra="forbid") rejects. Plain content writes must be unaffected.
+		// Content nodes (MIO-3074). The reconcile heal op POSTs to
+		// .../content/reconcile, but that tail is AMBIGUOUS: the backend
+		// resolves a node by slug/legacy-hash as well as by id, so
+		// PATCH .../content/reconcile is a legitimate update of a node slugged
+		// "reconcile". Path derivation cannot see the HTTP method, so this path
+		// MUST derive the ordinary node type; the reconcile command names its
+		// own type explicitly (ActionWithType). A typeOverride here would 422
+		// every update of a node addressed as "reconcile".
 		{"/api/teams/t1/hubs/h1/content", "content_nodes"},
 		{"/api/teams/t1/hubs/h1/content/cnt1", "content_nodes"},
-		{"/api/teams/t1/hubs/h1/content/reconcile", "content_node_reconciliations"},
+		{"/api/teams/t1/hubs/h1/content/reconcile", "content_nodes"},
 	}
 	for _, tc := range cases {
 		if got := resourceTypeFromPath(tc.path); got != tc.want {

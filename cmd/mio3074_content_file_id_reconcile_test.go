@@ -517,3 +517,51 @@ func TestContentReconcile_PlaylistIDsIsAStringArray(t *testing.T) {
 		t.Errorf("playlist_ids=%v want [pl_a]", got)
 	}
 }
+
+// CONTRACT (MIO-3074, Codex round 1 [Important]): .../content/reconcile is an
+// AMBIGUOUS path tail. The backend resolves a content node by slug or legacy
+// hash as well as by id (app/content get_by_identifier), so
+// PATCH .../content/reconcile is a legitimate update of a node whose identifier
+// happens to be "reconcile" — while POST to the same path is the heal op, whose
+// type Literal is content_node_reconciliations.
+//
+// JSON:API type derivation sees only the PATH, never the method, so no
+// path-keyed rule can serve both: a {"content/reconcile": …} typeOverride (plus
+// a "reconcile" knownCollections token) sends this PATCH the reconciliation
+// type and the backend's extra="forbid" schema 422s a valid update. The
+// reconcile command therefore names its type explicitly (ActionWithType) and
+// the override does NOT exist.
+//
+// This test is the guard on that: it fails the moment the override is
+// reintroduced.
+func TestContentUpdate_NodeAddressedAsReconcile_SendsNodeType(t *testing.T) {
+	var body []byte
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"cnt_1","type":"content_nodes","attributes":{"title":"Renamed"}}}`))
+	}))
+	defer srv.Close()
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_abc", "content", "update", "reconcile",
+			"--title", "Renamed")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Errorf("method=%q want PATCH", gotMethod)
+	}
+	if gotPath != "/api/v1/teams/t_team1/hubs/hub_abc/content/reconcile" {
+		t.Errorf("path=%q want the node-update path", gotPath)
+	}
+	assertExactBody(t, body, `{
+		"data": {
+			"type": "content_nodes",
+			"attributes": { "title": "Renamed" }
+		}
+	}`)
+}

@@ -534,6 +534,12 @@ func init() {
 
 // ---- reconcile --------------------------------------------------------------
 
+// contentReconcileType is the JSON:API `type` the backend's
+// HubContentReconcileResource declares as a Literal. It is sent explicitly
+// (ActionWithType) rather than derived from the request path — see the comment
+// at the call site and in internal/client/client.go's typeOverrides.
+const contentReconcileType = "content_node_reconciliations"
+
 var contentReconcileCmd = &cobra.Command{
 	Use:   "reconcile",
 	Short: "Create content items for a hub's playlists so their lessons are trackable.",
@@ -600,8 +606,14 @@ Two limits worth knowing before you run it:
 			return err
 		}
 
+		// The envelope type is named EXPLICITLY rather than derived from the
+		// path. .../content/reconcile is an ambiguous tail: the backend resolves
+		// a content node by slug as well as by id, so PATCH on that same path is
+		// a legitimate update of a node slugged "reconcile". A path-keyed
+		// typeOverride would answer both with the reconciliation type and 422
+		// that update (extra="forbid"). See internal/client ActionWithType.
 		path := contentBasePath(teamID, hubID, "") + "/reconcile"
-		res, err := c.client.Action(c.ctx, http.MethodPost, path, body)
+		res, err := c.client.ActionWithType(c.ctx, http.MethodPost, path, contentReconcileType, body)
 		if err != nil {
 			return err
 		}
