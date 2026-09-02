@@ -97,8 +97,16 @@ func resolveOwnedTeamID(cmd *cobra.Command, cli *client.Client, accessToken stri
 	case 1:
 		return owned[0].ID, owned[0].Name, nil
 	default:
-		// Multiple owned teams: prompt on TTY, error on non-TTY.
-		if !isTTY(cmd.InOrStdin()) {
+		// Multiple owned teams: prompt on TTY, error on non-TTY. Unlike the
+		// rest of this file, this branch is reached from mintAndStore's
+		// ownership-403 retry regardless of whether the ORIGINAL login was
+		// headless (MIO-3585) — so it needs isInteractiveStdin's real-TTY
+		// check, not isTTY's char-device one: isTTY treats /dev/null (the
+		// ordinary CI/headless stdin) as interactive, which would turn this
+		// documented non-interactive message into a hanging prompt that
+		// reads immediate EOF and fails with a bare "invalid choice"
+		// instead (verified in review round 2).
+		if !isInteractiveStdin(cmd) {
 			var sb strings.Builder
 			sb.WriteString("login succeeded but you own multiple teams — re-run with --team <id>:\n")
 			for _, t := range owned {
@@ -360,6 +368,16 @@ func validateAndStore(cmd *cobra.Command, apiBase, key string) error {
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "Logged in: API key validated and stored.")
 	return nil
+}
+
+// isInteractiveStdin reports whether cmd's input is a REAL terminal, using
+// the same term.IsTerminal check as readPassword below — unlike root.go's
+// isTTY, which treats ANY character device (including /dev/null, the
+// ordinary headless/CI stdin) as interactive. Use this, not isTTY, for any
+// branch that must stay silent/non-prompting under a headless invocation.
+func isInteractiveStdin(cmd *cobra.Command) bool {
+	f, ok := cmd.InOrStdin().(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
 }
 
 // readPassword reads a password without echoing when stdin is a terminal,

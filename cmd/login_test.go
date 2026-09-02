@@ -365,3 +365,69 @@ func TestLogin_ConfiguredCurrentTeamNotOwned_StillRecovers(t *testing.T) {
 		t.Errorf("mint attempts = %v, want %v", mintedPaths, want)
 	}
 }
+
+// TestMintAndStore_RecoveryWithMultipleOwnedTeams_DevNullStdinStaysNonInteractive
+// pins the review-round-2 finding: the ownership-403 recovery's "multiple
+// owned teams" branch must behave as NON-interactive when stdin is /dev/null
+// — the ordinary headless/CI/container stdin, and what cmd.InOrStdin()
+// defaults to in production when no one has called cmd.SetIn (e.g. every
+// real `mio login --email --password` invocation). /dev/null is a character
+// device, which root.go's isTTY incorrectly treats as a terminal; before the
+// isInteractiveStdin fix this branch would read /dev/null as if it were a
+// TTY, prompt, read immediate EOF, and fail with a bare "invalid choice"
+// instead of the documented "you own multiple teams — re-run with --team
+// <id>:" listing. A *strings.Reader (this file's other tests, via testCmd)
+// can't reproduce this: it isn't an *os.File at all, so it already fails
+// isTTY's type assertion regardless of which check is used — only a REAL
+// character-device file exposes the distinction.
+func TestMintAndStore_RecoveryWithMultipleOwnedTeams_DevNullStdinStaysNonInteractive(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	resetGlobalFlags()
+
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	t.Cleanup(func() { _ = devNull.Close() })
+
+	token := makeLoginJWT(t, "team_not_owned") // sub="user-test"
+	srv, mintedPaths, teamsListed := newMintServer(t, mintServerConfig{
+		teams: []teamRow{
+			{id: "team_not_owned", name: "Shared Team", ownerID: "someone-else"},
+			{id: "team_x", name: "X", ownerID: "user-test"},
+			{id: "team_y", name: "Y", ownerID: "user-test"},
+		},
+		mintStatus: map[string]int{"team_not_owned": http.StatusForbidden},
+	})
+
+	cli := client.New(srv.URL, "", client.WithHTTPClient(srv.Client()))
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetIn(devNull) // a REAL *os.File, char device, NOT a terminal
+	var errBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	_, err = mintAndStore(cmd, cli, token, "", cfg)
+	if err == nil {
+		t.Fatal("mintAndStore must fail when the caller owns multiple teams and none was chosen")
+	}
+	if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
+	}
+	if strings.Contains(err.Error(), "invalid choice") {
+		t.Errorf("error = %q — /dev/null stdin must never be treated as an interactive TTY", err.Error())
+	}
+	if !strings.Contains(err.Error(), "you own multiple teams") || !strings.Contains(err.Error(), "team_x") || !strings.Contains(err.Error(), "team_y") {
+		t.Errorf("error = %q, want the non-interactive multi-team listing naming team_x and team_y", err.Error())
+	}
+	if !*teamsListed {
+		t.Error("GET /api/v1/teams was never called")
+	}
+	if len(*mintedPaths) != 1 || (*mintedPaths)[0] != "/api/v1/teams/team_not_owned/api-keys" {
+		t.Errorf("mint attempts = %v, want exactly one against team_not_owned", *mintedPaths)
+	}
+}
