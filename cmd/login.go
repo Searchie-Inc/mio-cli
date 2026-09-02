@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -25,6 +26,19 @@ import (
 //     - multiple    → prompt on TTY; error with list on non-TTY.
 //     - zero        → clear error.
 //
+// Neither (1) nor (2) is proof of OWNERSHIP — minting an API key is
+// owner-gated server-side (mio-backend require_team_owner), while both a
+// caller-supplied --team and the JWT's team_id claim (the account's
+// last-active team, see TeamIDFromAccessToken) only require membership:
+// `teams switch` can point the claim at a team the caller belongs to but
+// does not own (MIO-3585, e.g. after switching into a shared team, or a web
+// signup landing the account in a team it doesn't own with no owned team of
+// its own). resolveTeamID does not itself check ownership — mintAndStore
+// catches the resulting 403 and retries via resolveOwnedTeamID, which is
+// where ownership is actually verified. An explicit --team is never
+// second-guessed that way; if it names a team the caller doesn't own,
+// MintAPIKey's error is left to speak for itself.
+//
 // Returns the resolved team id, its display name (may be empty if resolved
 // from the token claim), and any error.
 func resolveTeamID(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamID string) (id, name string, err error) {
@@ -39,35 +53,57 @@ func resolveTeamID(cmd *cobra.Command, cli *client.Client, accessToken, flagTeam
 	}
 
 	// 3. List teams via API.
+	return resolveOwnedTeamID(cmd, cli, accessToken)
+}
+
+// resolveOwnedTeamID lists the teams visible to the JWT bearer and narrows
+// them to the ones the caller OWNS. Minting an API key is owner-gated
+// server-side, so a team the caller merely belongs to can never succeed here
+// (MIO-3585) — unlike resolveTeamID's claim/flag-based guesses, this is the
+// path that actually confirms ownership, via each team's owner_id attribute
+// compared against the JWT's own `sub` claim.
+func resolveOwnedTeamID(cmd *cobra.Command, cli *client.Client, accessToken string) (id, name string, err error) {
 	teams, lerr := cli.ListTeams(cmd.Context(), accessToken)
 	if lerr != nil {
 		return "", "", errs.Wrap(errs.ExitGeneric, fmt.Errorf("login succeeded but could not list teams: %w", lerr))
 	}
-	switch len(teams) {
+	subject := client.SubjectFromAccessToken(accessToken)
+	owned := make([]client.TeamInfo, 0, len(teams))
+	for _, t := range teams {
+		if subject != "" && t.OwnerID == subject {
+			owned = append(owned, t)
+		}
+	}
+
+	switch len(owned) {
 	case 0:
-		return "", "", errs.New(errs.ExitGeneric,
-			"login succeeded but your account has no teams — contact support")
+		if len(teams) == 0 {
+			return "", "", errs.New(errs.ExitGeneric,
+				"login succeeded but your account has no teams — contact support")
+		}
+		return "", "", errs.New(errs.ExitUsage,
+			"login succeeded but you don't own any team — minting an API key requires team ownership; ask the team owner to mint one for you, or re-run with --team <id> for a team you own")
 	case 1:
-		return teams[0].ID, teams[0].Name, nil
+		return owned[0].ID, owned[0].Name, nil
 	default:
-		// Multiple teams: prompt on TTY, error on non-TTY.
-		if !isTTY(os.Stdin) {
+		// Multiple owned teams: prompt on TTY, error on non-TTY.
+		if !isTTY(cmd.InOrStdin()) {
 			var sb strings.Builder
-			sb.WriteString("login succeeded but multiple teams found — re-run with --team <id>:\n")
-			for _, t := range teams {
+			sb.WriteString("login succeeded but you own multiple teams — re-run with --team <id>:\n")
+			for _, t := range owned {
 				fmt.Fprintf(&sb, "  %s  %s\n", t.ID, t.Name)
 			}
 			return "", "", errs.New(errs.ExitUsage, "%s", strings.TrimRight(sb.String(), "\n"))
 		}
-		fmt.Fprintln(cmd.ErrOrStderr(), "Multiple teams found. Choose one:")
-		for i, t := range teams {
+		fmt.Fprintln(cmd.ErrOrStderr(), "You own multiple teams. Choose one:")
+		for i, t := range owned {
 			fmt.Fprintf(cmd.ErrOrStderr(), "  [%d] %s  %s\n", i+1, t.ID, t.Name)
 		}
 		fmt.Fprint(cmd.ErrOrStderr(), "Team number: ")
 		reader := bufio.NewReader(cmd.InOrStdin())
 		line, _ := reader.ReadString('\n')
 		line = strings.TrimSpace(line)
-		for i, t := range teams {
+		for i, t := range owned {
 			if line == fmt.Sprintf("%d", i+1) {
 				return t.ID, t.Name, nil
 			}
@@ -257,6 +293,21 @@ func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamI
 
 	keyName := fmt.Sprintf("mio-cli@%s", hostname())
 	minted, err := cli.MintAPIKey(cmd.Context(), accessToken, resolvedTeam, keyName)
+	if err != nil && flagTeamID == "" && errs.HTTPStatusOf(err) == http.StatusForbidden {
+		// resolvedTeam came from a guess (the JWT's team_id claim, or an
+		// unfiltered team list) that only proves MEMBERSHIP; minting is
+		// owner-gated, and this 403 means the guess wasn't owned (MIO-3585).
+		// Recover by asking explicitly which teams the caller OWNS rather
+		// than surfacing the backend's raw ownership rejection. An explicit
+		// --team is excluded above — that guess is never second-guessed.
+		fmt.Fprintln(cmd.ErrOrStderr(), "Note: your active team isn't one you own — checking which team(s) you do own.")
+		var rerr error
+		resolvedTeam, teamName, rerr = resolveOwnedTeamID(cmd, cli, accessToken)
+		if rerr != nil {
+			return "", rerr
+		}
+		minted, err = cli.MintAPIKey(cmd.Context(), accessToken, resolvedTeam, keyName)
+	}
 	if err != nil {
 		return "", err
 	}
