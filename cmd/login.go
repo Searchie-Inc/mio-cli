@@ -21,23 +21,27 @@ import (
 //
 //  1. explicit --team flag (or config current_team already resolved).
 //  2. team_id embedded in the JWT access token.
-//  3. GET /api/teams with the JWT bearer to enumerate the user's teams:
-//     - exactly one → use it automatically.
-//     - multiple    → prompt on TTY; error with list on non-TTY.
-//     - zero        → clear error.
+//  3. GET /api/teams with the JWT bearer, narrowed to the teams the caller
+//     OWNS (resolveOwnedTeamID):
+//     - exactly one owned team → use it automatically.
+//     - multiple owned teams   → prompt on TTY; error with list on non-TTY.
+//     - zero owned teams       → clear error.
 //
 // Neither (1) nor (2) is proof of OWNERSHIP — minting an API key is
 // owner-gated server-side (mio-backend require_team_owner), while both a
 // caller-supplied --team and the JWT's team_id claim (the account's
 // last-active team, see TeamIDFromAccessToken) only require membership:
-// `teams switch` can point the claim at a team the caller belongs to but
-// does not own (MIO-3585, e.g. after switching into a shared team, or a web
-// signup landing the account in a team it doesn't own with no owned team of
-// its own). resolveTeamID does not itself check ownership — mintAndStore
-// catches the resulting 403 and retries via resolveOwnedTeamID, which is
-// where ownership is actually verified. An explicit --team is never
-// second-guessed that way; if it names a team the caller doesn't own,
-// MintAPIKey's error is left to speak for itself.
+// `teams switch` can point the claim (and thus a STORED current_team, since
+// that is exactly what `teams switch` persists) at a team the caller
+// belongs to but does not own (MIO-3585, e.g. after switching into a shared
+// team, or a web signup landing the account in a team it doesn't own with no
+// owned team of its own). resolveTeamID does not itself check ownership for
+// (1) or (2) — mintAndStore catches the resulting 403 and retries via
+// resolveOwnedTeamID, which is where ownership is actually verified. Only a
+// --team flag TRULY PASSED ON THIS INVOCATION (flags.team, checked directly
+// in mintAndStore — never the config-resolved value threaded through here)
+// is never second-guessed that way; if it names a team the caller doesn't
+// own, MintAPIKey's error is left to speak for itself.
 //
 // Returns the resolved team id, its display name (may be empty if resolved
 // from the token claim), and any error.
@@ -62,6 +66,13 @@ func resolveTeamID(cmd *cobra.Command, cli *client.Client, accessToken, flagTeam
 // (MIO-3585) — unlike resolveTeamID's claim/flag-based guesses, this is the
 // path that actually confirms ownership, via each team's owner_id attribute
 // compared against the JWT's own `sub` claim.
+//
+// This mirrors mio-backend's CURRENT require_team_owner check exactly
+// (owner_id == sub, full stop). That dependency's own docstring flags itself
+// as Phase 1 — a later Phase 1.5 is expected to widen it to consult
+// team_members.role_id for multi-admin support. If that lands, this filter
+// needs the same widening or it will start rejecting teams the API would
+// accept for an admin who isn't the literal owner.
 func resolveOwnedTeamID(cmd *cobra.Command, cli *client.Client, accessToken string) (id, name string, err error) {
 	teams, lerr := cli.ListTeams(cmd.Context(), accessToken)
 	if lerr != nil {
@@ -293,13 +304,19 @@ func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamI
 
 	keyName := fmt.Sprintf("mio-cli@%s", hostname())
 	minted, err := cli.MintAPIKey(cmd.Context(), accessToken, resolvedTeam, keyName)
-	if err != nil && flagTeamID == "" && errs.HTTPStatusOf(err) == http.StatusForbidden {
-		// resolvedTeam came from a guess (the JWT's team_id claim, or an
-		// unfiltered team list) that only proves MEMBERSHIP; minting is
-		// owner-gated, and this 403 means the guess wasn't owned (MIO-3585).
-		// Recover by asking explicitly which teams the caller OWNS rather
-		// than surfacing the backend's raw ownership rejection. An explicit
-		// --team is excluded above — that guess is never second-guessed.
+	// Gate the retry on the raw --team FLAG (flags.team), never on flagTeamID:
+	// flagTeamID is often the CONFIG-resolved team (login passes
+	// resolved.TeamID, which falls back to a stored current_team — exactly
+	// what `teams switch` persists), and that stored default is just as
+	// unproven a guess as the JWT claim itself. Only a --team truly passed on
+	// THIS invocation is a deliberate choice worth never second-guessing.
+	if err != nil && flags.team == "" && errs.HTTPStatusOf(err) == http.StatusForbidden {
+		// resolvedTeam came from a guess (the JWT's team_id claim, a stored
+		// current_team, or an unfiltered team list) that only proves
+		// MEMBERSHIP; minting is owner-gated, and this 403 means the guess
+		// wasn't owned (MIO-3585). Recover by asking explicitly which teams
+		// the caller OWNS rather than surfacing the backend's raw ownership
+		// rejection.
 		fmt.Fprintln(cmd.ErrOrStderr(), "Note: your active team isn't one you own — checking which team(s) you do own.")
 		var rerr error
 		resolvedTeam, teamName, rerr = resolveOwnedTeamID(cmd, cli, accessToken)

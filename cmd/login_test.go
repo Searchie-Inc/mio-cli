@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,6 +120,7 @@ func testCmd(in string) (*cobra.Command, *bytes.Buffer) {
 // "Caller is not the owner of this team." error.
 func TestMintAndStore_ClaimedTeamNotOwned_RecoversToOwnedTeam(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	resetGlobalFlags() // flags.team="" — the retry gate reads this global directly
 
 	token := makeLoginJWT(t, "team_not_owned") // sub="user-test" (see makeLoginJWT)
 	srv, mintedPaths, teamsListed := newMintServer(t, mintServerConfig{
@@ -166,6 +169,7 @@ func TestMintAndStore_ClaimedTeamNotOwned_RecoversToOwnedTeam(t *testing.T) {
 // of a second doomed mint attempt.
 func TestMintAndStore_ClaimedTeamNotOwned_NoOwnedTeamAtAll(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	resetGlobalFlags()
 
 	token := makeLoginJWT(t, "team_not_owned")
 	srv, mintedPaths, _ := newMintServer(t, mintServerConfig{
@@ -201,9 +205,17 @@ func TestMintAndStore_ClaimedTeamNotOwned_NoOwnedTeamAtAll(t *testing.T) {
 
 // TestMintAndStore_ExplicitTeamFlagNotOwned_DoesNotRetry pins that an
 // explicit --team is never second-guessed: a 403 against a caller-supplied
-// team must propagate as-is, with no GET /api/teams recovery attempt.
+// team must propagate as-is, with no GET /api/teams recovery attempt. The
+// retry gate reads the flags.team GLOBAL directly (not the flagTeamID
+// parameter, which login also feeds from a config-resolved value) — see
+// TestLogin_ConfiguredCurrentTeamNotOwned_StillRecovers for why that
+// distinction matters — so this test must set flags.team itself to exercise
+// a genuinely explicit flag.
 func TestMintAndStore_ExplicitTeamFlagNotOwned_DoesNotRetry(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	resetGlobalFlags()
+	flags.team = "team_explicit"
+	t.Cleanup(resetGlobalFlags)
 
 	token := makeLoginJWT(t, "team_claim_irrelevant")
 	srv, mintedPaths, teamsListed := newMintServer(t, mintServerConfig{
@@ -274,5 +286,82 @@ func TestResolveOwnedTeamID_FiltersToTeamsOwnedBySubject(t *testing.T) {
 	}
 	if name != "Mine" {
 		t.Errorf("name = %q, want Mine", name)
+	}
+}
+
+// TestLogin_ConfiguredCurrentTeamNotOwned_StillRecovers pins the scenario
+// MIO-3585 actually names: a PRIOR `mio login`/`teams switch` left
+// current_team in config pointing at a team the caller belongs to but does
+// not own (the same shape as the JWT's stale team_id claim). Without an
+// explicit --team flag on THIS invocation, `login` must still recover via
+// resolveOwnedTeamID rather than silently disabling the fix — mintAndStore's
+// retry gate must key off the actual --team flag, not the config-resolved
+// team, or a stored current_team quietly reproduces the pre-fix 403.
+func TestLogin_ConfiguredCurrentTeamNotOwned_StillRecovers(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+
+	// Seed a stale current_team pointing at a team the account does not own —
+	// exactly what `mio teams switch <shared-team>` would leave behind.
+	mioDir := filepath.Join(cfgDir, "mio")
+	if err := os.MkdirAll(mioDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mioDir, "config.toml"), []byte("current_team = \"team_not_owned\"\n"), 0o600); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	token := makeLoginJWT(t, "team_not_owned") // sub="user-test"; claim agrees with the stale config
+	var mintedPaths []string
+	var teamsListed bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.URL.Path == "/api/v1/auth/login" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			resp, _ := json.Marshal(map[string]any{"access_token": token, "token_type": "bearer"})
+			_, _ = w.Write(resp)
+		case r.URL.Path == "/api/v1/teams" && r.Method == http.MethodGet:
+			teamsListed = true
+			body, _ := json.Marshal(map[string]any{"data": []map[string]any{
+				{"id": "team_not_owned", "type": "teams", "attributes": map[string]any{"name": "Shared Team", "owner_id": "someone-else"}},
+				{"id": "team_owned", "type": "teams", "attributes": map[string]any{"name": "My Team", "owner_id": "user-test"}},
+			}})
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(body)
+		case strings.HasSuffix(r.URL.Path, "/api-keys") && r.Method == http.MethodPost:
+			mintedPaths = append(mintedPaths, r.URL.Path)
+			if strings.Contains(r.URL.Path, "team_not_owned") {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"errors":[{"status":"403","detail":"Caller is not the owner of this team."}]}`))
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"key_1","type":"api_keys","attributes":{"secret":"mio_sk_recovered"}}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"not found"}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	// No --team on this invocation: config's stale current_team must not be
+	// treated as an explicit choice that blocks recovery.
+	env := []string{
+		"MIO_API_BASE_URL=" + srv.URL,
+		"MIO_API_KEY=",
+	}
+	res := runContract(t, env, "login", "--email", "alice@test.member.dev", "--password", "s3cr3t")
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q stdout=%q", res.Code, errs.ExitOK, res.Stderr, res.Stdout)
+	}
+	if !teamsListed {
+		t.Error("GET /api/v1/teams was never called — recovery did not run despite no explicit --team flag")
+	}
+	want := []string{"/api/v1/teams/team_not_owned/api-keys", "/api/v1/teams/team_owned/api-keys"}
+	if len(mintedPaths) != 2 || mintedPaths[0] != want[0] || mintedPaths[1] != want[1] {
+		t.Errorf("mint attempts = %v, want %v", mintedPaths, want)
 	}
 }
