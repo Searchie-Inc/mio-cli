@@ -92,7 +92,10 @@ func resolveOwnedTeamID(cmd *cobra.Command, cli *client.Client, accessToken stri
 			return "", "", errs.New(errs.ExitGeneric,
 				"login succeeded but your account has no teams — contact support")
 		}
-		return "", "", errs.New(errs.ExitUsage,
+		// ExitAuth, not ExitUsage: this is the same ownership rejection the
+		// backend would have returned as a 403 (which maps to ExitAuth) had we
+		// let the retry hit the wire against a team we already know isn't owned.
+		return "", "", errs.New(errs.ExitAuth,
 			"login succeeded but you don't own any team — minting an API key requires team ownership; ask the team owner to mint one for you, or re-run with --team <id> for a team you own")
 	case 1:
 		return owned[0].ID, owned[0].Name, nil

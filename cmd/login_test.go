@@ -192,8 +192,8 @@ func TestMintAndStore_ClaimedTeamNotOwned_NoOwnedTeamAtAll(t *testing.T) {
 	if err == nil {
 		t.Fatal("mintAndStore must fail when the caller owns no team")
 	}
-	if got := errs.CodeOf(err); got != errs.ExitUsage {
-		t.Errorf("exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
+	if got := errs.CodeOf(err); got != errs.ExitAuth {
+		t.Errorf("exit code = %d, want %d (ExitAuth)", got, errs.ExitAuth)
 	}
 	if !strings.Contains(err.Error(), "--team") {
 		t.Errorf("error = %q, want it to point at --team as the way out", err.Error())
