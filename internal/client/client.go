@@ -281,6 +281,17 @@ var typeOverrides = []struct {
 	// still members/achievements and resolves through the same entry.
 	{"hubs/achievements", "achievement_hubs"},
 	{"members/achievements", "achievement_earns"},
+	// Achievement rule compile/bind/preview (MIO-3662): PUT (and DELETE)
+	// .../hubs/{hub}/achievements/{achievement_id}/rule binds
+	// AchievementRulePutData, whose backend validator rejects any `type`
+	// other than the Literal "achievement_rules" (schemas.py: "Expected type
+	// 'achievement_rules', got ..."). Without this override the two-segment
+	// tail "achievements/rule" would fall through to the bare "achievements"
+	// collection derivation and 422. "rule" MUST also be a knownCollections
+	// token (below) — otherwise it is dropped as an opaque id-like segment
+	// and the tail silently becomes "hubs/achievements", misresolving to
+	// "achievement_hubs" instead (see TestResourceTypeFromPath).
+	{"achievements/rule", "achievement_rules"},
 	// Community moderation report-reasons (MIO-2265): the create POST derives
 	// its JSON:API type from the .../report-reasons collection tail. The URL
 	// segment uses hyphens; the backend ReportReasonCreateData type Literal is
@@ -443,6 +454,12 @@ var knownCollections = map[string]bool{
 	// backend 422s the wrong envelope type. "restore" (the earn-restore action
 	// segment) is deliberately NOT a token — see the typeOverrides entry.
 	"achievements": true,
+	// Achievement rule compile/bind/preview (MIO-3662): PUT/DELETE
+	// .../achievements/{id}/rule needs "rule" as a known token so the
+	// two-segment "achievements/rule" override above can match; without it
+	// the write's last collection resolves to "hubs/achievements" and
+	// misresolves to "achievement_hubs" (see the typeOverrides entry).
+	"rule": true,
 }
 
 // collectionSegments returns the path segments that are static collection

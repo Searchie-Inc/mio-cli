@@ -389,6 +389,16 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/hubs/h1/achievements", "achievement_hubs"},
 		{"/api/teams/t1/hubs/h1/members/c1/achievements", "achievement_earns"},
 		{"/api/teams/t1/hubs/h1/members/c1/achievements/a1/restore", "achievement_earns"},
+		// Audited override grant (MIO-3376 2a-7/MIO-3662): "override" is
+		// deliberately not a known collection token either, same reasoning as
+		// "restore" — verified here rather than assumed, since a missing
+		// knownCollections entry misresolves SILENTLY (see the "rule" case
+		// above, which genuinely does need one).
+		{"/api/teams/t1/hubs/h1/members/c1/achievements/a1/override", "achievement_earns"},
+		// Achievement rule compile/bind/preview (MIO-3662): "rule" must be a
+		// known token or this tail silently misresolves to "hubs/achievements"
+		// -> "achievement_hubs" instead of "achievement_rules".
+		{"/api/teams/t1/hubs/h1/achievements/a1/rule", "achievement_rules"},
 		// Content nodes (MIO-3074). The reconcile heal op POSTs to
 		// .../content/reconcile, but that tail is AMBIGUOUS: the backend
 		// resolves a node by slug/legacy-hash as well as by id, so

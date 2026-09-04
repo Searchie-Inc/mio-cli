@@ -20,6 +20,12 @@ package cmd
 //   - restore: POST .../restore sends the envelope EVEN WITH NO FLAGS (the
 //     backend requires the body; a nil body would 422), type
 //     "achievement_earns", restore_reason only when --reason given
+//   - rule set: PUT .../rule, hub-scoped path, envelope type
+//     "achievement_rules", confirm defaults to false and is ALWAYS sent
+//     explicitly, --confirm flips it to true, --notify-on-backfill threaded,
+//     confirm=false renders the meta-only preview count in plain words
+//     (never claiming an estimate is exact when it's a lower bound)
+//   - rule delete: DELETE .../rule, hub-scoped path, --yes gate
 //
 // Reuses the in-process harness from contract_test.go (runContract,
 // newMockServer, baseEnv, withTeam).
@@ -58,6 +64,27 @@ const achievementHubBody = `{
 		"attributes": {
 			"achievement_id": "ach_1",
 			"hub_id": "hub_123"
+		}
+	}
+}`
+
+// achievementRuleBody is a confirm=true PUT .../rule response (201 new bind /
+// 200 recompile) — a full achievement_rules resource.
+const achievementRuleBody = `{
+	"data": {
+		"id": "rule_1",
+		"type": "achievement_rules",
+		"attributes": {
+			"achievement_id": "ach_1",
+			"hub_id": "hub_123",
+			"segment_id": "seg_1",
+			"is_active": true,
+			"backfill_status": "pending",
+			"compiled_definition_version": 1,
+			"broken_reason": null,
+			"notify_on_backfill": false,
+			"created_at": "2026-09-04T00:00:00Z",
+			"updated_at": "2026-09-04T00:00:00Z"
 		}
 	}
 }`
@@ -211,6 +238,154 @@ func TestAchievementsCreate_InvalidAppearanceJSON(t *testing.T) {
 	}
 	if *fired {
 		t.Error("no HTTP request may fire when --appearance-json is malformed")
+	}
+}
+
+// ── create/update: rule-piece flags (MIO-3372/MIO-3662) ────────────────────────
+
+// TestAchievementsCreate_RuleFlags_ThresholdVariant verifies --rule-type/
+// --rule-criteria/--rule-threshold thread into the attrs body, and that
+// --rule-content-node-ids/--rule-window-days stay ABSENT (not zero-valued)
+// when not given — the whole point of Changed()-gating these like every
+// other create/update flag.
+func TestAchievementsCreate_RuleFlags_ThresholdVariant(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusCreated, achievementBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"achievements", "create",
+			"--title", "Fast Learner",
+			"--award-mode", "rule",
+			"--rule-type", "milestone",
+			"--rule-criteria", "time-since-joining",
+			"--rule-threshold", "5",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	_, attrs := decodeEnvelope(t, cap.Body)
+	if attrs["rule_type"] != "milestone" {
+		t.Errorf("attributes.rule_type = %v, want \"milestone\"", attrs["rule_type"])
+	}
+	if attrs["rule_criteria"] != "time-since-joining" {
+		t.Errorf("attributes.rule_criteria = %v, want \"time-since-joining\"", attrs["rule_criteria"])
+	}
+	if attrs["rule_threshold"] != float64(5) {
+		t.Errorf("attributes.rule_threshold = %v, want 5", attrs["rule_threshold"])
+	}
+	if _, present := attrs["rule_content_node_ids"]; present {
+		t.Errorf("attributes.rule_content_node_ids must be ABSENT when --rule-content-node-ids is not given; attrs=%v", attrs)
+	}
+	if _, present := attrs["rule_window_days"]; present {
+		t.Errorf("attributes.rule_window_days must be ABSENT when --rule-window-days is not given; attrs=%v", attrs)
+	}
+}
+
+// TestAchievementsCreate_RuleFlags_ContentNodeIDsAsJSONArray is the regression
+// guard that matters most for this flag: --rule-content-node-ids must
+// serialize as a JSON ARRAY of ids, never a single comma-joined string — the
+// backend reads rule_content_node_ids as list[str] (rules.py), and a
+// comma-string would be accepted on the wire as one bad id instead of a list.
+// Also verifies --rule-threshold stays absent (the two are mutually
+// exclusive; the CLI doesn't block it, but it must not invent one either).
+func TestAchievementsCreate_RuleFlags_ContentNodeIDsAsJSONArray(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusCreated, achievementBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"achievements", "create",
+			"--title", "Course Completer",
+			"--award-mode", "rule",
+			"--rule-type", "milestone",
+			"--rule-criteria", "completed-content",
+			"--rule-content-node-ids", "node_1,node_2",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	_, attrs := decodeEnvelope(t, cap.Body)
+	ids, ok := attrs["rule_content_node_ids"].([]any)
+	if !ok {
+		t.Fatalf("attributes.rule_content_node_ids = %v (%T), want a JSON array, not a string", attrs["rule_content_node_ids"], attrs["rule_content_node_ids"])
+	}
+	if len(ids) != 2 || ids[0] != "node_1" || ids[1] != "node_2" {
+		t.Errorf("attributes.rule_content_node_ids = %v, want [\"node_1\", \"node_2\"]", ids)
+	}
+	if _, present := attrs["rule_threshold"]; present {
+		t.Errorf("attributes.rule_threshold must be ABSENT when --rule-threshold is not given; attrs=%v", attrs)
+	}
+}
+
+// TestAchievementsCreate_RuleFlags_UnsetFieldsAbsent verifies that a plain
+// create (no --rule-* flags at all) sends NONE of the five rule-piece keys —
+// pinning the Changed() guarantee explicitly, since a stray zero-valued
+// rule_threshold or rule_window_days would trip the backend's
+// rule_pieces_not_allowed check for a manual badge.
+func TestAchievementsCreate_RuleFlags_UnsetFieldsAbsent(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusCreated, achievementBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "achievements", "create", "--title", "Plain Manual Badge")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	_, attrs := decodeEnvelope(t, cap.Body)
+	for _, key := range []string{"rule_type", "rule_criteria", "rule_threshold", "rule_window_days", "rule_content_node_ids"} {
+		if _, present := attrs[key]; present {
+			t.Errorf("attributes.%s must be ABSENT when no --rule-* flag is given; attrs=%v", key, attrs)
+		}
+	}
+}
+
+// TestAchievementsCreate_RuleContentNodeIDs_RejectsBlankEntry verifies a blank
+// entry in --rule-content-node-ids is a usage error before any request fires
+// — dropping it silently would ship a SHORTER list than the caller named
+// (same shape as content.go's --playlist-id, MIO-3074).
+func TestAchievementsCreate_RuleContentNodeIDs_RejectsBlankEntry(t *testing.T) {
+	srv, fired := firedAnyServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"achievements", "create",
+			"--title", "Course Completer",
+			"--rule-content-node-ids", "node_1,,node_2",
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("no HTTP request may fire when --rule-content-node-ids contains a blank entry")
+	}
+}
+
+// TestAchievementsUpdate_RuleFlags_PartialBody verifies updating a single
+// rule piece (--rule-threshold) sends ONLY that key — PATCH partial-update
+// semantics apply to the rule-piece flags exactly like every other
+// create/update flag, unlike the rule-set command's confirm/notify_on_backfill
+// which are always sent explicitly.
+func TestAchievementsUpdate_RuleFlags_PartialBody(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusOK, achievementBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "achievements", "update", "ach_1", "--rule-threshold", "7")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	_, attrs := decodeEnvelope(t, cap.Body)
+	if len(attrs) != 1 {
+		t.Errorf("attributes = %v, want exactly 1 key (rule_threshold)", attrs)
+	}
+	if attrs["rule_threshold"] != float64(7) {
+		t.Errorf("attributes.rule_threshold = %v, want 7", attrs["rule_threshold"])
 	}
 }
 
@@ -455,6 +630,171 @@ func TestAchievementsOfferingsDetach_WithYes(t *testing.T) {
 	}
 }
 
+// ── rule ─────────────────────────────────────────────────────────────────────
+
+// ruleSetPath is the hub-scoped rule path every "rule set"/"rule delete" test
+// asserts against verbatim — the regression that matters most here (MIO-3662:
+// the gap this command closes was found because a hand-rolled request hit the
+// TEAM-scoped shape instead and 404d).
+const ruleSetPath = "/api/v1/teams/t_team1/hubs/hub_123/achievements/ach_1/rule"
+
+// TestAchievementsRuleSet_PreviewByDefault verifies "rule set" without
+// --confirm PUTs the hub-scoped path with an explicit confirm:false (never
+// omitted) and notify_on_backfill:false, and renders the preview count in
+// plain words rather than dumping the raw meta object — saying, unmissably,
+// that nothing was persisted.
+func TestAchievementsRuleSet_PreviewByDefault(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusOK, `{"meta":{"preview_count":42,"preview_count_is_lower_bound":false}}`)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123", "achievements", "rule", "set", "ach_1")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if cap.Method != http.MethodPut {
+		t.Errorf("HTTP method = %q, want PUT", cap.Method)
+	}
+	if cap.Path != ruleSetPath {
+		t.Errorf("path = %q, want %q (hub-scoped)", cap.Path, ruleSetPath)
+	}
+
+	typ, attrs := decodeEnvelope(t, cap.Body)
+	if typ != "achievement_rules" {
+		t.Errorf("envelope type = %q, want \"achievement_rules\" (backend AchievementRulePutData Literal)", typ)
+	}
+	v, ok := attrs["confirm"]
+	if !ok {
+		t.Fatalf("attributes.confirm is absent, want explicit false present; body=%q", cap.Body)
+	}
+	if v != false {
+		t.Errorf("attributes.confirm = %v, want false", v)
+	}
+	nv, ok := attrs["notify_on_backfill"]
+	if !ok {
+		t.Fatalf("attributes.notify_on_backfill is absent, want explicit false present; body=%q", cap.Body)
+	}
+	if nv != false {
+		t.Errorf("attributes.notify_on_backfill = %v, want false", nv)
+	}
+
+	for _, want := range []string{"Preview only", "NOTHING WAS SAVED", "42", "--confirm"} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Errorf("stdout must mention %q; got %q", want, res.Stdout)
+		}
+	}
+	if strings.Contains(res.Stdout, "at least") {
+		t.Errorf("stdout must not hedge with \"at least\" when preview_count_is_lower_bound is false; got %q", res.Stdout)
+	}
+}
+
+// TestAchievementsRuleSet_PreviewLowerBound verifies preview_count_is_lower_bound
+// makes the count print as a hedge ("at least N"), never as an exact figure —
+// the estimate is capped above the preview page size and must not be
+// misrepresented as precise.
+func TestAchievementsRuleSet_PreviewLowerBound(t *testing.T) {
+	srv, _ := captureServer(t, http.StatusOK, `{"meta":{"preview_count":500,"preview_count_is_lower_bound":true}}`)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123", "achievements", "rule", "set", "ach_1")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "at least 500") {
+		t.Errorf("stdout must hedge a lower-bound estimate with \"at least 500\"; got %q", res.Stdout)
+	}
+}
+
+// TestAchievementsRuleSet_Confirm verifies --confirm sends confirm:true and
+// decodes the persisted achievement_rules resource (data present, NOT the
+// meta-only preview shape).
+func TestAchievementsRuleSet_Confirm(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusCreated, achievementRuleBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"achievements", "rule", "set", "ach_1", "--confirm")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if cap.Method != http.MethodPut {
+		t.Errorf("HTTP method = %q, want PUT", cap.Method)
+	}
+	if cap.Path != ruleSetPath {
+		t.Errorf("path = %q, want %q (hub-scoped)", cap.Path, ruleSetPath)
+	}
+
+	typ, attrs := decodeEnvelope(t, cap.Body)
+	if typ != "achievement_rules" {
+		t.Errorf("envelope type = %q, want \"achievement_rules\"", typ)
+	}
+	if attrs["confirm"] != true {
+		t.Errorf("attributes.confirm = %v, want true", attrs["confirm"])
+	}
+
+	if !strings.Contains(res.Stdout, "segment_id") || !strings.Contains(res.Stdout, "seg_1") {
+		t.Errorf("stdout must render the persisted rule resource (segment_id=seg_1); got %q", res.Stdout)
+	}
+}
+
+// TestAchievementsRuleSet_NotifyOnBackfillThreaded verifies --notify-on-backfill
+// maps to notify_on_backfill:true on the wire.
+func TestAchievementsRuleSet_NotifyOnBackfillThreaded(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusOK, achievementRuleBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"achievements", "rule", "set", "ach_1", "--confirm", "--notify-on-backfill")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	_, attrs := decodeEnvelope(t, cap.Body)
+	if attrs["notify_on_backfill"] != true {
+		t.Errorf("attributes.notify_on_backfill = %v, want true", attrs["notify_on_backfill"])
+	}
+}
+
+// TestAchievementsRuleDelete_RequiresYes verifies "rule delete" without --yes
+// exits 5 and never calls the API.
+func TestAchievementsRuleDelete_RequiresYes(t *testing.T) {
+	srv, fired := firedAnyServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123", "achievements", "rule", "delete", "ach_1")...)
+
+	if res.Code != errs.ExitNeedsConfir {
+		t.Errorf("exit code = %d, want %d (ExitNeedsConfir); stderr=%q", res.Code, errs.ExitNeedsConfir, res.Stderr)
+	}
+	if *fired {
+		t.Error("no HTTP request may fire without --yes")
+	}
+}
+
+// TestAchievementsRuleDelete_WithYes verifies "rule delete" DELETEs the
+// hub-scoped rule path.
+func TestAchievementsRuleDelete_WithYes(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusNoContent, "")
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123", "achievements", "rule", "delete", "ach_1", "--yes")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if cap.Method != http.MethodDelete {
+		t.Errorf("HTTP method = %q, want DELETE", cap.Method)
+	}
+	if cap.Path != ruleSetPath {
+		t.Errorf("path = %q, want %q (hub-scoped)", cap.Path, ruleSetPath)
+	}
+	if !strings.Contains(res.Stdout, "Unbound the rule for achievement ach_1") {
+		t.Errorf("stdout missing confirmation; got %q", res.Stdout)
+	}
+}
+
 // ── grant ────────────────────────────────────────────────────────────────────
 
 // TestAchievementsGrant_BodyShape verifies grant POSTs to the member earn path
@@ -663,6 +1003,107 @@ func TestAchievementsRestore_WithReason(t *testing.T) {
 	_, attrs := decodeEnvelope(t, cap.Body)
 	if attrs["restore_reason"] != "revoked in error" {
 		t.Errorf("attributes.restore_reason = %v, want the --reason value", attrs["restore_reason"])
+	}
+}
+
+// ── override ─────────────────────────────────────────────────────────────────
+
+// TestAchievementsOverride_BodyShape verifies override POSTs to the member
+// earn override path with envelope type "achievement_earns" (the SAME
+// Literal grant/restore use — verified empirically in
+// internal/client/client_test.go TestResourceTypeFromPath, not just assumed
+// from the "restore" precedent) and a body carrying ONLY {"reason": ...}.
+func TestAchievementsOverride_BodyShape(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusCreated, achievementEarnBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"achievements", "override", "ach_1",
+			"--contact-id", "ct_456",
+			"--reason", "segment missed them before the rule was bound",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if cap.Method != http.MethodPost {
+		t.Errorf("HTTP method = %q, want POST", cap.Method)
+	}
+	if cap.Path != "/api/v1/teams/t_team1/hubs/hub_123/members/ct_456/achievements/ach_1/override" {
+		t.Errorf("path = %q, want /api/v1/teams/t_team1/hubs/hub_123/members/ct_456/achievements/ach_1/override", cap.Path)
+	}
+
+	typ, attrs := decodeEnvelope(t, cap.Body)
+	if typ != "achievement_earns" {
+		t.Errorf("envelope type = %q, want \"achievement_earns\" (backend AchievementOverrideData Literal)", typ)
+	}
+	if len(attrs) != 1 {
+		t.Errorf("attributes = %v, want exactly 1 key (reason)", attrs)
+	}
+	if attrs["reason"] != "segment missed them before the rule was bound" {
+		t.Errorf("attributes.reason = %v, want the --reason value", attrs["reason"])
+	}
+}
+
+// TestAchievementsOverride_MissingContactID verifies omitting --contact-id
+// exits 2 without hitting the API — mirrors
+// TestAchievementsGrant_MissingContactID for the shared requireContactID path.
+func TestAchievementsOverride_MissingContactID(t *testing.T) {
+	srv, fired := firedAnyServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"achievements", "override", "ach_1", "--reason", "backfill missed them")...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("no HTTP request may fire without --contact-id")
+	}
+}
+
+// TestAchievementsOverride_MissingReason verifies omitting --reason entirely
+// exits 2 without hitting the API — unlike grant/revoke/restore, override's
+// --reason is required.
+func TestAchievementsOverride_MissingReason(t *testing.T) {
+	srv, fired := firedAnyServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"achievements", "override", "ach_1", "--contact-id", "ct_456")...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("no HTTP request may fire without --reason")
+	}
+}
+
+// TestAchievementsOverride_BlankReason_RejectedClientSide is the regression
+// guard for the one piece of client-side validation this file adds: a
+// whitespace-only --reason must be refused BEFORE any request fires. The
+// backend's AuditReason type strips whitespace before its min_length=1
+// check runs, so "   " would 422 there too — but there is no reading of a
+// whitespace-only reason the server would ever accept, so catching it
+// locally saves a guaranteed round trip (unlike --rule-content-node-ids'
+// blank-entry check, this one has a real server-side twin to point at).
+func TestAchievementsOverride_BlankReason_RejectedClientSide(t *testing.T) {
+	srv, fired := firedAnyServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"achievements", "override", "ach_1",
+			"--contact-id", "ct_456",
+			"--reason", "   ",
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("no HTTP request may fire when --reason is whitespace-only")
 	}
 }
 
