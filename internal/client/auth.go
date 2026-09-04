@@ -17,15 +17,15 @@ import (
 // See app/infrastructure/security/jwt.py: CLAIMS_NAMESPACE.
 const claimsNamespace = "https://membership.io/claims"
 
-// TeamIDFromAccessToken decodes the payload segment of a JWT access token
-// (without verifying the signature — the token was just received over TLS from
-// our own backend) and extracts the team_id from the namespaced claims object.
+// decodeAccessTokenClaims decodes the payload segment of a JWT access token
+// (without verifying the signature — the token was just received over TLS
+// from our own backend) and returns the raw claims map.
 //
-// Returns "" if the token is malformed or the claim is absent.
-func TeamIDFromAccessToken(accessToken string) string {
+// Returns nil if the token is malformed.
+func decodeAccessTokenClaims(accessToken string) map[string]any {
 	parts := strings.Split(accessToken, ".")
 	if len(parts) != 3 {
-		return ""
+		return nil
 	}
 	// Base64url decode with padding tolerance.
 	payload := parts[1]
@@ -37,10 +37,27 @@ func TeamIDFromAccessToken(accessToken string) string {
 	}
 	decoded, err := base64.URLEncoding.DecodeString(payload)
 	if err != nil {
-		return ""
+		return nil
 	}
 	var claims map[string]any
 	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return nil
+	}
+	return claims
+}
+
+// TeamIDFromAccessToken extracts the team_id from the namespaced claims
+// object of a JWT access token. This is the account's *last-active* team
+// (see mio-backend TeamService.resolve_default_team_id) — a hint for which
+// team to use, NOT proof of ownership: `teams switch` only requires
+// membership, so this claim can name a team the caller belongs to without
+// owning (MIO-3585). Callers that need to mint an API key (owner-gated) must
+// verify ownership separately, e.g. via ListTeams.
+//
+// Returns "" if the token is malformed or the claim is absent.
+func TeamIDFromAccessToken(accessToken string) string {
+	claims := decodeAccessTokenClaims(accessToken)
+	if claims == nil {
 		return ""
 	}
 	ns, ok := claims[claimsNamespace].(map[string]any)
@@ -49,6 +66,21 @@ func TeamIDFromAccessToken(accessToken string) string {
 	}
 	teamID, _ := ns["team_id"].(string)
 	return teamID
+}
+
+// SubjectFromAccessToken extracts the standard top-level `sub` claim (the
+// authenticated user's platform id) from a JWT access token. Used to
+// determine which of the teams returned by ListTeams the caller owns
+// (Team.owner_id == sub).
+//
+// Returns "" if the token is malformed or the claim is absent.
+func SubjectFromAccessToken(accessToken string) string {
+	claims := decodeAccessTokenClaims(accessToken)
+	if claims == nil {
+		return ""
+	}
+	sub, _ := claims["sub"].(string)
+	return sub
 }
 
 // stderr is indirected so tests can capture debug output if needed. It defaults
@@ -183,11 +215,17 @@ func (c *Client) Me(ctx context.Context) (map[string]any, error) {
 type TeamInfo struct {
 	ID   string
 	Name string
+	// OwnerID is the platform user id of the team's owner (team.owner_id).
+	// Compare against SubjectFromAccessToken to determine whether the caller
+	// owns this team — only the owner can mint an API key for it (MIO-3585).
+	OwnerID string
 }
 
 // ListTeams fetches the teams visible to the bearer access token (JWT) and
 // returns them as a slice of TeamInfo. It uses the JSON:API collection endpoint
-// GET /api/teams, authenticated with the access token as a JWT bearer.
+// GET /api/teams, authenticated with the access token as a JWT bearer. This
+// lists every team the caller BELONGS to, owned or not — see TeamInfo.OwnerID
+// to narrow down to teams the caller owns.
 func (c *Client) ListTeams(ctx context.Context, accessToken string) ([]TeamInfo, error) {
 	tokenClient := New(c.baseURL, accessToken, WithHTTPClient(c.http), WithDebug(c.debug))
 	col, err := tokenClient.List(ctx, "/api/teams", nil)
@@ -197,7 +235,8 @@ func (c *Client) ListTeams(ctx context.Context, accessToken string) ([]TeamInfo,
 	teams := make([]TeamInfo, 0, len(col.Data))
 	for _, r := range col.Data {
 		name, _ := r.Attributes["name"].(string)
-		teams = append(teams, TeamInfo{ID: r.ID, Name: name})
+		ownerID, _ := r.Attributes["owner_id"].(string)
+		teams = append(teams, TeamInfo{ID: r.ID, Name: name, OwnerID: ownerID})
 	}
 	return teams, nil
 }

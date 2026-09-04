@@ -161,7 +161,7 @@ mio contacts list
 
 Auth works against `https://api.member.dev` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL` (see [Authentication](#authentication)).
 
-If you belong to multiple teams, `mio login` will prompt you to pick one. You can switch later with `mio teams switch <team-id>`, which updates your local context. For single-team accounts the team is resolved automatically — no manual config step needed.
+Minting an API key requires team **ownership**, not just membership. If you own multiple teams, `mio login` will prompt you to pick one; if you own a different team than the one it guessed, re-run with `--team <team-id>`; if you don't own any team at all, login fails and you'll need that team's owner to mint a key for you. You can switch later with `mio teams switch <team-id>`, which updates your local context. For single-owned-team accounts the team is resolved automatically — no manual config step needed.
 
 ---
 

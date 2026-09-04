@@ -148,6 +148,64 @@ func TestLogin_403KeepsBackendDetailAndStatus(t *testing.T) {
 	}
 }
 
+func TestSubjectFromAccessToken_ExtractsSub(t *testing.T) {
+	token := makeTestToken(t, map[string]any{"team_id": "team-abc"})
+	got := SubjectFromAccessToken(token)
+	if got != "user-001" {
+		t.Errorf("SubjectFromAccessToken = %q, want %q (see makeTestToken)", got, "user-001")
+	}
+}
+
+func TestSubjectFromAccessToken_ReturnsEmptyForMalformedToken(t *testing.T) {
+	cases := []struct {
+		name  string
+		token string
+	}{
+		{"empty", ""},
+		{"one-segment", "onlyone"},
+		{"two-segments", "header.payload"},
+		{"invalid-base64", "hdr.!!!.sig"},
+		{"not-json-payload", "hdr." + base64.RawURLEncoding.EncodeToString([]byte("not-json")) + ".sig"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SubjectFromAccessToken(tc.token); got != "" {
+				t.Errorf("SubjectFromAccessToken(%q) = %q, want empty", tc.token, got)
+			}
+		})
+	}
+}
+
+// TestListTeams_CapturesOwnerID pins that ListTeams surfaces each team's
+// owner_id attribute on TeamInfo — the field MIO-3585's ownership check
+// (resolveOwnedTeamID) compares against the JWT's own `sub` claim to decide
+// which team the caller can actually mint an API key for.
+func TestListTeams_CapturesOwnerID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"t1","type":"teams","attributes":{"name":"Owned","owner_id":"user-001"}},
+			{"id":"t2","type":"teams","attributes":{"name":"Member Only","owner_id":"someone-else"}}
+		]}`))
+	}))
+	defer srv.Close()
+
+	teams, err := newTestClient(srv, "").ListTeams(context.Background(), "jwt_access_token")
+	if err != nil {
+		t.Fatalf("ListTeams error: %v", err)
+	}
+	if len(teams) != 2 {
+		t.Fatalf("len(teams) = %d, want 2", len(teams))
+	}
+	if teams[0].OwnerID != "user-001" {
+		t.Errorf("teams[0].OwnerID = %q, want user-001", teams[0].OwnerID)
+	}
+	if teams[1].OwnerID != "someone-else" {
+		t.Errorf("teams[1].OwnerID = %q, want someone-else", teams[1].OwnerID)
+	}
+}
+
 func TestTeamIDFromAccessToken_HandlesNullTeamID(t *testing.T) {
 	// team_id explicitly set to null (Python backend sets it to None for hub tokens).
 	token := makeTestToken(t, map[string]any{

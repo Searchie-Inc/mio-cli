@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -20,10 +21,27 @@ import (
 //
 //  1. explicit --team flag (or config current_team already resolved).
 //  2. team_id embedded in the JWT access token.
-//  3. GET /api/teams with the JWT bearer to enumerate the user's teams:
-//     - exactly one → use it automatically.
-//     - multiple    → prompt on TTY; error with list on non-TTY.
-//     - zero        → clear error.
+//  3. GET /api/teams with the JWT bearer, narrowed to the teams the caller
+//     OWNS (resolveOwnedTeamID):
+//     - exactly one owned team → use it automatically.
+//     - multiple owned teams   → prompt on TTY; error with list on non-TTY.
+//     - zero owned teams       → clear error.
+//
+// Neither (1) nor (2) is proof of OWNERSHIP — minting an API key is
+// owner-gated server-side (mio-backend require_team_owner), while both a
+// caller-supplied --team and the JWT's team_id claim (the account's
+// last-active team, see TeamIDFromAccessToken) only require membership:
+// `teams switch` can point the claim (and thus a STORED current_team, since
+// that is exactly what `teams switch` persists) at a team the caller
+// belongs to but does not own (MIO-3585, e.g. after switching into a shared
+// team, or a web signup landing the account in a team it doesn't own with no
+// owned team of its own). resolveTeamID does not itself check ownership for
+// (1) or (2) — mintAndStore catches the resulting 403 and retries via
+// resolveOwnedTeamID, which is where ownership is actually verified. Only a
+// --team flag TRULY PASSED ON THIS INVOCATION (flags.team, checked directly
+// in mintAndStore — never the config-resolved value threaded through here)
+// is never second-guessed that way; if it names a team the caller doesn't
+// own, MintAPIKey's error is left to speak for itself.
 //
 // Returns the resolved team id, its display name (may be empty if resolved
 // from the token claim), and any error.
@@ -39,35 +57,75 @@ func resolveTeamID(cmd *cobra.Command, cli *client.Client, accessToken, flagTeam
 	}
 
 	// 3. List teams via API.
+	return resolveOwnedTeamID(cmd, cli, accessToken)
+}
+
+// resolveOwnedTeamID lists the teams visible to the JWT bearer and narrows
+// them to the ones the caller OWNS. Minting an API key is owner-gated
+// server-side, so a team the caller merely belongs to can never succeed here
+// (MIO-3585) — unlike resolveTeamID's claim/flag-based guesses, this is the
+// path that actually confirms ownership, via each team's owner_id attribute
+// compared against the JWT's own `sub` claim.
+//
+// This mirrors mio-backend's CURRENT require_team_owner check exactly
+// (owner_id == sub, full stop). That dependency's own docstring flags itself
+// as Phase 1 — a later Phase 1.5 is expected to widen it to consult
+// team_members.role_id for multi-admin support. If that lands, this filter
+// needs the same widening or it will start rejecting teams the API would
+// accept for an admin who isn't the literal owner.
+func resolveOwnedTeamID(cmd *cobra.Command, cli *client.Client, accessToken string) (id, name string, err error) {
 	teams, lerr := cli.ListTeams(cmd.Context(), accessToken)
 	if lerr != nil {
 		return "", "", errs.Wrap(errs.ExitGeneric, fmt.Errorf("login succeeded but could not list teams: %w", lerr))
 	}
-	switch len(teams) {
+	subject := client.SubjectFromAccessToken(accessToken)
+	owned := make([]client.TeamInfo, 0, len(teams))
+	for _, t := range teams {
+		if subject != "" && t.OwnerID == subject {
+			owned = append(owned, t)
+		}
+	}
+
+	switch len(owned) {
 	case 0:
-		return "", "", errs.New(errs.ExitGeneric,
-			"login succeeded but your account has no teams — contact support")
+		if len(teams) == 0 {
+			return "", "", errs.New(errs.ExitGeneric,
+				"login succeeded but your account has no teams — contact support")
+		}
+		// ExitAuth, not ExitUsage: this is the same ownership rejection the
+		// backend would have returned as a 403 (which maps to ExitAuth) had we
+		// let the retry hit the wire against a team we already know isn't owned.
+		return "", "", errs.New(errs.ExitAuth,
+			"login succeeded but you don't own any team — minting an API key requires team ownership; ask the team owner to mint one for you, or re-run with --team <id> for a team you own")
 	case 1:
-		return teams[0].ID, teams[0].Name, nil
+		return owned[0].ID, owned[0].Name, nil
 	default:
-		// Multiple teams: prompt on TTY, error on non-TTY.
-		if !isTTY(os.Stdin) {
+		// Multiple owned teams: prompt on TTY, error on non-TTY. Unlike the
+		// rest of this file, this branch is reached from mintAndStore's
+		// ownership-403 retry regardless of whether the ORIGINAL login was
+		// headless (MIO-3585) — so it needs isInteractiveStdin's real-TTY
+		// check, not isTTY's char-device one: isTTY treats /dev/null (the
+		// ordinary CI/headless stdin) as interactive, which would turn this
+		// documented non-interactive message into a hanging prompt that
+		// reads immediate EOF and fails with a bare "invalid choice"
+		// instead (verified in review round 2).
+		if !isInteractiveStdin(cmd) {
 			var sb strings.Builder
-			sb.WriteString("login succeeded but multiple teams found — re-run with --team <id>:\n")
-			for _, t := range teams {
+			sb.WriteString("login succeeded but you own multiple teams — re-run with --team <id>:\n")
+			for _, t := range owned {
 				fmt.Fprintf(&sb, "  %s  %s\n", t.ID, t.Name)
 			}
 			return "", "", errs.New(errs.ExitUsage, "%s", strings.TrimRight(sb.String(), "\n"))
 		}
-		fmt.Fprintln(cmd.ErrOrStderr(), "Multiple teams found. Choose one:")
-		for i, t := range teams {
+		fmt.Fprintln(cmd.ErrOrStderr(), "You own multiple teams. Choose one:")
+		for i, t := range owned {
 			fmt.Fprintf(cmd.ErrOrStderr(), "  [%d] %s  %s\n", i+1, t.ID, t.Name)
 		}
 		fmt.Fprint(cmd.ErrOrStderr(), "Team number: ")
 		reader := bufio.NewReader(cmd.InOrStdin())
 		line, _ := reader.ReadString('\n')
 		line = strings.TrimSpace(line)
-		for i, t := range teams {
+		for i, t := range owned {
 			if line == fmt.Sprintf("%d", i+1) {
 				return t.ID, t.Name, nil
 			}
@@ -257,6 +315,27 @@ func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamI
 
 	keyName := fmt.Sprintf("mio-cli@%s", hostname())
 	minted, err := cli.MintAPIKey(cmd.Context(), accessToken, resolvedTeam, keyName)
+	// Gate the retry on the raw --team FLAG (flags.team), never on flagTeamID:
+	// flagTeamID is often the CONFIG-resolved team (login passes
+	// resolved.TeamID, which falls back to a stored current_team — exactly
+	// what `teams switch` persists), and that stored default is just as
+	// unproven a guess as the JWT claim itself. Only a --team truly passed on
+	// THIS invocation is a deliberate choice worth never second-guessing.
+	if err != nil && flags.team == "" && errs.HTTPStatusOf(err) == http.StatusForbidden {
+		// resolvedTeam came from a guess (the JWT's team_id claim, a stored
+		// current_team, or an unfiltered team list) that only proves
+		// MEMBERSHIP; minting is owner-gated, and this 403 means the guess
+		// wasn't owned (MIO-3585). Recover by asking explicitly which teams
+		// the caller OWNS rather than surfacing the backend's raw ownership
+		// rejection.
+		fmt.Fprintln(cmd.ErrOrStderr(), "Note: your active team isn't one you own — checking which team(s) you do own.")
+		var rerr error
+		resolvedTeam, teamName, rerr = resolveOwnedTeamID(cmd, cli, accessToken)
+		if rerr != nil {
+			return "", rerr
+		}
+		minted, err = cli.MintAPIKey(cmd.Context(), accessToken, resolvedTeam, keyName)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -292,6 +371,16 @@ func validateAndStore(cmd *cobra.Command, apiBase, key string) error {
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "Logged in: API key validated and stored.")
 	return nil
+}
+
+// isInteractiveStdin reports whether cmd's input is a REAL terminal, using
+// the same term.IsTerminal check as readPassword below — unlike root.go's
+// isTTY, which treats ANY character device (including /dev/null, the
+// ordinary headless/CI stdin) as interactive. Use this, not isTTY, for any
+// branch that must stay silent/non-prompting under a headless invocation.
+func isInteractiveStdin(cmd *cobra.Command) bool {
+	f, ok := cmd.InOrStdin().(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
 }
 
 // readPassword reads a password without echoing when stdin is a terminal,
