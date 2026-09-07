@@ -346,6 +346,27 @@ path resolves through `members/achievements` because `restore` is not a collecti
 
 ---
 
+## events  (`cmd/events.go`) — MIO-3173; backend app/hub_events (Events v1)
+Hub-scoped ONLY — the base route has NO `/teams/{team_id}` segment (the only resource
+with that shape); `/api/hubs/{hub_id}/events…` only. Every route requires a
+member/contact identity via `MIO_CONTACT_TOKEN` (see the package doc comment in
+`cmd/events.go`) — a team API key 401s on all of them. Types: `hub_events`
+(create/update, via typeOverrides `hubs/events`) / `event_rsvps` (rsvp set, via
+typeOverrides `events/rsvp`). RSVP status enum (`going` / `not_going` / `maybe`,
+`cmd/events.go`'s rsvp-set switch) is hand-mirrored from mio-backend
+`app/hub_events/rsvp_status.py`, the upstream single source of truth — nothing
+watches the two for drift.
+- `create`        POST   `/api/hubs/{hub_id}/events`  body: envelope `hub_events` {title, starts_at, ends_at, timezone, location_type, description?, cover_image_url?, location_url?, location_address?, capacity?, visibility?, segment_id?, rsvp_tag_id?, attendee_list_visible?}; title/starts_at/ends_at/timezone/location_type REQUIRED (validated client-side). Requires hub owner/admin/moderator.
+- `list`          GET    `/api/hubs/{hub_id}/events`  query: page[size], page[after], filter[status] (upcoming|past), sort (starts_at|-starts_at) — invalid status/sort rejected client-side (the backend silently mistreats them instead of 422ing)
+- `retrieve`      GET    `/api/hubs/{hub_id}/events/{id}`
+- `update`        PATCH  `/api/hubs/{hub_id}/events/{id}`  partial: envelope `hub_events`, same fields as create — PATCH semantics, unset flags never sent
+- `cancel`        POST   `/api/hubs/{hub_id}/events/{id}/cancel`  nil body; irreversible; requires hub owner/admin/moderator
+- `rsvp set`      PUT    `/api/hubs/{hub_id}/events/{id}/rsvp`  body: envelope `event_rsvps` {status: going|not_going|maybe}; acts as the authenticated member contact — not admin-gated. A `maybe` does not consume a `--capacity` seat and is not tagged by `--rsvp-tag-id` (the sticky tag hangs off the "going"-only RsvpCreated event)
+- `rsvp withdraw` DELETE `/api/hubs/{hub_id}/events/{id}/rsvp`  → 200 with the withdrawn RSVP resource in the body (NOT 204); writes status=not_going — there is no separate "withdrawn" status
+- `rsvps list`    GET    `/api/hubs/{hub_id}/events/{id}/rsvps`  query: page[size], page[after]; only "going" RSVPs are ever returned — a not_going (including withdrawn) or maybe RSVP never appears here
+
+---
+
 ## Out of scope (v1)
 contact_auth, hub_memberships, comments (contact routes), realtime SSE, all
 portal `/me` and `/api/hub/…` routes, webhooks, JWKS, magic-link landing.

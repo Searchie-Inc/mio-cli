@@ -581,14 +581,23 @@ func TestEventsRSVPSet_InvalidStatus(t *testing.T) {
 }
 
 // TestEventsRSVPSet_Maybe verifies --status maybe is accepted and forwarded
-// verbatim. "Maybe" is a real third RSVP state (product ruling, Slack
-// #8-mio-development 2026-09-07, thread 1788527517.683859): it keeps the
-// event in the member's "My Events" tab without committing to "going". The
-// CLI has no capacity or notification logic of its own (that lives in
+// verbatim to the SAME wire contract as going/not_going: PUT to
+// .../events/{id}/rsvp with a JSON:API envelope of type "event_rsvps" and
+// attributes.status set. "Maybe" is a real third RSVP state (product ruling,
+// Slack #8-mio-development 2026-09-07, thread 1788527517.683859): it keeps
+// the event in the member's "My Events" tab without committing to "going".
+// The CLI has no capacity or notification logic of its own (that lives in
 // mio-backend) — it only needs to stop rejecting the value and pass it
 // through, exactly like "going"/"not_going" above.
+//
+// This asserts method + path + envelope type, not just the status attribute
+// (MIO-3739 review round): a body-only oracle stayed green when "maybe" was
+// mutated to route to a different verb/path/envelope entirely, because
+// nothing here could tell the two implementations apart — see
+// .claude/rules/verifying-guards.md ("probe set smaller than the claim").
 func TestEventsRSVPSet_Maybe(t *testing.T) {
 	var gotBody []byte
+	var gotMethod, gotPath string
 
 	const maybeRSVPBody = `{
 		"data": {
@@ -601,6 +610,8 @@ func TestEventsRSVPSet_Maybe(t *testing.T) {
 	}`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
 		gotBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		w.WriteHeader(http.StatusOK)
@@ -618,13 +629,23 @@ func TestEventsRSVPSet_Maybe(t *testing.T) {
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("HTTP method = %q, want PUT", gotMethod)
+	}
+	if !strings.HasSuffix(gotPath, "/hubs/hub_123/events/evt_1/rsvp") {
+		t.Errorf("path %q does not end with /hubs/hub_123/events/evt_1/rsvp", gotPath)
+	}
 	var doc struct {
 		Data struct {
+			Type       string         `json:"type"`
 			Attributes map[string]any `json:"attributes"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(gotBody, &doc); err != nil {
 		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
+	}
+	if doc.Data.Type != "event_rsvps" {
+		t.Errorf("envelope type = %q, want \"event_rsvps\"", doc.Data.Type)
 	}
 	if doc.Data.Attributes["status"] != "maybe" {
 		t.Errorf("attributes.status = %v, want \"maybe\"", doc.Data.Attributes["status"])
