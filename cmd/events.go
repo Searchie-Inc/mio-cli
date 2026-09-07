@@ -461,12 +461,13 @@ var eventsRSVPSetCmd = &cobra.Command{
 	Short: "Set your RSVP status for an event.",
 	Long: `Set the authenticated member's RSVP status for an event.
 
---status is required: going or not_going.
+--status is required: going, not_going, or maybe.
 
 Acts as the authenticated member contact (login-based auth); does not require
 hub owner/admin/moderator permissions.`,
 	Example: `  mio events rsvp set evt_abc123 --hub hub_123 --status going
-  mio events rsvp set evt_abc123 --hub hub_123 --status not_going`,
+  mio events rsvp set evt_abc123 --hub hub_123 --status not_going
+  mio events rsvp set evt_abc123 --hub hub_123 --status maybe`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, hubID, err := eventsContext(cmd)
@@ -482,9 +483,9 @@ hub owner/admin/moderator permissions.`,
 			return errs.Wrap(errs.ExitGeneric, ferr)
 		}
 		switch status {
-		case "going", "not_going":
+		case "going", "not_going", "maybe":
 		default:
-			return errs.New(errs.ExitUsage, "--status must be one of: going, not_going (got %q)", status)
+			return errs.New(errs.ExitUsage, "--status must be one of: going, not_going, maybe (got %q)", status)
 		}
 
 		attrs := map[string]any{"status": status}
@@ -544,7 +545,7 @@ var eventsRSVPsCmd = &cobra.Command{
 	Use:   "rsvps",
 	Short: "Read RSVPs recorded for an event.",
 	Long: `List RSVPs recorded for an event. Only "going" RSVPs are returned — a
-withdrawn or "not_going" RSVP never appears here.
+withdrawn, "not_going", or "maybe" RSVP never appears here.
 
 Hub owners/admins/moderators can always list. An ordinary active member can
 list too when the host left the attendee list visible for this event
@@ -554,8 +555,8 @@ list too when the host left the attendee list visible for this event
 var eventsRSVPsListCmd = &cobra.Command{
 	Use:   "list <event_id>",
 	Short: "List RSVPs for an event.",
-	Long: `List the "going" RSVPs recorded for the given event. Withdrawn and
-"not_going" RSVPs are never included in the response.
+	Long: `List the "going" RSVPs recorded for the given event. Withdrawn,
+"not_going", and "maybe" RSVPs are never included in the response.
 
 Hub owners/admins/moderators can always list; an ordinary active member can
 list too when the host left the attendee list visible for this event.`,
@@ -605,7 +606,7 @@ func init() {
 	eventsListCmd.Flags().String("sort", "", "Sort order: starts_at or -starts_at.")
 
 	// rsvp set flags.
-	eventsRSVPSetCmd.Flags().String("status", "", "RSVP status: going or not_going. Required.")
+	eventsRSVPSetCmd.Flags().String("status", "", "RSVP status: going, not_going, or maybe. Required.")
 
 	// Pagination on rsvps list.
 	addPaginationFlags(eventsRSVPsListCmd)

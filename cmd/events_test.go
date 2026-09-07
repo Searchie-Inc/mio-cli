@@ -561,9 +561,52 @@ func TestEventsRSVPSet_MissingStatus(t *testing.T) {
 }
 
 // TestEventsRSVPSet_InvalidStatus verifies an out-of-enum --status value
-// exits 2 without hitting the API.
+// exits 2 without hitting the API. "attending" (not "maybe") is the example
+// here: "maybe" became a legal third RSVP state (MIO-maybe-rsvp), so it can
+// no longer stand in for an invalid value — see TestEventsRSVPSet_Maybe for
+// its positive-path coverage instead.
 func TestEventsRSVPSet_InvalidStatus(t *testing.T) {
 	srv := newMockServer(t, nil) // must not be called
+
+	res := runContract(t, eventsEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"events", "rsvp", "set", "evt_1",
+			"--status", "attending",
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
+
+// TestEventsRSVPSet_Maybe verifies --status maybe is accepted and forwarded
+// verbatim. "Maybe" is a real third RSVP state (product ruling, Slack
+// #8-mio-development 2026-09-07, thread 1788527517.683859): it keeps the
+// event in the member's "My Events" tab without committing to "going". The
+// CLI has no capacity or notification logic of its own (that lives in
+// mio-backend) — it only needs to stop rejecting the value and pass it
+// through, exactly like "going"/"not_going" above.
+func TestEventsRSVPSet_Maybe(t *testing.T) {
+	var gotBody []byte
+
+	const maybeRSVPBody = `{
+		"data": {
+			"id": "rsvp_1",
+			"type": "event_rsvps",
+			"attributes": {
+				"status": "maybe"
+			}
+		}
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(maybeRSVPBody))
+	}))
+	t.Cleanup(srv.Close)
 
 	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
@@ -572,8 +615,19 @@ func TestEventsRSVPSet_InvalidStatus(t *testing.T) {
 			"--status", "maybe",
 		)...)
 
-	if res.Code != errs.ExitUsage {
-		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	var doc struct {
+		Data struct {
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(gotBody, &doc); err != nil {
+		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
+	}
+	if doc.Data.Attributes["status"] != "maybe" {
+		t.Errorf("attributes.status = %v, want \"maybe\"", doc.Data.Attributes["status"])
 	}
 }
 
@@ -595,8 +649,8 @@ func TestEventsRSVPWithdraw_RequiresYes(t *testing.T) {
 // TestEventsRSVPWithdraw_WithYes_RendersBody is the regression guard for the
 // 200-with-body contract: the withdraw endpoint returns 200 with the RSVP
 // resource transitioned to "not_going" (the real backend RSVP-status enum is
-// going|not_going — there is no separate "withdrawn" status), NOT 204. The
-// command must render it (client.Action), not discard it (client.Delete
+// going|not_going|maybe — there is no separate "withdrawn" status), NOT 204.
+// The command must render it (client.Action), not discard it (client.Delete
 // would swallow the body on a 200).
 func TestEventsRSVPWithdraw_WithYes_RendersBody(t *testing.T) {
 	var gotMethod, gotPath string
