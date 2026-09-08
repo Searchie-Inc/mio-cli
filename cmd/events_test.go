@@ -1014,3 +1014,503 @@ func TestEventsContext_AnonymousWinsOverContactToken(t *testing.T) {
 			"configured MIO_CONTACT_TOKEN, never send it despite an explicit --anonymous request", gotAuth)
 	}
 }
+
+// ── events hosts (MIO-3740) ───────────────────────────────────────────────
+//
+// The backend makes an event's host CLIENT-SETTABLE and PLURAL:
+//
+//   - host_contact_id  (string)      — sugar for host_contact_ids=[value]
+//   - host_contact_ids (list[str])   — 1..MAX_HOSTS_PER_EVENT (3) entries,
+//     duplicates rejected
+//   - the two are MUTUALLY EXCLUSIVE; sending both is a 422
+//   - on create, omitting both stamps the authenticated caller as sole host
+//
+// (mio-backend app/hub_events/schemas.py: HubEventCreateAttributes /
+// HubEventUpdateAttributes and their _reject_ambiguous_host_fields validator;
+// the cap is MAX_HOSTS_PER_EVENT in app/hub_events/models.py.)
+//
+// These tests assert the WIRE — the exact request path and the exact
+// attributes object — not merely that a request happened. The path is
+// compared for EQUALITY, not with strings.HasSuffix: a suffix match would
+// happily accept /api/v1/teams/{team}/hubs/hub_123/events, and events is the
+// one resource whose route carries no team segment at all. The /v1 in the
+// expected path is injected by the client (canonicalRequestPath), not by
+// eventsPath.
+
+const (
+	eventsCreateWirePath = "/api/v1/hubs/hub_123/events"
+	eventsUpdateWirePath = "/api/v1/hubs/hub_123/events/evt_1"
+)
+
+// recordedEventRequest is one request the host-flag mock server saw.
+type recordedEventRequest struct {
+	Method string
+	Path   string
+	Body   string
+}
+
+// newHostRecordingServer starts a mock server that records EVERY request it
+// receives — including ones it would otherwise ignore — so a test can assert
+// that a rejected flag combination sent NOTHING AT ALL. The returned slice
+// pointer is read after runContract returns.
+func newHostRecordingServer(t *testing.T, status int, body string) (*httptest.Server, *[]recordedEventRequest) {
+	t.Helper()
+	got := &[]recordedEventRequest{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		*got = append(*got, recordedEventRequest{Method: r.Method, Path: r.URL.Path, Body: string(raw)})
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, got
+}
+
+// eventAttributesFrom decodes the JSON:API attributes object out of a recorded
+// request body.
+func eventAttributesFrom(t *testing.T, body string) map[string]any {
+	t.Helper()
+	var doc struct {
+		Data struct {
+			Type       string         `json:"type"`
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("request body is not valid JSON: %v; body=%q", err, body)
+	}
+	if doc.Data.Type != "hub_events" {
+		t.Errorf("envelope type = %q, want \"hub_events\"", doc.Data.Type)
+	}
+	return doc.Data.Attributes
+}
+
+// wantHostContactIDs asserts attrs.host_contact_ids is exactly want (a JSON
+// array of strings, in order) and that the singular host_contact_id is absent.
+func wantHostContactIDs(t *testing.T, attrs map[string]any, want []string) {
+	t.Helper()
+	raw, ok := attrs["host_contact_ids"]
+	if !ok {
+		t.Fatalf("attributes has no host_contact_ids key; attributes=%v", attrs)
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("host_contact_ids = %#v, want a JSON array (a comma-joined string would be one bad id)", raw)
+	}
+	if len(list) != len(want) {
+		t.Fatalf("host_contact_ids = %v, want %v", list, want)
+	}
+	for i, w := range want {
+		if list[i] != w {
+			t.Errorf("host_contact_ids[%d] = %v, want %q", i, list[i], w)
+		}
+	}
+	if _, present := attrs["host_contact_id"]; present {
+		t.Errorf("host_contact_id must NOT be sent alongside host_contact_ids (the API 422s both together); attributes=%v", attrs)
+	}
+}
+
+// eventsCreateArgs returns a minimal, valid `events create` invocation with the
+// given extra flags appended.
+func eventsCreateArgs(extra ...string) []string {
+	base := []string{
+		"--hub", "hub_123",
+		"events", "create",
+		"--title", "Community Meetup",
+		"--starts-at", "2026-09-01T18:00:00Z",
+		"--ends-at", "2026-09-01T20:00:00Z",
+		"--timezone", "America/New_York",
+		"--location-type", "url",
+		"--location-url", "https://zoom.us/j/123",
+	}
+	return withTeam("t_team1", append(base, extra...)...)
+}
+
+// eventsUpdateArgs returns a minimal `events update` invocation with the given
+// extra flags appended.
+func eventsUpdateArgs(extra ...string) []string {
+	base := []string{"--hub", "hub_123", "events", "update", "evt_1"}
+	return withTeam("t_team1", append(base, extra...)...)
+}
+
+// TestEventsCreate_HostContactIDsCommaSeparated pins the plural flag onto the
+// wire: --host-contact-ids a,b must serialize as the JSON array
+// host_contact_ids: ["a","b"], to the exact events path.
+func TestEventsCreate_HostContactIDsCommaSeparated(t *testing.T) {
+	srv, got := newHostRecordingServer(t, http.StatusCreated, hubEventBody)
+
+	res := runContract(t, eventsEnv(srv.URL), eventsCreateArgs("--host-contact-ids", "con_a,con_b")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("server saw %d requests, want exactly 1: %+v", len(*got), *got)
+	}
+	req := (*got)[0]
+	if req.Method != http.MethodPost {
+		t.Errorf("HTTP method = %q, want POST", req.Method)
+	}
+	if req.Path != eventsCreateWirePath {
+		t.Errorf("request path = %q, want exactly %q", req.Path, eventsCreateWirePath)
+	}
+	wantHostContactIDs(t, eventAttributesFrom(t, req.Body), []string{"con_a", "con_b"})
+}
+
+// TestEventsCreate_HostContactIDsRepeatedFlagSameBody pins cobra's StringSlice
+// contract: the repeated form (--host-contact-ids a --host-contact-ids b) and
+// the comma form must produce the SAME wire body, byte for byte.
+func TestEventsCreate_HostContactIDsRepeatedFlagSameBody(t *testing.T) {
+	srv, got := newHostRecordingServer(t, http.StatusCreated, hubEventBody)
+
+	repeated := runContract(t, eventsEnv(srv.URL),
+		eventsCreateArgs("--host-contact-ids", "con_a", "--host-contact-ids", "con_b")...)
+	if repeated.Code != errs.ExitOK {
+		t.Fatalf("repeated form: exit code = %d, want %d (ExitOK); stderr=%q", repeated.Code, errs.ExitOK, repeated.Stderr)
+	}
+
+	comma := runContract(t, eventsEnv(srv.URL), eventsCreateArgs("--host-contact-ids", "con_a,con_b")...)
+	if comma.Code != errs.ExitOK {
+		t.Fatalf("comma form: exit code = %d, want %d (ExitOK); stderr=%q", comma.Code, errs.ExitOK, comma.Stderr)
+	}
+
+	if len(*got) != 2 {
+		t.Fatalf("server saw %d requests, want exactly 2: %+v", len(*got), *got)
+	}
+	if (*got)[0].Path != eventsCreateWirePath {
+		t.Errorf("request path = %q, want exactly %q", (*got)[0].Path, eventsCreateWirePath)
+	}
+	wantHostContactIDs(t, eventAttributesFrom(t, (*got)[0].Body), []string{"con_a", "con_b"})
+
+	if (*got)[0].Body != (*got)[1].Body {
+		t.Errorf("repeated-flag body != comma-separated body:\n repeated=%s\n comma   =%s",
+			(*got)[0].Body, (*got)[1].Body)
+	}
+}
+
+// TestEventsCreate_HostContactIDSingular pins the singular sugar: it must send
+// host_contact_id (a bare string) and must NOT also send host_contact_ids —
+// the API 422s the pair.
+func TestEventsCreate_HostContactIDSingular(t *testing.T) {
+	srv, got := newHostRecordingServer(t, http.StatusCreated, hubEventBody)
+
+	res := runContract(t, eventsEnv(srv.URL), eventsCreateArgs("--host-contact-id", "con_solo")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("server saw %d requests, want exactly 1: %+v", len(*got), *got)
+	}
+	if (*got)[0].Path != eventsCreateWirePath {
+		t.Errorf("request path = %q, want exactly %q", (*got)[0].Path, eventsCreateWirePath)
+	}
+	attrs := eventAttributesFrom(t, (*got)[0].Body)
+	if attrs["host_contact_id"] != "con_solo" {
+		t.Errorf("attributes.host_contact_id = %v, want \"con_solo\"", attrs["host_contact_id"])
+	}
+	if _, present := attrs["host_contact_ids"]; present {
+		t.Errorf("--host-contact-id must NOT also send the plural host_contact_ids "+
+			"(sending both is a 422); attributes=%v", attrs)
+	}
+}
+
+// TestEventsCreate_NoHostFlagsSendsNeitherField pins the default: with neither
+// host flag set, NEITHER field appears in the body, so the backend stamps the
+// authenticated caller as sole host (today's behaviour, unchanged).
+func TestEventsCreate_NoHostFlagsSendsNeitherField(t *testing.T) {
+	srv, got := newHostRecordingServer(t, http.StatusCreated, hubEventBody)
+
+	res := runContract(t, eventsEnv(srv.URL), eventsCreateArgs()...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("server saw %d requests, want exactly 1: %+v", len(*got), *got)
+	}
+	attrs := eventAttributesFrom(t, (*got)[0].Body)
+	if _, present := attrs["host_contact_id"]; present {
+		t.Errorf("host_contact_id must be absent when no host flag is set; attributes=%v", attrs)
+	}
+	if _, present := attrs["host_contact_ids"]; present {
+		t.Errorf("host_contact_ids must be absent when no host flag is set; attributes=%v", attrs)
+	}
+}
+
+// TestEventsUpdate_HostContactIDsCommaSeparated is the update-side twin of the
+// create test: the plural flag on the wire, at the exact single-resource path.
+func TestEventsUpdate_HostContactIDsCommaSeparated(t *testing.T) {
+	srv, got := newHostRecordingServer(t, http.StatusOK, hubEventBody)
+
+	res := runContract(t, eventsEnv(srv.URL), eventsUpdateArgs("--host-contact-ids", "con_a,con_b")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("server saw %d requests, want exactly 1: %+v", len(*got), *got)
+	}
+	req := (*got)[0]
+	if req.Method != http.MethodPatch {
+		t.Errorf("HTTP method = %q, want PATCH", req.Method)
+	}
+	if req.Path != eventsUpdateWirePath {
+		t.Errorf("request path = %q, want exactly %q", req.Path, eventsUpdateWirePath)
+	}
+	attrs := eventAttributesFrom(t, req.Body)
+	wantHostContactIDs(t, attrs, []string{"con_a", "con_b"})
+	// PATCH stays partial: the host set is the ONLY thing this request changes.
+	if len(attrs) != 1 {
+		t.Errorf("attributes = %v, want exactly 1 key (host_contact_ids)", attrs)
+	}
+}
+
+// TestEventsUpdate_HostContactIDsRepeatedFlagSameBody — repeated form, update side.
+func TestEventsUpdate_HostContactIDsRepeatedFlagSameBody(t *testing.T) {
+	srv, got := newHostRecordingServer(t, http.StatusOK, hubEventBody)
+
+	repeated := runContract(t, eventsEnv(srv.URL),
+		eventsUpdateArgs("--host-contact-ids", "con_a", "--host-contact-ids", "con_b")...)
+	if repeated.Code != errs.ExitOK {
+		t.Fatalf("repeated form: exit code = %d, want %d (ExitOK); stderr=%q", repeated.Code, errs.ExitOK, repeated.Stderr)
+	}
+	comma := runContract(t, eventsEnv(srv.URL), eventsUpdateArgs("--host-contact-ids", "con_a,con_b")...)
+	if comma.Code != errs.ExitOK {
+		t.Fatalf("comma form: exit code = %d, want %d (ExitOK); stderr=%q", comma.Code, errs.ExitOK, comma.Stderr)
+	}
+
+	if len(*got) != 2 {
+		t.Fatalf("server saw %d requests, want exactly 2: %+v", len(*got), *got)
+	}
+	if (*got)[0].Path != eventsUpdateWirePath {
+		t.Errorf("request path = %q, want exactly %q", (*got)[0].Path, eventsUpdateWirePath)
+	}
+	wantHostContactIDs(t, eventAttributesFrom(t, (*got)[0].Body), []string{"con_a", "con_b"})
+	if (*got)[0].Body != (*got)[1].Body {
+		t.Errorf("repeated-flag body != comma-separated body:\n repeated=%s\n comma   =%s",
+			(*got)[0].Body, (*got)[1].Body)
+	}
+}
+
+// TestEventsUpdate_HostContactIDSingular — singular sugar, update side.
+func TestEventsUpdate_HostContactIDSingular(t *testing.T) {
+	srv, got := newHostRecordingServer(t, http.StatusOK, hubEventBody)
+
+	res := runContract(t, eventsEnv(srv.URL), eventsUpdateArgs("--host-contact-id", "con_solo")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("server saw %d requests, want exactly 1: %+v", len(*got), *got)
+	}
+	if (*got)[0].Path != eventsUpdateWirePath {
+		t.Errorf("request path = %q, want exactly %q", (*got)[0].Path, eventsUpdateWirePath)
+	}
+	attrs := eventAttributesFrom(t, (*got)[0].Body)
+	if attrs["host_contact_id"] != "con_solo" {
+		t.Errorf("attributes.host_contact_id = %v, want \"con_solo\"", attrs["host_contact_id"])
+	}
+	if _, present := attrs["host_contact_ids"]; present {
+		t.Errorf("--host-contact-id must NOT also send the plural host_contact_ids; attributes=%v", attrs)
+	}
+}
+
+// TestEventsHostFlags_RejectedBeforeAnyRequest is the guard the whole feature
+// rests on: every host-flag combination the API would 422 must exit ExitUsage
+// LOCALLY, having sent the mock server NOTHING. A test that only checked the
+// exit code would pass even if the CLI round-tripped the bad body first, so
+// the "server saw 0 requests" assertion is the load-bearing half.
+func TestEventsHostFlags_RejectedBeforeAnyRequest(t *testing.T) {
+	cases := []struct {
+		name  string
+		extra []string
+	}{
+		// Mutually exclusive — the API's _reject_ambiguous_host_fields 422s
+		// the pair; cobra's MarkFlagsMutuallyExclusive rejects it here first.
+		{"both host flags", []string{"--host-contact-id", "con_a", "--host-contact-ids", "con_b"}},
+		{"both host flags, same id", []string{"--host-contact-id", "con_a", "--host-contact-ids", "con_a"}},
+		// Over MAX_HOSTS_PER_EVENT (3).
+		{"over the cap", []string{"--host-contact-ids", "con_a,con_b,con_c,con_d"}},
+		{"over the cap, repeated form", []string{
+			"--host-contact-ids", "con_a", "--host-contact-ids", "con_b",
+			"--host-contact-ids", "con_c", "--host-contact-ids", "con_d",
+		}},
+		// Duplicates are rejected, never silently de-duplicated.
+		{"duplicate id", []string{"--host-contact-ids", "con_a,con_a"}},
+		{"duplicate id, repeated form", []string{"--host-contact-ids", "con_a", "--host-contact-ids", "con_a"}},
+		// Blank entries: dropping one would ship a SHORTER host set than named.
+		{"empty id between two real ones", []string{"--host-contact-ids", "con_a,,con_b"}},
+		{"whitespace-only id", []string{"--host-contact-ids", "con_a, ,con_b"}},
+		{"empty flag value", []string{"--host-contact-ids", ""}},
+		// The singular flag's own blank case: an empty id resolves to no hub
+		// member, so the API fails closed on it exactly as it does on a blank
+		// list entry.
+		{"empty singular id", []string{"--host-contact-id", ""}},
+		{"whitespace-only singular id", []string{"--host-contact-id", "  "}},
+	}
+
+	for _, verb := range []struct {
+		name string
+		args func(extra ...string) []string
+	}{
+		{"create", eventsCreateArgs},
+		{"update", eventsUpdateArgs},
+	} {
+		for _, tc := range cases {
+			t.Run(verb.name+"/"+tc.name, func(t *testing.T) {
+				srv, got := newHostRecordingServer(t, http.StatusOK, hubEventBody)
+
+				res := runContract(t, eventsEnv(srv.URL), verb.args(tc.extra...)...)
+
+				if res.Code != errs.ExitUsage {
+					t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+				}
+				if len(*got) != 0 {
+					t.Errorf("server saw %d request(s), want 0 — a knowingly-invalid host set "+
+						"must never reach the API: %+v", len(*got), *got)
+				}
+			})
+		}
+	}
+}
+
+// TestEventsHostFlags_ErrorsNameWhatIsWrong pins the MESSAGE, not just the exit
+// code: the SilenceErrors root never writes it into the stderr buffer (main.go
+// renders it), so this drives the tree through executeCLI and reads the raw
+// error. An exit-code-only guard would accept "unknown flag" or a bare
+// "invalid input" for every one of these.
+func TestEventsHostFlags_ErrorsNameWhatIsWrong(t *testing.T) {
+	cases := []struct {
+		name  string
+		extra []string
+		want  []string
+	}{
+		{
+			"both host flags",
+			[]string{"--host-contact-id", "con_a", "--host-contact-ids", "con_b"},
+			[]string{"host-contact-id", "host-contact-ids"},
+		},
+		{
+			"over the cap",
+			[]string{"--host-contact-ids", "con_a,con_b,con_c,con_d"},
+			[]string{"--host-contact-ids", "at most 3", "got 4"},
+		},
+		{
+			"duplicate id",
+			[]string{"--host-contact-ids", "con_a,con_a"},
+			[]string{"--host-contact-ids", "duplicate", "con_a"},
+		},
+		{
+			"empty id",
+			[]string{"--host-contact-ids", "con_a,,con_b"},
+			[]string{"--host-contact-ids", "empty value"},
+		},
+		{
+			"empty flag value",
+			[]string{"--host-contact-ids", ""},
+			[]string{"--host-contact-ids", "at least one host"},
+		},
+		{
+			"empty singular id",
+			[]string{"--host-contact-id", ""},
+			[]string{"--host-contact-id", "empty value"},
+		},
+	}
+
+	srv, got := newHostRecordingServer(t, http.StatusOK, hubEventBody)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := executeCLI(t, eventsEnv(srv.URL), eventsCreateArgs(tc.extra...)...)
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if code := codeForExecuteErr(err); code != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage)", code, errs.ExitUsage)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error message %q does not mention %q", err.Error(), want)
+				}
+			}
+		})
+	}
+
+	if len(*got) != 0 {
+		t.Errorf("server saw %d request(s), want 0: %+v", len(*got), *got)
+	}
+}
+
+// TestEventsHostFlags_AtTheCapIsAccepted is the accept-side counterpart to the
+// over-the-cap reject above. Without it, an off-by-one cap (">= 3" instead of
+// "> 3") would still pass every rejection case in this file — a reject-only
+// probe cannot tell the two implementations apart.
+func TestEventsHostFlags_AtTheCapIsAccepted(t *testing.T) {
+	srv, got := newHostRecordingServer(t, http.StatusCreated, hubEventBody)
+
+	res := runContract(t, eventsEnv(srv.URL), eventsCreateArgs("--host-contact-ids", "con_a,con_b,con_c")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK) — exactly MAX_HOSTS_PER_EVENT hosts is legal; stderr=%q",
+			res.Code, errs.ExitOK, res.Stderr)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("server saw %d requests, want exactly 1: %+v", len(*got), *got)
+	}
+	wantHostContactIDs(t, eventAttributesFrom(t, (*got)[0].Body), []string{"con_a", "con_b", "con_c"})
+}
+
+// TestEventsHostFlags_RejectedBeforeScopeResolution proves WHERE the check
+// runs, not just that it runs. The other rejection tests pass --hub hub_123,
+// an ID-SHAPED value that ResolveHub returns unchanged with no API call — so
+// they would stay green even if the validation happened after eventsContext.
+// Here --hub is a NAME, which eventsContext can only resolve by listing the
+// team's hubs over HTTP. Zero requests is therefore the only outcome
+// consistent with "a knowingly-invalid host set fires no request at all"; a
+// validation placed after eventsContext shows up as exactly one GET.
+func TestEventsHostFlags_RejectedBeforeScopeResolution(t *testing.T) {
+	verbs := map[string][]string{
+		"create": {
+			"--hub", "marketing-hub",
+			"events", "create",
+			"--title", "Community Meetup",
+			"--starts-at", "2026-09-01T18:00:00Z",
+			"--ends-at", "2026-09-01T20:00:00Z",
+			"--timezone", "America/New_York",
+			"--location-type", "url",
+			"--host-contact-ids", "con_a,con_a",
+		},
+		"update": {
+			"--hub", "marketing-hub",
+			"events", "update", "evt_1",
+			"--host-contact-ids", "con_a,con_a",
+		},
+	}
+
+	for name, args := range verbs {
+		t.Run(name, func(t *testing.T) {
+			srv, got := newHostRecordingServer(t, http.StatusOK, hubEventBody)
+
+			err := executeCLI(t, eventsEnv(srv.URL), withTeam("t_team1", args...)...)
+			if err == nil {
+				t.Fatal("expected a usage error for the duplicate host id, got nil")
+			}
+			if code := codeForExecuteErr(err); code != errs.ExitUsage {
+				t.Errorf("exit code = %d, want %d (ExitUsage); err=%v", code, errs.ExitUsage, err)
+			}
+			// The error must be the HOST one, not a hub-resolution failure —
+			// otherwise "0 requests" could be true for the wrong reason.
+			if !strings.Contains(err.Error(), "--host-contact-ids") {
+				t.Errorf("error %q does not name --host-contact-ids; the host check must fire "+
+					"before hub resolution, not after it", err.Error())
+			}
+			if len(*got) != 0 {
+				t.Errorf("server saw %d request(s), want 0 — the host check must run BEFORE "+
+					"eventsContext resolves a name-shaped --hub over HTTP: %+v", len(*got), *got)
+			}
+		})
+	}
+}
