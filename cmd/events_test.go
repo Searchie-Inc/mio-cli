@@ -599,6 +599,10 @@ func TestEventsRSVPSet_Maybe(t *testing.T) {
 	var gotBody []byte
 	var gotMethod, gotPath string
 
+	// The full wire path, including the /v1 the client injects — eventsPath's
+	// doc comment describes the pre-version prefix only.
+	const wantRSVPPath = "/api/v1/hubs/hub_123/events/evt_1/rsvp"
+
 	const maybeRSVPBody = `{
 		"data": {
 			"id": "rsvp_1",
@@ -632,8 +636,12 @@ func TestEventsRSVPSet_Maybe(t *testing.T) {
 	if gotMethod != http.MethodPut {
 		t.Errorf("HTTP method = %q, want PUT", gotMethod)
 	}
-	if !strings.HasSuffix(gotPath, "/hubs/hub_123/events/evt_1/rsvp") {
-		t.Errorf("path %q does not end with /hubs/hub_123/events/evt_1/rsvp", gotPath)
+	// Exact equality, not HasSuffix: the contract is that events paths carry
+	// NO team_id segment (see eventsPath's doc comment). A suffix match is
+	// satisfied by "/api/teams/t_team1/hubs/hub_123/events/evt_1/rsvp" too, so
+	// it cannot fail in the one direction this assertion exists to catch.
+	if gotPath != wantRSVPPath {
+		t.Errorf("path = %q, want %q", gotPath, wantRSVPPath)
 	}
 	var doc struct {
 		Data struct {
