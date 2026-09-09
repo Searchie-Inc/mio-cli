@@ -561,9 +561,67 @@ func TestEventsRSVPSet_MissingStatus(t *testing.T) {
 }
 
 // TestEventsRSVPSet_InvalidStatus verifies an out-of-enum --status value
-// exits 2 without hitting the API.
+// exits 2 without hitting the API. "attending" (not "maybe") is the example
+// here: "maybe" became a legal third RSVP state (MIO-maybe-rsvp), so it can
+// no longer stand in for an invalid value — see TestEventsRSVPSet_Maybe for
+// its positive-path coverage instead.
 func TestEventsRSVPSet_InvalidStatus(t *testing.T) {
 	srv := newMockServer(t, nil) // must not be called
+
+	res := runContract(t, eventsEnv(srv.URL),
+		withTeam("t_team1",
+			"--hub", "hub_123",
+			"events", "rsvp", "set", "evt_1",
+			"--status", "attending",
+		)...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+}
+
+// TestEventsRSVPSet_Maybe verifies --status maybe is accepted and forwarded
+// verbatim to the SAME wire contract as going/not_going: PUT to
+// .../events/{id}/rsvp with a JSON:API envelope of type "event_rsvps" and
+// attributes.status set. "Maybe" is a real third RSVP state (product ruling,
+// Slack #8-mio-development 2026-09-07, thread 1788527517.683859): it keeps
+// the event in the member's "My Events" tab without committing to "going".
+// The CLI has no capacity or notification logic of its own (that lives in
+// mio-backend) — it only needs to stop rejecting the value and pass it
+// through, exactly like "going"/"not_going" above.
+//
+// This asserts method + path + envelope type, not just the status attribute
+// (MIO-3739 review round): a body-only oracle stayed green when "maybe" was
+// mutated to route to a different verb/path/envelope entirely, because
+// nothing here could tell the two implementations apart — see
+// .claude/rules/verifying-guards.md ("probe set smaller than the claim").
+func TestEventsRSVPSet_Maybe(t *testing.T) {
+	var gotBody []byte
+	var gotMethod, gotPath string
+
+	// The full wire path, including the /v1 the client injects — eventsPath's
+	// doc comment describes the pre-version prefix only.
+	const wantRSVPPath = "/api/v1/hubs/hub_123/events/evt_1/rsvp"
+
+	const maybeRSVPBody = `{
+		"data": {
+			"id": "rsvp_1",
+			"type": "event_rsvps",
+			"attributes": {
+				"status": "maybe"
+			}
+		}
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(maybeRSVPBody))
+	}))
+	t.Cleanup(srv.Close)
 
 	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
@@ -572,8 +630,33 @@ func TestEventsRSVPSet_InvalidStatus(t *testing.T) {
 			"--status", "maybe",
 		)...)
 
-	if res.Code != errs.ExitUsage {
-		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("HTTP method = %q, want PUT", gotMethod)
+	}
+	// Exact equality, not HasSuffix: the contract is that events paths carry
+	// NO team_id segment (see eventsPath's doc comment). A suffix match is
+	// satisfied by "/api/teams/t_team1/hubs/hub_123/events/evt_1/rsvp" too, so
+	// it cannot fail in the one direction this assertion exists to catch.
+	if gotPath != wantRSVPPath {
+		t.Errorf("path = %q, want %q", gotPath, wantRSVPPath)
+	}
+	var doc struct {
+		Data struct {
+			Type       string         `json:"type"`
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(gotBody, &doc); err != nil {
+		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
+	}
+	if doc.Data.Type != "event_rsvps" {
+		t.Errorf("envelope type = %q, want \"event_rsvps\"", doc.Data.Type)
+	}
+	if doc.Data.Attributes["status"] != "maybe" {
+		t.Errorf("attributes.status = %v, want \"maybe\"", doc.Data.Attributes["status"])
 	}
 }
 
@@ -595,8 +678,8 @@ func TestEventsRSVPWithdraw_RequiresYes(t *testing.T) {
 // TestEventsRSVPWithdraw_WithYes_RendersBody is the regression guard for the
 // 200-with-body contract: the withdraw endpoint returns 200 with the RSVP
 // resource transitioned to "not_going" (the real backend RSVP-status enum is
-// going|not_going — there is no separate "withdrawn" status), NOT 204. The
-// command must render it (client.Action), not discard it (client.Delete
+// going|not_going|maybe — there is no separate "withdrawn" status), NOT 204.
+// The command must render it (client.Action), not discard it (client.Delete
 // would swallow the body on a 200).
 func TestEventsRSVPWithdraw_WithYes_RendersBody(t *testing.T) {
 	var gotMethod, gotPath string

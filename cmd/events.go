@@ -594,12 +594,13 @@ var eventsRSVPSetCmd = &cobra.Command{
 	Short: "Set your RSVP status for an event.",
 	Long: `Set the authenticated member's RSVP status for an event.
 
---status is required: going or not_going.
+--status is required: going, not_going, or maybe.
 
 Acts as the authenticated member contact (login-based auth); does not require
 hub owner/admin/moderator permissions.`,
 	Example: `  mio events rsvp set evt_abc123 --hub hub_123 --status going
-  mio events rsvp set evt_abc123 --hub hub_123 --status not_going`,
+  mio events rsvp set evt_abc123 --hub hub_123 --status not_going
+  mio events rsvp set evt_abc123 --hub hub_123 --status maybe`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, hubID, err := eventsContext(cmd)
@@ -614,10 +615,15 @@ hub owner/admin/moderator permissions.`,
 		if ferr != nil {
 			return errs.Wrap(errs.ExitGeneric, ferr)
 		}
+		// This enum is hand-mirrored from the backend's single source of
+		// truth (mio-backend app/hub_events/rsvp_status.py, the RsvpStatus
+		// Literal) and nothing watches the two for drift — see the
+		// typeOverrides/knownCollections precedent cited at the top of this
+		// file (MIO-2665 catalog pin) for why that is a known hazard here.
 		switch status {
-		case "going", "not_going":
+		case "going", "not_going", "maybe":
 		default:
-			return errs.New(errs.ExitUsage, "--status must be one of: going, not_going (got %q)", status)
+			return errs.New(errs.ExitUsage, "--status must be one of: going, not_going, maybe (got %q)", status)
 		}
 
 		attrs := map[string]any{"status": status}
@@ -677,7 +683,7 @@ var eventsRSVPsCmd = &cobra.Command{
 	Use:   "rsvps",
 	Short: "Read RSVPs recorded for an event.",
 	Long: `List RSVPs recorded for an event. Only "going" RSVPs are returned — a
-withdrawn or "not_going" RSVP never appears here.
+"not_going" (including withdrawn) or "maybe" RSVP never appears here.
 
 Hub owners/admins/moderators can always list. An ordinary active member can
 list too when the host left the attendee list visible for this event
@@ -687,8 +693,8 @@ list too when the host left the attendee list visible for this event
 var eventsRSVPsListCmd = &cobra.Command{
 	Use:   "list <event_id>",
 	Short: "List RSVPs for an event.",
-	Long: `List the "going" RSVPs recorded for the given event. Withdrawn and
-"not_going" RSVPs are never included in the response.
+	Long: `List the "going" RSVPs recorded for the given event. A "not_going"
+(including withdrawn) or "maybe" RSVP is never included in the response.
 
 Hub owners/admins/moderators can always list; an ordinary active member can
 list too when the host left the attendee list visible for this event.`,
@@ -725,10 +731,10 @@ func init() {
 		cmd.Flags().String("cover-image-url", "", "Cover image URL.")
 		cmd.Flags().String("location-url", "", "Location URL (when --location-type=url).")
 		cmd.Flags().String("location-address", "", "Location address (when --location-type=address).")
-		cmd.Flags().Int("capacity", 0, "Maximum attendee capacity.")
+		cmd.Flags().Int("capacity", 0, "Maximum attendee capacity. A \"maybe\" RSVP does not consume a seat — only \"going\" counts against this limit.")
 		cmd.Flags().String("visibility", "", "Visibility: all_members or segment.")
 		cmd.Flags().String("segment-id", "", "Segment id to scope visibility to (when --visibility=segment).")
-		cmd.Flags().String("rsvp-tag-id", "", "Tag id to apply to contacts who RSVP.")
+		cmd.Flags().String("rsvp-tag-id", "", "Tag id to apply to contacts who RSVP \"going\". Not applied for \"maybe\" or \"not_going\".")
 		cmd.Flags().Bool("attendee-list-visible", false, "Whether the attendee list is visible to other attendees.")
 
 		// Hosts (MIO-3740). Two shapes for one concept, so cobra is told they
@@ -757,7 +763,7 @@ func init() {
 	eventsListCmd.Flags().String("sort", "", "Sort order: starts_at or -starts_at.")
 
 	// rsvp set flags.
-	eventsRSVPSetCmd.Flags().String("status", "", "RSVP status: going or not_going. Required.")
+	eventsRSVPSetCmd.Flags().String("status", "", "RSVP status: going, not_going, or maybe. Required.")
 
 	// Pagination on rsvps list.
 	addPaginationFlags(eventsRSVPsListCmd)
