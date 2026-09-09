@@ -216,9 +216,24 @@ func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	return c, hubID, nil
 }
 
+// eventsMaxHosts is the CLI-side mirror of the backend's MAX_HOSTS_PER_EVENT
+// (mio-backend app/hub_events/models.py — currently 3), the cap on how many
+// hosts one event may carry. The backend enforces it at three layers of its
+// own (the write schema's Field(max_length=...), the service layer, and that
+// shared constant), so this copy is a client-side FAIL-FAST, never the
+// authority: it turns a knowingly-invalid body into a local usage error
+// instead of a round-trip that is guaranteed to 422. If the backend ever
+// raises the cap, this number is stale-but-safe (it rejects requests the API
+// would now accept) rather than unsafe.
+const eventsMaxHosts = 3
+
 // eventsAttrFlags is the set of create/update flags, shared so both commands
 // stay in lockstep. attrKey (see flags.go) translates each kebab-case flag
 // name to its snake_case attribute key (e.g. --starts-at -> starts_at).
+//
+// NEITHER host flag is in this list: both are read explicitly by
+// setEventAttrs so their values can be checked before the wire (and, for the
+// plural, so it serializes as a JSON ARRAY rather than a string).
 var eventsAttrFlags = []string{
 	"title", "starts-at", "ends-at", "timezone", "location-type",
 	"description", "cover-image-url", "location-url", "location-address",
@@ -229,12 +244,84 @@ var eventsAttrFlags = []string{
 // the correct getter per field. Only flags the user actually set are copied
 // (setStringFlag/setIntFlag/setBoolFlag all no-op on an unset flag), so a
 // PATCH stays a partial update and no field is ever sent as an explicit null.
-func setEventAttrs(cmd *cobra.Command, attrs map[string]any) {
+//
+// HOSTS (MIO-3740). The backend accepts EITHER host_contact_id (a single
+// contact id, sugar for a one-entry list) OR host_contact_ids (the full
+// ordered set, position 0 being the primary/denormalized host) — never both;
+// sending both is a 422. That mutual exclusivity is declared to cobra with
+// MarkFlagsMutuallyExclusive (see the flag-registration init below), so it
+// fires during flag validation, before this builder — or any request — runs.
+//
+// Neither host flag is a plain set*Flag copy: both are read explicitly so
+// their values can be checked BEFORE the wire (same shape as
+// achievements.go's --rule-content-node-ids and content.go's --playlist-id).
+// Silently repairing any of these would ship a host set the caller did not
+// ask for and still report success:
+//
+//   - a blank entry would ship a SHORTER list than was named;
+//   - a duplicate is loud evidence of a confused caller — the backend rejects
+//     it (schemas.py _reject_duplicate_host_contact_ids) rather than
+//     de-duplicating, and so does this;
+//   - an empty list and an over-cap list are both flat 422s server-side
+//     (min_length=1 / max_length=MAX_HOSTS_PER_EVENT);
+//   - an empty singular id is the same guaranteed 422 by another route: it
+//     resolves to no hub member, and the backend fails closed.
+//
+// The plural value stored is a real []string, NOT a joined string — the
+// backend reads host_contact_ids as list[str], so a comma-joined string
+// would be one bad id rather than a list.
+func setEventAttrs(cmd *cobra.Command, attrs map[string]any) error {
 	for _, f := range eventsAttrFlags {
 		setStringFlag(cmd, attrs, f)
 	}
 	setIntFlag(cmd, attrs, "capacity")
 	setBoolFlag(cmd, attrs, "attendee-list-visible")
+
+	if cmd.Flags().Changed("host-contact-id") {
+		raw, ferr := cmd.Flags().GetString("host-contact-id")
+		if ferr != nil {
+			return errs.Wrap(errs.ExitGeneric, ferr)
+		}
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			return errs.New(errs.ExitUsage,
+				"--host-contact-id was set to an empty value; remove it or supply a real contact id")
+		}
+		attrs["host_contact_id"] = id
+	}
+
+	if !cmd.Flags().Changed("host-contact-ids") {
+		return nil
+	}
+	ids, ferr := cmd.Flags().GetStringSlice("host-contact-ids")
+	if ferr != nil {
+		return errs.Wrap(errs.ExitGeneric, ferr)
+	}
+	cleaned := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, raw := range ids {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			return errs.New(errs.ExitUsage,
+				"--host-contact-ids contains an empty value; remove it or supply a real contact id")
+		}
+		if _, dup := seen[id]; dup {
+			return errs.New(errs.ExitUsage,
+				"--host-contact-ids contains a duplicate contact id (%s); list each host exactly once", id)
+		}
+		seen[id] = struct{}{}
+		cleaned = append(cleaned, id)
+	}
+	if len(cleaned) == 0 {
+		return errs.New(errs.ExitUsage,
+			"--host-contact-ids was set but no contact id was given; an event always needs at least one host")
+	}
+	if len(cleaned) > eventsMaxHosts {
+		return errs.New(errs.ExitUsage,
+			"--host-contact-ids accepts at most %d contact ids (got %d)", eventsMaxHosts, len(cleaned))
+	}
+	attrs["host_contact_ids"] = cleaned
+	return nil
 }
 
 // ---- create -------------------------------------------------------------------
@@ -252,6 +339,17 @@ var eventsCreateCmd = &cobra.Command{
 Allowed values for --location-type: url, address.
 Allowed values for --visibility:     all_members, segment (requires --segment-id).
 
+HOSTS. An event carries 1 to 3 hosts. Name them with EITHER --host-contact-id
+(one contact id) OR --host-contact-ids (the full ordered set, comma-separated
+or repeated; position 0 is the primary host). The two flags are mutually
+exclusive — passing both is a usage error, checked before any request is sent.
+Omit both and the event is hosted by the calling contact, which is what every
+CLI-created event did before these flags existed.
+
+Every named contact must already be a current, active member of this hub; the
+API rejects the WHOLE request otherwise (no partial accept). Being a host is
+attribution, not permission — it grants the contact no extra authority.
+
 Requires hub owner/admin/moderator permissions.`,
 	Example: `  mio events create --hub hub_123 --title "Community Meetup" \
     --starts-at 2026-09-01T18:00:00Z --ends-at 2026-09-01T20:00:00Z \
@@ -260,9 +358,30 @@ Requires hub owner/admin/moderator permissions.`,
   mio events create --hub hub_123 --title "Members-Only Session" \
     --starts-at 2026-09-01T18:00:00Z --ends-at 2026-09-01T20:00:00Z \
     --timezone America/New_York --location-type address --location-address "123 Main St" \
-    --visibility segment --segment-id seg_abc123 --capacity 50`,
+    --visibility segment --segment-id seg_abc123 --capacity 50
+
+  # Host it as somebody other than the calling contact.
+  mio events create --hub hub_123 --title "Guest Lecture" \
+    --starts-at 2026-09-01T18:00:00Z --ends-at 2026-09-01T20:00:00Z \
+    --timezone America/New_York --location-type url --location-url https://zoom.us/j/123 \
+    --host-contact-id con_guest
+
+  # Three co-hosts, comma-separated (repeating the flag works too).
+  mio events create --hub hub_123 --title "Panel" \
+    --starts-at 2026-09-01T18:00:00Z --ends-at 2026-09-01T20:00:00Z \
+    --timezone America/New_York --location-type url --location-url https://zoom.us/j/123 \
+    --host-contact-ids con_a,con_b,con_c`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Build the body BEFORE eventsContext so an invalid host set fires no
+		// request at all — not even the scope-resolution round-trips
+		// eventsContext makes when --hub/--team is a NAME rather than an id
+		// (the same rule content.go's --playlist-id documents, MIO-3074).
+		attrs := map[string]any{}
+		if err := setEventAttrs(cmd, attrs); err != nil {
+			return err
+		}
+
 		c, hubID, err := eventsContext(cmd)
 		if err != nil {
 			return err
@@ -280,9 +399,6 @@ Requires hub owner/admin/moderator permissions.`,
 		if len(missing) > 0 {
 			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
 		}
-
-		attrs := map[string]any{}
-		setEventAttrs(cmd, attrs)
 
 		res, err := c.client.Create(c.ctx, eventsPath(hubID, ""), attrs)
 		if err != nil {
@@ -383,18 +499,35 @@ accident.
 Allowed values for --location-type (when provided): url, address.
 Allowed values for --visibility (when provided):     all_members, segment.
 
+HOSTS. --host-contact-id and --host-contact-ids REPLACE the event's whole host
+set — they are not a per-host add/remove. The two are mutually exclusive
+(passing both is a usage error, checked before any request is sent), and the
+replacement set must hold 1 to 3 distinct contact ids, each a current, active
+member of this hub. There is no way to leave an event with no host: omit both
+flags to leave the existing hosts untouched.
+
 Requires hub owner/admin/moderator permissions.`,
 	Example: `  mio events update evt_abc123 --hub hub_123 --title "New Title"
-  mio events update evt_abc123 --hub hub_123 --capacity 100 --visibility all_members`,
+  mio events update evt_abc123 --hub hub_123 --capacity 100 --visibility all_members
+
+  # Hand the event to a single new host, replacing whoever hosted it before.
+  mio events update evt_abc123 --hub hub_123 --host-contact-id con_new
+
+  # Replace the host set with two co-hosts (repeating the flag works too).
+  mio events update evt_abc123 --hub hub_123 --host-contact-ids con_a,con_b`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Built BEFORE eventsContext for the same reason as create above: an
+		// invalid host set must fire no request at all.
+		attrs := map[string]any{}
+		if err := setEventAttrs(cmd, attrs); err != nil {
+			return err
+		}
+
 		c, hubID, err := eventsContext(cmd)
 		if err != nil {
 			return err
 		}
-
-		attrs := map[string]any{}
-		setEventAttrs(cmd, attrs)
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -597,6 +730,25 @@ func init() {
 		cmd.Flags().String("segment-id", "", "Segment id to scope visibility to (when --visibility=segment).")
 		cmd.Flags().String("rsvp-tag-id", "", "Tag id to apply to contacts who RSVP.")
 		cmd.Flags().Bool("attendee-list-visible", false, "Whether the attendee list is visible to other attendees.")
+
+		// Hosts (MIO-3740). Two shapes for one concept, so cobra is told they
+		// are mutually exclusive: that check runs during flag validation,
+		// before RunE, so the ambiguous combination the API 422s can never be
+		// assembled into a body, let alone sent.
+		cmd.Flags().String("host-contact-id", "",
+			"Contact id to record as the event's SOLE host, replacing the whole host set — shorthand for "+
+				"--host-contact-ids with a single value. Must be a current, active member of this hub. "+
+				"Mutually exclusive with --host-contact-ids. Default when both host flags are omitted: on "+
+				"create, the calling contact hosts the event; on update, the existing hosts are left unchanged.")
+		cmd.Flags().StringSlice("host-contact-ids", nil,
+			fmt.Sprintf("The full, ordered set of contact ids to record as the event's hosts, REPLACING the "+
+				"existing set rather than merging into it (position 0 is the primary host). Comma-separated "+
+				"or repeatable. Must hold 1 to %d distinct, non-blank ids, each a current active member of "+
+				"this hub — the count, duplicate and blank checks all run before any request is sent. "+
+				"Mutually exclusive with --host-contact-id. Default when both host flags are omitted: on "+
+				"create, the calling contact hosts the event; on update, the existing hosts are left unchanged.",
+				eventsMaxHosts))
+		cmd.MarkFlagsMutuallyExclusive("host-contact-id", "host-contact-ids")
 	}
 
 	// Pagination + filter/sort on list.
