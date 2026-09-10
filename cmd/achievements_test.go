@@ -504,6 +504,233 @@ func TestAchievementsUpdate_NothingToUpdate(t *testing.T) {
 	}
 }
 
+// ── update: --clear (MIO-3685) ──────────────────────────────────────────────
+//
+// An operator could not flip a rule-awarded badge back to manual: the
+// backend 422s rule_pieces_not_allowed on a bare --award-mode manual because
+// setAchievementAttrs only ever COPIES a changed flag's value — no flag
+// could express an explicit null, so a previously-set rule piece could never
+// be cleared in the same command. --clear is the fix: a repeatable flag that
+// nulls a named field instead of setting it.
+
+// TestAchievementsUpdate_Clear_SendsExplicitNull verifies --clear rule-type
+// sends rule_type as a LITERAL JSON null in the PATCH body. Asserting the
+// raw wire bytes (not just a decoded map lookup) matters here specifically:
+// a decoder that defaulted an absent key to a Go nil would satisfy a
+// map-only assertion without "null" ever having been present on the wire —
+// and an absent key vs. an explicit null is the entire distinction this
+// ticket exists to create.
+func TestAchievementsUpdate_Clear_SendsExplicitNull(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusOK, achievementBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "achievements", "update", "ach_1", "--clear", "rule-type")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if cap.Method != http.MethodPatch {
+		t.Errorf("HTTP method = %q, want PATCH", cap.Method)
+	}
+
+	if !strings.Contains(string(cap.Body), `"rule_type":null`) {
+		t.Fatalf("request body must contain the literal wire token \"rule_type\":null; body=%q", cap.Body)
+	}
+
+	_, attrs := decodeEnvelope(t, cap.Body)
+	v, present := attrs["rule_type"]
+	if !present {
+		t.Fatalf("attributes.rule_type is absent, want an explicit null present; body=%q", cap.Body)
+	}
+	if v != nil {
+		t.Errorf("attributes.rule_type = %v, want nil (JSON null)", v)
+	}
+}
+
+// TestAchievementsUpdate_Clear_Multiple verifies multiple repeatable --clear
+// flags all null in ONE PATCH.
+func TestAchievementsUpdate_Clear_Multiple(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusOK, achievementBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "achievements", "update", "ach_1",
+			"--clear", "rule-type",
+			"--clear", "rule-criteria",
+			"--clear", "rule-threshold",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	for _, key := range []string{"rule_type", "rule_criteria", "rule_threshold"} {
+		if !strings.Contains(string(cap.Body), `"`+key+`":null`) {
+			t.Errorf("request body must contain the literal wire token %q; body=%q", `"`+key+`":null`, cap.Body)
+		}
+	}
+	_, attrs := decodeEnvelope(t, cap.Body)
+	if len(attrs) != 3 {
+		t.Errorf("attributes = %v, want exactly 3 keys (rule_type, rule_criteria, rule_threshold)", attrs)
+	}
+}
+
+// TestAchievementsUpdate_Clear_CommaSeparated verifies a single --clear value
+// may also be comma-separated — matches the --unset idiom on `hubs update`
+// (hubs_update_blobs.go's parseUnsetFlag), the closest existing precedent
+// for a repeatable, comma-splittable nullable-field flag.
+func TestAchievementsUpdate_Clear_CommaSeparated(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusOK, achievementBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "achievements", "update", "ach_1",
+			"--clear", "rule-type,rule-criteria",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	_, attrs := decodeEnvelope(t, cap.Body)
+	if len(attrs) != 2 {
+		t.Errorf("attributes = %v, want exactly 2 keys (rule_type, rule_criteria)", attrs)
+	}
+}
+
+// TestAchievementsUpdate_Clear_WithNormalFlag verifies --clear combines with
+// an ordinary value-setting flag in ONE PATCH — the actual operator workflow
+// this ticket unblocks: --award-mode manual --clear rule-type --clear
+// rule-criteria in a single command.
+func TestAchievementsUpdate_Clear_WithNormalFlag(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusOK, achievementBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "achievements", "update", "ach_1",
+			"--award-mode", "manual",
+			"--clear", "rule-type",
+			"--clear", "rule-criteria",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if cap.Method != http.MethodPatch {
+		t.Errorf("HTTP method = %q, want PATCH", cap.Method)
+	}
+	_, attrs := decodeEnvelope(t, cap.Body)
+	if len(attrs) != 3 {
+		t.Errorf("attributes = %v, want exactly 3 keys (award_mode, rule_type, rule_criteria)", attrs)
+	}
+	if attrs["award_mode"] != "manual" {
+		t.Errorf("attributes.award_mode = %v, want \"manual\"", attrs["award_mode"])
+	}
+	for _, key := range []string{"rule_type", "rule_criteria"} {
+		v, present := attrs[key]
+		if !present || v != nil {
+			t.Errorf("attributes.%s = %v (present=%v), want an explicit null", key, v, present)
+		}
+	}
+}
+
+// TestAchievementsUpdate_Clear_UnknownField verifies an unrecognized --clear
+// field name is a usage error before any request fires — a typo the server
+// cannot diagnose helpfully, so the CLI catches it against its own flag
+// vocabulary instead.
+func TestAchievementsUpdate_Clear_UnknownField(t *testing.T) {
+	srv, fired := firedAnyServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "achievements", "update", "ach_1", "--clear", "not-a-real-field")...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("no HTTP request may fire when --clear names an unknown field")
+	}
+}
+
+// TestAchievementsUpdate_Clear_ConflictsWithSet verifies setting AND
+// clearing the same field in one invocation is a usage error before any
+// request fires — ambiguous intent, not resolved by a "last flag wins" rule.
+func TestAchievementsUpdate_Clear_ConflictsWithSet(t *testing.T) {
+	srv, fired := firedAnyServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "achievements", "update", "ach_1",
+			"--rule-type", "milestone", "--clear", "rule-type")...)
+
+	if res.Code != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	}
+	if *fired {
+		t.Error("no HTTP request may fire when a field is both set and cleared")
+	}
+}
+
+// TestAchievementsUpdate_NoClear_NoStrayNulls verifies a normal update with
+// no --clear flag is unchanged from before MIO-3685: only the flags actually
+// supplied appear in the body, and none of them is null.
+func TestAchievementsUpdate_NoClear_NoStrayNulls(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusOK, achievementBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "achievements", "update", "ach_1", "--title", "New Title")...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	_, attrs := decodeEnvelope(t, cap.Body)
+	if len(attrs) != 1 {
+		t.Errorf("attributes = %v, want exactly 1 key (title) — no stray nulls without --clear", attrs)
+	}
+	for k, v := range attrs {
+		if v == nil {
+			t.Errorf("attributes.%s is an unexpected null; attrs=%v", k, attrs)
+		}
+	}
+}
+
+// ── update: rule_pieces_not_allowed hint (MIO-3685) ─────────────────────────
+
+// TestAchievementsUpdate_RulePiecesNotAllowed_Hint verifies the update 422
+// rule_pieces_not_allowed carries a hint pointing the operator at --clear,
+// and that the hint does NOT rely on the backend's source pointer (which is
+// hardcoded to /data/attributes/rule_type regardless of which piece is
+// actually left over) — it must say to clear every rule piece, not just the
+// one the pointer happens to name.
+func TestAchievementsUpdate_RulePiecesNotAllowed_Hint(t *testing.T) {
+	detail, exitCode := earnHintDetail(t, 422,
+		`{"errors":[{"status":"422","code":"rule_pieces_not_allowed","detail":"A manual badge cannot carry rule pieces.","source":{"pointer":"/data/attributes/rule_type"}}]}`,
+		"--team", "t_team1", "achievements", "update", "ach_1", "--award-mode", "manual")
+
+	if exitCode != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage, from 422)", exitCode, errs.ExitUsage)
+	}
+	for _, want := range []string{"--clear rule-type", "--clear rule-criteria", "--clear rule-threshold"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("422 detail must mention %q; got %q", want, detail)
+		}
+	}
+	if !strings.Contains(detail, "not reliable") {
+		t.Errorf("422 detail must warn that the source pointer is not reliable; got %q", detail)
+	}
+}
+
+// TestAchievementsUpdate_OtherValidation422_NoHint verifies a 422 that is NOT
+// rule_pieces_not_allowed does not get the --clear hint bolted on — the hint
+// is keyed on the specific JSON:API error CODE, not the bare HTTP status,
+// since update's 422 can come from several unrelated validation failures.
+func TestAchievementsUpdate_OtherValidation422_NoHint(t *testing.T) {
+	detail, exitCode := earnHintDetail(t, 422,
+		`{"errors":[{"status":"422","code":"rule_type_not_available","detail":"streak is not yet available."}]}`,
+		"--team", "t_team1", "achievements", "update", "ach_1", "--rule-type", "streak")
+
+	if exitCode != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage, from 422)", exitCode, errs.ExitUsage)
+	}
+	if strings.Contains(detail, "--clear") {
+		t.Errorf("422 for an unrelated code must not carry the --clear hint; got %q", detail)
+	}
+}
+
 // ── archive ──────────────────────────────────────────────────────────────────
 
 // TestAchievementsArchive_RequiresYes verifies archive without --yes exits 5

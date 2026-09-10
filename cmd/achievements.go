@@ -339,10 +339,17 @@ func requireOverrideReason(cmd *cobra.Command) (string, error) {
 	return v, nil
 }
 
-// achievementsAttrFlags is the set of create/update string flags, shared so
-// both commands stay in lockstep. attrKey (see flags.go) translates each
-// kebab-case flag name to its snake_case attribute key (e.g. --award-mode ->
-// award_mode).
+// achievementsScalarFlags is the SINGLE vocabulary of create/update flags
+// whose wire attribute key is plain attrKey(name) (kebab -> snake, e.g.
+// --award-mode -> award_mode) and whose value, when the operator sets it, is
+// copied through unchanged by one of the set*Flag helpers (flags.go).
+//
+// This table drives BOTH directions: setAchievementAttrs walks it to copy a
+// VALUE when the flag is set, and achievementsClearAttrKey (--clear,
+// update-only — MIO-3685) walks the SAME table to validate a field name and
+// resolve its wire key when NULLING it instead. A flag added here is
+// therefore automatically both settable and clearable, with no second,
+// independently maintained list for --clear to fall out of sync with.
 //
 // rule-type/rule-criteria (MIO-3372/MIO-3662): the backend's write schemas
 // type these as plain strings, NOT an OpenAPI enum (schemas.py: "Plain
@@ -351,14 +358,120 @@ func requireOverrideReason(cmd *cobra.Command) (string, error) {
 // currently-accepted values are named in the flag help as information, not
 // as a client-enforced closed list; app/achievements/rules.py
 // (validate_rule_pieces) is the actual authority and 422s precisely.
-var achievementsAttrFlags = []string{"title", "description", "award-mode", "category", "rule-type", "rule-criteria"}
+//
+// --rule-content-node-ids (list-valued — see achievementsClearableExtraFlags
+// below) and --appearance-json (wire key "appearance", NOT
+// attrKey("appearance-json") == "appearance_json" — a whole-object
+// passthrough, not a scalar) do not fit this table's plain copy-through
+// shape and are handled in their own blocks in setAchievementAttrs; the
+// latter is therefore also NOT a --clear target (see
+// achievementsClearAttrKey).
+var achievementsScalarFlags = []struct {
+	name string
+	set  func(cmd *cobra.Command, attrs map[string]any, name string)
+}{
+	{"title", setStringFlag},
+	{"description", setStringFlag},
+	{"award-mode", setStringFlag},
+	{"category", setStringFlag},
+	{"rule-type", setStringFlag},
+	{"rule-criteria", setStringFlag},
+	{"points", setIntFlag},
+	{"rule-threshold", setIntFlag},
+	{"rule-window-days", setIntFlag},
+	{"is-secret", setBoolFlag},
+	{"is-active", setBoolFlag},
+	{"email-notification-enabled", setBoolFlag},
+}
+
+// achievementsClearableExtraFlags are --clear targets that are NOT in
+// achievementsScalarFlags because setAchievementAttrs reads their VALUE a
+// different way (rule-content-node-ids is list-valued, read explicitly
+// below), but whose wire attribute key is still plain attrKey(name) — so
+// --clear can null them by the same rule as everything in the table above.
+var achievementsClearableExtraFlags = []string{"rule-content-node-ids"}
+
+// achievementsClearAttrKey resolves a --clear field name (as the operator
+// typed it, e.g. "rule-type") to its wire attribute key ("rule_type"), or
+// ok=false when --clear does not recognize that name. It is the ONLY place
+// --clear's field vocabulary is decided, and that vocabulary is exactly
+// achievementsScalarFlags plus achievementsClearableExtraFlags — the same
+// names setAchievementAttrs already knows how to copy a value for. This
+// deliberately does not know or care which of these fields the BACKEND
+// considers nullable: that is app/achievements/schemas.py's call, not the
+// CLI's, and it 422s precisely (rule_pieces_not_allowed and friends) when a
+// null is one it won't accept. The check here catches a typo in the CLI's
+// OWN flag vocabulary before any request fires — a different, narrower job.
+func achievementsClearAttrKey(name string) (string, bool) {
+	for _, f := range achievementsScalarFlags {
+		if f.name == name {
+			return attrKey(name), true
+		}
+	}
+	for _, n := range achievementsClearableExtraFlags {
+		if n == name {
+			return attrKey(name), true
+		}
+	}
+	return "", false
+}
+
+// achievementsParseClearFlag validates update's repeatable --clear flag and
+// returns the wire attribute keys to null, or nil if --clear was not given.
+// Everything here runs BEFORE any request fires (ExitUsage on failure, no
+// partial validation left to the server) — mirrors hubs.go's --unset
+// (parseUnsetFlag): repeatable AND comma-separated, blank entries rejected.
+//
+// Two things are usage errors specific to --clear:
+//   - an unknown field name (typo) — see achievementsClearAttrKey;
+//   - a field that is BOTH set (--<field> <value>) and cleared (--clear
+//     <field>) in the same invocation — ambiguous intent, not resolved by
+//     picking a "last flag wins" order.
+func achievementsParseClearFlag(cmd *cobra.Command) ([]string, error) {
+	if !cmd.Flags().Changed("clear") {
+		return nil, nil
+	}
+	raw, err := cmd.Flags().GetStringArray("clear")
+	if err != nil {
+		return nil, errs.Wrap(errs.ExitUsage, err)
+	}
+
+	var wireKeys []string
+	for _, entry := range raw {
+		for _, part := range strings.Split(entry, ",") {
+			name := strings.TrimSpace(part)
+			if name == "" {
+				return nil, errs.New(errs.ExitUsage,
+					"--clear %q has a blank entry (stray comma?); every comma-separated entry must be a field name", entry)
+			}
+			wireKey, ok := achievementsClearAttrKey(name)
+			if !ok {
+				return nil, errs.New(errs.ExitUsage,
+					"--clear %q: unknown field; run 'mio achievements update --help' for the fields --clear accepts", name)
+			}
+			if cmd.Flags().Changed(name) {
+				return nil, errs.New(errs.ExitUsage,
+					"--clear %s conflicts with --%s: cannot set and clear the same field in one command", name, name)
+			}
+			wireKeys = append(wireKeys, wireKey)
+		}
+	}
+	if len(wireKeys) == 0 {
+		return nil, errs.New(errs.ExitUsage,
+			"--clear is empty: pass at least one field name (e.g. --clear rule-type)")
+	}
+	return wireKeys, nil
+}
 
 // setAchievementAttrs copies every changed create/update flag into attrs. Only
 // flags the user actually set are copied (the set*Flag helpers no-op on an
 // unset flag), so a PATCH stays a partial update and no field is ever sent as
-// an explicit null. --appearance-json is forwarded WHOLESALE as the
-// `appearance` object — the backend validates shape/icon/colors strictly
-// (extra=forbid), and the CLI is a conduit, not a second validator.
+// an explicit null — UNLESS the operator named it with --clear (update only;
+// achievementsParseClearFlag), which is the one deliberate exception: that
+// flag's entire purpose is to send an explicit null. --appearance-json is
+// forwarded WHOLESALE as the `appearance` object — the backend validates
+// shape/icon/colors strictly (extra=forbid), and the CLI is a conduit, not a
+// second validator.
 //
 // --rule-content-node-ids is the one rule-piece flag that isn't a plain
 // setIntFlag/setStringFlag copy: it needs the slice read explicitly so a
@@ -371,15 +484,9 @@ var achievementsAttrFlags = []string{"title", "description", "award-mode", "cate
 // (rule_threshold_conflicts_with_content_ids, rule_content_node_ids_invalid);
 // duplicating it here would just drift.
 func setAchievementAttrs(cmd *cobra.Command, attrs map[string]any) error {
-	for _, f := range achievementsAttrFlags {
-		setStringFlag(cmd, attrs, f)
+	for _, f := range achievementsScalarFlags {
+		f.set(cmd, attrs, f.name)
 	}
-	setIntFlag(cmd, attrs, "points")
-	setIntFlag(cmd, attrs, "rule-threshold")
-	setIntFlag(cmd, attrs, "rule-window-days")
-	setBoolFlag(cmd, attrs, "is-secret")
-	setBoolFlag(cmd, attrs, "is-active")
-	setBoolFlag(cmd, attrs, "email-notification-enabled")
 
 	if cmd.Flags().Changed("rule-content-node-ids") {
 		ids, ferr := cmd.Flags().GetStringSlice("rule-content-node-ids")
@@ -407,6 +514,14 @@ func setAchievementAttrs(cmd *cobra.Command, attrs map[string]any) error {
 	}
 	if appearance != nil {
 		attrs["appearance"] = appearance
+	}
+
+	clearKeys, err := achievementsParseClearFlag(cmd)
+	if err != nil {
+		return err
+	}
+	for _, k := range clearKeys {
+		attrs[k] = nil
 	}
 	return nil
 }
@@ -535,14 +650,26 @@ null'd out by accident.
 
 The --rule-* flags (see 'mio achievements create --help') work the same way
 here: only the ones you supply change, so setting --rule-threshold on an
-existing rule leaves --rule-type/--rule-criteria as they were. Flipping
---award-mode from "rule" back to "manual" does NOT clear a previously-set
-rule piece in the same command — the CLI has no null-clearing flag for these
-fields yet, and the backend rejects a manual badge that still carries any
-rule piece (rule_pieces_not_allowed) until they are cleared some other way.`,
+existing rule leaves --rule-type/--rule-criteria as they were.
+
+Flipping --award-mode from "rule" back to "manual" ADDITIONALLY requires
+clearing every rule piece the badge still carries, in the SAME command — the
+backend rejects a manual badge that still carries any rule piece
+(rule_pieces_not_allowed). Use the repeatable --clear <field> flag to null a
+field instead of setting it:
+
+  mio achievements update ach_abc123 --award-mode manual \
+    --clear rule-type --clear rule-criteria --clear rule-threshold
+
+--clear is a general mechanism, not a rule-piece special case — it works for
+any nullable attribute this command knows about (see --clear's own help for
+the full list), repeatable and comma-separated. Setting and clearing the
+same field in one command (e.g. --rule-type milestone --clear rule-type) is
+a usage error.`,
 	Example: `  mio achievements update ach_abc123 --title "New Title" --points 25
   mio achievements update ach_abc123 --is-active=false
-  mio achievements update ach_abc123 --rule-threshold 5`,
+  mio achievements update ach_abc123 --rule-threshold 5
+  mio achievements update ach_abc123 --award-mode manual --clear rule-type --clear rule-criteria --clear rule-threshold`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := achievementsContext(cmd)
@@ -560,10 +687,47 @@ rule piece (rule_pieces_not_allowed) until they are cleared some other way.`,
 
 		res, err := c.client.Update(c.ctx, achievementsPath(teamID, args[0]), attrs)
 		if err != nil {
-			return err
+			return hintAchievementsUpdateErr(err)
 		}
 		return c.render(cmd, res)
 	},
+}
+
+// achievementsUpdateRulePiecesHint fires on the backend's
+// rule_pieces_not_allowed 422 (app/achievements/schemas.py) — the exact dead
+// end MIO-3685 exists to fix: flipping award_mode away from "rule" while the
+// badge still carries any rule piece. See hintAchievementsUpdateErr for why
+// this is keyed on the error CODE rather than the bare HTTP status.
+//
+// The backend hardcodes this error's source.pointer to
+// /data/attributes/rule_type regardless of which piece is actually left
+// over (a known, pre-existing backend quirk this CLI does not fix), so on a
+// PARTIAL clear the pointer can name a field the operator already cleared
+// successfully. This hint deliberately never echoes that pointer and instead
+// names the whole rule-piece set, so it stays correct no matter which field
+// the pointer blames.
+const achievementsUpdateRulePiecesHint = "a badge can't move away from award_mode \"rule\" while it " +
+	"still carries any rule piece. Clear every rule piece it currently has in the SAME command with " +
+	"the repeatable --clear flag, e.g.: --award-mode manual --clear rule-type --clear rule-criteria " +
+	"--clear rule-threshold (also --clear rule-window-days / --clear rule-content-node-ids if the " +
+	"badge set those too). Note: this error names /data/attributes/rule_type as its source regardless " +
+	"of which piece is actually left over — that pointer is not reliable here, so clear every rule " +
+	"piece the badge has, not just the one it names"
+
+// hintAchievementsUpdateErr appends achievementsUpdateRulePiecesHint to an
+// update error carrying the rule_pieces_not_allowed JSON:API error code,
+// preserving the transport status (and therefore the exit code). Keyed on
+// the CODE via client.HasAPIErrorCode rather than the bare HTTP status
+// (unlike hintAchievementsEarnErr's grant/revoke/restore hints): update's
+// 422 can come from several unrelated validation failures
+// (validate_rule_pieces alone raises more than this one code), and only
+// rule_pieces_not_allowed has this fix. Any other error (or nil) passes
+// through untouched.
+func hintAchievementsUpdateErr(err error) error {
+	if err == nil || !client.HasAPIErrorCode(err, "rule_pieces_not_allowed") {
+		return err
+	}
+	return errs.NewHTTP(errs.HTTPStatusOf(err), "%s\nhint: %s", err.Error(), achievementsUpdateRulePiecesHint)
 }
 
 // ---- archive ----------------------------------------------------------------
@@ -1070,6 +1234,12 @@ func init() {
 		cmd.Flags().Int("rule-window-days", 0, "Rolling window in days — only accepted for --rule-type=challenge, which is not yet available (see --rule-type); setting this on any rule type accepted today 422s server-side (rule_window_days_not_allowed). Reserved for when challenge ships.")
 		cmd.Flags().StringSlice("rule-content-node-ids", nil, "Content node ids that must ALL be completed. Only valid with --rule-criteria=completed-content, and MUTUALLY EXCLUSIVE with --rule-threshold (see its help) — the backend 422s the combination, the CLI does not block it client-side. Repeatable or comma-separated; 1-50 items, no duplicates (enforced server-side).")
 	}
+
+	// --clear (MIO-3685, update only): the general null-clearing mechanism —
+	// see achievementsScalarFlags/achievementsClearAttrKey for how its
+	// vocabulary is derived so it can't drift from what setAchievementAttrs
+	// already knows how to set.
+	achievementsUpdateCmd.Flags().StringArray("clear", nil, "Null out a field instead of setting it, e.g. --clear rule-type. Repeatable and comma-separated. Valid targets: title, description, award-mode, category, rule-type, rule-criteria, points, rule-threshold, rule-window-days, is-secret, is-active, email-notification-enabled, rule-content-node-ids. Setting a field with --<field> and clearing it with --clear in the same command is a usage error. This only validates that the name is one the CLI knows how to null — whether the backend actually accepts null for a given field is its own call (it 422s the ones it won't accept, e.g. rule_pieces_not_allowed until every rule piece is cleared).")
 
 	// Pagination + filters on the lists.
 	addPaginationFlags(achievementsListCmd)
