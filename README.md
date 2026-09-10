@@ -337,6 +337,25 @@ mio products prices create <product-id> --amount 19900 --currency usd --type one
 # Segments — preview who matches a condition tree (does not save)
 mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
 mio segments members <segment-id>
+
+# Events (hub-scoped) — the one family a normal API key cannot drive.
+# Every `mio events` route needs a member (contact) identity, so a key from
+# `mio login` / MIO_API_KEY 401s and the CLI stops with exit 3 before it sends.
+# Export a member access token instead; CLI member login is still to come.
+export MIO_CONTACT_TOKEN=<member-access-token>
+mio events create --hub <hub-id> --title "Community Meetup" \
+  --starts-at 2026-09-01T18:00:00Z --ends-at 2026-09-01T20:00:00Z \
+  --timezone America/New_York --location-type url --location-url https://zoom.us/j/123
+# An event carries 1-3 hosts. --host-contact-id and --host-contact-ids are mutually
+# exclusive, and on `update` they REPLACE the whole host set, never add to it.
+mio events update <event-id> --hub <hub-id> --host-contact-ids con_a,con_b
+mio events list --hub <hub-id> --status upcoming --sort starts_at
+# RSVP is three-state and acts as YOU: `rsvp` (singular) is your own answer,
+# `rsvps` (plural) is everyone's. A `maybe` takes no seat against --capacity.
+mio events rsvp set <event-id> --hub <hub-id> --status maybe
+mio events rsvps list <event-id> --hub <hub-id>   # "going" only — never maybe/not_going
+# `cancel` is an action, not a delete: the event is kept, marked cancelled.
+mio events cancel <event-id> --hub <hub-id> --yes
 ```
 
 `segments search` takes the **full condition tree** (matching the backend write shape), not a flat list. You can also read it from a file and paginate:
