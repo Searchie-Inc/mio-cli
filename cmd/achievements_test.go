@@ -14,8 +14,10 @@ package cmd
 //   - offerings list/attach/detach: hub-scoped paths, attach envelope type
 //     "achievement_hubs", detach --yes gate
 //   - grant: POST .../members/{contact_id}/achievements, envelope type
-//     "achievement_earns", award_reason only when --reason given,
-//     --contact-id required
+//     "achievement_earns", award_reason sent only when --reason is exactly
+//     "manual" (MIO-3488 — the backend 422s any other value); a non-"manual"
+//     --reason is rejected client-side with no request fired; --contact-id
+//     required
 //   - revoke: DELETE with ?reason= QUERY (no body), --yes gate
 //   - restore: POST .../restore sends the envelope EVEN WITH NO FLAGS (the
 //     backend requires the body; a nil body would 422), type
@@ -1026,7 +1028,8 @@ func TestAchievementsRuleDelete_WithYes(t *testing.T) {
 
 // TestAchievementsGrant_BodyShape verifies grant POSTs to the member earn path
 // with envelope type "achievement_earns", achievement_id, and award_reason
-// (only because --reason was given).
+// "manual" (the only value the backend's Literal["manual"] schema accepts,
+// MIO-3488).
 func TestAchievementsGrant_BodyShape(t *testing.T) {
 	srv, cap := captureServer(t, http.StatusCreated, achievementEarnBody)
 
@@ -1034,7 +1037,7 @@ func TestAchievementsGrant_BodyShape(t *testing.T) {
 		withTeam("t_team1", "--hub", "hub_123",
 			"achievements", "grant", "ach_1",
 			"--contact-id", "ct_456",
-			"--reason", "community week winner",
+			"--reason", "manual",
 		)...)
 
 	if res.Code != errs.ExitOK {
@@ -1054,8 +1057,37 @@ func TestAchievementsGrant_BodyShape(t *testing.T) {
 	if attrs["achievement_id"] != "ach_1" {
 		t.Errorf("attributes.achievement_id = %v, want \"ach_1\"", attrs["achievement_id"])
 	}
-	if attrs["award_reason"] != "community week winner" {
-		t.Errorf("attributes.award_reason = %v, want the --reason value", attrs["award_reason"])
+	if attrs["award_reason"] != "manual" {
+		t.Errorf("attributes.award_reason = %v, want \"manual\"", attrs["award_reason"])
+	}
+}
+
+// TestAchievementsGrant_NonManualReason_RejectedClientSide verifies a --reason
+// other than "manual" is rejected before any request is sent. The backend
+// request schema types award_reason as Literal["manual"] (MIO-3488) and 422s
+// ("Input should be manual") on any other value, so forwarding it would be a
+// guaranteed round trip to a failure the CLI can already see coming.
+func TestAchievementsGrant_NonManualReason_RejectedClientSide(t *testing.T) {
+	srv, fired := firedAnyServer(t)
+
+	err := executeCLI(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"achievements", "grant", "ach_1",
+			"--contact-id", "ct_456",
+			"--reason", "community week winner",
+		)...)
+
+	if err == nil {
+		t.Fatal("want an error, got nil")
+	}
+	if got := errs.CodeOf(err); got != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage); err=%q", got, errs.ExitUsage, err)
+	}
+	if *fired {
+		t.Error("no HTTP request may fire for a non-\"manual\" --reason")
+	}
+	if !strings.Contains(err.Error(), "manual") {
+		t.Errorf("error = %q, want it to name the \"manual\" constraint", err)
 	}
 }
 
