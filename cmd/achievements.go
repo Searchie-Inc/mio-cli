@@ -339,6 +339,26 @@ func requireOverrideReason(cmd *cobra.Command) (string, error) {
 	return v, nil
 }
 
+// applyGrantAwardReason sets attrs["award_reason"] for grant, iff --reason was
+// given. The backend request schema types award_reason as Literal["manual"]
+// (MIO-3488) and 422s ("Input should be manual") on anything else, so a
+// non-"manual" value is rejected here before any request is sent rather than
+// forwarded to a guaranteed 422.
+func applyGrantAwardReason(cmd *cobra.Command, attrs map[string]any) error {
+	if !cmd.Flags().Changed("reason") {
+		return nil
+	}
+	v, err := cmd.Flags().GetString("reason")
+	if err != nil {
+		return errs.Wrap(errs.ExitGeneric, err)
+	}
+	if v != "manual" {
+		return errs.New(errs.ExitUsage, "--reason must be \"manual\" — the backend only accepts award_reason=\"manual\" (MIO-3488) and records provenance itself")
+	}
+	attrs["award_reason"] = v
+	return nil
+}
+
 // achievementsScalarFlags is the SINGLE vocabulary of create/update flags
 // whose wire attribute key is plain attrKey(name) (kebab -> snake, e.g.
 // --award-mode -> award_mode) and whose value, when the operator sets it, is
@@ -1031,11 +1051,13 @@ The achievement must be offered in the hub (see 'mio achievements offerings')
 and its award_mode must be manual. Granting over a previously REVOKED earn is
 a 409 — use 'mio achievements restore' instead.
 
---reason is forwarded as award_reason, which the request schema accepts — but
-the Phase 1 backend records award_reason="manual" regardless (verified live:
-grant_manual hardcodes it; revoke/restore reasons ARE persisted).`,
+--reason accepts only the literal value "manual" (MIO-3488): the backend
+request schema types award_reason as Literal["manual"] and 422s
+("Input should be manual") on anything else, then records provenance itself
+regardless of what was sent. Any other --reason value is rejected here before
+a request is sent.`,
 	Example: `  mio achievements grant ach_abc123 --hub hub_123 --contact-id ct_456
-  mio achievements grant ach_abc123 --hub hub_123 --contact-id ct_456 --reason "manual: community week winner"`,
+  mio achievements grant ach_abc123 --hub hub_123 --contact-id ct_456 --reason manual`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, hubID, err := achievementsHubContext(cmd)
@@ -1048,7 +1070,9 @@ grant_manual hardcodes it; revoke/restore reasons ARE persisted).`,
 		}
 
 		attrs := map[string]any{"achievement_id": args[0]}
-		setMappedString(cmd, attrs, "reason", "award_reason")
+		if err := applyGrantAwardReason(cmd, attrs); err != nil {
+			return err
+		}
 
 		res, err := c.client.Create(c.ctx, achievementsEarnPath(teamID, hubID, contactID, ""), attrs)
 		if err != nil {
@@ -1257,7 +1281,7 @@ func init() {
 	for _, cmd := range []*cobra.Command{achievementsGrantCmd, achievementsRevokeCmd, achievementsRestoreCmd, achievementsOverrideCmd} {
 		cmd.Flags().String("contact-id", "", "GLOBAL contact id of the hub member — capture with `mio contacts retrieve <team-contact-id> -o plain --jq .contact_id` (the flattened contact_id field, NOT the row's .id). Required.")
 	}
-	achievementsGrantCmd.Flags().String("reason", "", "Forwarded as award_reason. The Phase 1 backend accepts but does NOT persist it (award_reason is always recorded as \"manual\").")
+	achievementsGrantCmd.Flags().String("reason", "", "Must be exactly \"manual\" (MIO-3488) — the backend rejects any other value with a 422 and records provenance itself.")
 	achievementsRevokeCmd.Flags().String("reason", "", "Audit reason recorded as the earn's revoke_reason (sent as the ?reason= query parameter).")
 	achievementsRestoreCmd.Flags().String("reason", "", "Audit reason recorded as the earn's restore_reason.")
 	achievementsOverrideCmd.Flags().String("reason", "", "REQUIRED. Audit reason recorded as the earn's grant_reason. Unlike grant/revoke/restore's optional --reason, this one is mandatory — an empty or whitespace-only value is rejected before any request is sent (the backend's own AuditReason validator strips whitespace before its required check too, so a whitespace-only value would 422 there as well).")
