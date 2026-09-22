@@ -12,6 +12,7 @@ package cmd
 // Self-registered via init(); no other file is modified.
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -945,17 +947,50 @@ type caAttrDef struct {
 	FieldType string // the backend AttributeType: text/number/boolean/date/multiple/single
 }
 
+// caNextDefsPageAfter extracts the next page's page[after] cursor for the
+// team's contact-attribute definitions list, per the REAL pagination envelope
+// mio-backend's list_definitions emits (app/contact_attributes/router.py:
+// 155-168, verified against origin/main 2026-09-22) — which is NOT the
+// meta.page.{next_cursor,has_more} shape cmd/hubs_scaffold.go's shared
+// nextPageCursor reads for other endpoints that DO emit it correctly, so this
+// helper is deliberately local to this file and does not touch that one.
+// Here meta is TOP-LEVEL {"has_more": bool} (no nested "page" key), and the
+// next page is a full URL string at links.next
+// (".../contact-attributes?page[after]=<last row id>&page[size]=<size>",
+// page[size] capped at le=100). client.Collection has no Links field
+// (internal/client is intentionally link-unaware — Resource/Collection model
+// only id/type/attributes/meta), so this parses links.next out of the raw
+// envelope bytes (col.RawBody) instead.
+func caNextDefsPageAfter(col *client.Collection) string {
+	if hasMore, present := col.Meta["has_more"].(bool); present && !hasMore {
+		return ""
+	}
+	var doc struct {
+		Links struct {
+			Next string `json:"next"`
+		} `json:"links"`
+	}
+	if err := json.Unmarshal(col.RawBody, &doc); err != nil || doc.Links.Next == "" {
+		return ""
+	}
+	u, err := url.Parse(doc.Links.Next)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("page[after]")
+}
+
 // caDefFieldTypesBySlug lists the team's contact-attribute definitions and
 // returns a slug→caAttrDef map (id + the backend AttributeType: text/number/
 // boolean/date/multiple/single). `values set` uses it to route each --attr
 // value into the correct typed field, to resolve a select-type definition's
 // options (MIO-4124), and to reject unknown slugs before any write (MIO-2553).
-// It follows the backend's pagination cursor to exhaustion (meta.page.next_cursor
-// gated by has_more — the same convention as the scaffold's nextPageCursor) so
-// every definition resolves even for teams with more than one page of
-// attributes; without that, a slug on a later page would look unknown. The
-// seen-cursor set + maxPages bound are a stall guard against a buggy server
-// returning a stable/looping cursor.
+// It follows the backend's REAL pagination shape to exhaustion via
+// caNextDefsPageAfter (top-level meta.has_more + links.next — see that
+// function's doc comment) so every definition resolves even for teams with
+// more than one page of attributes; without that, a slug on a later page
+// would look unknown. The seen-cursor set + maxPages bound are a stall guard
+// against a buggy server returning a stable/looping cursor.
 func caDefFieldTypesBySlug(c *cmdContext, teamID string) (map[string]caAttrDef, error) {
 	out := map[string]caAttrDef{}
 	seen := map[string]bool{}
@@ -974,7 +1009,7 @@ func caDefFieldTypesBySlug(c *cmdContext, teamID string) (map[string]caAttrDef, 
 				out[slug] = caAttrDef{ID: r.ID, FieldType: ft}
 			}
 		}
-		next := nextPageCursor(col)
+		next := caNextDefsPageAfter(col)
 		if next == "" || seen[next] {
 			break
 		}

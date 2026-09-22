@@ -814,6 +814,117 @@ func TestContactAttributesValuesSet_EmptyOptionValueExitsUsageNoWrite(t *testing
 	}
 }
 
+// ─── MIO-4124 round 3 — real definitions-list pagination envelope ────────────
+//
+// caDefsPage1Body / caDefsPage2Body simulate mio-backend's REAL
+// list_definitions pagination shape (app/contact_attributes/router.py:155-168,
+// verified against origin/main 2026-09-22) — NOT the meta.page.{next_cursor,
+// has_more} shape cmd/hubs_scaffold.go's nextPageCursor reads for other
+// endpoints. Here meta is TOP-LEVEL {"has_more": bool} (no nested "page" key),
+// and the next page is a full URL string at links.next
+// (".../contact-attributes?page[after]=<last row id>&page[size]=<size>",
+// page[size] capped at 100), with the brackets percent-encoded exactly as the
+// backend emits them. def_tier2 (a "multiple" select) and scalar2 (text) both
+// live on page two, so a slug lookup that stops after page one would call
+// both "unknown".
+const caDefsPage1Body = `{"data":[` +
+	`{"id":"def_scalar1","type":"contact_attribute_definitions","attributes":{"slug":"scalar1","type":"text"}}` +
+	`],"meta":{"has_more":true},"links":{"next":"/api/teams/t_team1/contact-attributes?page%5Bafter%5D=def_last1&page%5Bsize%5D=100"}}`
+
+const caDefsPage2Body = `{"data":[` +
+	`{"id":"def_tier2","type":"contact_attribute_definitions","attributes":{"slug":"tier2","type":"multiple"}},` +
+	`{"id":"def_scalar2","type":"contact_attribute_definitions","attributes":{"slug":"scalar2","type":"text"}}` +
+	`],"meta":{"has_more":false}}`
+
+const caTier2OptionsBody = `{"data":[` +
+	`{"id":"opt_gold2","type":"contact_attribute_options","attributes":{"definition_id":"def_tier2","slug":"gold","label":"Gold","position":1}}` +
+	`]}`
+
+// caPagedDefsValuesSetServer starts a spy server whose GET .../contact-attributes
+// list is served across TWO pages, in the REAL mio-backend pagination shape
+// (see caDefsPage1Body above). defsGETCount counts every definitions-list GET
+// (both pages), so a test can assert exactly two round trips happened — one
+// per page, no more (MIO-4124 round 3).
+func caPagedDefsValuesSetServer(t *testing.T) (srv *httptest.Server, patchBody *[]byte, patchFired *bool, defsGETCount *int) {
+	t.Helper()
+	var body []byte
+	var fired bool
+	defsCount := 0
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/contact-attributes"):
+			defsCount++
+			w.WriteHeader(http.StatusOK)
+			if r.URL.Query().Get("page[after]") == "def_last1" {
+				_, _ = w.Write([]byte(caDefsPage2Body))
+			} else {
+				_, _ = w.Write([]byte(caDefsPage1Body))
+			}
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/def_tier2/options"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(caTier2OptionsBody))
+		case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/attributes"):
+			body, _ = io.ReadAll(r.Body)
+			fired = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(minimalContactValueListBody))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"not found"}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &body, &fired, &defsCount
+}
+
+// TestContactAttributesValuesSet_DefinitionsListFollowsRealPagination
+// (MIO-4124 round 3) verifies caDefFieldTypesBySlug follows mio-backend's REAL
+// list_definitions pagination envelope (top-level meta.has_more + links.next,
+// not meta.page.next_cursor), so a slug that only exists on the SECOND
+// definitions page still resolves — the definitions-list GET must fire
+// exactly twice (once per page). Both a select-type slug (tier2, multiple)
+// and a scalar slug (scalar2, text) live on page two; resolving tier2
+// additionally proves the new select-value path reaches page-two definitions
+// too, since it is what actually calls caDefFieldTypesBySlug.
+func TestContactAttributesValuesSet_DefinitionsListFollowsRealPagination(t *testing.T) {
+	srv, patchBody, patchFired, defsGETCount := caPagedDefsValuesSetServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "tier2=gold",
+			"--attr", "scalar2=hello",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*patchFired {
+		t.Fatalf("no PATCH request fired")
+	}
+	if got := *defsGETCount; got != 2 {
+		t.Errorf("definitions-list GET count = %d, want 2 (must follow links.next to page two)", got)
+	}
+
+	ops := decodeCAOps(t, *patchBody)
+	if len(ops) != 2 {
+		t.Fatalf("data should be a 2-item list; got %#v", ops)
+	}
+	bySlug := make(map[string]map[string]any, len(ops))
+	for _, op := range ops {
+		slug, _ := op.Attributes["definition_slug"].(string)
+		bySlug[slug] = op.Attributes
+	}
+	ids, _ := bySlug["tier2"]["option_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "opt_gold2" {
+		t.Errorf("tier2 option_ids = %#v, want [\"opt_gold2\"]", bySlug["tier2"]["option_ids"])
+	}
+	if got := bySlug["scalar2"]["value_text"]; got != "hello" {
+		t.Errorf("scalar2 value_text = %#v, want \"hello\"", got)
+	}
+}
+
 // TestContactAttributesValuesGet_DecodesCollection (MIO-2501) verifies `values
 // get` decodes a LIST response (collection) and exits 0, rather than trying to
 // decode the array as a single resource.
