@@ -158,11 +158,12 @@ func caHubContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 
 // attrDefFieldTypes is the set of accepted --field-type values (the backend
 // AttributeType enum: text/number/boolean/date/multiple/single — mio-backend
-// app/contact_attributes/models.py:27). Validated client-side so a typo exits
-// ExitUsage rather than a 422 round-trip — NEW client-side validation added
-// with the pure-builder extraction (MIO-2543); "single" added MIO-4124 (it
-// was missing even though the backend enum, and this command's own read/set
-// paths, have always supported it).
+// app/contact_attributes/schemas.py's ATTRIBUTE_TYPES/AttributeType, mirrored
+// server-side by the models.py:60 CHECK constraint). Validated client-side so
+// a typo exits ExitUsage rather than a 422 round-trip — NEW client-side
+// validation added with the pure-builder extraction (MIO-2543); "single"
+// added MIO-4124 (it was missing even though the backend enum, and this
+// command's own read/set paths, have always supported it).
 var attrDefFieldTypes = map[string]bool{
 	"text":     true,
 	"number":   true,
@@ -733,12 +734,19 @@ Pass each attribute as --attr <key>=<value>. Multiple --attr flags may be used.
 
 For a single- or multiple-select attribute, <value> names one of the
 attribute's options — by option id, by option slug, or by label
-(case-insensitive). A multiple-select attribute accepts more than one option:
-repeat --attr for the same key, or pass a comma-separated list (a label that
-itself contains a comma must be given by id or slug instead, not label). A
-single-select attribute accepts exactly one resolved option.`,
+(case-insensitive). Setting a select attribute REPLACES its entire current
+selection with the value(s) given in this command — it does not add to
+whatever the contact already has. A multiple-select attribute may name more
+than one option: repeat --attr for the same key, or pass a comma-separated
+list — every --attr for one key in a single command merges into ONE
+replacing set (it never accumulates across separate commands: running this
+command again later replaces the selection again, from scratch). An option
+whose slug or label contains a comma must be passed by id. A single-select
+attribute accepts exactly one value.`,
 	Example: `  mio contact-attributes values set tcid_abc123 --attr company=Acme --attr tier=enterprise
   mio contact-attributes values set tcid_abc123 --attr plan=Gold
+  # Both --attr flags below name the SAME multiple-select attribute, so they merge into
+  # one replacing set (interests = music, sports, travel) — not two incremental adds.
   mio contact-attributes values set tcid_abc123 --attr interests=music,sports --attr interests=travel`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -867,12 +875,23 @@ single-select attribute accepts exactly one resolved option.`,
 				return err
 			}
 
+			// Two different raw tokens (e.g. a slug and a label, or a slug and
+			// an id) can resolve to the SAME option — "tier=pro --attr
+			// tier=Pro --attr tier=opt_pro" all name opt_pro. Raw-token dedup
+			// above only catches literal duplicates; dedupe by resolved id too
+			// so the wire list never repeats one option, preserving the order
+			// each id was first resolved in.
 			resolvedIDs := make([]string, 0, len(g.values))
+			seenIDs := map[string]bool{}
 			for _, raw := range g.values {
 				id, err := resolveCAOptionValue(slug, options, raw)
 				if err != nil {
 					return err
 				}
+				if seenIDs[id] {
+					continue
+				}
+				seenIDs[id] = true
 				resolvedIDs = append(resolvedIDs, id)
 			}
 
@@ -976,34 +995,23 @@ type caAttrOption struct {
 }
 
 // caOptionsByDef lists ALL options for the given select-type (single/multiple)
-// definition, following the pagination cursor to exhaustion exactly like
-// caDefFieldTypesBySlug (meta.page.next_cursor gated by has_more), so `values
-// set` can resolve an option value against a definition's FULL option list
-// even when it spans more than one page.
+// definition with a SINGLE GET. GET .../contact-attributes/{definition_id}/
+// options (mio-backend app/contact_attributes/router.py's list_options) takes
+// no page params and returns every row in one response (meta={}) — verified
+// against mio-backend origin/main 2026-09-22, `git grep next_cursor` under
+// app/contact_attributes/ has zero hits. Unlike caDefFieldTypesBySlug's
+// definitions list, this endpoint is NOT paginated, so no cursor loop is
+// needed here.
 func caOptionsByDef(c *cmdContext, teamID, defID string) ([]caAttrOption, error) {
-	var out []caAttrOption
-	seen := map[string]bool{}
-	query := url.Values{}
-	query.Set("page[size]", "100")
-	const maxPages = 1000
-	for page := 0; page < maxPages; page++ {
-		col, err := c.client.List(c.ctx, contactAttributesOptionsPath(teamID, defID, ""), query)
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range col.Data {
-			slug, _ := r.Attributes["slug"].(string)
-			label, _ := r.Attributes["label"].(string)
-			out = append(out, caAttrOption{ID: r.ID, Slug: slug, Label: label})
-		}
-		next := nextPageCursor(col)
-		if next == "" || seen[next] {
-			break
-		}
-		seen[next] = true
-		query = url.Values{}
-		query.Set("page[size]", "100")
-		query.Set("page[after]", next)
+	col, err := c.client.List(c.ctx, contactAttributesOptionsPath(teamID, defID, ""), url.Values{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]caAttrOption, 0, len(col.Data))
+	for _, r := range col.Data {
+		slug, _ := r.Attributes["slug"].(string)
+		label, _ := r.Attributes["label"].(string)
+		out = append(out, caAttrOption{ID: r.ID, Slug: slug, Label: label})
 	}
 	return out, nil
 }

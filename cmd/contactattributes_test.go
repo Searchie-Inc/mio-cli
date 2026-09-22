@@ -366,9 +366,16 @@ const caTierOptionsBody = `{"data":[` +
 	`{"id":"opt_enterprise","type":"contact_attribute_options","attributes":{"definition_id":"def_tier","slug":"enterprise","label":"Enterprise","position":3}}` +
 	`]}`
 
+// caStatusOptionsBody's opt_active1/opt_active2 share a label case-insensitively
+// ("Active"/"active") — the ambiguous-label test. opt_dup_id's SLUG
+// ("opt_active1") deliberately collides with opt_active1's ID, for the
+// id-over-slug precedence test: a raw value of "opt_active1" must resolve via
+// the id match (to opt_active1 itself), not via a slug match against
+// opt_dup_id.
 const caStatusOptionsBody = `{"data":[` +
 	`{"id":"opt_active1","type":"contact_attribute_options","attributes":{"definition_id":"def_status","slug":"active","label":"Active","position":1}},` +
-	`{"id":"opt_active2","type":"contact_attribute_options","attributes":{"definition_id":"def_status","slug":"live","label":"active","position":2}}` +
+	`{"id":"opt_active2","type":"contact_attribute_options","attributes":{"definition_id":"def_status","slug":"live","label":"active","position":2}},` +
+	`{"id":"opt_dup_id","type":"contact_attribute_options","attributes":{"definition_id":"def_status","slug":"opt_active1","label":"Duplicate ID Slug","position":3}}` +
 	`]}`
 
 // caOp is a decoded {type, attributes} entry of a values-set write body's
@@ -519,11 +526,15 @@ func TestContactAttributesValuesSet_SingleSelectBySlugAndByID(t *testing.T) {
 	}
 }
 
-// TestContactAttributesValuesSet_MultipleAccumulatesAndDedupes (MIO-4124)
-// verifies a multiple-select attribute accumulates values across BOTH
-// repeated --attr flags and a comma-separated value into ONE op, preserves
-// order, drops exact (raw) duplicates, and fetches the definition's options
-// exactly once no matter how many --attr occurrences reference it.
+// TestContactAttributesValuesSet_MultipleAccumulatesAndDedupes (MIO-4124,
+// extended round 2 for resolved-id dedup) verifies a multiple-select
+// attribute accumulates values across BOTH repeated --attr flags and a
+// comma-separated value into ONE op, preserves order, drops exact (raw)
+// duplicate tokens, ALSO drops duplicates that only tie once RESOLVED — "pro"
+// (slug), "Pro" (label) and "opt_pro" (id) are three different raw tokens
+// that all name the same option and must collapse to one entry — and fetches
+// the definition's options exactly once no matter how many --attr
+// occurrences reference it.
 func TestContactAttributesValuesSet_MultipleAccumulatesAndDedupes(t *testing.T) {
 	srv, patchBody, patchFired, counts := caSelectValuesSetServer(t)
 
@@ -531,7 +542,9 @@ func TestContactAttributesValuesSet_MultipleAccumulatesAndDedupes(t *testing.T) 
 		withTeam("t_team1",
 			"contact-attributes", "values", "set", "tcid_abc123",
 			"--attr", "tier=basic,pro",
-			"--attr", "tier=pro", // duplicate of "pro" above — dropped
+			"--attr", "tier=pro", // duplicate RAW token of "pro" above — dropped before resolution
+			"--attr", "tier=Pro", // different raw token, but resolves (by label) to the SAME option — dropped after resolution
+			"--attr", "tier=opt_pro", // different raw token again, resolves (by id) to the SAME option — dropped after resolution
 			"--attr", "tier=enterprise",
 		)...)
 
@@ -644,13 +657,16 @@ func TestContactAttributesValuesSet_UnknownOptionValueExitsUsageNoWrite(t *testi
 	}
 }
 
-// TestContactAttributesValuesSet_TwoValuesForSingleExitsUsageNoWrite (MIO-4124)
-// verifies passing two DISTINCT option values for a single-select attribute
-// exits ExitUsage (mirroring the backend's "accepts exactly one option, not
-// multiple" rule) and fires NO write request. Uses executeCLI to see the error
-// message (see the comment on TestContactAttributesValuesSet_UnknownOptionValueExitsUsageNoWrite).
+// TestContactAttributesValuesSet_TwoValuesForSingleExitsUsageNoWrite (MIO-4124,
+// extended round 2) verifies passing two DISTINCT option values for a
+// single-select attribute exits ExitUsage (mirroring the backend's "accepts
+// exactly one option, not multiple" rule), fires NO write request, and — the
+// point that actually proves the check runs BEFORE resolution, not just
+// before the write — fires NO options GET for the definition either. Uses
+// executeCLI to see the error message (see the comment on
+// TestContactAttributesValuesSet_UnknownOptionValueExitsUsageNoWrite).
 func TestContactAttributesValuesSet_TwoValuesForSingleExitsUsageNoWrite(t *testing.T) {
-	srv, _, patchFired, _ := caSelectValuesSetServer(t)
+	srv, _, patchFired, counts := caSelectValuesSetServer(t)
 
 	err := executeCLI(t, baseEnv(srv.URL),
 		withTeam("t_team1",
@@ -663,6 +679,9 @@ func TestContactAttributesValuesSet_TwoValuesForSingleExitsUsageNoWrite(t *testi
 	}
 	if *patchFired {
 		t.Errorf("PATCH must NOT fire for two values on a single-select attribute")
+	}
+	if got := (*counts)["def_plan"]; got != 0 {
+		t.Errorf("options GET count for def_plan = %d, want 0 (the single-select cardinality check must run before fetching options)", got)
 	}
 	if err == nil || !strings.Contains(err.Error(), "plan") {
 		t.Errorf("error must name the definition %q: %v", "plan", err)
@@ -691,6 +710,74 @@ func TestContactAttributesValuesSet_AmbiguousLabelExitsUsageNoWrite(t *testing.T
 	}
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "ambiguous") {
 		t.Errorf("error must say the value is ambiguous: %v", err)
+	}
+}
+
+// TestContactAttributesValuesSet_SlugMatchWinsOverAmbiguousLabel (MIO-4124
+// round 2) verifies the resolution order actually discriminates slug from
+// label, not just in theory: "status=active" (lowercase) exact-matches
+// opt_active1's SLUG ("active") and must resolve there directly — even though
+// opt_active2's label ("active", case-insensitive) would otherwise tie with
+// opt_active1's label ("Active") and make the value ambiguous, exactly like
+// TestContactAttributesValuesSet_AmbiguousLabelExitsUsageNoWrite above. That
+// test alone cannot tell a resolver that checks slug-before-label apart from
+// one that checks label-before-slug, because "status=Active" never
+// exact-matches any slug at all; this one gives the resolver a value that
+// DOES, so a label-first implementation would (wrongly) hit the ambiguous
+// branch instead of resolving.
+func TestContactAttributesValuesSet_SlugMatchWinsOverAmbiguousLabel(t *testing.T) {
+	srv, patchBody, patchFired, _ := caSelectValuesSetServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "status=active",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*patchFired {
+		t.Fatalf("no PATCH request fired")
+	}
+	ops := decodeCAOps(t, *patchBody)
+	if len(ops) != 1 {
+		t.Fatalf("data should be a 1-item list; got %#v", ops)
+	}
+	ids, _ := ops[0].Attributes["option_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "opt_active1" {
+		t.Errorf("option_ids = %#v, want [\"opt_active1\"] (an exact slug match must win over an otherwise-ambiguous label match)", ops[0].Attributes["option_ids"])
+	}
+}
+
+// TestContactAttributesValuesSet_IDMatchWinsOverSlugMatch (MIO-4124 round 2)
+// verifies an id match takes precedence over a slug match: caStatusOptionsBody
+// carries opt_dup_id, whose SLUG ("opt_active1") deliberately collides with
+// opt_active1's ID. A raw value of "opt_active1" must resolve to opt_active1
+// itself (the id match, checked first) — not to opt_dup_id (which would only
+// match on slug).
+func TestContactAttributesValuesSet_IDMatchWinsOverSlugMatch(t *testing.T) {
+	srv, patchBody, patchFired, _ := caSelectValuesSetServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "status=opt_active1",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*patchFired {
+		t.Fatalf("no PATCH request fired")
+	}
+	ops := decodeCAOps(t, *patchBody)
+	if len(ops) != 1 {
+		t.Fatalf("data should be a 1-item list; got %#v", ops)
+	}
+	ids, _ := ops[0].Attributes["option_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "opt_active1" {
+		t.Errorf("option_ids = %#v, want [\"opt_active1\"] (an exact id match must win over a different option's colliding slug)", ops[0].Attributes["option_ids"])
 	}
 }
 
