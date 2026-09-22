@@ -107,7 +107,7 @@ mio contact-attributes hub-config list — list hub-level attribute configuratio
 mio contact-attributes hub-config update — update a hub attribute configuration
 mio contact-attributes hub-config delete — remove a hub attribute configuration
 mio contact-attributes values get — get all attribute values for a contact
-mio contact-attributes values set — set attribute values for a contact
+mio contact-attributes values set — set attribute values for a contact; for a single/multiple-select attribute, --attr value is an option id, slug, or label, and REPLACES the attribute's entire current selection (it does not add to it)
 
 mio tags create — create a tag in the active team
 mio tags list — list tags

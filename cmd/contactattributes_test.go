@@ -309,12 +309,13 @@ func TestContactAttributesValuesSet_NonFiniteNumberExitsUsageNoWrite(t *testing.
 	}
 }
 
-// TestContactAttributesValuesSet_MultiSelectExitsUsageNoWrite (MIO-2553) verifies
-// a multi-select (multiple/single) attribute exits ExitUsage with a clear message
-// and fires NO PATCH — option-value setting via bare key=value is a documented
-// follow-up, and sending value_text would 422 server-side anyway.
-func TestContactAttributesValuesSet_MultiSelectExitsUsageNoWrite(t *testing.T) {
-	srv, _, patchFired := caValuesSetServer(t)
+// TestContactAttributesValuesSet_MultiSelectResolvesOptionValue (MIO-4124)
+// supersedes the old "not yet supported" expectation (MIO-2553) for a
+// multi-select attribute: `--attr tier=enterprise` now resolves the value
+// against the definition's options and writes option_ids, instead of exiting
+// ExitUsage.
+func TestContactAttributesValuesSet_MultiSelectResolvesOptionValue(t *testing.T) {
+	srv, patchBody, patchFired, _ := caSelectValuesSetServer(t)
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
@@ -322,11 +323,605 @@ func TestContactAttributesValuesSet_MultiSelectExitsUsageNoWrite(t *testing.T) {
 			"--attr", "tier=enterprise",
 		)...)
 
-	if res.Code != errs.ExitUsage {
-		t.Fatalf("exit code = %d, want %d (ExitUsage); stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*patchFired {
+		t.Fatalf("no PATCH request fired")
+	}
+	ops := decodeCAOps(t, *patchBody)
+	if len(ops) != 1 {
+		t.Fatalf("data should be a 1-item list; got %#v", ops)
+	}
+	ids, _ := ops[0].Attributes["option_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "opt_enterprise" {
+		t.Errorf("option_ids = %#v, want [\"opt_enterprise\"]", ops[0].Attributes["option_ids"])
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MIO-4124 — values set: option values for single/multiple-select attributes
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// caDefsWithSelectsBody extends the MIO-2553 definitions fixture with two
+// select-type attributes: "plan" (single) and "tier" (multiple, already
+// present pre-MIO-4124). "status" is a second single-type def whose two
+// options share a label case-insensitively, for the ambiguous-label test.
+const caDefsWithSelectsBody = `{"data":[` +
+	`{"id":"def_age","type":"contact_attribute_definitions","attributes":{"slug":"age","type":"number"}},` +
+	`{"id":"def_company","type":"contact_attribute_definitions","attributes":{"slug":"company","type":"text"}},` +
+	`{"id":"def_plan","type":"contact_attribute_definitions","attributes":{"slug":"plan","type":"single"}},` +
+	`{"id":"def_tier","type":"contact_attribute_definitions","attributes":{"slug":"tier","type":"multiple"}},` +
+	`{"id":"def_status","type":"contact_attribute_definitions","attributes":{"slug":"status","type":"single"}}` +
+	`]}`
+
+const caPlanOptionsBody = `{"data":[` +
+	`{"id":"opt_gold","type":"contact_attribute_options","attributes":{"definition_id":"def_plan","slug":"gold","label":"Gold","position":1}},` +
+	`{"id":"opt_silver","type":"contact_attribute_options","attributes":{"definition_id":"def_plan","slug":"silver","label":"Silver","position":2}}` +
+	`]}`
+
+const caTierOptionsBody = `{"data":[` +
+	`{"id":"opt_basic","type":"contact_attribute_options","attributes":{"definition_id":"def_tier","slug":"basic","label":"Basic","position":1}},` +
+	`{"id":"opt_pro","type":"contact_attribute_options","attributes":{"definition_id":"def_tier","slug":"pro","label":"Pro","position":2}},` +
+	`{"id":"opt_enterprise","type":"contact_attribute_options","attributes":{"definition_id":"def_tier","slug":"enterprise","label":"Enterprise","position":3}}` +
+	`]}`
+
+// caStatusOptionsBody's opt_active1/opt_active2 share a label case-insensitively
+// ("Active"/"active") — the ambiguous-label test. opt_dup_id's SLUG
+// ("opt_active1") deliberately collides with opt_active1's ID, for the
+// id-over-slug precedence test: a raw value of "opt_active1" must resolve via
+// the id match (to opt_active1 itself), not via a slug match against
+// opt_dup_id.
+const caStatusOptionsBody = `{"data":[` +
+	`{"id":"opt_active1","type":"contact_attribute_options","attributes":{"definition_id":"def_status","slug":"active","label":"Active","position":1}},` +
+	`{"id":"opt_active2","type":"contact_attribute_options","attributes":{"definition_id":"def_status","slug":"live","label":"active","position":2}},` +
+	`{"id":"opt_dup_id","type":"contact_attribute_options","attributes":{"definition_id":"def_status","slug":"opt_active1","label":"Duplicate ID Slug","position":3}}` +
+	`]}`
+
+// caOp is a decoded {type, attributes} entry of a values-set write body's
+// data[] list.
+type caOp struct {
+	Type       string         `json:"type"`
+	Attributes map[string]any `json:"attributes"`
+}
+
+// decodeCAOps decodes a values-set PATCH body's {data:[...]} list.
+func decodeCAOps(t *testing.T, body []byte) []caOp {
+	t.Helper()
+	var doc struct {
+		Data []caOp `json:"data"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("body /data is not a valid JSON list: %v; body=%q", err, body)
+	}
+	return doc.Data
+}
+
+// caSelectValuesSetServer starts a spy server serving caDefsWithSelectsBody
+// (the def-type lookup) plus each select definition's options list, and
+// captures the PATCH write. optionsGETCount counts GET .../options calls PER
+// definition id, so a test can assert a definition's options are fetched
+// exactly once no matter how many --attr occurrences (or comma-separated
+// tokens) reference it (MIO-4124).
+func caSelectValuesSetServer(t *testing.T) (srv *httptest.Server, patchBody *[]byte, patchFired *bool, optionsGETCount *map[string]int) {
+	t.Helper()
+	var body []byte
+	var fired bool
+	counts := map[string]int{}
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/contact-attributes"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(caDefsWithSelectsBody))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/def_plan/options"):
+			counts["def_plan"]++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(caPlanOptionsBody))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/def_tier/options"):
+			counts["def_tier"]++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(caTierOptionsBody))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/def_status/options"):
+			counts["def_status"]++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(caStatusOptionsBody))
+		case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/attributes"):
+			body, _ = io.ReadAll(r.Body)
+			fired = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(minimalContactValueListBody))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"not found"}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &body, &fired, &counts
+}
+
+// TestContactAttributesValuesSet_SingleSelectByLabel (MIO-4124) verifies a
+// single-select attribute value can be set by LABEL: `--attr plan=Gold`
+// resolves through exactly one options GET, and the write body carries
+// option_ids (never option_slugs or a value_* key).
+func TestContactAttributesValuesSet_SingleSelectByLabel(t *testing.T) {
+	srv, patchBody, patchFired, counts := caSelectValuesSetServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "plan=Gold",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*patchFired {
+		t.Fatalf("no PATCH request fired")
+	}
+	if got := (*counts)["def_plan"]; got != 1 {
+		t.Errorf("options GET count for def_plan = %d, want 1", got)
+	}
+
+	ops := decodeCAOps(t, *patchBody)
+	if len(ops) != 1 {
+		t.Fatalf("data should be a 1-item list; got %#v", ops)
+	}
+	op := ops[0]
+	if op.Type != "set" {
+		t.Errorf("data[0].type = %q, want \"set\"", op.Type)
+	}
+	if slug, _ := op.Attributes["definition_slug"].(string); slug != "plan" {
+		t.Errorf("definition_slug = %q, want \"plan\"", slug)
+	}
+	ids, ok := op.Attributes["option_ids"].([]any)
+	if !ok || len(ids) != 1 || ids[0] != "opt_gold" {
+		t.Errorf("option_ids = %#v, want [\"opt_gold\"]", op.Attributes["option_ids"])
+	}
+	if _, ok := op.Attributes["option_slugs"]; ok {
+		t.Errorf("must NOT carry option_slugs: %#v", op.Attributes)
+	}
+	for _, k := range []string{"value_text", "value_number", "value_boolean", "value_date"} {
+		if _, ok := op.Attributes[k]; ok {
+			t.Errorf("must NOT carry %s: %#v", k, op.Attributes)
+		}
+	}
+}
+
+// TestContactAttributesValuesSet_SingleSelectBySlugAndByID (MIO-4124) verifies
+// a single-select value resolves to the SAME option id whether the raw --attr
+// value names the option's slug or its id directly.
+func TestContactAttributesValuesSet_SingleSelectBySlugAndByID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{"by slug", "gold"},
+		{"by id", "opt_gold"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, patchBody, patchFired, _ := caSelectValuesSetServer(t)
+
+			res := runContract(t, baseEnv(srv.URL),
+				withTeam("t_team1",
+					"contact-attributes", "values", "set", "tcid_abc123",
+					"--attr", "plan="+tc.raw,
+				)...)
+
+			if res.Code != errs.ExitOK {
+				t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+			}
+			if !*patchFired {
+				t.Fatalf("no PATCH request fired")
+			}
+			ops := decodeCAOps(t, *patchBody)
+			if len(ops) != 1 {
+				t.Fatalf("data should be a 1-item list; got %#v", ops)
+			}
+			ids, _ := ops[0].Attributes["option_ids"].([]any)
+			if len(ids) != 1 || ids[0] != "opt_gold" {
+				t.Errorf("option_ids = %#v, want [\"opt_gold\"]", ops[0].Attributes["option_ids"])
+			}
+		})
+	}
+}
+
+// TestContactAttributesValuesSet_MultipleAccumulatesAndDedupes (MIO-4124,
+// extended round 2 for resolved-id dedup) verifies a multiple-select
+// attribute accumulates values across BOTH repeated --attr flags and a
+// comma-separated value into ONE op, preserves order, drops exact (raw)
+// duplicate tokens, ALSO drops duplicates that only tie once RESOLVED — "pro"
+// (slug), "Pro" (label) and "opt_pro" (id) are three different raw tokens
+// that all name the same option and must collapse to one entry — and fetches
+// the definition's options exactly once no matter how many --attr
+// occurrences reference it.
+func TestContactAttributesValuesSet_MultipleAccumulatesAndDedupes(t *testing.T) {
+	srv, patchBody, patchFired, counts := caSelectValuesSetServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "tier=basic,pro",
+			"--attr", "tier=pro", // duplicate RAW token of "pro" above — dropped before resolution
+			"--attr", "tier=Pro", // different raw token, but resolves (by label) to the SAME option — dropped after resolution
+			"--attr", "tier=opt_pro", // different raw token again, resolves (by id) to the SAME option — dropped after resolution
+			"--attr", "tier=enterprise",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*patchFired {
+		t.Fatalf("no PATCH request fired")
+	}
+	if got := (*counts)["def_tier"]; got != 1 {
+		t.Errorf("options GET count for def_tier = %d, want 1", got)
+	}
+
+	ops := decodeCAOps(t, *patchBody)
+	if len(ops) != 1 {
+		t.Fatalf("data should be a 1-item list (one op for the whole 'tier' attribute); got %#v", ops)
+	}
+	ids, ok := ops[0].Attributes["option_ids"].([]any)
+	if !ok {
+		t.Fatalf("option_ids missing or wrong type: %#v", ops[0].Attributes)
+	}
+	want := []any{"opt_basic", "opt_pro", "opt_enterprise"}
+	if len(ids) != len(want) {
+		t.Fatalf("option_ids = %#v, want %#v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Errorf("option_ids[%d] = %#v, want %#v", i, ids[i], want[i])
+		}
+	}
+}
+
+// TestContactAttributesValuesSet_MixedScalarAndSelect (MIO-4124) verifies a
+// call mixing one scalar attribute and one select attribute produces two ops
+// — the scalar op is unchanged from pre-MIO-4124 behaviour (value_text,
+// carries no option_ids) — and the options list is fetched ONLY for the
+// select definition actually referenced.
+func TestContactAttributesValuesSet_MixedScalarAndSelect(t *testing.T) {
+	srv, patchBody, patchFired, counts := caSelectValuesSetServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "company=Acme",
+			"--attr", "plan=Gold",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*patchFired {
+		t.Fatalf("no PATCH request fired")
+	}
+	if got := (*counts)["def_plan"]; got != 1 {
+		t.Errorf("options GET count for def_plan = %d, want 1", got)
+	}
+	if got := (*counts)["def_tier"]; got != 0 {
+		t.Errorf("options GET count for def_tier = %d, want 0 (not referenced)", got)
+	}
+
+	ops := decodeCAOps(t, *patchBody)
+	if len(ops) != 2 {
+		t.Fatalf("data should be a 2-item list; got %#v", ops)
+	}
+	bySlug := make(map[string]map[string]any, len(ops))
+	for _, op := range ops {
+		slug, _ := op.Attributes["definition_slug"].(string)
+		bySlug[slug] = op.Attributes
+	}
+	if got := bySlug["company"]["value_text"]; got != "Acme" {
+		t.Errorf("company value_text = %#v, want \"Acme\"", got)
+	}
+	if _, ok := bySlug["company"]["option_ids"]; ok {
+		t.Errorf("company (scalar) must NOT carry option_ids: %#v", bySlug["company"])
+	}
+	ids, _ := bySlug["plan"]["option_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "opt_gold" {
+		t.Errorf("plan option_ids = %#v, want [\"opt_gold\"]", bySlug["plan"]["option_ids"])
+	}
+}
+
+// TestContactAttributesValuesSet_UnknownOptionValueExitsUsageNoWrite (MIO-4124)
+// verifies a value that matches none of a select definition's options exits
+// ExitUsage, names the definition, lists its options as "slug (label)", and
+// fires NO write request. Uses executeCLI (not runContract) to assert on the
+// error MESSAGE: the SilenceErrors root (cmd/root.go) never writes RunE's
+// returned error into the captured stderr buffer in-process — only main.go's
+// post-Execute rendering does that, so res.Stderr is always empty here (see
+// pages_catalog_test.go's executeCLI doc comment).
+func TestContactAttributesValuesSet_UnknownOptionValueExitsUsageNoWrite(t *testing.T) {
+	srv, _, patchFired, _ := caSelectValuesSetServer(t)
+
+	err := executeCLI(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "plan=Bronze",
+		)...)
+
+	if codeForExecuteErr(err) != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); err=%v", codeForExecuteErr(err), errs.ExitUsage, err)
 	}
 	if *patchFired {
-		t.Errorf("PATCH must NOT fire for an unsupported multi-select attribute")
+		t.Errorf("PATCH must NOT fire for an unmatched option value")
+	}
+	if err == nil || !strings.Contains(err.Error(), "plan") {
+		t.Errorf("error must name the definition %q: %v", "plan", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "gold (Gold)") || !strings.Contains(err.Error(), "silver (Silver)") {
+		t.Errorf("error must list the definition's options as \"slug (label)\": %v", err)
+	}
+}
+
+// TestContactAttributesValuesSet_TwoValuesForSingleExitsUsageNoWrite (MIO-4124,
+// extended round 2) verifies passing two DISTINCT option values for a
+// single-select attribute exits ExitUsage (mirroring the backend's "accepts
+// exactly one option, not multiple" rule), fires NO write request, and — the
+// point that actually proves the check runs BEFORE resolution, not just
+// before the write — fires NO options GET for the definition either. Uses
+// executeCLI to see the error message (see the comment on
+// TestContactAttributesValuesSet_UnknownOptionValueExitsUsageNoWrite).
+func TestContactAttributesValuesSet_TwoValuesForSingleExitsUsageNoWrite(t *testing.T) {
+	srv, _, patchFired, counts := caSelectValuesSetServer(t)
+
+	err := executeCLI(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "plan=Gold", "--attr", "plan=Silver",
+		)...)
+
+	if codeForExecuteErr(err) != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); err=%v", codeForExecuteErr(err), errs.ExitUsage, err)
+	}
+	if *patchFired {
+		t.Errorf("PATCH must NOT fire for two values on a single-select attribute")
+	}
+	if got := (*counts)["def_plan"]; got != 0 {
+		t.Errorf("options GET count for def_plan = %d, want 0 (the single-select cardinality check must run before fetching options)", got)
+	}
+	if err == nil || !strings.Contains(err.Error(), "plan") {
+		t.Errorf("error must name the definition %q: %v", "plan", err)
+	}
+}
+
+// TestContactAttributesValuesSet_AmbiguousLabelExitsUsageNoWrite (MIO-4124)
+// verifies a value that case-insensitively matches TWO options' labels (and
+// matches neither by id nor by slug) exits ExitUsage as ambiguous and fires
+// NO write request. Uses executeCLI to see the error message (see the comment
+// on TestContactAttributesValuesSet_UnknownOptionValueExitsUsageNoWrite).
+func TestContactAttributesValuesSet_AmbiguousLabelExitsUsageNoWrite(t *testing.T) {
+	srv, _, patchFired, _ := caSelectValuesSetServer(t)
+
+	err := executeCLI(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "status=Active",
+		)...)
+
+	if codeForExecuteErr(err) != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); err=%v", codeForExecuteErr(err), errs.ExitUsage, err)
+	}
+	if *patchFired {
+		t.Errorf("PATCH must NOT fire for an ambiguous option value")
+	}
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "ambiguous") {
+		t.Errorf("error must say the value is ambiguous: %v", err)
+	}
+}
+
+// TestContactAttributesValuesSet_SlugMatchWinsOverAmbiguousLabel (MIO-4124
+// round 2) verifies the resolution order actually discriminates slug from
+// label, not just in theory: "status=active" (lowercase) exact-matches
+// opt_active1's SLUG ("active") and must resolve there directly — even though
+// opt_active2's label ("active", case-insensitive) would otherwise tie with
+// opt_active1's label ("Active") and make the value ambiguous, exactly like
+// TestContactAttributesValuesSet_AmbiguousLabelExitsUsageNoWrite above. That
+// test alone cannot tell a resolver that checks slug-before-label apart from
+// one that checks label-before-slug, because "status=Active" never
+// exact-matches any slug at all; this one gives the resolver a value that
+// DOES, so a label-first implementation would (wrongly) hit the ambiguous
+// branch instead of resolving.
+func TestContactAttributesValuesSet_SlugMatchWinsOverAmbiguousLabel(t *testing.T) {
+	srv, patchBody, patchFired, _ := caSelectValuesSetServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "status=active",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*patchFired {
+		t.Fatalf("no PATCH request fired")
+	}
+	ops := decodeCAOps(t, *patchBody)
+	if len(ops) != 1 {
+		t.Fatalf("data should be a 1-item list; got %#v", ops)
+	}
+	ids, _ := ops[0].Attributes["option_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "opt_active1" {
+		t.Errorf("option_ids = %#v, want [\"opt_active1\"] (an exact slug match must win over an otherwise-ambiguous label match)", ops[0].Attributes["option_ids"])
+	}
+}
+
+// TestContactAttributesValuesSet_IDMatchWinsOverSlugMatch (MIO-4124 round 2)
+// verifies an id match takes precedence over a slug match: caStatusOptionsBody
+// carries opt_dup_id, whose SLUG ("opt_active1") deliberately collides with
+// opt_active1's ID. A raw value of "opt_active1" must resolve to opt_active1
+// itself (the id match, checked first) — not to opt_dup_id (which would only
+// match on slug).
+func TestContactAttributesValuesSet_IDMatchWinsOverSlugMatch(t *testing.T) {
+	srv, patchBody, patchFired, _ := caSelectValuesSetServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "status=opt_active1",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*patchFired {
+		t.Fatalf("no PATCH request fired")
+	}
+	ops := decodeCAOps(t, *patchBody)
+	if len(ops) != 1 {
+		t.Fatalf("data should be a 1-item list; got %#v", ops)
+	}
+	ids, _ := ops[0].Attributes["option_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "opt_active1" {
+		t.Errorf("option_ids = %#v, want [\"opt_active1\"] (an exact id match must win over a different option's colliding slug)", ops[0].Attributes["option_ids"])
+	}
+}
+
+// TestContactAttributesValuesSet_EmptyOptionValueExitsUsageNoWrite (MIO-4124)
+// verifies an empty option value (a trailing comma in a comma-separated list)
+// exits ExitUsage BEFORE any write — and before any options GET, since the
+// check runs while splitting --attr values, ahead of option resolution — with
+// a message that specifically calls out the empty value. Asserting only the
+// exit code here would not discriminate this from the (also ExitUsage)
+// "unknown option" fallback an empty string would otherwise hit during
+// resolution (verifying-guards.md: a reject-side case must be able to tell
+// the two implementations apart) — the message and options-GET-count checks
+// are what make this guard mutation-provable.
+func TestContactAttributesValuesSet_EmptyOptionValueExitsUsageNoWrite(t *testing.T) {
+	srv, _, patchFired, counts := caSelectValuesSetServer(t)
+
+	err := executeCLI(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "tier=basic,",
+		)...)
+
+	if codeForExecuteErr(err) != errs.ExitUsage {
+		t.Fatalf("exit code = %d, want %d (ExitUsage); err=%v", codeForExecuteErr(err), errs.ExitUsage, err)
+	}
+	if *patchFired {
+		t.Errorf("PATCH must NOT fire for an empty option value")
+	}
+	if got := (*counts)["def_tier"]; got != 0 {
+		t.Errorf("options GET count for def_tier = %d, want 0 (the empty-value check must run before option resolution)", got)
+	}
+	if err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error must specifically call out the empty value: %v", err)
+	}
+}
+
+// ─── MIO-4124 round 3 — real definitions-list pagination envelope ────────────
+//
+// caDefsPage1Body / caDefsPage2Body simulate mio-backend's REAL
+// list_definitions pagination shape (app/contact_attributes/router.py:155-168,
+// verified against origin/main 2026-09-22) — NOT the meta.page.{next_cursor,
+// has_more} shape cmd/hubs_scaffold.go's nextPageCursor reads for other
+// endpoints. Here meta is TOP-LEVEL {"has_more": bool} (no nested "page" key),
+// and the next page is a full URL string at links.next
+// (".../contact-attributes?page[after]=<last row id>&page[size]=<size>",
+// page[size] capped at 100), with the brackets percent-encoded exactly as the
+// backend emits them. def_tier2 (a "multiple" select) and scalar2 (text) both
+// live on page two, so a slug lookup that stops after page one would call
+// both "unknown".
+const caDefsPage1Body = `{"data":[` +
+	`{"id":"def_scalar1","type":"contact_attribute_definitions","attributes":{"slug":"scalar1","type":"text"}}` +
+	`],"meta":{"has_more":true},"links":{"next":"/api/teams/t_team1/contact-attributes?page%5Bafter%5D=def_last1&page%5Bsize%5D=100"}}`
+
+const caDefsPage2Body = `{"data":[` +
+	`{"id":"def_tier2","type":"contact_attribute_definitions","attributes":{"slug":"tier2","type":"multiple"}},` +
+	`{"id":"def_scalar2","type":"contact_attribute_definitions","attributes":{"slug":"scalar2","type":"text"}}` +
+	`],"meta":{"has_more":false}}`
+
+const caTier2OptionsBody = `{"data":[` +
+	`{"id":"opt_gold2","type":"contact_attribute_options","attributes":{"definition_id":"def_tier2","slug":"gold","label":"Gold","position":1}}` +
+	`]}`
+
+// caPagedDefsValuesSetServer starts a spy server whose GET .../contact-attributes
+// list is served across TWO pages, in the REAL mio-backend pagination shape
+// (see caDefsPage1Body above). defsGETCount counts every definitions-list GET
+// (both pages), so a test can assert exactly two round trips happened — one
+// per page, no more (MIO-4124 round 3).
+func caPagedDefsValuesSetServer(t *testing.T) (srv *httptest.Server, patchBody *[]byte, patchFired *bool, defsGETCount *int) {
+	t.Helper()
+	var body []byte
+	var fired bool
+	defsCount := 0
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/contact-attributes"):
+			defsCount++
+			w.WriteHeader(http.StatusOK)
+			if r.URL.Query().Get("page[after]") == "def_last1" {
+				_, _ = w.Write([]byte(caDefsPage2Body))
+			} else {
+				_, _ = w.Write([]byte(caDefsPage1Body))
+			}
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/def_tier2/options"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(caTier2OptionsBody))
+		case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/attributes"):
+			body, _ = io.ReadAll(r.Body)
+			fired = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(minimalContactValueListBody))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"not found"}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &body, &fired, &defsCount
+}
+
+// TestContactAttributesValuesSet_DefinitionsListFollowsRealPagination
+// (MIO-4124 round 3) verifies caDefFieldTypesBySlug follows mio-backend's REAL
+// list_definitions pagination envelope (top-level meta.has_more + links.next,
+// not meta.page.next_cursor), so a slug that only exists on the SECOND
+// definitions page still resolves — the definitions-list GET must fire
+// exactly twice (once per page). Both a select-type slug (tier2, multiple)
+// and a scalar slug (scalar2, text) live on page two; resolving tier2
+// additionally proves the new select-value path reaches page-two definitions
+// too, since it is what actually calls caDefFieldTypesBySlug.
+func TestContactAttributesValuesSet_DefinitionsListFollowsRealPagination(t *testing.T) {
+	srv, patchBody, patchFired, defsGETCount := caPagedDefsValuesSetServer(t)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"contact-attributes", "values", "set", "tcid_abc123",
+			"--attr", "tier2=gold",
+			"--attr", "scalar2=hello",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if !*patchFired {
+		t.Fatalf("no PATCH request fired")
+	}
+	if got := *defsGETCount; got != 2 {
+		t.Errorf("definitions-list GET count = %d, want 2 (must follow links.next to page two)", got)
+	}
+
+	ops := decodeCAOps(t, *patchBody)
+	if len(ops) != 2 {
+		t.Fatalf("data should be a 2-item list; got %#v", ops)
+	}
+	bySlug := make(map[string]map[string]any, len(ops))
+	for _, op := range ops {
+		slug, _ := op.Attributes["definition_slug"].(string)
+		bySlug[slug] = op.Attributes
+	}
+	ids, _ := bySlug["tier2"]["option_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "opt_gold2" {
+		t.Errorf("tier2 option_ids = %#v, want [\"opt_gold2\"]", bySlug["tier2"]["option_ids"])
+	}
+	if got := bySlug["scalar2"]["value_text"]; got != "hello" {
+		t.Errorf("scalar2 value_text = %#v, want \"hello\"", got)
 	}
 }
 
@@ -364,25 +959,66 @@ func TestContactAttributesValuesGet_DecodesCollection(t *testing.T) {
 	}
 }
 
-// TestContactAttributesCreate_RejectsInvalidFieldType (MIO-2543) verifies the NEW
-// client-side --field-type enum validation added with the pure-builder extraction:
-// an out-of-enum field type now exits ExitUsage and fires NO request, instead of
-// round-tripping to a backend 422. (The valid-field-type body guards live in
-// jake_qa_drift_test.go and are unchanged.)
+// TestContactAttributesCreate_RejectsInvalidFieldType (MIO-2543, extended
+// MIO-4124) verifies the client-side --field-type enum validation added with
+// the pure-builder extraction: an out-of-enum field type exits ExitUsage and
+// fires NO request, instead of round-tripping to a backend 422 — and that the
+// error message names "single" in the accepted-type list (MIO-4124 added
+// "single" to attrDefFieldTypes alongside the pre-existing "multiple"). (The
+// valid-field-type body guards live in jake_qa_drift_test.go and are
+// unchanged.) Uses executeCLI (not runContract) to see the error message: the
+// SilenceErrors root never writes RunE's returned error into the captured
+// stderr buffer in-process (see pages_catalog_test.go's executeCLI doc
+// comment).
 func TestContactAttributesCreate_RejectsInvalidFieldType(t *testing.T) {
 	srv, fired := newNoRequestServer(t, minimalHubConfigBody)
 
-	res := runContract(t, baseEnv(srv.URL),
+	err := executeCLI(t, baseEnv(srv.URL),
 		withTeam("t_team1", "contact-attributes", "create",
 			"--name", "Company", "--slug", "company", "--field-type", "select",
 		)...)
 
-	if res.Code != errs.ExitUsage {
-		t.Errorf("exit code = %d, want %d (ExitUsage for invalid --field-type); stderr=%q",
-			res.Code, errs.ExitUsage, res.Stderr)
+	if codeForExecuteErr(err) != errs.ExitUsage {
+		t.Errorf("exit code = %d, want %d (ExitUsage for invalid --field-type); err=%v",
+			codeForExecuteErr(err), errs.ExitUsage, err)
 	}
 	if *fired {
 		t.Error("an invalid --field-type must exit before any HTTP request")
+	}
+	if err == nil || !strings.Contains(err.Error(), "single") {
+		t.Errorf("error must name \"single\" in the accepted --field-type list: %v", err)
+	}
+}
+
+// TestContactAttributesCreate_FieldTypeSingle (MIO-4124) verifies
+// `contact-attributes create --field-type=single` is accepted client-side
+// (attrDefFieldTypes gained "single" alongside the pre-existing scalar types
+// and "multiple") and the wire body carries attributes.type = "single",
+// mirroring the pattern TestWritePath_ContactAttributesCreate_ExactBody
+// (jake_qa_drift_test.go) uses for the other field types.
+func TestContactAttributesCreate_FieldTypeSingle(t *testing.T) {
+	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalContactAttrBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "contact-attributes", "create",
+			"--name", "Plan",
+			"--slug", "plan",
+			"--field-type", "single",
+		)...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+
+	var doc struct {
+		Data struct {
+			Attributes map[string]any `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(*gotBody, &doc); err != nil {
+		t.Fatalf("request body is not valid JSON: %v; body=%q", err, *gotBody)
+	}
+	if got := doc.Data.Attributes["type"]; got != "single" {
+		t.Errorf(`attributes["type"] = %v, want "single"`, got)
 	}
 }
 
