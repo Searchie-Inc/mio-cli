@@ -505,6 +505,40 @@ func TestGetAPIKey_LegacyCleanupNeverDeletesANewerKey(t *testing.T) {
 	}
 }
 
+// TestGetAPIKey_LegacyBlobIsRemoved: the other half of the legacy contract. A
+// v0.1 blob is encrypted under a passphrase published in this repo's history,
+// so it is effectively plaintext on disk; recognising one must take it off the
+// disk, and leave no copy behind in the private directory it is detached into.
+func TestGetAPIKey_LegacyBlobIsRemoved(t *testing.T) {
+	dir := withXDG(t)
+	withFileBackendOnly(t)
+	noRetryWait(t)
+
+	legacyRing, err := openKeyringWithPassword(legacyFilePassphrase, "")
+	if err != nil {
+		t.Fatalf("open legacy ring: %v", err)
+	}
+	if err := legacyRing.Set(legacyKeyringItem("mio_sk_old_legacy_key")); err != nil {
+		t.Fatalf("seed legacy blob: %v", err)
+	}
+
+	if _, err := GetAPIKey(); !errors.Is(err, ErrLegacyCredentials) {
+		t.Fatalf("GetAPIKey = %v, want ErrLegacyCredentials", err)
+	}
+	keyringDir := filepath.Dir(blobPathFor(dir))
+	entries, err := os.ReadDir(keyringDir)
+	if err != nil {
+		t.Fatalf("read keyring dir: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("after recognising a legacy blob the keyring dir still holds %v; the legacy blob must be removed and no detached copy left behind", names)
+	}
+}
+
 // TestSetAPIKey_StagesBesideTheBlob: the replacement blob must be staged in
 // the SAME directory as the live one, the only place a rename is guaranteed
 // not to cross a filesystem (the keyring dir can be a mount point or a
