@@ -18,8 +18,9 @@ package cmd
 //     update command actually sends with every one of its flags set) and requires
 //     the help to name each one verbatim, so neither a reworded help nor a new
 //     flag documented under some other word can stay green;
-//   - the list example guard takes EVERY --jq example on each list command's
-//     help, rejects any that reads a key the rows do not have (from gojq's own
+//   - the list example guard takes EVERY --jq on each list command's help (any
+//     line but the flag's own usage line, and one it cannot run fails),
+//     rejects any that reads a key the rows do not have (from gojq's own
 //     parse tree, and again from the output: rows carry no null, so a null
 //     was manufactured), RUNS each against 2, 1 and 0 rows and rejects any
 //     whose JSON type changes with the row count, and requires some example
@@ -349,24 +350,27 @@ func TestCheckoutHubDisplayHelp_NamesEachEditableWireAttribute(t *testing.T) {
 	}
 }
 
-// jqExample pulls a single-quoted --jq program out of one example line.
+// jqExample pulls a single-quoted --jq program out of one help line.
 var jqExample = regexp.MustCompile(`--jq '([^']+)'`)
 
-// helpJQExamples returns the --jq program of every example on a rendered help
-// page: each line that is a `mio …` invocation. Any --jq on such a line that is
-// not in the `--jq '<program>'` form fails the test rather than being skipped,
-// so every --jq example on the page is either checked or rejected.
+// helpJQExamples returns the program of every --jq on a rendered help page.
+// No line is skipped for its shape: a `mio …` example, a capture like
+// `ID=$(mio … --jq '…')`, a `# or: --jq '…'` comment and prose all count. The
+// one exception is the flag's own usage line under Global Flags
+// (`--jq string   Filter …`). Any --jq that is not in the
+// `--jq '<program>'` form fails the test rather than being skipped, so every
+// --jq on the page is either run or rejected.
 func helpJQExamples(t *testing.T, page, help string) []string {
 	t.Helper()
 	var progs []string
 	for _, line := range strings.Split(help, "\n") {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "mio ") {
+		if !strings.Contains(line, "--jq") || strings.HasPrefix(line, "--jq string ") {
 			continue
 		}
 		found := jqExample.FindAllStringSubmatch(line, -1)
 		if n := strings.Count(line, "--jq"); n != len(found) {
-			t.Errorf("`%s` example %q passes --jq in a form this guard cannot run; write the program single-quoted: --jq '<program>'", page, line)
+			t.Errorf("`%s` line %q passes --jq in a form this guard cannot run; write the program single-quoted: --jq '<program>'", page, line)
 		}
 		for _, m := range found {
 			progs = append(progs, m[1])
@@ -528,7 +532,8 @@ func yieldsEachRow(out any, wire []wireRow, editable []string) string {
 }
 
 // TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute checks EVERY
-// --jq example on each list command's help (not just the first):
+// --jq on each list command's help, on any line (helpJQExamples), not just the
+// first example:
 //
 //   - reads: every field the example reads by a literal name (jqFieldReads)
 //     must be `id`, `type` or an attribute the API's rows carry — `.visibility`,
