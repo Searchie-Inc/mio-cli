@@ -620,6 +620,16 @@ var unreadableRetryWait = func() { time.Sleep(25 * time.Millisecond) }
 // exactly that window.
 var beforeLegacyRemoval = func() {}
 
+// afterLegacyDetach runs once removeLegacyBlob has moved the live blob aside
+// and before it decides whether to put it back. It does nothing in
+// production; a test uses it to look at the live path inside that window.
+var afterLegacyDetach = func() {}
+
+// linkBlob puts a detached blob back at the live path. A variable only so a
+// test can make it fail, which a real filesystem does only rarely (EIO,
+// ENOSPC, EDQUOT).
+var linkBlob = os.Link
+
 // GetAPIKey returns the stored API key, or "" (no error) if none is stored.
 // See LoadAPIKey, which also reports the store it read.
 func GetAPIKey() (string, error) {
@@ -667,9 +677,13 @@ func LoadAPIKey() (string, Store, error) {
 	case errors.Is(err, keyring.ErrKeyNotFound):
 		return "", store, nil
 	case isUndecodableBlob(store, err) || keyFileRejected:
-		if isLegacyBlob(store) {
+		// The blob's identity is taken BEFORE it is recognised: what the check
+		// then reads is this file or one written over it later, and a later one
+		// is never legacy, so a positive answer is about this file.
+		recognised, statErr := os.Lstat(store.Path)
+		if statErr == nil && isLegacyBlob(store) {
 			beforeLegacyRemoval()
-			if derr := removeLegacyBlob(store); derr != nil {
+			if derr := removeLegacyBlob(store, recognised); derr != nil {
 				// Deletion failed: the stale blob remains. Still typed as legacy
 				// so callers map it to ExitAuth.
 				return "", store, fmt.Errorf("%w (cleanup failed: %v)", ErrLegacyCredentials, derr)
@@ -709,31 +723,55 @@ func isFilesystemFailure(err error) bool {
 }
 
 // removeLegacyBlob deletes the blob at store.Path only if it is STILL the
-// legacy blob that was recognised. Between recognising it and removing it
-// another process can publish a fresh key over the same path — `mio login`
-// does exactly that — and a plain remove would delete the new key. So the
-// blob is first detached with a rename into a private directory beside it
-// (atomic, same filesystem), the detached copy is re-checked, and if it is not
-// legacy it is linked back, unless an even newer blob already took its place.
-func removeLegacyBlob(store Store) error {
+// legacy blob that was recognised; recognised is its Lstat, taken before it
+// was recognised. Between the two another process can write a fresh key over
+// the same path: `mio login` renames a new file over it, and a mio from
+// v0.22.0 or earlier rewrites it in place. Neither may be deleted, nor moved
+// off the live path, where for as long as it is gone every reader is told no
+// key is stored.
+//
+//   - A key published by rename is a different file, so once the live path no
+//     longer names the recognised file nothing is touched.
+//   - Otherwise the blob is detached with a rename into a private directory
+//     beside it (atomic, same filesystem) and re-checked there. It is deleted
+//     only if it is still the recognised file AND still decrypts as legacy,
+//     which a blob rewritten in place does not. Anything else is linked back,
+//     unless an even newer blob already took the live path; if the link
+//     fails, the detached copy is kept and the error says where.
+//
+// A narrow window remains: a rename landing between the identity check and
+// the detach is linked straight back without decrypting anything, and an
+// in-place rewrite of the recognised file stays detached while it is
+// re-checked.
+func removeLegacyBlob(store Store, recognised fs.FileInfo) error {
+	if cur, err := os.Lstat(store.Path); err != nil || !os.SameFile(cur, recognised) {
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil // gone, or replaced since it was recognised: nothing of ours to remove
+	}
 	hold, err := os.MkdirTemp(filepath.Dir(store.Path), ".legacy-")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.RemoveAll(hold) }()
 	held := filepath.Join(hold, filepath.Base(store.Path))
 	if err := os.Rename(store.Path, held); err != nil {
+		_ = os.Remove(hold)
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
 		return err
 	}
-	if isLegacyBlob(Store{Backend: keyring.FileBackend, Path: held}) {
-		return nil // the deferred RemoveAll deletes it
+	afterLegacyDetach()
+	if info, err := os.Lstat(held); err == nil && os.SameFile(info, recognised) &&
+		isLegacyBlob(Store{Backend: keyring.FileBackend, Path: held}) {
+		return os.RemoveAll(hold)
 	}
-	if err := os.Link(held, store.Path); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
+	if err := linkBlob(held, store.Path); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("a blob that is no longer the legacy one was moved aside and could not be put back (%w); "+
+			"it is kept at %s: move it back to %s", err, held, store.Path)
 	}
+	_ = os.RemoveAll(hold)
 	return nil
 }
 
