@@ -295,9 +295,11 @@ Allowed values for --type:     one_time, recurring
 Allowed values for --interval: month, year, week, day (required when --type=recurring)
 
 --trial-period-days sets a free trial in days (the API accepts 0 to
-2147483647; 0 means no trial). Checkout applies it only to a recurring
-price: the API also stores it on a one_time price, where it has no effect.
-Omit the flag for no trial.
+2147483647; 0 means no trial). Keep it at 730 or less: Stripe documents a
+730-day maximum for a Checkout free trial, the API does not check it, and
+checkout hands the stored value to Stripe unchanged. Checkout applies it
+only to a recurring price: the API also stores it on a one_time price, where
+it has no effect. Omit the flag for no trial.
 
 FIXED AFTER CREATE: amount, currency, type, interval, interval_count and
 trial_period_days cannot be changed by 'prices update' (the API rejects them).
@@ -337,6 +339,8 @@ To change one, create a new price and deactivate the old one with
 		// Sent only when given (Changed), so 0 reaches the API as 0 and an
 		// omitted flag leaves the backend default (null, no trial). No bound or
 		// type rule here: the API owns both (ge=0, le=INT32_MAX; no type rule).
+		// Stripe's 730-day Checkout maximum is documented in the help, not
+		// enforced: it is Stripe's rule, not the API's.
 		setIntFlag(cmd, attrs, "trial-period-days")
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
@@ -466,7 +470,7 @@ func init() {
 	productsPricesCreateCmd.Flags().String("type", "", "Price type: one_time or recurring. Required.")
 	productsPricesCreateCmd.Flags().String("interval", "", "Billing interval: month, year, week, or day. Required when --type=recurring.")
 	productsPricesCreateCmd.Flags().Int("interval-count", 0, "Number of intervals between billings (≥1). Required when --type=recurring.")
-	productsPricesCreateCmd.Flags().Int("trial-period-days", 0, "Free-trial length in days (0-2147483647; 0 = no trial). Applied at checkout to recurring prices only. Omit for no trial. Fixed after create.")
+	productsPricesCreateCmd.Flags().Int("trial-period-days", 0, "Free-trial length in days (API accepts 0-2147483647, 0 = no trial; keep it <=730, Stripe Checkout's maximum, which the API does not check). Applied at checkout to recurring prices only. Omit for no trial. Fixed after create.")
 	productsPricesCreateCmd.Flags().String("name", "", "Human-readable price label (max 100 chars).")
 	productsPricesCreateCmd.Flags().String("description", "", "Price description (max 500 chars).")
 	productsPricesCreateCmd.Flags().Bool("is-active", true, "Whether the price is active.")
