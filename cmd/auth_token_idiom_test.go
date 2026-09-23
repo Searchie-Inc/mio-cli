@@ -83,15 +83,24 @@ func TestAuthTokenExportIdiom_StopsASetEScript(t *testing.T) {
 	}
 }
 
-// authTokenCapture finds a command substitution of `mio auth token`.
-var authTokenCapture = regexp.MustCompile(`\$\(\s*mio auth token\b`)
+// authTokenCapture finds a shell capture of `mio auth token`'s stdout: a
+// $(…) substitution, or an old-style backtick one right after an assignment
+// (elsewhere a backticked `mio auth token` is a Markdown code span, not a
+// capture). It tolerates extra spaces, a `command` prefix and a path to mio.
+var authTokenCapture = regexp.MustCompile("(\\$\\(|=[\"']?`)\\s*(command\\s+)?(\\S*/)?mio\\s+auth\\s+token\\b")
+
+// exportsTheKey matches the second statement of authTokenExport alone on its
+// line, optionally followed by a comment.
+var exportsTheKey = regexp.MustCompile(`^\s*export MIO_API_KEY\s*(#.*)?$`)
 
 // TestAuthTokenExportIdiom_EveryDocUsesIt: wherever the docs capture `mio auth
-// token` — every Markdown and text file in the repo, and every command's help —
-// it must be as authTokenExport (its first statement, with the export on the
-// next line) or authTokenExportOneLine, the forms the test above runs. Any
-// other shape, `export MIO_API_KEY="$(mio auth token)"` above all, is named by
-// file and line.
+// token` (authTokenCapture) — every Markdown and text file in the repo, and
+// every command's help — it must be as authTokenExport (its first statement
+// alone on its line, `export MIO_API_KEY` alone on the next) or
+// authTokenExportOneLine, the forms the test above runs. Any other shape,
+// `export MIO_API_KEY="$(mio auth token)"` above all, is named by file and
+// line. A capture it does not recognise as one (a `mio` reached through an
+// alias or a variable) is outside what it can see.
 func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 	root, err := filepath.Abs("..")
 	if err != nil {
@@ -133,6 +142,9 @@ func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 	addHelp(RootCmd())
 
 	first, second, _ := strings.Cut(authTokenExport, "\n")
+	if !exportsTheKey.MatchString(second) {
+		t.Fatalf("authTokenExport's second statement %q is not what this scan accepts on the next line", second)
+	}
 	captures := map[string]int{}
 	for name, text := range surfaces {
 		lines := strings.Split(text, "\n")
@@ -145,8 +157,11 @@ func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 			if !authTokenCapture.MatchString(rest) {
 				continue
 			}
-			if after, ok := strings.CutPrefix(strings.TrimSpace(rest), first); ok && !authTokenCapture.MatchString(after) &&
-				i+1 < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i+1]), second) {
+			// The two-statement form: the first statement ALONE on its line (a
+			// trailing comment aside — anything else, `|| true` say, can swallow
+			// the exit 3), and exactly `export MIO_API_KEY` on the next.
+			if after, ok := strings.CutPrefix(strings.TrimSpace(rest), first); ok && isBlankOrComment(after) &&
+				i+1 < len(lines) && exportsTheKey.MatchString(lines[i+1]) {
 				continue
 			}
 			t.Errorf("%s:%d captures `mio auth token` outside the documented idiom, so its exit 3 may never reach set -e:\n"+
@@ -161,4 +176,11 @@ func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 			t.Errorf("%s never captures `mio auth token`: the scan is not reading it, or it lost its export instructions", must)
 		}
 	}
+}
+
+// isBlankOrComment reports whether what follows a shell statement on its line
+// is nothing but whitespace or a comment.
+func isBlankOrComment(s string) bool {
+	s = strings.TrimSpace(s)
+	return s == "" || strings.HasPrefix(s, "#")
 }

@@ -166,7 +166,7 @@ golangci-lint run ./...   # 0 issues (v2.12.2 — same as CI)
 XDG_CONFIG_HOME=$(mktemp -d) go test ./... -race -timeout 120s
 ```
 
-**`TestContract_ExitCodes_NoCredentials` and `TestWiring_SingleHubAutoDefault` failing means different things on different trees.** On a branch cut before MIO-2995 (no `TestMain` in `cmd/main_test.go`) a run without `XDG_CONFIG_HOME` fails them from the developer's real credentials: that is environmental, and isolating makes them green. On a tree WITH that `TestMain` the `cmd` tests isolate themselves, so the same two failures are a regression of that isolation: the `TestMain:` stderr lines name what broke. Either way, do not change their assertions. See `cli-prime` §3.1.
+**`TestContract_ExitCodes_NoCredentials` and `TestWiring_SingleHubAutoDefault` failing means different things on different trees.** On a branch cut before MIO-2995 (no `TestMain` in `cmd/main_test.go`) a run without `XDG_CONFIG_HOME` fails them from the developer's real credentials: that is environmental, and isolating makes them green. On a tree WITH that `TestMain` the `cmd` tests isolate themselves. A break its checks catch shows as `TestMain: refusing to run: …` with no test run at all, so the same two tests failing by name is a regression of that isolation that the checks miss. Either way, do not change their assertions. See `cli-prime` §3.1.
 
 Then collect: `git log <base>..HEAD --oneline`, `git diff <base>...HEAD --stat`, `git diff --name-only <base>...HEAD`, and the pass count.
 
