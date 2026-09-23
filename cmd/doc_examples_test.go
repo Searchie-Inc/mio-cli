@@ -31,8 +31,10 @@ package cmd
 //     create moved to it in MIO-4154 for exactly this reason). MIO-4154 moved
 //     the `missing required flag(s)` checks, except `hubs policies gate
 //     --enabled`, which stays in RunE to keep its usage hint. That one and 43
-//     others, mostly phrased `--x is required[: hint]`, still live in RunE and
-//     are invisible here until they move. Some are conditional and cannot move.
+//     others, mostly phrased `--x is required[: hint]`, still live in RunE.
+//     43 of those 44 are invisible here until they move; `pages publish
+//     --if-match` is seen because it is also declared with MarkFlagRequired.
+//     Some are conditional and cannot move.
 //     List all 44 with: grep -nE 'ExitUsage, *"[^"]*(required|missing)' cmd/*.go
 //   - Flag VALUES. Every flag is parsed into a stub that accepts anything, so
 //     placeholders (<id>, "$HUB_ID") never false-positive; an invalid enum value
