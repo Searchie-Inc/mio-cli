@@ -923,6 +923,10 @@ func replaceFileBlob(store Store, item keyring.Item) error {
 }
 
 // DeleteAPIKey removes the stored API key. A missing key is not an error.
+//
+// On the file backend it also removes any copy a legacy cleanup moved aside
+// and never put back (movedAsideBlobs): reads report such a copy as a stored
+// key, so leaving it would keep a secret under the config dir after logout.
 func DeleteAPIKey() error {
 	ring, store, err := openKeyring()
 	if err != nil {
@@ -932,6 +936,11 @@ func DeleteAPIKey() error {
 	// keyring.ErrKeyNotFound; both mean there was nothing to delete.
 	if err := ring.Remove(keyringKeyName); err != nil && !errors.Is(err, keyring.ErrKeyNotFound) && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("delete API key from %s: %w", store.Describe(), err)
+	}
+	for _, held := range movedAsideBlobs(store) {
+		if err := os.RemoveAll(filepath.Dir(held)); err != nil {
+			return fmt.Errorf("delete the API key a legacy-credential cleanup moved aside to %s: %w", held, err)
+		}
 	}
 	return nil
 }

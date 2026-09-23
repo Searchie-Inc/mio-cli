@@ -875,3 +875,58 @@ func TestDeleteAPIKey_NothingStoredIsNotAnError(t *testing.T) {
 		t.Fatalf("DeleteAPIKey with nothing stored = %v, want nil", err)
 	}
 }
+
+// TestDeleteAPIKey_RemovesAKeyMovedAsideByLegacyCleanup: a legacy cleanup that
+// died, or could not put a blob back, leaves the key in .legacy-*/api-key
+// beside the live path, and reads name it there. Deleting the stored key
+// (`mio logout`) must delete that copy too: otherwise logout reports success
+// while a secret stays under the config dir, and the next read still reports a
+// key moved aside. With and without a live blob beside it.
+func TestDeleteAPIKey_RemovesAKeyMovedAsideByLegacyCleanup(t *testing.T) {
+	for _, withLive := range []bool{false, true} {
+		name := "stranded copy only"
+		if withLive {
+			name = "stranded copy and a live blob"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := withXDG(t)
+			withFileBackendOnly(t)
+			noRetryWait(t)
+
+			if err := SetAPIKey("mio_sk_live_stranded_by_a_dead_cleanup"); err != nil {
+				t.Fatalf("SetAPIKey: %v", err)
+			}
+			live := blobPathFor(dir)
+			hold, err := os.MkdirTemp(filepath.Dir(live), legacyHoldPrefix)
+			if err != nil {
+				t.Fatalf("hold dir: %v", err)
+			}
+			if err := os.Rename(live, filepath.Join(hold, filepath.Base(live))); err != nil {
+				t.Fatalf("strand the blob: %v", err)
+			}
+			if withLive {
+				if err := SetAPIKey("mio_sk_live_current"); err != nil {
+					t.Fatalf("SetAPIKey: %v", err)
+				}
+			}
+
+			if err := DeleteAPIKey(); err != nil {
+				t.Fatalf("DeleteAPIKey = %v, want nil", err)
+			}
+			entries, err := os.ReadDir(filepath.Dir(live))
+			if err != nil {
+				t.Fatalf("read keyring dir: %v", err)
+			}
+			var left []string
+			for _, e := range entries {
+				left = append(left, e.Name())
+			}
+			if len(left) != 0 {
+				t.Fatalf("after DeleteAPIKey the keyring dir still holds %v: a key moved aside by a legacy cleanup survived logout", left)
+			}
+			if key, _, err := LoadAPIKey(); key != "" || err != nil {
+				t.Fatalf("after DeleteAPIKey a read = (%q, %v), want no key stored", key, err)
+			}
+		})
+	}
+}
