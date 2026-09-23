@@ -86,7 +86,7 @@ This is the canonical "did my setup work?" command. Off a TTY it prints JSON
 		// env), the key carries its own team identity. Use the team_id from the
 		// /api/auth/me response as the authoritative team for this invocation,
 		// ignoring whatever current_team is stored in the config file.
-		// When using a keychain key (no explicit override), fall back to the
+		// When using a stored key (no explicit override), fall back to the
 		// resolved config team id as before.
 		teamID := c.resolved.TeamID
 		if ks := keySource(c.resolved); ks == "flag (--api-key)" || ks == "env ("+config.EnvAPIKey+")" {
@@ -131,7 +131,7 @@ func keySource(r config.Resolved) string {
 	if flags.apiKey != "" {
 		return "flag (--api-key)"
 	}
-	// --anonymous skips the env + keychain fallbacks in config.Resolve, so
+	// --anonymous skips the env + stored-key fallbacks in config.Resolve, so
 	// reporting either of them here would name a key that is NOT being sent —
 	// exactly the kind of misreporting MIO-2694 is about. An explicit --api-key
 	// still wins, which is why it is checked first.

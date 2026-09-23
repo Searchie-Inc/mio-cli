@@ -311,7 +311,7 @@ func loginPassword(cmd *cobra.Command, reader *bufio.Reader, apiBase, teamID str
 }
 
 // mintAndStore resolves the team for the given JWT access token, mints a
-// "mio-cli@<host>" API key, stores it in the OS keychain, persists the resolved
+// "mio-cli@<host>" API key, stores it in the credential store, persists the resolved
 // team to config, and returns a human display string for the team ("Name (id)"
 // or the bare id when the name is unknown). It is the shared tail of every
 // password→key flow — `login` (interactive + headless) and `register` — which
@@ -369,7 +369,8 @@ func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamI
 }
 
 // validateAndStore validates a key against /api/auth/me and, on success, stores
-// it in the keychain.
+// it in the credential store. It never reads the stored key first, which is
+// why `MIO_API_KEY=<key> mio login` can replace a blob mio cannot read.
 func validateAndStore(cmd *cobra.Command, apiBase, key string) error {
 	cli := client.New(apiBase, key, client.WithDebug(flags.debug))
 	if _, err := cli.Me(cmd.Context()); err != nil {

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/99designs/keyring"
+
 	"github.com/Searchie-Inc/mio-cli/internal/config"
 )
 
@@ -68,6 +70,16 @@ func runIsolated(m *testing.M) int {
 	}
 	restore := config.UseFileBackendOnly()
 	defer restore()
+	// Check the isolation BEFORE any test runs: TestMain_IsolatesEveryUserStore
+	// reports the same problems, but only after every test sorted ahead of it
+	// has already had its chance to write a real store.
+	if problems := isolationProblems(); len(problems) > 0 {
+		fmt.Fprintln(os.Stderr, "TestMain: refusing to run: the cmd tests are not isolated from the developer's real stores:")
+		for _, p := range problems {
+			fmt.Fprintln(os.Stderr, "  - "+p)
+		}
+		return 1
+	}
 	return m.Run()
 }
 
@@ -94,25 +106,46 @@ func pinGoToolchainDirs() {
 
 // TestMain_IsolatesEveryUserStore pins TestMain's isolation: every location a
 // mio store can be derived from — HOME, USERPROFILE, XDG_CONFIG_HOME, and the
-// config path they resolve to — must be a temp dir and not the developer's.
-// During MIO-2995 a store path wrongly derived from $HOME replaced the real
+// config path they resolve to — must be a temp dir and not the developer's,
+// and the keyring must be pinned to the file backend under it. During
+// MIO-2995 a store path wrongly derived from $HOME replaced the real
 // ~/.config/mio/keyring/api-key from a unit test; this is what stops that
-// from reaching a real store again.
+// from reaching a real store again. TestMain runs the same checks before any
+// test and refuses to start if one fails; this test names them in the report.
 func TestMain_IsolatesEveryUserStore(t *testing.T) {
+	for _, p := range isolationProblems() {
+		t.Error(p)
+	}
+}
+
+// isolationProblems lists every way the current process could still reach
+// the developer's real config or credential stores; empty means isolated.
+func isolationProblems() []string {
+	var problems []string
 	tmp := os.TempDir()
 	for _, k := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME"} {
 		v := os.Getenv(k)
 		if v == "" || !strings.HasPrefix(v, tmp) {
-			t.Errorf("%s = %q, want a temp dir under %s — TestMain must isolate it", k, v, tmp)
+			problems = append(problems, fmt.Sprintf("%s = %q, want a temp dir under %s — TestMain must isolate it", k, v, tmp))
 		}
 		if realUserHome != "" && v == realUserHome {
-			t.Errorf("%s is the developer's real home %q", k, v)
+			problems = append(problems, fmt.Sprintf("%s is the developer's real home %q", k, v))
 		}
 	}
 	if home, err := os.UserHomeDir(); err != nil || home == realUserHome {
-		t.Errorf("os.UserHomeDir() = (%q, %v): still the developer's real home", home, err)
+		problems = append(problems, fmt.Sprintf("os.UserHomeDir() = (%q, %v): still the developer's real home", home, err))
 	}
 	if p, err := config.Path(); err != nil || !strings.HasPrefix(p, tmp) {
-		t.Errorf("config.Path() = (%q, %v), want a path under %s", p, err, tmp)
+		problems = append(problems, fmt.Sprintf("config.Path() = (%q, %v), want a path under %s", p, err, tmp))
 	}
+	// On a runner with no OS store the file backend is chosen whether or not
+	// it is pinned, so no test's behaviour shows a missing pin there; on a
+	// macOS cgo build or a Linux desktop, the first test that stores a key
+	// would write the developer's real Keychain or Secret Service.
+	if b := config.KeyringBackends(); len(b) != 1 || b[0] != keyring.FileBackend {
+		problems = append(problems, fmt.Sprintf("keyring backends = %v, want only %q: without config.UseFileBackendOnly a test that "+
+			"stores or reads a key reaches the first OS store this build can open (the macOS Keychain in a cgo build, "+
+			"a desktop Secret Service or KWallet)", b, keyring.FileBackend))
+	}
+	return problems
 }

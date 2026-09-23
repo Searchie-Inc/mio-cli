@@ -180,7 +180,7 @@ Run `mio login` and choose one of two paths:
 
 | build | store |
 |---|---|
-| Release binaries on **macOS** (and Linux without a desktop keyring) | encrypted file `$XDG_CONFIG_HOME/mio/keyring/api-key` (else `~/.config/mio/keyring/api-key`), unlocked by `file-keyring.key` beside it. The release binaries are built without cgo, so **on macOS they never use the Keychain** |
+| Release binaries on **macOS** (and Linux without a desktop keyring) | encrypted file `$XDG_CONFIG_HOME/mio/keyring/api-key` (else `~/.config/mio/keyring/api-key`), unlocked by `file-keyring.key` one level up, in the `mio` config dir (`$XDG_CONFIG_HOME/mio/file-keyring.key`). The release binaries are built without cgo, so **on macOS they never use the Keychain** |
 | Linux with a Secret Service or KWallet on the D-Bus session bus | that keyring |
 | Windows | Credential Manager |
 | macOS, compiled from source with cgo | the macOS Keychain |
@@ -190,7 +190,8 @@ Run `mio login` and choose one of two paths:
 To hand the stored key to a script or agent session once, instead of every command reading the store:
 
 ```sh
-export MIO_API_KEY="$(mio auth token)"   # prints only the stored key; exit 3 and empty stdout when none is stored
+MIO_API_KEY="$(mio auth token)"   # prints only the stored key; exit 3 and empty stdout when none is stored
+export MIO_API_KEY                # a separate statement: export MIO_API_KEY="$(…)" returns 0 and hides that exit 3 from set -e
 ```
 
 `mio auth token` lands in the release after `v0.22.0`.
@@ -440,7 +441,7 @@ Scripts and agents can branch on these stable codes.
 | `login` / `logout` | Interactive auth |
 | `register` | Create a new account (email + password, optional first/last name) and auto-login — interactive, or headless via `--email`/`--password` (or `MIO_EMAIL`/`MIO_PASSWORD`). Replaces any stored key. |
 | `whoami` | Print resolved identity — user, team, hub, api-base, profile, key source |
-| `auth` | `token` — print the stored API key to stdout (`export MIO_API_KEY="$(mio auth token)"`); exit 3 with empty stdout when none is stored |
+| `auth` | `token` — print the stored API key to stdout (`MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY`); exit 3 with empty stdout when none is stored |
 | `config` | `set`, `get`, `list` |
 | `api-keys` | `create`, `list`, `retrieve`, `delete` |
 | `teams` | `create`, `list`, `retrieve`, `update`, `delete`, `switch` (server-side switch + updates local context); `members list/add/remove` |

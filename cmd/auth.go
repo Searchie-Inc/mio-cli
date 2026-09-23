@@ -5,7 +5,10 @@ package cmd
 // Prints the API key `mio login` stored, and nothing else, so a headless
 // session can export it ONCE and stop touching the credential store:
 //
-//	export MIO_API_KEY="$(mio auth token)"
+//	MIO_API_KEY="$(mio auth token)"
+//	export MIO_API_KEY
+//
+// (two statements on purpose — see authTokenExport).
 //
 // It is the `gh auth token` shape on purpose — that is the verb agents already
 // reach for. It lives in its own `auth` group rather than on an existing
@@ -24,11 +27,24 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Searchie-Inc/mio-cli/internal/config"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
+)
+
+// authTokenExport is THE documented way to export the stored key, and every
+// doc surface must use it or authTokenExportOneLine (pinned by
+// TestAuthTokenExportIdiom_EveryDocUsesIt). It is two statements on purpose:
+// `export MIO_API_KEY="$(…)"` returns export's own status, 0, so `set -e`
+// never sees auth token's exit 3 and the script runs on with an EMPTY key
+// exported; `MIO_API_KEY="$(…)" && export …` hides the 3 from `set -e` too.
+// TestAuthTokenExportIdiom_StopsASetEScript runs both forms under bash.
+const (
+	authTokenExport        = "MIO_API_KEY=\"$(mio auth token)\"\nexport MIO_API_KEY"
+	authTokenExportOneLine = `MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY`
 )
 
 func init() {
@@ -48,7 +64,11 @@ var authTokenCmd = &cobra.Command{
 by a newline, and nothing else — whatever --output says — so a script or agent
 can export it once and stop reading the credential store:
 
-  export MIO_API_KEY="$(mio auth token)"
+` + indentHelp(authTokenExport) + `
+
+Keep those two statements apart. 'export MIO_API_KEY="$(…)"' reports export's
+own status (0), so set -e never sees the exit 3 described below, and the script
+goes on with an empty key.
 
 It reads ONLY the stored key: --api-key and MIO_API_KEY are not echoed back.
 If MIO_API_KEY is already set to a different key, a note on stderr says so
@@ -68,9 +88,12 @@ store it read. A stored key that does not decode, or whose key file is missing
 or invalid, also exits 3 ('mio login' replaces it). So does a key file whose
 mode is not exactly 0600: it is treated as compromised, and the key file and
 the stored credential are both invalidated. Any other filesystem error while
-reading the store (permission denied on the blob, I/O error) exits 1:
-re-authenticating cannot fix that.`,
-	Example: `  export MIO_API_KEY="$(mio auth token)"
+reading the store (permission denied on the blob, an I/O error) exits 1: it is
+not a verdict on the key. Fix the file, or replace an unreadable blob without
+reading it: 'MIO_API_KEY=<key> mio login' writes a new blob over it. A password
+login ('mio login --email … --password …') reads the store first, so it fails
+the same way.`,
+	Example: indentHelp(authTokenExport) + `
   mio auth token >/dev/null && echo "a key is stored"`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -92,4 +115,9 @@ re-authenticating cannot fix that.`,
 		fmt.Fprintln(cmd.OutOrStdout(), key)
 		return nil
 	},
+}
+
+// indentHelp indents every line of a shell snippet for a help text block.
+func indentHelp(snippet string) string {
+	return "  " + strings.ReplaceAll(snippet, "\n", "\n  ")
 }

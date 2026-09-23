@@ -1,6 +1,6 @@
 // Package config owns the mio CLI's persistent state: the TOML config file at
 // $XDG_CONFIG_HOME/mio/config.toml (default ~/.config/mio/config.toml) and the
-// OS keychain entry that stores the API key. It also implements the canonical
+// credential-store entry that holds the API key. It also implements the canonical
 // auth-resolution order used by every command.
 //
 // The config file holds non-secret context (current team/hub, api base, named
@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	// keyringService is the OS keychain service name under which the API key
+	// keyringService is the credential-store service name under which the API key
 	// is stored. Stable across versions so `mio login` once persists.
 	keyringService = "mio-cli"
 	// keyringKeyName is the item label within the service.
@@ -403,6 +403,15 @@ func UseFileBackendOnly() (restore func()) {
 	orig := keyringAllowedBackends
 	keyringAllowedBackends = []keyring.BackendType{keyring.FileBackend}
 	return func() { keyringAllowedBackends = orig }
+}
+
+// KeyringBackends returns a copy of the backends a credential-store operation
+// in this process may try, in order. It exists so a test package can prove
+// UseFileBackendOnly is in force BEFORE any test stores or reads a key: on a
+// CI runner with no OS store the file backend is picked either way, so the
+// pin's absence is invisible to behaviour there and shows only here.
+func KeyringBackends() []keyring.BackendType {
+	return append([]keyring.BackendType(nil), keyringAllowedBackends...)
 }
 
 // Store identifies the credential store a stored-key operation used, so that
@@ -840,7 +849,7 @@ func DeleteAPIKey() error {
 // env and config. Empty strings mean "not set on the command line".
 type Overrides struct {
 	APIKey string
-	// Anonymous forces an unauthenticated resolution: the env var and keychain
+	// Anonymous forces an unauthenticated resolution: the env var and stored-key
 	// fallbacks are skipped so a request can deliberately run without credentials
 	// (MIO-2648). An explicit APIKey still takes effect.
 	Anonymous bool
@@ -853,7 +862,7 @@ type Overrides struct {
 // Resolve computes the effective {apiKey, apiBase, teamID, hubID} from the
 // precedence chain:
 //
-//	api key : --api-key flag  >  MIO_API_KEY env  >  keychain
+//	api key : --api-key flag  >  MIO_API_KEY env  >  stored key
 //	api base: --api-base flag >  MIO_API_BASE_URL >  profile/config  >  default
 //	team/hub: --team/--hub    >  profile/config
 //
@@ -863,8 +872,8 @@ type Overrides struct {
 func (c *Config) Resolve(o Overrides) (Resolved, error) {
 	prof := c.profile(o.Profile)
 
-	// API key: flag > env > keychain. --anonymous (o.Anonymous) skips the env and
-	// keychain fallbacks so a request can run explicitly unauthenticated (MIO-2648).
+	// API key: flag > env > stored key. --anonymous (o.Anonymous) skips the env
+	// and stored-key fallbacks so a request can run explicitly unauthenticated (MIO-2648).
 	apiKey := o.APIKey
 	if apiKey == "" && !o.Anonymous {
 		apiKey = os.Getenv(EnvAPIKey)

@@ -176,7 +176,7 @@ var versionCmd = &cobra.Command{
 
 // cmdContext is the resolved per-invocation state a resource command needs. It
 // is built lazily by newContext so commands like `version`/`config` that don't
-// hit the API never touch the keychain.
+// hit the API never touch the credential store.
 type cmdContext struct {
 	ctx      context.Context
 	cfg      *config.Config

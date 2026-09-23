@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -217,6 +218,45 @@ func TestLogin_ReplacesAnUnreadableStoredKey(t *testing.T) {
 	}
 }
 
+// TestLogin_EnvKeyReplacesABlobItCannotRead pins the way out that `mio auth
+// token --help` documents for a blob the filesystem will not let mio read
+// (permission denied: exit 1, not a verdict on the key). `MIO_API_KEY=<key>
+// mio login` never reads the old blob, so it must write a fresh one over it,
+// back at 0600. (A password login reads the store first and cannot.)
+func TestLogin_EnvKeyReplacesABlobItCannotRead(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX file modes that bind the current user")
+	}
+	_, blob := isolatedStore(t)
+	if err := config.SetAPIKey("mio_sk_live_old"); err != nil {
+		t.Fatalf("SetAPIKey: %v", err)
+	}
+	if err := os.Chmod(blob, 0); err != nil {
+		t.Fatalf("chmod the blob: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blob, 0o600) })
+	if _, err := config.GetAPIKey(); err == nil || config.StoredKeyUnusable(err) {
+		t.Fatalf("precondition: reading a mode-000 blob = %v, want a filesystem error rather than a credential verdict", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"email":"who@example.com","id":"u1"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	res, err := runCaptured(t, []string{"MIO_API_BASE_URL=" + srv.URL, "MIO_API_KEY=mio_sk_live_new"}, "login")
+	if res.Code != errs.ExitOK {
+		t.Fatalf("MIO_API_KEY=<key> mio login over a blob it cannot read: exit = %d, want 0 (the documented recovery); err = %v; stderr=%q",
+			res.Code, err, res.Stderr)
+	}
+	if got, gerr := config.GetAPIKey(); gerr != nil || got != "mio_sk_live_new" {
+		t.Fatalf("after login the store holds (%q, %v), want the new key", got, gerr)
+	}
+	if fi, serr := os.Stat(blob); serr != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the replaced blob: stat = (%v, %v), want mode 0600", fi, serr)
+	}
+}
+
 // TestRegister_ReplacesAnUnreadableStoredKey: `mio register` reads the store
 // before minting, exactly like login, and must likewise treat an unusable
 // stored key as "no key" and overwrite it instead of aborting with exit 1.
@@ -244,7 +284,7 @@ func TestRegister_ReplacesAnUnreadableStoredKey(t *testing.T) {
 }
 
 // TestAuthToken_PrintsTheStoredKeyAndNothingElse is the headless recovery path:
-// `export MIO_API_KEY=$(mio auth token)` once, then stop touching the store.
+// export the key once (authTokenExport), then stop touching the store.
 // stdout is exactly the key and a newline whatever --output says; the key
 // appears nowhere else; and no request is made (it must work offline).
 func TestAuthToken_PrintsTheStoredKeyAndNothingElse(t *testing.T) {
