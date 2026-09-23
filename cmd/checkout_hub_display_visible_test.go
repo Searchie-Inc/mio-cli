@@ -349,8 +349,31 @@ func TestCheckoutHubDisplayHelp_NamesEachEditableWireAttribute(t *testing.T) {
 	}
 }
 
-// jqExample pulls each --jq program out of a rendered help page's examples.
+// jqExample pulls a single-quoted --jq program out of one example line.
 var jqExample = regexp.MustCompile(`--jq '([^']+)'`)
+
+// helpJQExamples returns the --jq program of every example on a rendered help
+// page: each line that is a `mio …` invocation. Any --jq on such a line that is
+// not in the `--jq '<program>'` form fails the test rather than being skipped,
+// so every --jq example on the page is either checked or rejected.
+func helpJQExamples(t *testing.T, page, help string) []string {
+	t.Helper()
+	var progs []string
+	for _, line := range strings.Split(help, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "mio ") {
+			continue
+		}
+		found := jqExample.FindAllStringSubmatch(line, -1)
+		if n := strings.Count(line, "--jq"); n != len(found) {
+			t.Errorf("`%s` example %q passes --jq in a form this guard cannot run; write the program single-quoted: --jq '<program>'", page, line)
+		}
+		for _, m := range found {
+			progs = append(progs, m[1])
+		}
+	}
+	return progs
+}
 
 // jqFieldReads returns every field a jq program reads by a LITERAL name: `.k`,
 // `."k"`, `.["k"]`, the object shorthand `{k}` / `{"k"}` (which means
@@ -533,7 +556,7 @@ func TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute(t *testing.T
 		t.Run(tc.list.name, func(t *testing.T) {
 			keys := updateWireAttributes(t, tc.updateCmd, tc.updatePath)
 			page := "mio " + strings.Join(tc.list.args, " ") + " --help"
-			examples := jqExample.FindAllStringSubmatch(helpOutput(t, tc.list.args...), -1)
+			examples := helpJQExamples(t, page, helpOutput(t, tc.list.args...))
 			if len(examples) == 0 {
 				t.Fatalf("`%s` has no --jq example; show how to select %v", page, keys)
 			}
@@ -560,8 +583,7 @@ func TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute(t *testing.T
 			}
 
 			var shortfalls []string
-			for _, m := range examples {
-				prog := m[1]
+			for _, prog := range examples {
 				ex := fmt.Sprintf("`%s` example --jq '%s'", page, prog)
 
 				for _, k := range jqFieldReads(t, prog) {
