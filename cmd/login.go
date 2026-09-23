@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -195,20 +194,16 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		Profile: flags.profile,
 	})
 	if err != nil {
-		switch {
-		case errors.Is(err, config.ErrLegacyCredentials):
-			// The stale blob has already been deleted; resolved is populated with
-			// APIBase/TeamID but no key.  Inform the user once and fall through to
-			// the interactive login prompt as if no key was stored.
-			fmt.Fprintln(cmd.ErrOrStderr(), "Note: your stored credentials used an old format and have been cleared. Please log in again.")
-		case errors.Is(err, config.ErrUnreadableCredentials):
-			// The stored blob exists but cannot be used; logging in replaces it
-			// (MIO-2995). Before, this aborted login with exit 1, leaving no way
-			// out but deleting the file by hand.
-			fmt.Fprintf(cmd.ErrOrStderr(), "Note: %v\nLogging in will replace it.\n", err)
-		default:
+		// A stored blob that exists but cannot be used — legacy (v0.1)
+		// encryption, or one that does not decode — is left in place by the
+		// read, and logging in replaces it (MIO-2995). resolved still carries
+		// APIBase/TeamID, so fall through as if no key was stored. An
+		// unreadable blob used to abort login with exit 1, leaving no way out
+		// but deleting the file by hand.
+		if !config.StoredKeyUnusable(err) {
 			return errs.Wrap(errs.ExitGeneric, err)
 		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "Note: %v\nLogging in will replace it.\n", err)
 	}
 
 	// Path 1: env / flag key — validate and store.

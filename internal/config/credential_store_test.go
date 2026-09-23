@@ -461,342 +461,6 @@ func TestSetAPIKey_ReaderNeverSeesTheBlobMissingOrPartial(t *testing.T) {
 	}
 }
 
-// TestGetAPIKey_LegacyCleanupNeverDeletesANewerKey pins the delete step of the
-// legacy path. Between recognising a legacy blob and removing it, another
-// process can publish a fresh key over the same path (`mio login` does exactly
-// that). A plain remove at that point deletes the NEW key. The removal must
-// only ever take the blob it verified.
-func TestGetAPIKey_LegacyCleanupNeverDeletesANewerKey(t *testing.T) {
-	withXDG(t)
-	withFileBackendOnly(t)
-	noRetryWait(t)
-
-	legacyRing, err := openKeyringWithPassword(legacyFilePassphrase, "")
-	if err != nil {
-		t.Fatalf("open legacy ring: %v", err)
-	}
-	if err := legacyRing.Set(legacyKeyringItem("mio_sk_old_legacy_key")); err != nil {
-		t.Fatalf("seed legacy blob: %v", err)
-	}
-
-	const fresh = "mio_sk_live_published_by_a_concurrent_login"
-	published := false
-	orig := beforeLegacyRemoval
-	beforeLegacyRemoval = func() {
-		if published {
-			return
-		}
-		published = true
-		if err := SetAPIKey(fresh); err != nil {
-			t.Errorf("concurrent SetAPIKey: %v", err)
-		}
-	}
-	t.Cleanup(func() { beforeLegacyRemoval = orig })
-
-	if _, err := GetAPIKey(); !errors.Is(err, ErrLegacyCredentials) {
-		t.Fatalf("first read = %v, want ErrLegacyCredentials (it saw the legacy blob)", err)
-	}
-	if !published {
-		t.Fatal("the removal hook never ran, so this test did not exercise the race")
-	}
-	got, err := GetAPIKey()
-	if err != nil || got != fresh {
-		t.Fatalf("after the legacy cleanup the store holds (%q, %v); the key published between recognition and removal was deleted", got, err)
-	}
-}
-
-// TestGetAPIKey_LegacyCleanupNeverHidesANewerKey: not deleting the key a
-// concurrent `mio login` published over a recognised legacy blob is not
-// enough; the cleanup must not move it off the live path at all. While it is
-// detached, every reader, and every `mio` command resolving the stored key,
-// reports "no API key stored", and a crash in that window strands it in a
-// hidden directory. A login publishes by rename, so the live path then names a
-// different file from the one recognised as legacy, and the cleanup must see
-// that before it detaches anything.
-func TestGetAPIKey_LegacyCleanupNeverHidesANewerKey(t *testing.T) {
-	dir := withXDG(t)
-	withFileBackendOnly(t)
-	noRetryWait(t)
-
-	legacyRing, err := openKeyringWithPassword(legacyFilePassphrase, "")
-	if err != nil {
-		t.Fatalf("open legacy ring: %v", err)
-	}
-	if err := legacyRing.Set(legacyKeyringItem("mio_sk_old_legacy_key")); err != nil {
-		t.Fatalf("seed legacy blob: %v", err)
-	}
-
-	const fresh = "mio_sk_live_published_by_a_concurrent_login"
-	published := false
-	origBefore := beforeLegacyRemoval
-	beforeLegacyRemoval = func() {
-		if published {
-			return
-		}
-		published = true
-		if err := SetAPIKey(fresh); err != nil {
-			t.Errorf("concurrent SetAPIKey: %v", err)
-		}
-	}
-	var hidden string
-	origDetach := afterLegacyDetach
-	afterLegacyDetach = func() {
-		if _, err := os.Lstat(blobPathFor(dir)); err != nil {
-			hidden = err.Error()
-		}
-	}
-	t.Cleanup(func() { beforeLegacyRemoval, afterLegacyDetach = origBefore, origDetach })
-
-	if _, err := GetAPIKey(); !errors.Is(err, ErrLegacyCredentials) {
-		t.Fatalf("first read = %v, want ErrLegacyCredentials (it saw the legacy blob)", err)
-	}
-	if !published {
-		t.Fatal("the removal hook never ran, so this test did not exercise the race")
-	}
-	if hidden != "" {
-		t.Fatalf("the legacy cleanup moved the key a concurrent login had just published off the live path (%s); "+
-			"a reader in that window is told no key is stored", hidden)
-	}
-	if got, err := GetAPIKey(); err != nil || got != fresh {
-		t.Fatalf("after the legacy cleanup the store holds (%q, %v), want the published key", got, err)
-	}
-}
-
-// TestGetAPIKey_KeyMovedAsideByLegacyCleanupIsNeverReportedMissing: the
-// identity check cannot close the race completely. A login whose rename lands
-// between that check and the detach still has its key moved aside for a
-// moment, and a crash there strands it in the .legacy-* directory. POSIX has
-// no compare-and-rename, so the reader has to cope: while a detached blob
-// exists and the live one does not, a read must never answer "no key stored".
-// It waits (the bounded retry) for the blob to be put back, and failing that
-// names where the key is. Here the reader runs inside the window, on the
-// cleanup's own goroutine, so the blob cannot come back while it waits: the
-// answer must be the unusable-credential error naming the detached copy.
-func TestGetAPIKey_KeyMovedAsideByLegacyCleanupIsNeverReportedMissing(t *testing.T) {
-	dir := withXDG(t)
-	withFileBackendOnly(t)
-	noRetryWait(t)
-
-	legacyRing, err := openKeyringWithPassword(legacyFilePassphrase, "")
-	if err != nil {
-		t.Fatalf("open legacy ring: %v", err)
-	}
-	if err := legacyRing.Set(legacyKeyringItem("mio_sk_old_legacy_key")); err != nil {
-		t.Fatalf("seed legacy blob: %v", err)
-	}
-
-	const fresh = "mio_sk_live_published_after_the_identity_check"
-	published := false
-	origBefore := beforeLegacyDetach
-	beforeLegacyDetach = func() {
-		if published {
-			return
-		}
-		published = true
-		if err := SetAPIKey(fresh); err != nil {
-			t.Errorf("concurrent SetAPIKey: %v", err)
-		}
-	}
-	var midKey string
-	var midErr error
-	midRead := false
-	origDetach := afterLegacyDetach
-	afterLegacyDetach = func() {
-		midRead = true
-		midKey, _, midErr = LoadAPIKey()
-	}
-	t.Cleanup(func() { beforeLegacyDetach, afterLegacyDetach = origBefore, origDetach })
-
-	if _, err := GetAPIKey(); !errors.Is(err, ErrLegacyCredentials) {
-		t.Fatalf("first read = %v, want ErrLegacyCredentials (it saw the legacy blob)", err)
-	}
-	if !published || !midRead {
-		t.Fatalf("the detach hooks did not both run (published=%v, mid-window read=%v), so this test did not exercise the race", published, midRead)
-	}
-	if midErr == nil {
-		t.Fatalf("a read while the published key was moved aside answered (%q, nil): no key stored, for a key that exists", midKey)
-	}
-	if !errors.Is(midErr, ErrUnreadableCredentials) || !strings.Contains(midErr.Error(), filepath.Join(filepath.Dir(blobPathFor(dir)), ".legacy-")) {
-		t.Errorf("a read while the key was moved aside = %v; want ErrUnreadableCredentials naming the .legacy-* copy", midErr)
-	}
-	if got, err := GetAPIKey(); err != nil || got != fresh {
-		t.Fatalf("after the cleanup the store holds (%q, %v), want the published key put back", got, err)
-	}
-	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(blobPathFor(dir)), ".legacy-*")); len(left) != 0 {
-		t.Errorf("the cleanup left %v behind", left)
-	}
-}
-
-// TestLoadAPIKey_WaitsOutALegacyCleanupInFlight: the other half. A reader
-// that finds the live blob missing while a .legacy-* copy exists backs off
-// and re-reads, so a cleanup that puts the key back within the bounded retry
-// is invisible to it.
-func TestLoadAPIKey_WaitsOutALegacyCleanupInFlight(t *testing.T) {
-	dir := withXDG(t)
-	withFileBackendOnly(t)
-
-	const want = "mio_sk_live_moved_aside_for_a_moment"
-	if err := SetAPIKey(want); err != nil {
-		t.Fatalf("SetAPIKey: %v", err)
-	}
-	live := blobPathFor(dir)
-	hold, err := os.MkdirTemp(filepath.Dir(live), ".legacy-")
-	if err != nil {
-		t.Fatalf("hold dir: %v", err)
-	}
-	held := filepath.Join(hold, filepath.Base(live))
-	if err := os.Rename(live, held); err != nil {
-		t.Fatalf("move the blob aside: %v", err)
-	}
-
-	waits := 0
-	orig := unreadableRetryWait
-	unreadableRetryWait = func() {
-		waits++
-		if waits == 1 {
-			if err := os.Rename(held, live); err != nil {
-				t.Errorf("put the blob back: %v", err)
-			}
-		}
-	}
-	t.Cleanup(func() { unreadableRetryWait = orig })
-
-	got, _, err := LoadAPIKey()
-	if err != nil || got != want {
-		t.Fatalf("LoadAPIKey while a cleanup had the blob moved aside = (%q, %v), want %q: the read must back off and re-read", got, err, want)
-	}
-	if waits == 0 {
-		t.Fatal("LoadAPIKey never backed off, so this test did not exercise the window")
-	}
-}
-
-// TestGetAPIKey_LegacyCleanupPutsBackAKeyRewrittenInPlace: a mio from v0.22.0
-// or earlier writes the blob IN PLACE, so a key it logs in with between the
-// cleanup recognising the legacy blob and removing it keeps the recognised
-// file's identity. The cleanup must then detach it, find it no longer decrypts
-// as legacy, and put it back. If putting it back fails, the detached copy is
-// the only copy of that key: it must be kept, and the error must say where.
-func TestGetAPIKey_LegacyCleanupPutsBackAKeyRewrittenInPlace(t *testing.T) {
-	for _, linkFails := range []bool{false, true} {
-		name := "put back"
-		if linkFails {
-			name = "put back fails"
-		}
-		t.Run(name, func(t *testing.T) {
-			dir := withXDG(t)
-			withFileBackendOnly(t)
-			noRetryWait(t)
-
-			legacyRing, err := openKeyringWithPassword(legacyFilePassphrase, "")
-			if err != nil {
-				t.Fatalf("open legacy ring: %v", err)
-			}
-			if err := legacyRing.Set(legacyKeyringItem("mio_sk_old_legacy_key")); err != nil {
-				t.Fatalf("seed legacy blob: %v", err)
-			}
-
-			const fresh = "mio_sk_live_written_in_place_by_an_older_mio"
-			var installKey string
-			rewritten := false
-			origBefore := beforeLegacyRemoval
-			beforeLegacyRemoval = func() {
-				if rewritten {
-					return
-				}
-				rewritten = true
-				key, err := loadOrCreateFileKey()
-				if err != nil {
-					t.Errorf("file key: %v", err)
-					return
-				}
-				installKey = key
-				ring, err := openKeyringWithPassword(key, "")
-				if err != nil {
-					t.Errorf("open ring: %v", err)
-					return
-				}
-				// The library's own Set: os.WriteFile over the live path, same inode.
-				if err := ring.Set(apiKeyItem(fresh)); err != nil {
-					t.Errorf("in-place write: %v", err)
-				}
-			}
-			origLink := linkBlob
-			if linkFails {
-				linkBlob = func(oldname, newname string) error {
-					return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EIO}
-				}
-			}
-			t.Cleanup(func() { beforeLegacyRemoval, linkBlob = origBefore, origLink })
-
-			_, readErr := GetAPIKey()
-			if !rewritten {
-				t.Fatal("the removal hook never ran, so this test did not exercise the race")
-			}
-			held, _ := filepath.Glob(filepath.Join(filepath.Dir(blobPathFor(dir)), ".legacy-*", keyringKeyName))
-
-			if !linkFails {
-				if got, err := GetAPIKey(); err != nil || got != fresh {
-					t.Fatalf("after the legacy cleanup the store holds (%q, %v), want the key written in place; first read: %v", got, err, readErr)
-				}
-				if len(held) != 0 {
-					t.Errorf("the cleanup left detached copies behind: %v", held)
-				}
-				return
-			}
-
-			if len(held) != 1 {
-				t.Fatalf("the legacy cleanup could not put back a key that is not legacy, and left %d copies of it (%v); read error: %v. "+
-					"The detached copy is the only one, so deleting it loses the key", len(held), held, readErr)
-			}
-			if readErr == nil || !strings.Contains(readErr.Error(), held[0]) {
-				t.Errorf("the read error must say where the key was kept (%s); got %v", held[0], readErr)
-			}
-			ring, err := keyring.Open(keyringConfig(keyring.FileBackend, filepath.Dir(held[0]),
-				func(string) (string, error) { return installKey, nil }))
-			if err != nil {
-				t.Fatalf("open kept copy: %v", err)
-			}
-			if item, err := ring.Get(keyringKeyName); err != nil || string(item.Data) != fresh {
-				t.Fatalf("the kept copy holds (%q, %v), want the key written in place", item.Data, err)
-			}
-		})
-	}
-}
-
-// TestGetAPIKey_LegacyBlobIsRemoved: the other half of the legacy contract. A
-// v0.1 blob is encrypted under a passphrase published in this repo's history,
-// so it is effectively plaintext on disk; recognising one must take it off the
-// disk, and leave no copy behind in the private directory it is detached into.
-func TestGetAPIKey_LegacyBlobIsRemoved(t *testing.T) {
-	dir := withXDG(t)
-	withFileBackendOnly(t)
-	noRetryWait(t)
-
-	legacyRing, err := openKeyringWithPassword(legacyFilePassphrase, "")
-	if err != nil {
-		t.Fatalf("open legacy ring: %v", err)
-	}
-	if err := legacyRing.Set(legacyKeyringItem("mio_sk_old_legacy_key")); err != nil {
-		t.Fatalf("seed legacy blob: %v", err)
-	}
-
-	if _, err := GetAPIKey(); !errors.Is(err, ErrLegacyCredentials) {
-		t.Fatalf("GetAPIKey = %v, want ErrLegacyCredentials", err)
-	}
-	keyringDir := filepath.Dir(blobPathFor(dir))
-	entries, err := os.ReadDir(keyringDir)
-	if err != nil {
-		t.Fatalf("read keyring dir: %v", err)
-	}
-	if len(entries) != 0 {
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			names = append(names, e.Name())
-		}
-		t.Fatalf("after recognising a legacy blob the keyring dir still holds %v; the legacy blob must be removed and no detached copy left behind", names)
-	}
-}
-
 // TestSetAPIKey_StagesBesideTheBlob: the replacement blob must be staged in
 // the SAME directory as the live one, the only place a rename is guaranteed
 // not to cross a filesystem (the keyring dir can be a mount point or a
@@ -876,56 +540,175 @@ func TestDeleteAPIKey_NothingStoredIsNotAnError(t *testing.T) {
 	}
 }
 
-// TestDeleteAPIKey_RemovesAKeyMovedAsideByLegacyCleanup: a legacy cleanup that
-// died, or could not put a blob back, leaves the key in .legacy-*/api-key
-// beside the live path, and reads name it there. Deleting the stored key
-// (`mio logout`) must delete that copy too: otherwise logout reports success
-// while a secret stays under the config dir, and the next read still reports a
-// key moved aside. With and without a live blob beside it.
-func TestDeleteAPIKey_RemovesAKeyMovedAsideByLegacyCleanup(t *testing.T) {
-	for _, withLive := range []bool{false, true} {
-		name := "stranded copy only"
-		if withLive {
-			name = "stranded copy and a live blob"
+// legacyInstalls are the two routes a read takes into the legacy check. A v0.1
+// install (2026-06-01 .. 06-09) left a blob under legacyFilePassphrase and no
+// per-install key file, so the KEY FILE fails to load. A key file can also sit
+// beside a legacy blob (a later write minted it and failed before publishing
+// its blob), and then the BLOB fails to decode. LoadAPIKey reaches the legacy
+// check from both, so every legacy guard runs both.
+var legacyInstalls = []struct {
+	name        string
+	withKeyFile bool
+}{
+	{"v0.1 install, no key file", false},
+	{"key file beside a legacy blob", true},
+}
+
+// seedLegacyBlob writes a v0.1 blob at the live path under dir and returns its
+// bytes and its identity, for assertLegacyBlobUntouched.
+func seedLegacyBlob(t *testing.T, dir string, withKeyFile bool) ([]byte, fs.FileInfo) {
+	t.Helper()
+	if withKeyFile {
+		if _, err := loadOrCreateFileKey(); err != nil {
+			t.Fatalf("mint the key file: %v", err)
 		}
-		t.Run(name, func(t *testing.T) {
+	}
+	ring, err := openKeyringWithPassword(legacyFilePassphrase, "")
+	if err != nil {
+		t.Fatalf("open legacy ring: %v", err)
+	}
+	if err := ring.Set(legacyKeyringItem("mio_sk_old_legacy_key")); err != nil {
+		t.Fatalf("seed legacy blob: %v", err)
+	}
+	blob := blobPathFor(dir)
+	data, err := os.ReadFile(blob)
+	if err != nil {
+		t.Fatalf("read seeded blob: %v", err)
+	}
+	info, err := os.Lstat(blob)
+	if err != nil {
+		t.Fatalf("stat seeded blob: %v", err)
+	}
+	return data, info
+}
+
+// assertLegacyBlobUntouched fails unless the live path still names the seeded
+// file, byte for byte, and nothing was put beside it in the keyring dir (a
+// copy moved aside is a moved credential too).
+func assertLegacyBlobUntouched(t *testing.T, dir string, want []byte, wantInfo fs.FileInfo, via string) {
+	t.Helper()
+	blob := blobPathFor(dir)
+	info, err := os.Lstat(blob)
+	if err != nil {
+		t.Fatalf("after %s the legacy blob is gone from %s (%v): a read must report it and leave it in place", via, blob, err)
+	}
+	if !os.SameFile(info, wantInfo) {
+		t.Fatalf("after %s %s is no longer the file that held the legacy blob: a read must not move or replace a stored credential", via, blob)
+	}
+	got, err := os.ReadFile(blob)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("after %s the legacy blob's bytes changed (read err %v): a read must not rewrite a stored credential", via, err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(blob))
+	if err != nil {
+		t.Fatalf("read keyring dir: %v", err)
+	}
+	if len(entries) != 1 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("after %s the keyring dir holds %v, want only %s", via, names, keyringKeyName)
+	}
+}
+
+// TestLegacyBlob_EveryReadReportsItAndLeavesItInPlace: a v0.1 blob is REPORTED
+// by every read entry point in this package (ErrLegacyCredentials, naming the
+// store and `mio login`) and LEFT IN PLACE, byte for byte, at the same path
+// (MIO-2995). Reads used to delete it, and a delete on read can remove a key
+// another process published over the blob in the meantime; every scheme for
+// closing that race on the read side opened another. cmd's
+// TestLegacyStoredKey_EveryCommandReportsItAndLeavesItInPlace covers the
+// command-level readers.
+func TestLegacyBlob_EveryReadReportsItAndLeavesItInPlace(t *testing.T) {
+	reads := []struct {
+		name string
+		read func() error
+	}{
+		{"GetAPIKey", func() error { _, err := GetAPIKey(); return err }},
+		{"LoadAPIKey", func() error { _, _, err := LoadAPIKey(); return err }},
+		{"Resolve", func() error { _, err := (&Config{}).Resolve(Overrides{}); return err }},
+	}
+	for _, inst := range legacyInstalls {
+		t.Run(inst.name, func(t *testing.T) {
 			dir := withXDG(t)
 			withFileBackendOnly(t)
 			noRetryWait(t)
+			want, wantInfo := seedLegacyBlob(t, dir, inst.withKeyFile)
 
-			if err := SetAPIKey("mio_sk_live_stranded_by_a_dead_cleanup"); err != nil {
+			for _, r := range reads {
+				err := r.read()
+				if !errors.Is(err, ErrLegacyCredentials) {
+					t.Fatalf("%s on a legacy blob = %v, want ErrLegacyCredentials", r.name, err)
+				}
+				if msg := err.Error(); !strings.Contains(msg, blobPathFor(dir)) || !strings.Contains(msg, "mio login") {
+					t.Errorf("%s: the legacy error must name the store it read (%s) and say to run `mio login`: %q", r.name, blobPathFor(dir), msg)
+				}
+				assertLegacyBlobUntouched(t, dir, want, wantInfo, r.name)
+			}
+		})
+	}
+}
+
+// TestSetAPIKey_ReplacesALegacyBlob: since no read clears a legacy blob, the
+// next SetAPIKey (what `mio login` and `mio register` store through) is what
+// replaces it, and the new key must read back.
+func TestSetAPIKey_ReplacesALegacyBlob(t *testing.T) {
+	for _, inst := range legacyInstalls {
+		t.Run(inst.name, func(t *testing.T) {
+			dir := withXDG(t)
+			withFileBackendOnly(t)
+			noRetryWait(t)
+			seedLegacyBlob(t, dir, inst.withKeyFile)
+			if _, err := GetAPIKey(); !errors.Is(err, ErrLegacyCredentials) {
+				t.Fatalf("precondition: reading the seeded blob = %v, want ErrLegacyCredentials", err)
+			}
+
+			const fresh = "mio_sk_live_stored_over_a_legacy_blob"
+			if err := SetAPIKey(fresh); err != nil {
+				t.Fatalf("SetAPIKey over a legacy blob = %v: storing a key must replace it, it is how `mio login` recovers", err)
+			}
+			if got, err := GetAPIKey(); err != nil || got != fresh {
+				t.Fatalf("after SetAPIKey over a legacy blob the store reads (%q, %v), want %q", got, err, fresh)
+			}
+		})
+	}
+}
+
+// TestDeleteAPIKey_RemovesTheLiveBlob: DeleteAPIKey (`mio logout`) removes the
+// live blob, whether it holds a current key or a legacy one (which no read
+// removes any more), a read afterwards finds no key stored, and a second
+// delete, with nothing stored, is still not an error.
+func TestDeleteAPIKey_RemovesTheLiveBlob(t *testing.T) {
+	seeds := []struct {
+		name string
+		seed func(t *testing.T, dir string)
+	}{
+		{"current blob", func(t *testing.T, _ string) {
+			if err := SetAPIKey("mio_sk_live_logged_out"); err != nil {
 				t.Fatalf("SetAPIKey: %v", err)
 			}
-			live := blobPathFor(dir)
-			hold, err := os.MkdirTemp(filepath.Dir(live), legacyHoldPrefix)
-			if err != nil {
-				t.Fatalf("hold dir: %v", err)
-			}
-			if err := os.Rename(live, filepath.Join(hold, filepath.Base(live))); err != nil {
-				t.Fatalf("strand the blob: %v", err)
-			}
-			if withLive {
-				if err := SetAPIKey("mio_sk_live_current"); err != nil {
-					t.Fatalf("SetAPIKey: %v", err)
-				}
-			}
+		}},
+		{"legacy blob", func(t *testing.T, dir string) { seedLegacyBlob(t, dir, false) }},
+	}
+	for _, s := range seeds {
+		t.Run(s.name, func(t *testing.T) {
+			dir := withXDG(t)
+			withFileBackendOnly(t)
+			noRetryWait(t)
+			s.seed(t, dir)
 
 			if err := DeleteAPIKey(); err != nil {
 				t.Fatalf("DeleteAPIKey = %v, want nil", err)
 			}
-			entries, err := os.ReadDir(filepath.Dir(live))
-			if err != nil {
-				t.Fatalf("read keyring dir: %v", err)
-			}
-			var left []string
-			for _, e := range entries {
-				left = append(left, e.Name())
-			}
-			if len(left) != 0 {
-				t.Fatalf("after DeleteAPIKey the keyring dir still holds %v: a key moved aside by a legacy cleanup survived logout", left)
+			if _, err := os.Lstat(blobPathFor(dir)); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("after DeleteAPIKey the live blob is still there (stat err = %v): logout must remove it", err)
 			}
 			if key, _, err := LoadAPIKey(); key != "" || err != nil {
 				t.Fatalf("after DeleteAPIKey a read = (%q, %v), want no key stored", key, err)
+			}
+			if err := DeleteAPIKey(); err != nil {
+				t.Fatalf("a second DeleteAPIKey, with nothing stored = %v, want nil", err)
 			}
 		})
 	}

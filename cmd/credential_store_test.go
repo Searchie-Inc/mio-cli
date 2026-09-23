@@ -12,6 +12,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/99designs/keyring"
 
 	"github.com/Searchie-Inc/mio-cli/internal/config"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
@@ -177,19 +180,114 @@ func TestUnreadableStoredKey_ExitsAuthAndKeepsTheBlob(t *testing.T) {
 	}
 }
 
-// TestLogin_ReplacesAnUnreadableStoredKey: `mio login --email --password` reads
+// seedLegacyStoredKey writes a v0.1 blob at blob, the way a v0.1 install
+// (2026-06-01 .. 06-09) left it: the key encrypted under the passphrase v0.1
+// hardcoded ("mio-cli", published in this repo's history), with no per-install
+// key file beside it. It returns the blob's bytes and identity.
+func seedLegacyStoredKey(t *testing.T, blob string) ([]byte, os.FileInfo) {
+	t.Helper()
+	ring, err := keyring.Open(keyring.Config{
+		ServiceName:      "mio-cli",
+		AllowedBackends:  []keyring.BackendType{keyring.FileBackend},
+		FileDir:          filepath.Dir(blob),
+		FilePasswordFunc: func(string) (string, error) { return "mio-cli", nil },
+	})
+	if err != nil {
+		t.Fatalf("open a v0.1 file keyring: %v", err)
+	}
+	if err := ring.Set(keyring.Item{Key: filepath.Base(blob), Data: []byte("mio_sk_live_v01_legacy")}); err != nil {
+		t.Fatalf("seed the legacy blob: %v", err)
+	}
+	data, err := os.ReadFile(blob)
+	if err != nil {
+		t.Fatalf("read the seeded blob: %v", err)
+	}
+	info, err := os.Lstat(blob)
+	if err != nil {
+		t.Fatalf("stat the seeded blob: %v", err)
+	}
+	return data, info
+}
+
+// TestLegacyStoredKey_EveryCommandReportsItAndLeavesItInPlace: every command
+// that reads the stored key — the root key resolution every resource command
+// goes through, `whoami`, and `mio auth token` — reports a v0.1 blob as an
+// unusable credential (exit 3, naming the store and `mio login`) and leaves it
+// where it is, byte for byte (MIO-2995). No read path deletes, moves or
+// renames a stored credential; `mio login` replaces it
+// (TestLogin_ReplacesAnUnusableStoredKey). config's
+// TestLegacyBlob_EveryReadReportsItAndLeavesItInPlace covers the package-level
+// readers.
+func TestLegacyStoredKey_EveryCommandReportsItAndLeavesItInPlace(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"root key resolution (contacts list)", []string{"--team", "t_team1", "contacts", "list"}},
+		{"whoami", []string{"whoami"}},
+		{"auth token", []string{"auth", "token"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, blob := isolatedStore(t)
+			want, wantInfo := seedLegacyStoredKey(t, blob)
+			srv, _ := noRequestServer(t)
+
+			res, err := runCaptured(t, []string{"MIO_API_BASE_URL=" + srv.URL}, tc.args...)
+			if res.Code != errs.ExitAuth {
+				t.Fatalf("exit = %d, want %d (ExitAuth) for a legacy stored key; err = %v", res.Code, errs.ExitAuth, err)
+			}
+			if !errors.Is(err, config.ErrLegacyCredentials) {
+				t.Errorf("err = %v, want ErrLegacyCredentials", err)
+			}
+			if err != nil && (!strings.Contains(err.Error(), blob) || !strings.Contains(err.Error(), "mio login")) {
+				t.Errorf("the legacy-key error must name the store it read (%s) and say to run `mio login`: %v", blob, err)
+			}
+			if res.Stdout != "" {
+				t.Errorf("stdout = %q, want empty", res.Stdout)
+			}
+
+			info, serr := os.Lstat(blob)
+			if serr != nil {
+				t.Fatalf("after %v the legacy blob is gone (%v): a read must report it and leave it in place", tc.args, serr)
+			}
+			if !os.SameFile(info, wantInfo) {
+				t.Fatalf("after %v %s is no longer the file that held the legacy blob: a read must not move or replace it", tc.args, blob)
+			}
+			if got, rerr := os.ReadFile(blob); rerr != nil || !bytes.Equal(got, want) {
+				t.Fatalf("after %v the legacy blob's bytes changed (read err %v)", tc.args, rerr)
+			}
+			if entries, _ := os.ReadDir(filepath.Dir(blob)); len(entries) != 1 {
+				t.Fatalf("after %v the keyring dir holds %d entries, want only the blob", tc.args, len(entries))
+			}
+		})
+	}
+}
+
+// unusableStoredKeys are the stored blobs every read reports as unusable (exit
+// 3) and leaves in place, so `mio login` and `mio register` must replace them:
+// one that does not decode (the empty file a reader sees while a mio from
+// v0.22.0 or earlier rewrites it in place), and a v0.1 legacy blob.
+var unusableStoredKeys = []struct {
+	name string
+	seed func(t *testing.T, blob string)
+}{
+	{"unreadable blob", func(t *testing.T, blob string) {
+		if err := config.SetAPIKey("mio_sk_live_stale"); err != nil {
+			t.Fatalf("SetAPIKey: %v", err)
+		}
+		if err := os.WriteFile(blob, nil, 0o600); err != nil {
+			t.Fatalf("empty the blob: %v", err)
+		}
+	}},
+	{"legacy blob", func(t *testing.T, blob string) { seedLegacyStoredKey(t, blob) }},
+}
+
+// TestLogin_ReplacesAnUnusableStoredKey: `mio login --email --password` reads
 // the store first, and used to ABORT (exit 1) on a blob that did not decode, so
 // the only way out was deleting the file by hand. It must treat an unusable
-// stored key like no key and overwrite it.
-func TestLogin_ReplacesAnUnreadableStoredKey(t *testing.T) {
-	_, blob := isolatedStore(t)
-	if err := config.SetAPIKey("mio_sk_live_stale"); err != nil {
-		t.Fatalf("SetAPIKey: %v", err)
-	}
-	if err := os.WriteFile(blob, nil, 0o600); err != nil {
-		t.Fatalf("empty the blob: %v", err)
-	}
-
+// stored key like no key and overwrite it — a legacy blob included, now that
+// the read leaves one in place instead of deleting it.
+func TestLogin_ReplacesAnUnusableStoredKey(t *testing.T) {
 	token := makeLoginJWT(t, "team_owned")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -207,14 +305,24 @@ func TestLogin_ReplacesAnUnreadableStoredKey(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res, err := runCaptured(t, []string{"MIO_API_BASE_URL=" + srv.URL},
-		"login", "--email", "a@test.member.dev", "--password", "s3cr3t")
-	if res.Code != errs.ExitOK {
-		t.Fatalf("login over an unreadable stored key: exit = %d, want 0; err = %v; stderr=%q", res.Code, err, res.Stderr)
-	}
-	got, gerr := config.GetAPIKey()
-	if gerr != nil || got != "mio_sk_live_fresh" {
-		t.Fatalf("after login the store holds (%q, %v), want the freshly minted key", got, gerr)
+	for _, s := range unusableStoredKeys {
+		t.Run(s.name, func(t *testing.T) {
+			_, blob := isolatedStore(t)
+			s.seed(t, blob)
+			if _, err := config.GetAPIKey(); !config.StoredKeyUnusable(err) {
+				t.Fatalf("precondition: reading the seeded blob = %v, want an unusable-stored-key error", err)
+			}
+
+			res, err := runCaptured(t, []string{"MIO_API_BASE_URL=" + srv.URL},
+				"login", "--email", "a@test.member.dev", "--password", "s3cr3t")
+			if res.Code != errs.ExitOK {
+				t.Fatalf("login over an unusable stored key (%s): exit = %d, want 0; err = %v; stderr=%q", s.name, res.Code, err, res.Stderr)
+			}
+			got, gerr := config.GetAPIKey()
+			if gerr != nil || got != "mio_sk_live_fresh" {
+				t.Fatalf("after login the store holds (%q, %v), want the freshly minted key", got, gerr)
+			}
+		})
 	}
 }
 
@@ -257,29 +365,32 @@ func TestLogin_EnvKeyReplacesABlobItCannotRead(t *testing.T) {
 	}
 }
 
-// TestRegister_ReplacesAnUnreadableStoredKey: `mio register` reads the store
+// TestRegister_ReplacesAnUnusableStoredKey: `mio register` reads the store
 // before minting, exactly like login, and must likewise treat an unusable
-// stored key as "no key" and overwrite it instead of aborting with exit 1.
-func TestRegister_ReplacesAnUnreadableStoredKey(t *testing.T) {
-	_, blob := isolatedStore(t)
-	if err := config.SetAPIKey("mio_sk_live_stale"); err != nil {
-		t.Fatalf("SetAPIKey: %v", err)
-	}
-	if err := os.WriteFile(blob, nil, 0o600); err != nil {
-		t.Fatalf("empty the blob: %v", err)
-	}
-	var regBody map[string]any
-	mintReached := false
-	srv := registerMintServer(t, "t_reg", &regBody, &mintReached)
+// stored key — unreadable or legacy — as "no key" and overwrite it instead of
+// aborting with exit 1.
+func TestRegister_ReplacesAnUnusableStoredKey(t *testing.T) {
+	for _, s := range unusableStoredKeys {
+		t.Run(s.name, func(t *testing.T) {
+			_, blob := isolatedStore(t)
+			s.seed(t, blob)
+			if _, err := config.GetAPIKey(); !config.StoredKeyUnusable(err) {
+				t.Fatalf("precondition: reading the seeded blob = %v, want an unusable-stored-key error", err)
+			}
+			var regBody map[string]any
+			mintReached := false
+			srv := registerMintServer(t, "t_reg", &regBody, &mintReached)
 
-	res, err := runCaptured(t, []string{"MIO_API_BASE_URL=" + srv.URL},
-		"register", "--email", "new@test.member.dev", "--password", "s3cr3tpass")
-	if res.Code != errs.ExitOK {
-		t.Fatalf("register over an unreadable stored key: exit = %d, want 0; err = %v; stderr=%q", res.Code, err, res.Stderr)
-	}
-	got, gerr := config.GetAPIKey()
-	if gerr != nil || got != "mio_sk_registertest123" {
-		t.Fatalf("after register the store holds (%q, %v), want the freshly minted key", got, gerr)
+			res, err := runCaptured(t, []string{"MIO_API_BASE_URL=" + srv.URL},
+				"register", "--email", "new@test.member.dev", "--password", "s3cr3tpass")
+			if res.Code != errs.ExitOK {
+				t.Fatalf("register over an unusable stored key (%s): exit = %d, want 0; err = %v; stderr=%q", s.name, res.Code, err, res.Stderr)
+			}
+			got, gerr := config.GetAPIKey()
+			if gerr != nil || got != "mio_sk_registertest123" {
+				t.Fatalf("after register the store holds (%q, %v), want the freshly minted key", got, gerr)
+			}
+		})
 	}
 }
 

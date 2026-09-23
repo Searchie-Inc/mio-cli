@@ -66,9 +66,10 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 		TeamID:  flags.team,
 		Profile: flags.profile,
 	})
-	// A stored key that cannot be used (legacy, already cleared; or unreadable,
-	// about to be overwritten) is irrelevant here since register mints and
-	// stores a fresh key regardless. Any other resolution error is fatal.
+	// A stored key that cannot be used (legacy or unreadable, left in place by
+	// the read and about to be overwritten) is irrelevant here since register
+	// mints and stores a fresh key regardless. Any other resolution error is
+	// fatal.
 	if err != nil && !config.StoredKeyUnusable(err) {
 		return errs.Wrap(errs.ExitGeneric, err)
 	}

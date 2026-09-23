@@ -184,18 +184,26 @@ func (c *Config) Save() error {
 
 // ---- Keychain helpers -------------------------------------------------------
 
-// ErrLegacyCredentials is returned by GetAPIKey when the stored credential blob
-// was encrypted with the old hardcoded passphrase.  Callers (including the
-// login flow) should treat it as "no stored key" and proceed to the login
-// prompt rather than aborting.  Root command wiring maps this to ExitAuth.
-var ErrLegacyCredentials = errors.New("stored credentials use legacy encryption; please run `mio login` to re-login")
+// ErrLegacyCredentials is returned when the file keyring's blob decrypts under
+// the passphrase v0.1 hardcoded (legacyFilePassphrase) and not under this
+// install's key. The blob is REPORTED and LEFT IN PLACE: `mio login` and `mio
+// register` replace it through SetAPIKey's atomic rename, and `mio logout`
+// deletes it. Root wiring maps it to ExitAuth; login and register treat it
+// like "no stored key" and go on.
+//
+// No read deletes, moves or renames a stored credential because it is legacy
+// (MIO-2995). A read that removes the blob it has just recognised can remove a
+// key another process published over it in the meantime, and every scheme for
+// closing that race on the read side opened another; with SetAPIKey atomic, a
+// deletion on read buys nothing the next login does not already do.
+var ErrLegacyCredentials = errors.New("stored credentials use legacy encryption")
 
 // ErrUnreadableCredentials is returned when the file keyring's blob exists but
 // does not decode with this install's passphrase and is not a legacy blob
 // either: a write still in flight in another mio process, a blob truncated by
 // a crash, or one encrypted under a key file that has since been regenerated.
 //
-// Unlike ErrLegacyCredentials the blob is LEFT IN PLACE. Nothing on the read
+// Like ErrLegacyCredentials, the blob is LEFT IN PLACE. Nothing on the read
 // path can tell a half-finished write from a dead blob, and deleting a
 // credential another process is in the middle of writing destroys it for good
 // (MIO-2995: a blob cut inside its auth tag used to be classified "legacy" and
@@ -211,7 +219,7 @@ func StoredKeyUnusable(err error) bool {
 
 // legacyFilePassphrase is the hardcoded passphrase v0.1 (2026-06-01 .. 06-09)
 // encrypted the file keyring with, before MIO-794 moved to a per-install key.
-// It is only ever used to RECOGNISE such a blob so it can be cleared.
+// It is only ever used to RECOGNISE such a blob so it can be reported.
 const legacyFilePassphrase = "mio-cli"
 
 // loadOrCreateFileKey returns the per-install random passphrase used for the
@@ -615,31 +623,6 @@ const unreadableRetries = 4
 
 var unreadableRetryWait = func() { time.Sleep(25 * time.Millisecond) }
 
-// beforeLegacyRemoval runs between recognising a legacy blob and removing it.
-// It does nothing in production; a test uses it to publish a new key into
-// exactly that window.
-var beforeLegacyRemoval = func() {}
-
-// legacyHoldPrefix names the private directories removeLegacyBlob moves a
-// blob into, beside the live one, while it decides whether to delete it.
-const legacyHoldPrefix = ".legacy-"
-
-// beforeLegacyDetach runs once removeLegacyBlob has found the live path still
-// names the recognised file and before it moves that file aside. It does
-// nothing in production; a test uses it to publish a new key into exactly
-// that window.
-var beforeLegacyDetach = func() {}
-
-// afterLegacyDetach runs once removeLegacyBlob has moved the live blob aside
-// and before it decides whether to put it back. It does nothing in
-// production; a test uses it to look at the live path inside that window.
-var afterLegacyDetach = func() {}
-
-// linkBlob puts a detached blob back at the live path. A variable only so a
-// test can make it fail, which a real filesystem does only rarely (EIO,
-// ENOSPC, EDQUOT).
-var linkBlob = os.Link
-
 // GetAPIKey returns the stored API key, or "" (no error) if none is stored.
 // See LoadAPIKey, which also reports the store it read.
 func GetAPIKey() (string, error) {
@@ -652,8 +635,8 @@ func GetAPIKey() (string, error) {
 // when the key is missing or unusable, so the caller can say where it looked.
 //
 // A file-backend blob that exists but cannot be used is never reported as
-// "no key stored", and is deleted only on positive evidence that it is a
-// legacy (v0.1) blob. Two failures lead there:
+// "no key stored", and nothing here deletes, moves or renames it. Two failures
+// lead there:
 //   - The blob does not decode. It is re-read a bounded number of times,
 //     because a mio from v0.22.0 or earlier may be rewriting it in place.
 //   - The per-install key file cannot be read (missing, not 0600, invalid).
@@ -662,21 +645,18 @@ func GetAPIKey() (string, error) {
 //     just invalidated the blob, so a re-read would find it gone and answer
 //     "no key stored" for a key that was deliberately revoked.
 //
-// Either way, a blob that decrypts under the legacy passphrase is deleted
-// (ErrLegacyCredentials — v0.1 installs have no key file at all), and
-// anything else is ErrUnreadableCredentials with the blob left in place.
-//
-// A MISSING blob is "no key stored" only when no legacy cleanup has one moved
-// aside (see removeLegacyBlob). While one does, the read is retried like an
-// undecodable blob, and if the blob is still not back it is
-// ErrUnreadableCredentials naming where it is.
+// Either way, a blob that decrypts under the legacy passphrase is
+// ErrLegacyCredentials (v0.1 installs have no key file at all), and anything
+// else is ErrUnreadableCredentials. Both leave the blob where it is; the next
+// SetAPIKey replaces it. (The key-file permission drift above is the one read
+// that removes a blob: readAndValidateFileKey treats the key as compromised.)
 func LoadAPIKey() (string, Store, error) {
 	ring, store, err := openKeyring()
 	if err != nil {
 		return "", store, fmt.Errorf("open credential store: %w", err)
 	}
 	item, err := ring.Get(keyringKeyName)
-	for i := 0; i < unreadableRetries && (isUndecodableBlob(store, err) || isMovedAside(store, err)); i++ {
+	for i := 0; i < unreadableRetries && isUndecodableBlob(store, err); i++ {
 		unreadableRetryWait()
 		item, err = ring.Get(keyringKeyName)
 	}
@@ -690,25 +670,12 @@ func LoadAPIKey() (string, Store, error) {
 	case err == nil:
 		return string(item.Data), store, nil
 	case errors.Is(err, keyring.ErrKeyNotFound):
-		if held := movedAsideBlobs(store); len(held) > 0 {
-			return "", store, fmt.Errorf("%w: %s holds no blob, but a legacy-credential cleanup moved one aside to %s and has not put it back. "+
-				"It was left there: if no other mio process is running, move it back to %s; or run `mio login` (or export MIO_API_KEY) to store a new key",
-				ErrUnreadableCredentials, store.Describe(), held[0], store.Path)
-		}
 		return "", store, nil
 	case isUndecodableBlob(store, err) || keyFileRejected:
-		// The blob's identity is taken BEFORE it is recognised: what the check
-		// then reads is this file or one written over it later, and a later one
-		// is never legacy, so a positive answer is about this file.
-		recognised, statErr := os.Lstat(store.Path)
-		if statErr == nil && isLegacyBlob(store) {
-			beforeLegacyRemoval()
-			if derr := removeLegacyBlob(store, recognised); derr != nil {
-				// Deletion failed: the stale blob remains. Still typed as legacy
-				// so callers map it to ExitAuth.
-				return "", store, fmt.Errorf("%w (cleanup failed: %v)", ErrLegacyCredentials, derr)
-			}
-			return "", store, ErrLegacyCredentials
+		if isLegacyBlob(store) {
+			return "", store, fmt.Errorf("%w: %s holds a key encrypted under the retired v0.1 passphrase, which this version does not read. "+
+				"It was left in place: run `mio login` to replace it (or `mio logout` to delete it)",
+				ErrLegacyCredentials, store.Describe())
 		}
 		if passErr != nil {
 			return "", store, fmt.Errorf("%w: the key file that unlocks %s is unusable: %v",
@@ -734,38 +701,6 @@ func isUndecodableBlob(store Store, err error) bool {
 	return !errors.As(err, &pathErr) && !errors.As(err, &passErr)
 }
 
-// isMovedAside reports whether err is the file backend finding no blob while
-// a legacy cleanup has one moved aside: a window a re-read may see closed.
-func isMovedAside(store Store, err error) bool {
-	return errors.Is(err, keyring.ErrKeyNotFound) && len(movedAsideBlobs(store)) > 0
-}
-
-// movedAsideBlobs lists the blobs removeLegacyBlob has moved out of
-// store.Path into a .legacy-* directory beside it and not yet deleted or put
-// back: normally for a few syscalls, indefinitely if the process died there.
-// File backend only.
-func movedAsideBlobs(store Store) []string {
-	if store.Backend != keyring.FileBackend || store.Path == "" {
-		return nil
-	}
-	dir := filepath.Dir(store.Path)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var held []string
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), legacyHoldPrefix) {
-			continue
-		}
-		p := filepath.Join(dir, e.Name(), filepath.Base(store.Path))
-		if _, err := os.Lstat(p); err == nil {
-			held = append(held, p)
-		}
-	}
-	return held
-}
-
 // isFilesystemFailure reports whether err is the filesystem refusing an
 // operation on a path that exists (EACCES, EIO, ...) rather than reporting it
 // missing.
@@ -774,65 +709,10 @@ func isFilesystemFailure(err error) bool {
 	return errors.As(err, &pathErr) && !errors.Is(err, fs.ErrNotExist)
 }
 
-// removeLegacyBlob deletes the blob at store.Path only if it is STILL the
-// legacy blob that was recognised; recognised is its Lstat, taken before it
-// was recognised. Between the two another process can write a fresh key over
-// the same path: `mio login` renames a new file over it, and a mio from
-// v0.22.0 or earlier rewrites it in place. Neither may be deleted, nor moved
-// off the live path, where for as long as it is gone every reader is told no
-// key is stored.
-//
-//   - A key published by rename is a different file, so once the live path no
-//     longer names the recognised file nothing is touched.
-//   - Otherwise the blob is detached with a rename into a private directory
-//     beside it (atomic, same filesystem) and re-checked there. It is deleted
-//     only if it is still the recognised file AND still decrypts as legacy,
-//     which a blob rewritten in place does not. Anything else is linked back,
-//     unless an even newer blob already took the live path; if the link
-//     fails, the detached copy is kept and the error says where.
-//
-// POSIX has no compare-and-rename, so a narrow window remains: a key renamed
-// in between the identity check and the detach is moved aside too (and linked
-// straight back, without decrypting anything), and an in-place rewrite of the
-// recognised file stays aside while it is re-checked. Readers cover it:
-// LoadAPIKey re-reads while a blob is moved aside, and names the .legacy-*
-// copy rather than answer "no key stored" if it never comes back.
-func removeLegacyBlob(store Store, recognised fs.FileInfo) error {
-	if cur, err := os.Lstat(store.Path); err != nil || !os.SameFile(cur, recognised) {
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		return nil // gone, or replaced since it was recognised: nothing of ours to remove
-	}
-	beforeLegacyDetach()
-	hold, err := os.MkdirTemp(filepath.Dir(store.Path), legacyHoldPrefix)
-	if err != nil {
-		return err
-	}
-	held := filepath.Join(hold, filepath.Base(store.Path))
-	if err := os.Rename(store.Path, held); err != nil {
-		_ = os.Remove(hold)
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	afterLegacyDetach()
-	if info, err := os.Lstat(held); err == nil && os.SameFile(info, recognised) &&
-		isLegacyBlob(Store{Backend: keyring.FileBackend, Path: held}) {
-		return os.RemoveAll(hold)
-	}
-	if err := linkBlob(held, store.Path); err != nil && !errors.Is(err, fs.ErrExist) {
-		return fmt.Errorf("a blob that is no longer the legacy one was moved aside and could not be put back (%w); "+
-			"it is kept at %s: move it back to %s", err, held, store.Path)
-	}
-	_ = os.RemoveAll(hold)
-	return nil
-}
-
 // isLegacyBlob reports whether the blob at store.Path decrypts under the v0.1
 // hardcoded passphrase — positive evidence that it is a legacy blob, as
-// opposed to a partial write, which decrypts under no passphrase at all.
+// opposed to a partial write, which decrypts under no passphrase at all. It
+// only reads.
 func isLegacyBlob(store Store) bool {
 	ring, err := keyring.Open(keyring.Config{
 		ServiceName:      keyringService,
@@ -922,11 +802,8 @@ func replaceFileBlob(store Store, item keyring.Item) error {
 	return os.Rename(filepath.Join(stage, filepath.Base(store.Path)), store.Path)
 }
 
-// DeleteAPIKey removes the stored API key. A missing key is not an error.
-//
-// On the file backend it also removes any copy a legacy cleanup moved aside
-// and never put back (movedAsideBlobs): reads report such a copy as a stored
-// key, so leaving it would keep a secret under the config dir after logout.
+// DeleteAPIKey removes the stored API key: on the file backend, the live blob,
+// whatever it holds (a legacy one included). A missing key is not an error.
 func DeleteAPIKey() error {
 	ring, store, err := openKeyring()
 	if err != nil {
@@ -936,11 +813,6 @@ func DeleteAPIKey() error {
 	// keyring.ErrKeyNotFound; both mean there was nothing to delete.
 	if err := ring.Remove(keyringKeyName); err != nil && !errors.Is(err, keyring.ErrKeyNotFound) && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("delete API key from %s: %w", store.Describe(), err)
-	}
-	for _, held := range movedAsideBlobs(store) {
-		if err := os.RemoveAll(filepath.Dir(held)); err != nil {
-			return fmt.Errorf("delete the API key a legacy-credential cleanup moved aside to %s: %w", held, err)
-		}
 	}
 	return nil
 }
@@ -988,11 +860,10 @@ func (c *Config) Resolve(o Overrides) (Resolved, error) {
 		case err == nil:
 			apiKey = stored
 		case StoredKeyUnusable(err):
-			// A legacy blob (already deleted) or an unreadable one (left in
-			// place): either way there is no usable stored key. Resolve the rest
-			// of the context and surface the sentinel so callers (root wiring,
-			// login, register) can react — login must be able to go on and
-			// overwrite the store.
+			// A legacy or an unreadable blob, left in place either way: there
+			// is no usable stored key. Resolve the rest of the context and
+			// surface the sentinel so callers (root wiring, login, register) can
+			// react — login must be able to go on and overwrite the store.
 			return Resolved{
 				APIBase:   firstNonEmpty(o.APIBase, os.Getenv(EnvAPIBase), prof.APIBase, c.APIBase, DefaultAPIBase),
 				TeamID:    firstNonEmpty(o.TeamID, prof.CurrentTeam, c.CurrentTeam),
