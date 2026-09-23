@@ -14,9 +14,9 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/config"
 )
 
-// realUserHome is the home directory this test process started with, kept
-// only so TestMain_IsolatesEveryUserStore can prove the tests are NOT using it.
-var realUserHome string
+// isolationRoot is the temp dir TestMain created for this run. Every location a
+// store can be derived from must resolve under it; see isolationProblems.
+var isolationRoot string
 
 // TestMain keeps every test in this package away from the developer's real
 // credential stores and config (MIO-2995):
@@ -50,9 +50,14 @@ func runIsolated(m *testing.M) int {
 		return 1
 	}
 	defer func() { _ = os.RemoveAll(root) }()
+	// Resolve symlinks (macOS's /var -> /private/var) so the prefix checks in
+	// isolationProblems compare like with like.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	isolationRoot = root
 
 	pinGoToolchainDirs()
-	realUserHome, _ = os.UserHomeDir()
 
 	home := filepath.Join(root, "home")
 	cfgHome := filepath.Join(root, "config")
@@ -105,13 +110,17 @@ func pinGoToolchainDirs() {
 }
 
 // TestMain_IsolatesEveryUserStore pins TestMain's isolation: every location a
-// mio store can be derived from — HOME, USERPROFILE, XDG_CONFIG_HOME, and the
-// config path they resolve to — must be a temp dir and not the developer's,
-// and the keyring must be pinned to the file backend under it. During
-// MIO-2995 a store path wrongly derived from $HOME replaced the real
-// ~/.config/mio/keyring/api-key from a unit test; this is what stops that
-// from reaching a real store again. TestMain runs the same checks before any
-// test and refuses to start if one fails; this test names them in the report.
+// mio store can be derived from — HOME, USERPROFILE, XDG_CONFIG_HOME, the home
+// directory os.UserHomeDir derives from them, and the config path they resolve
+// to — must lie inside the temp dir TestMain created, and the keyring must be
+// pinned to the file backend under it. Inside TestMain's own dir, not merely
+// inside os.TempDir(): a caller that already runs `go test` under a temp
+// XDG_CONFIG_HOME would otherwise satisfy the check with TestMain's pinning
+// deleted. During MIO-2995 a store path wrongly derived from $HOME replaced
+// the real ~/.config/mio/keyring/api-key from a unit test; this is what stops
+// that from reaching a real store again. TestMain runs the same checks before
+// any test and refuses to start if one fails; this test names them in the
+// report.
 func TestMain_IsolatesEveryUserStore(t *testing.T) {
 	for _, p := range isolationProblems() {
 		t.Error(p)
@@ -122,21 +131,19 @@ func TestMain_IsolatesEveryUserStore(t *testing.T) {
 // the developer's real config or credential stores; empty means isolated.
 func isolationProblems() []string {
 	var problems []string
-	tmp := os.TempDir()
+	inRoot := func(p string) bool {
+		return isolationRoot != "" && (p == isolationRoot || strings.HasPrefix(p, isolationRoot+string(filepath.Separator)))
+	}
 	for _, k := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME"} {
-		v := os.Getenv(k)
-		if v == "" || !strings.HasPrefix(v, tmp) {
-			problems = append(problems, fmt.Sprintf("%s = %q, want a temp dir under %s — TestMain must isolate it", k, v, tmp))
-		}
-		if realUserHome != "" && v == realUserHome {
-			problems = append(problems, fmt.Sprintf("%s is the developer's real home %q", k, v))
+		if v := os.Getenv(k); !inRoot(v) {
+			problems = append(problems, fmt.Sprintf("%s = %q, want a dir under TestMain's %q — TestMain must pin it", k, v, isolationRoot))
 		}
 	}
-	if home, err := os.UserHomeDir(); err != nil || home == realUserHome {
-		problems = append(problems, fmt.Sprintf("os.UserHomeDir() = (%q, %v): still the developer's real home", home, err))
+	if home, err := os.UserHomeDir(); err != nil || !inRoot(home) {
+		problems = append(problems, fmt.Sprintf("os.UserHomeDir() = (%q, %v), want a dir under %q", home, err, isolationRoot))
 	}
-	if p, err := config.Path(); err != nil || !strings.HasPrefix(p, tmp) {
-		problems = append(problems, fmt.Sprintf("config.Path() = (%q, %v), want a path under %s", p, err, tmp))
+	if p, err := config.Path(); err != nil || !inRoot(p) {
+		problems = append(problems, fmt.Sprintf("config.Path() = (%q, %v), want a path under %q", p, err, isolationRoot))
 	}
 	// On a runner with no OS store the file backend is chosen whether or not
 	// it is pinned, so no test's behaviour shows a missing pin there; on a
