@@ -120,19 +120,9 @@ a whole hub's playlists one each, see 'mio content reconcile'.`,
 			return err
 		}
 
-		// Both --title and --node-type are required by the backend
-		// ContentNodeCreateAttributes schema; validate client-side so a
-		// partial-required body never reaches the API.
-		var missing []string
-		if !cmd.Flags().Changed("title") {
-			missing = append(missing, "--title")
-		}
-		if !cmd.Flags().Changed("node-type") {
-			missing = append(missing, "--node-type")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
-		}
+		// --title and --node-type are required by the backend
+		// ContentNodeCreateAttributes schema; cobra enforces both before RunE
+		// (markFlagsRequired in init).
 
 		c, teamID, hubID, err := contentContext(cmd)
 		if err != nil {
@@ -498,6 +488,7 @@ func init() {
 	// --content-type maps to attributes.content_type (optional sub-type for lessons).
 	contentCreateCmd.Flags().String("title", "", "Content item title.")
 	contentCreateCmd.Flags().String("node-type", "", `Node type: "container" (folder/module) or "lesson" (leaf item). Required on create.`)
+	markFlagsRequired(contentCreateCmd, "title", "node-type")
 	contentCreateCmd.Flags().String("content-type", "", `Optional content sub-type for lesson nodes (e.g. video, audio, pdf, text).`)
 	contentCreateCmd.Flags().String("parent-id", "", "Id of the parent content item (nests this item under a folder).")
 	contentCreateCmd.Flags().String("description", "", "Content item description.")

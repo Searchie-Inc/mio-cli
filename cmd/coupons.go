@@ -93,20 +93,6 @@ var couponsCreateCmd = &cobra.Command{
 			return err
 		}
 
-		var missing []string
-		if !cmd.Flags().Changed("code") {
-			missing = append(missing, "--code")
-		}
-		if !cmd.Flags().Changed("discount-type") {
-			missing = append(missing, "--discount-type")
-		}
-		if !cmd.Flags().Changed("discount-value") {
-			missing = append(missing, "--discount-value")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flags: %s", strings.Join(missing, ", "))
-		}
-
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "code")
 		setMappedString(cmd, attrs, "discount-type", "discount_type")
@@ -285,6 +271,7 @@ func init() {
 	couponsCreateCmd.Flags().Bool("first-time-only", false, "Restrict to first-time buyers only.")
 	couponsCreateCmd.Flags().String("expires-at", "", "Expiry timestamp in RFC 3339 format, e.g. 2026-12-31T23:59:59Z.")
 	couponsCreateCmd.Flags().Bool("is-active", true, "Whether the coupon is active (default: true).")
+	markFlagsRequired(couponsCreateCmd, "code", "discount-type", "discount-value")
 
 	// update: only mutable fields; code/discount_type/discount_value/currency absent.
 	couponsUpdateCmd.Flags().Int("max-redemptions", 0, "Maximum number of redemptions (must be ≥ 1). Omit to leave unchanged.")

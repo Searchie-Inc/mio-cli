@@ -303,10 +303,9 @@ func hintAchievementsEarnErr(verb string, err error) error {
 }
 
 // requireContactID reads the required --contact-id flag for the earn verbs.
+// Its presence is enforced by cobra (markFlagsRequired in init); an empty value
+// is rejected here.
 func requireContactID(cmd *cobra.Command) (string, error) {
-	if !cmd.Flags().Changed("contact-id") {
-		return "", errs.New(errs.ExitUsage, "missing required flag: --contact-id")
-	}
 	v, err := cmd.Flags().GetString("contact-id")
 	if err != nil {
 		return "", errs.Wrap(errs.ExitGeneric, err)
@@ -326,9 +325,7 @@ func requireContactID(cmd *cobra.Command) (string, error) {
 // unambiguous: there is no reading of "   " that the backend would ever
 // accept, so rejecting it locally saves a guaranteed round trip.
 func requireOverrideReason(cmd *cobra.Command) (string, error) {
-	if !cmd.Flags().Changed("reason") {
-		return "", errs.New(errs.ExitUsage, "missing required flag: --reason")
-	}
+	// Presence is enforced by cobra (markFlagsRequired in init).
 	v, err := cmd.Flags().GetString("reason")
 	if err != nil {
 		return "", errs.Wrap(errs.ExitGeneric, err)
@@ -579,11 +576,8 @@ the badge still does not award anyone until 'mio achievements rule set
 			return err
 		}
 
-		// --title is the only backend-required create attribute; validate
-		// client-side so a missing-required body never reaches the API.
-		if !cmd.Flags().Changed("title") {
-			return errs.New(errs.ExitUsage, "missing required flag: --title")
-		}
+		// --title is the only backend-required create attribute; cobra
+		// enforces it before RunE (markFlagsRequired in init).
 
 		attrs := map[string]any{}
 		if err := setAchievementAttrs(cmd, attrs); err != nil {
@@ -1258,6 +1252,7 @@ func init() {
 		cmd.Flags().Int("rule-window-days", 0, "Rolling window in days — only accepted for --rule-type=challenge, which is not yet available (see --rule-type); setting this on any rule type accepted today 422s server-side (rule_window_days_not_allowed). Reserved for when challenge ships.")
 		cmd.Flags().StringSlice("rule-content-node-ids", nil, "Content node ids that must ALL be completed. Only valid with --rule-criteria=completed-content, and MUTUALLY EXCLUSIVE with --rule-threshold (see its help) — the backend 422s the combination, the CLI does not block it client-side. Repeatable or comma-separated; 1-50 items, no duplicates (enforced server-side).")
 	}
+	markFlagsRequired(achievementsCreateCmd, "title")
 
 	// --clear (MIO-3685, update only): the general null-clearing mechanism —
 	// see achievementsScalarFlags/achievementsClearAttrKey for how its
@@ -1280,9 +1275,11 @@ func init() {
 	// PR #109).
 	for _, cmd := range []*cobra.Command{achievementsGrantCmd, achievementsRevokeCmd, achievementsRestoreCmd, achievementsOverrideCmd} {
 		cmd.Flags().String("contact-id", "", "GLOBAL contact id of the hub member — capture with `mio contacts retrieve <team-contact-id> -o plain --jq .contact_id` (the flattened contact_id field, NOT the row's .id). Required.")
+		markFlagsRequired(cmd, "contact-id")
 	}
 	achievementsGrantCmd.Flags().String("reason", "", "Must be exactly \"manual\" (MIO-3488) — the backend rejects any other value with a 422 and records provenance itself.")
 	achievementsRevokeCmd.Flags().String("reason", "", "Audit reason recorded as the earn's revoke_reason (sent as the ?reason= query parameter).")
 	achievementsRestoreCmd.Flags().String("reason", "", "Audit reason recorded as the earn's restore_reason.")
 	achievementsOverrideCmd.Flags().String("reason", "", "REQUIRED. Audit reason recorded as the earn's grant_reason. Unlike grant/revoke/restore's optional --reason, this one is mandatory — an empty or whitespace-only value is rejected before any request is sent (the backend's own AuditReason validator strips whitespace before its required check too, so a whitespace-only value would 422 there as well).")
+	markFlagsRequired(achievementsOverrideCmd, "reason")
 }

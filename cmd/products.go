@@ -27,7 +27,6 @@ package cmd
 import (
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -291,21 +290,8 @@ Allowed values for --interval: month, year, week, day (required when --type=recu
 			return err
 		}
 
-		// --amount, --currency, and --type are required by PriceCreateAttributes.
-		var missing []string
-		if !cmd.Flags().Changed("amount") {
-			missing = append(missing, "--amount")
-		}
-		if !cmd.Flags().Changed("currency") {
-			missing = append(missing, "--currency")
-		}
-		if !cmd.Flags().Changed("type") {
-			missing = append(missing, "--type")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
-		}
-
+		// --amount, --currency, and --type are required by PriceCreateAttributes;
+		// cobra enforces them before RunE (markFlagsRequired in init).
 		attrs := map[string]any{}
 		setIntFlag(cmd, attrs, "amount")
 		setStringFlag(cmd, attrs, "currency")
@@ -441,6 +427,8 @@ func init() {
 	productsPricesCreateCmd.Flags().String("name", "", "Human-readable price label (max 100 chars).")
 	productsPricesCreateCmd.Flags().String("description", "", "Price description (max 500 chars).")
 	productsPricesCreateCmd.Flags().Bool("is-active", true, "Whether the price is active.")
+
+	markFlagsRequired(productsPricesCreateCmd, "amount", "currency", "type")
 
 	// Update flags: only mutable fields (billing fields are immutable after creation).
 	productsPricesUpdateCmd.Flags().String("name", "", "Human-readable price label (max 100 chars).")

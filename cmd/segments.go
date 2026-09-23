@@ -12,7 +12,6 @@ package cmd
 import (
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -97,20 +96,9 @@ Prefix the value with @ to read the JSON from a file (e.g. --conditions @conds.j
 			return err
 		}
 
-		// Both --name and --conditions are required by the backend
-		// SegmentCreateAttributes schema; validate client-side so a
-		// partial-required body never reaches the API.
-		var missing []string
-		if !cmd.Flags().Changed("name") {
-			missing = append(missing, "--name")
-		}
-		if !cmd.Flags().Changed("conditions") {
-			missing = append(missing, "--conditions")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
-		}
-
+		// --name and --conditions are required by the backend
+		// SegmentCreateAttributes schema; cobra enforces both before RunE
+		// (markFlagsRequired in init).
 		rawConditions, _ := cmd.Flags().GetString("conditions")
 		conditions, perr := parseJSONFlag(rawConditions)
 		if perr != nil {
@@ -396,6 +384,7 @@ func init() {
 		cmd.Flags().Bool("is-active", false, "Whether the segment is active (default true on create).")
 		cmd.Flags().String("conditions", "", `Condition tree as JSON: {"version":1,"groups":[{"logic":"AND","conditions":[...]}]}. Prefix with @ to read from a file (e.g. @conditions.json).`)
 	}
+	markFlagsRequired(segmentsCreateCmd, "name", "conditions")
 
 	// Pagination flags for list and members.
 	addPaginationFlags(segmentsListCmd)
