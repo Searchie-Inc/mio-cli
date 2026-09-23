@@ -20,6 +20,11 @@ import (
 // A requirement that is CONDITIONAL on another flag's value (--interval when
 // --type=recurring) is not expressible here and stays in RunE.
 //
+// Older RunE checks still exist: MIO-4154 moved only the `missing required
+// flag(s)` ones, and the `--x is required[: hint]` ones remain (the grep that
+// lists them is in doc_examples_test.go, under WHAT IT DOES NOT SEE). Do not
+// copy them.
+//
 // It panics on a name the command does not define, so a typo fails at init
 // rather than silently leaving the flag optional.
 func markFlagsRequired(cmd *cobra.Command, names ...string) {

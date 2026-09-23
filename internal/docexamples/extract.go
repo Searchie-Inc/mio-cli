@@ -6,9 +6,11 @@
 // `go build -o mio .`, cannot join a `\`-continued invocation, and would read a
 // placeholder like `<id>` as a redirection. What it understands:
 //
-//   - fenced code blocks (``` or ~~~, any indentation, any info string);
+//   - fenced code blocks (``` or ~~~, any indentation, any info string), also
+//     inside a blockquote (`> ```sh`), where the fence ends with its container;
 //     a block containing `$ ` prompts is a console transcript, and only its
-//     prompt lines (plus their `\` continuations) are code
+//     prompt lines (plus their `\` continuations) are parsed — its other lines
+//     are output, and a `mio <word>` on one is reported, never dropped
 //   - words, single/double quotes, backslash escapes, `\`-newline continuation
 //   - `;` `&` `|` `&&` `||` and newlines as command separators; `( … )` subshells
 //   - `$( … )` and backtick command substitution, recursively (so the `mio` inside
@@ -21,9 +23,10 @@
 //     an unquoted `[--flag <v>]` optional group is dropped, and a bare `…`/`...`
 //     marks an invocation as ELIDED (deliberately incomplete)
 //
-// Every `mio <word>` visible in code that is not the head of an extracted
-// invocation is reported in Result.Uncovered, so a shape the parser does not
-// understand surfaces as a failure instead of an unguarded example.
+// Every `mio <word>` on a line of a fenced block (a transcript's output lines
+// included) that is not the head of an extracted invocation is reported in
+// Result.Uncovered, so a shape the parser does not understand surfaces as a
+// failure instead of an unguarded example. Text outside a fence is not read.
 package docexamples
 
 import (
@@ -62,6 +65,9 @@ type Mention struct {
 	File string
 	Line int
 	Text string
+	// Output: the line is an unprompted line of a `$ ` console transcript, so
+	// it was read as output. If it is a command, it needs its `$ ` prompt.
+	Output bool
 }
 
 // Result is everything extracted from one source.
@@ -82,32 +88,63 @@ func FromMarkdown(file, content string) Result {
 	lines := strings.Split(content, "\n")
 	var res Result
 	for i := 0; i < len(lines); i++ {
-		indent, marker, ok := fenceOpen(lines[i])
+		opener, depth := stripQuote(lines[i], -1)
+		indent, marker, ok := fenceOpen(opener)
 		if !ok {
 			continue
 		}
 		start := i + 1
 		end := start
-		for end < len(lines) && !fenceClose(lines[end], marker) {
+		closed := false
+		for end < len(lines) {
+			l, d := stripQuote(lines[end], depth)
+			if d < depth {
+				break // the enclosing blockquote ended, and the fence with it
+			}
+			if fenceClose(l, marker) {
+				closed = true
+				break
+			}
 			end++
 		}
 		body := make([]string, 0, end-start)
 		for _, l := range lines[start:end] {
+			l, _ = stripQuote(l, depth)
 			body = append(body, stripIndent(l, indent))
 		}
 		sub := FromScript(file, start+1, strings.Join(body, "\n"))
 		res.Invocations = append(res.Invocations, sub.Invocations...)
 		res.Uncovered = append(res.Uncovered, sub.Uncovered...)
 		i = end
+		if !closed {
+			i = end - 1 // lines[end] is not this fence's close: read it afresh
+		}
 	}
 	return res
+}
+
+// stripQuote removes up to max blockquote markers (`>` after any indentation,
+// plus one following space) from line, all of them when max < 0, and reports
+// how many it removed. A fence inside a blockquote is code like any other.
+func stripQuote(line string, max int) (string, int) {
+	n := 0
+	for max < 0 || n < max {
+		t := strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(t, ">") {
+			break
+		}
+		line = strings.TrimPrefix(t[1:], " ")
+		n++
+	}
+	return line, n
 }
 
 // FromScript extracts the invocations from a shell snippet whose first line is
 // line firstLine of file (a cobra Example string, or one fenced block's body).
 func FromScript(file string, firstLine int, script string) Result {
-	script = strings.Join(consoleCode(strings.Split(script, "\n")), "\n")
-	p := &parser{src: script, file: file, firstLine: firstLine}
+	code, output := consoleCode(strings.Split(script, "\n"))
+	script = strings.Join(code, "\n")
+	p := &parser{src: script, file: file, firstLine: firstLine, output: output}
 	p.lineStarts = []int{0}
 	for i := 0; i < len(script); i++ {
 		if script[i] == '\n' {
@@ -156,10 +193,13 @@ func stripIndent(line string, indent int) string {
 	return line[i:]
 }
 
-// consoleCode blanks the OUTPUT lines of a console transcript, keeping line
+// consoleCode splits a console transcript into code and output, keeping line
 // numbers stable. A block is a transcript when any line starts with `$ `; then
-// only prompt lines and their `\` continuations are code.
-func consoleCode(body []string) []string {
+// only prompt lines (prompt stripped) and their `\` continuations are code, and
+// every other line is blanked in code and returned, as written, in output —
+// output is not parsed, but a `mio <word>` on it is still reported (uncovered).
+// Outside a transcript, output is nil.
+func consoleCode(body []string) (code, output []string) {
 	isConsole := false
 	for _, l := range body {
 		if strings.HasPrefix(strings.TrimLeft(l, " \t"), "$ ") {
@@ -168,23 +208,24 @@ func consoleCode(body []string) []string {
 		}
 	}
 	if !isConsole {
-		return body
+		return body, nil
 	}
-	out := make([]string, len(body))
+	code = make([]string, len(body))
+	output = make([]string, len(body))
 	cont := false
 	for i, l := range body {
 		t := strings.TrimLeft(l, " \t")
 		switch {
 		case strings.HasPrefix(t, "$ "):
-			out[i] = t[2:]
+			code[i] = t[2:]
 		case cont:
-			out[i] = l
+			code[i] = l
 		default:
-			out[i] = ""
+			output[i] = l
 		}
-		cont = out[i] != "" && strings.HasSuffix(strings.TrimRight(out[i], " \t"), "\\")
+		cont = code[i] != "" && strings.HasSuffix(strings.TrimRight(code[i], " \t"), "\\")
 	}
-	return out
+	return code, output
 }
 
 // ---- shell-lite parser -------------------------------------------------------
@@ -207,6 +248,7 @@ type parser struct {
 	file       string
 	firstLine  int
 	lineStarts []int
+	output     []string // per line: a transcript's output line as written, else ""
 
 	pending     []heredoc
 	nonCode     [][2]int // byte ranges that are comments or heredoc bodies
@@ -548,9 +590,10 @@ func (p *parser) emit(words []word) {
 	p.invocations = append(p.invocations, inv)
 }
 
-// uncovered lists the code lines holding a `mio <word>` that is not the head of
-// an extracted invocation. Coverage is per `mio` word, not per line: an
-// extracted invocation never vouches for a second one beside it.
+// uncovered lists the lines holding a `mio <word>` that is not the head of an
+// extracted invocation. Coverage is per `mio` word, not per line: an extracted
+// invocation never vouches for a second one beside it. A transcript's output
+// lines are never parsed, so any mention on one is uncovered by definition.
 func (p *parser) uncovered() []Mention {
 	heads := map[int]bool{}
 	for _, inv := range p.invocations {
@@ -558,6 +601,10 @@ func (p *parser) uncovered() []Mention {
 	}
 	var out []Mention
 	for idx, start := range p.lineStarts {
+		if idx < len(p.output) && mentionRE.MatchString(p.output[idx]) {
+			out = append(out, Mention{File: p.file, Line: p.firstLine + idx, Text: strings.TrimSpace(p.output[idx]), Output: true})
+			continue
+		}
 		end := len(p.src)
 		if idx+1 < len(p.lineStarts) {
 			end = p.lineStarts[idx+1] - 1

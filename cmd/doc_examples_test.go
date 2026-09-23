@@ -27,27 +27,32 @@ package cmd
 //
 // WHAT IT DOES NOT SEE
 //   - A requirement enforced only inside a RunE body. cobra cannot report it, so
-//     neither can this. Declare required flags with MarkFlagRequired (products
-//     create moved to it in MIO-4154 for exactly this reason).
+//     neither can this. Declare required flags with markFlagsRequired (products
+//     create moved to it in MIO-4154 for exactly this reason). MIO-4154 moved
+//     the `missing required flag(s)` checks only. 44 other requirement checks,
+//     mostly phrased `--x is required[: hint]`, still live in RunE and are
+//     invisible here until they move. Some are conditional and cannot move.
+//     List them with: grep -nE 'ExitUsage, *"[^"]*(required|missing)' cmd/*.go
 //   - Flag VALUES. Every flag is parsed into a stub that accepts anything, so
 //     placeholders (<id>, "$HUB_ID") never false-positive; an invalid enum value
 //     in a doc is out of scope.
-//   - Prose and inline `code spans`. Only fenced blocks and Example strings are
-//     read; the extractor reports any fenced line that mentions `mio <word>` but
-//     that it could not turn into an invocation (TestDocExamples_* fail on it).
+//   - Prose and inline `code spans`. Only fenced blocks (blockquoted ones too)
+//     and Example strings are read; the extractor reports any line of them that
+//     mentions `mio <word>` but that it could not turn into an invocation,
+//     including an unprompted line of a `$ ` console transcript
+//     (TestDocExamples_* fail on it). So llms.txt and
+//     docs/internal/api-surface.md, which have no fenced blocks, are not read.
 //
 // To sweep another repo's docs with the same checker (the docs site, say), set
 // MIO_DOC_EXAMPLES_EXTRA to a list of files/globs separated by the OS path-list
 // separator and run TestDocExamples_ShippedSurfaces.
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 
@@ -59,14 +64,19 @@ import (
 
 // shippedDocSurfaces are the hand-maintained documents that ship with (or are
 // generated into) the CLI and that agents execute verbatim. Paths are relative
-// to this package directory. docs/superpowers/ is excluded on purpose: it holds
-// dated design plans and specs describing the CLI as it was then, not docs.
+// to this package directory. Each must yield at least one checked invocation
+// (TestDocExamples_ShippedSurfaces fails otherwise), so this list cannot claim a
+// surface the guard never reads.
+//
+// Not listed, because they hold no fenced code block and so give this checker
+// nothing to read: llms.txt (a one-line-per-command index) and
+// docs/internal/api-surface.md (an endpoint reference). Neither is guarded.
+// docs/superpowers/ is excluded on purpose: it holds dated design plans and
+// specs describing the CLI as it was then, not docs.
 var shippedDocSurfaces = []string{
 	"../README.md",
 	"../AGENTS.md",
-	"../llms.txt",
 	"skills/content/mio-skill.md",
-	"../docs/internal/api-surface.md",
 }
 
 // stubValue accepts any value. The guard checks which flags an example passes,
@@ -231,6 +241,15 @@ func docSurfaceFiles(t *testing.T) []string {
 	return files
 }
 
+// transcriptHint explains an uncovered mention on an output line of a `$ `
+// console transcript, which is read as output rather than parsed.
+func transcriptHint(m docexamples.Mention) string {
+	if !m.Output {
+		return ""
+	}
+	return " (the block has `$ ` prompts, so this unprompted line is read as output; if it is a command, give it a `$ ` prompt)"
+}
+
 // displayPath renders a surface path relative to the repo root for messages.
 func displayPath(p string) string {
 	if strings.HasPrefix(p, "../") {
@@ -248,6 +267,7 @@ func displayPath(p string) string {
 func TestDocExamples_ShippedSurfaces(t *testing.T) {
 	root := docRoot()
 	checked := 0
+	perSurface := map[string]int{}
 	for _, path := range docSurfaceFiles(t) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -256,7 +276,7 @@ func TestDocExamples_ShippedSurfaces(t *testing.T) {
 		name := displayPath(path)
 		res := docexamples.FromMarkdown(name, string(raw))
 		for _, m := range res.Uncovered {
-			t.Errorf("%s:%d: mentions mio but no invocation was extracted, so it is unguarded: %s", m.File, m.Line, m.Text)
+			t.Errorf("%s:%d: mentions mio but no invocation was extracted, so it is unguarded%s: %s", m.File, m.Line, transcriptHint(m), m.Text)
 		}
 		for _, inv := range res.Invocations {
 			v := checkDocInvocation(root, inv.Args, inv.Elided)
@@ -267,11 +287,19 @@ func TestDocExamples_ShippedSurfaces(t *testing.T) {
 				t.Logf("%s:%d: skipped `%s`: %s", inv.File, inv.Line, inv.Text(), v.skipped)
 			default:
 				checked++
+				perSurface[path]++
 			}
 		}
 	}
 	if checked == 0 {
 		t.Fatal("no documented invocation was checked — the extractor or the surface list is broken")
+	}
+	// Per surface, not in total: a listed surface that yields nothing would be
+	// hidden by the others' counts while the list claims it is guarded.
+	for _, path := range shippedDocSurfaces {
+		if perSurface[path] == 0 {
+			t.Errorf("%s: listed in shippedDocSurfaces but no invocation from it was checked, so listing it guards nothing", displayPath(path))
+		}
 	}
 }
 
@@ -334,7 +362,7 @@ func TestDocExamples_CommandExamples(t *testing.T) {
 		}
 		res := docexamples.FromScript(label, 1, c.Example)
 		for _, m := range res.Uncovered {
-			t.Errorf("%s: mentions mio but no invocation was extracted, so it is unguarded: %s", where(m.Line), m.Text)
+			t.Errorf("%s: mentions mio but no invocation was extracted, so it is unguarded%s: %s", where(m.Line), transcriptHint(m), m.Text)
 		}
 		for _, inv := range res.Invocations {
 			v := checkDocInvocation(root, inv.Args, inv.Elided)
@@ -439,7 +467,3 @@ func TestDocExamples_CheckerRejectsKnownBadInvocations(t *testing.T) {
 		}
 	}
 }
-
-// Compile-time use of errors/sort to keep imports honest if cases change.
-var _ = errors.New
-var _ = sort.Strings

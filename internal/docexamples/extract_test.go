@@ -42,9 +42,12 @@ func TestFromScript_Shapes(t *testing.T) {
 			want:   []got{{1, 1, "contacts·list·--output·json", false}},
 		},
 		{
-			name:   "console transcript output mentioning mio is not code",
-			script: "$ mio hubs create --name A --slug a\nPublish it with: mio hubs update hub_1 --published",
-			want:   []got{{1, 1, "hubs·create·--name·A·--slug·a", false}},
+			name:   "console transcript output is not parsed",
+			script: "$ mio version\nmio 0.2.0\n$ mio hubs create --name A \\\n  --slug a\n{\"id\": \"hub_1\"}",
+			want: []got{
+				{1, 1, "version", false},
+				{3, 4, "hubs·create·--name·A·--slug·a", false},
+			},
 		},
 		{
 			name:   "command substitution into a variable",
@@ -175,6 +178,83 @@ func TestFromScript_UncoveredMentionBesideAnExtractedOne(t *testing.T) {
 	}
 	if len(res.Uncovered) != 1 || res.Uncovered[0].Line != 1 {
 		t.Fatalf("want the `watch … mio contacts list` mention reported at line 1, got %+v", res.Uncovered)
+	}
+}
+
+// TestFromScript_TranscriptOutputMentionIsReported: one `$ ` prompt makes a
+// block a console transcript, and its unprompted lines are output, never parsed.
+// A `mio <word>` on such a line must still be REPORTED: otherwise a single
+// prompt line blinds the guard to every unprompted command in the same block,
+// and line 1 below, the exact MIO-4154 defect, would pass unseen (blind review).
+// A version banner (`mio 0.2.0`) names no command word and is not a mention.
+func TestFromScript_TranscriptOutputMentionIsReported(t *testing.T) {
+	res := FromScript("x.md", 1, strings.Join([]string{
+		`mio products create --name "Pro Plan"`, // 1: unprompted — reported
+		"$ mio version",                         // 2: prompt — extracted
+		"mio 0.2.0",                             // 3: output, no command word
+		"Publish it with: mio hubs update hub_1 --published", // 4: output naming mio — reported
+	}, "\n"))
+	if g, want := view(res.Invocations), []got{{2, 2, "version", false}}; !reflect.DeepEqual(g, want) {
+		t.Errorf("invocations\n got %+v\nwant %+v", g, want)
+	}
+	var lines []int
+	for _, m := range res.Uncovered {
+		lines = append(lines, m.Line)
+		if !m.Output {
+			t.Errorf("line %d: Output = false, want true (it is an unprompted line of a transcript)", m.Line)
+		}
+	}
+	if want := []int{1, 4}; !reflect.DeepEqual(lines, want) {
+		t.Errorf("uncovered lines = %v, want %v: an unprompted `mio <word>` in a transcript must be reported, not blanked", lines, want)
+	}
+}
+
+// TestFromMarkdown_BlockquoteFences: a fence inside a blockquote (`> ```sh`,
+// README's go-install note) is code like any other, so its invocations must be
+// extracted and its mentions covered (blind review, MIO-4154). The fence ends
+// where its container ends, two ways: a top-level fence straight after a quoted
+// one opens a new block instead of being swallowed (lines 12-16), and prose
+// straight after one is prose, not code (lines 17-19). Each half fails on its
+// own mutation; the second exists because the first alone passed with the
+// container-end check deleted (the stray backticks parsed as a substitution).
+func TestFromMarkdown_BlockquoteFences(t *testing.T) {
+	doc := strings.Join([]string{
+		"> **Note:** rename it:", // 1
+		"> ```sh",                // 2
+		`> mio products create --name "Pro Plan"`, // 3
+		">```",                  // 4: close, no space after >
+		"> > ```bash",           // 5: nested quote
+		"> > mio contacts list", // 6
+		"> > ```",               // 7
+		"  > - item:",           // 8: indented quote holding a list
+		">   ```sh",             // 9: list-indented fence in a quote
+		">   V=$(mio pages tree get <p> --jq .tree)", // 10
+		">   ```",                      // 11
+		"> ```sh",                      // 12: ended by its container ending
+		"> mio version",                // 13
+		"```sh",                        // 14: a NEW top-level fence
+		"mio hubs list",                // 15
+		"```",                          // 16
+		"> ```sh",                      // 17: also ended by its container ending,
+		"> mio contacts retrieve <id>", // 18
+		"prose: mio pages list",        // 19: here by prose, which is not read
+		"",                             // 20
+		"more prose",                   // 21
+	}, "\n")
+	res := FromMarkdown("doc.md", doc)
+	want := []got{
+		{3, 3, "products·create·--name·Pro Plan", false},
+		{6, 6, "contacts·list", false},
+		{10, 10, "pages·tree·get·<p>·--jq·.tree", false},
+		{13, 13, "version", false},
+		{15, 15, "hubs·list", false},
+		{18, 18, "contacts·retrieve·<id>", false},
+	}
+	if g := view(res.Invocations); !reflect.DeepEqual(g, want) {
+		t.Errorf("invocations\n got %+v\nwant %+v", g, want)
+	}
+	if len(res.Uncovered) != 0 {
+		t.Errorf("unexpected uncovered: %+v", res.Uncovered)
 	}
 }
 
