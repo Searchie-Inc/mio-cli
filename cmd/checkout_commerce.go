@@ -103,11 +103,12 @@ All commands require a hub context: pass --hub <id> or run 'mio config set curre
 }
 
 var checkoutHubProductsListCmd = &cobra.Command{
-	Use:     "list",
-	Short:   "List the products offered by a hub.",
-	Long:    "List all hub_product_display rows for the active hub, ordered by position. Requires --hub.",
-	Example: `  mio checkout hub-products list --hub hub_abc123`,
-	Args:    cobra.NoArgs,
+	Use:   "list",
+	Short: "List the products offered by a hub.",
+	Long:  "List all hub_product_display rows for the active hub, ordered by position. Requires --hub.",
+	Example: `  mio checkout hub-products list --hub hub_abc123
+  mio checkout hub-products list --hub hub_abc123 --jq '.[] | {id, product_id, position, visible, is_free_tier}'`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := checkoutHubContext(cmd)
 		if err != nil {

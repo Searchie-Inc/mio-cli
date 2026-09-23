@@ -8,7 +8,7 @@ package cmd
 // missing key. What WAS wrong is the help, which called the attribute
 // "visibility" while the flag and the wire both say `visible`.
 //
-// Two guards follow, each with an oracle the implementation cannot fake:
+// Three guards follow, each with an oracle the implementation cannot fake:
 //
 //   - the list render guard feeds the real command the exact attributes the API
 //     returns and reads the RENDERED stdout (json, table, plain, --jq) — not the
@@ -17,12 +17,17 @@ package cmd
 //   - the help guard derives the editable attributes from the WIRE (the body the
 //     update command actually sends with every one of its flags set) and requires
 //     the help to name each one verbatim, so neither a reworded help nor a new
-//     flag documented under some other word can stay green.
+//     flag documented under some other word can stay green;
+//   - the list example guard RUNS each list command's documented --jq example
+//     against the API's shape and requires every one of those editable
+//     attributes back with its value, so the example cannot vanish or drift
+//     to a key the rows do not have.
 
 import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -335,5 +340,53 @@ func TestCheckoutHubDisplayHelp_NamesEachEditableWireAttribute(t *testing.T) {
 			t.Errorf("`mio %s --help` says \"visibility\"; the attribute and the flag are both `visible` (MIO-4156):\n%s",
 				strings.Join(page, " "), out)
 		}
+	}
+}
+
+// jqExample pulls the --jq program out of a rendered help page's examples.
+var jqExample = regexp.MustCompile(`--jq '([^']+)'`)
+
+// TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute: each list
+// command's help carries a --jq example, and running THAT example against the
+// API's shape must yield every editable attribute (taken from the update wire,
+// as above) with the value the API sent. An example that is deleted, or that
+// selects a key rows do not have (`.visibility` answers null), fails here.
+func TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute(t *testing.T) {
+	cases := []struct {
+		list       hubDisplayListCase
+		updateCmd  *cobra.Command
+		updatePath []string
+	}{
+		{hubDisplayListCases[0], checkoutHubPricesUpdateCmd, []string{"checkout", "hub-prices", "update", "hprd_1"}},
+		{hubDisplayListCases[1], checkoutHubProductsUpdateCmd, []string{"checkout", "hub-products", "update", "hpd_1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.list.name, func(t *testing.T) {
+			keys := updateWireAttributes(t, tc.updateCmd, tc.updatePath)
+			page := "mio " + strings.Join(tc.list.args, " ") + " --help"
+			m := jqExample.FindStringSubmatch(helpOutput(t, tc.list.args...))
+			if m == nil {
+				t.Fatalf("`%s` has no --jq example; show how to select %v", page, keys)
+			}
+
+			wire := tc.list.rows(t)
+			srv, _, _, _ := captureCommerceRequest(t, http.StatusOK, `{"data":`+tc.list.data+`,"meta":{"count":2}}`)
+			var got []map[string]any
+			out := tc.list.run(t, srv.URL, "--jq", m[1])
+			if err := json.Unmarshal([]byte(out), &got); err != nil {
+				t.Fatalf("`%s` example --jq '%s' did not yield one object per row: %v; stdout=%q", page, m[1], err, out)
+			}
+			if len(got) != len(wire) {
+				t.Fatalf("`%s` example --jq '%s' yielded %d objects for %d rows", page, m[1], len(got), len(wire))
+			}
+			for i, obj := range got {
+				for _, k := range keys {
+					if v, ok := obj[k]; !ok || !reflect.DeepEqual(v, wire[i].Attributes[k]) {
+						t.Errorf("`%s` example --jq '%s' row %d: editable attribute %q = %v (present=%v), want %v",
+							page, m[1], i, k, v, ok, wire[i].Attributes[k])
+					}
+				}
+			}
+		})
 	}
 }
