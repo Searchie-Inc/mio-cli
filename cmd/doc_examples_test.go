@@ -48,7 +48,13 @@ package cmd
 //
 // To sweep another repo's docs with the same checker (the docs site, say), set
 // MIO_DOC_EXAMPLES_EXTRA to a list of files/globs separated by the OS path-list
-// separator and run TestDocExamples_ShippedSurfaces.
+// separator and run TestDocExamples_ShippedSurfaces. The sweep reads those
+// files exactly as it reads the shipped surfaces, with the same blind spots: it
+// checks fenced blocks only, so an inline `mio …` span in their prose is NOT
+// checked, and a clean sweep says nothing about it. Every fence is read as shell whatever its info string, so
+// a `text` block of CLI output is parsed too, and a `mio <word>` in it that is
+// not the head of a command (`Publish it with: mio hubs update …`) is reported
+// as unguarded.
 
 import (
 	"fmt"
