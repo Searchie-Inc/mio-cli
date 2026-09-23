@@ -65,9 +65,11 @@ uses the macOS Keychain. 'mio whoami' reports the one in use as key_source.
 
 With no stored key it exits 3 with nothing on stdout, and the error names the
 store it read. A stored key that does not decode, or whose key file is missing
-or invalid, also exits 3 ('mio login' replaces it). A filesystem error while
-reading the store (permission denied, I/O error) exits 1: re-authenticating
-cannot fix that.`,
+or invalid, also exits 3 ('mio login' replaces it). So does a key file whose
+mode is not exactly 0600: it is treated as compromised, and the key file and
+the stored credential are both invalidated. Any other filesystem error while
+reading the store (permission denied on the blob, I/O error) exits 1:
+re-authenticating cannot fix that.`,
 	Example: `  export MIO_API_KEY="$(mio auth token)"
   mio auth token >/dev/null && echo "a key is stored"`,
 	Args: cobra.NoArgs,
