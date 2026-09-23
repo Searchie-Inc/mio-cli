@@ -967,7 +967,7 @@ index at `mio gen-docs --dir ./docs`. Core groups:
 - **Auth/context:** `mio whoami` · `mio config set|get|list` · `mio teams list|switch` · `mio api-keys create|list`
 - **Hubs:** `mio hubs scaffold|templates` · `mio hubs create|retrieve|update|list` · `mio hubs policies get|update|gate` · `mio hubs navigation list|add|remove|reorder`
 - **Pages:** `mio pages create|list|retrieve|home` · `mio pages catalog templates|section-types|scaffold` · `mio pages tree get|set` · `mio pages publish` · `mio pages sections create|list|reorder`
-- **Media:** `mio media files upload|list|durable-url` · `mio media playlists create|set-cover` (+ `playlists items add|list|remove|reorder`) · `mio media hub-media publish` · `mio media hub-playlists publish` · `mio media search` · `mio media transcripts get|edit|revert`
+- **Media:** `mio media files upload|list|durable-url` (`upload`/`replace` go multipart above 100 MB, or at any size with `--multipart`) · `mio media playlists create|set-cover` (+ `playlists items add|list|remove|reorder`) · `mio media hub-media publish` · `mio media hub-playlists publish` · `mio media search` · `mio media transcripts get|edit|revert`
 - **Community:** `mio community spaces create|list` · `mio community discussions create|list|update` · `mio community moderation ...`
 - **Contacts/members:** `mio contacts list|retrieve` · `mio contact-attributes ...` · `mio tags ...` · `mio hub-memberships add|set-role|ban` · `mio segments ...`
 - **Commerce:** `mio products ...` · `mio coupons ...` · `mio checkout ...`

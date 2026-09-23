@@ -163,7 +163,7 @@ Every implemented resource and its verbs.
 | `pages sections` | `create` (`--type` validated against the catalog writable set) `list` `update` `delete` `reorder` |
 | `pages tree` | `get` `set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit for the first tree on a draft-less page, defaults to `0`). `get` returns `{tree, draft_version}`; `set` wants `{root}` — unwrap and re-wrap (see Page-Tree Render Contract) |
 | `pages catalog` | `scaffold` (`--template`/`--variant` → a node-tree for `pages tree set`) `templates` (`--page-type`) `section-types` (`--writable-only`). **There is no `pages catalog list`** |
-| `media files` | `list` `retrieve` `durable-url` (non-expiring hub-scoped image URL; `--hub` `--preset` `--publish`) `update` `delete` `upload` (create → presigned PUT → finalize, auto-multipart) `replace` `finalize` `transcode` `register-synthetic` |
+| `media files` | `list` `retrieve` `durable-url` (non-expiring hub-scoped image URL; `--hub` `--preset` `--publish`) `update` `delete` `upload` (create → presigned PUT → finalize; multipart above 100 MB (104857600 bytes) — at or below it is one presigned PUT — or at any size with `--multipart`; `--part-size-mb` sets the part size, default 16, min 5, read only on the multipart path) `replace` (same threshold and flags) `finalize` `transcode` `register-synthetic` |
 | `media files cards` | `get` `set` (`--cards` JSON array/@file) |
 | `media files chapters` | `get` `set` (`--chapters` JSON array/@file) |
 | `media folders` | `list` `create` `retrieve` `update` `delete` `move` (`--parent-id`/`--to-root`) |
