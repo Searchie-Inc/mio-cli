@@ -131,6 +131,7 @@ func dispatchFirstRequest(t *testing.T, mc multipartCapable, size int64, extra .
 
 var helpBytesThreshold = regexp.MustCompile(`\b(\d+) bytes\b`)
 var helpPartMinimum = regexp.MustCompile(`\bminimum (\d+)\b`)
+var helpPartDefault = regexp.MustCompile(`\bdefault (\d+)\b`)
 
 // statedNumber returns the single number re captures in text. Zero matches, or
 // two different numbers, is a help text that does not make one statement.
@@ -194,9 +195,10 @@ func TestMultipartThreshold_HelpIsWhatTheWireDoes(t *testing.T) {
 }
 
 // TestMultipartPartSize_HelpIsWhatTheCommandEnforces: the minimum part size the
-// help states is the one the command enforces before any request, and the flag
-// is read only on the multipart path (a small file without --multipart ignores
-// it rather than rejecting it).
+// help states is the one the command enforces before any request — on the forced
+// AND the automatic multipart path — and the flag is read only on the multipart
+// path (a small file without --multipart ignores it rather than rejecting it).
+// The default the help states is the flag's real default.
 func TestMultipartPartSize_HelpIsWhatTheCommandEnforces(t *testing.T) {
 	found := commandsWithMultipartFlag()
 	for path, mc := range multipartCapableCommands {
@@ -209,9 +211,23 @@ func TestMultipartPartSize_HelpIsWhatTheCommandEnforces(t *testing.T) {
 			minMB := statedNumber(t, helpPartMinimum, c.Long, "minimum part size")
 			below := strconv.FormatInt(minMB-1, 10)
 
+			if def := statedNumber(t, helpPartDefault, c.Long, "default part size"); strconv.FormatInt(def, 10) != c.Flags().Lookup("part-size-mb").DefValue {
+				t.Errorf("--help says the part size default is %d, but --part-size-mb defaults to %s",
+					def, c.Flags().Lookup("part-size-mb").DefValue)
+			}
+
 			if got, code := dispatchFirstRequest(t, mc, 1, "--multipart", "--part-size-mb", below); got != "" || code != errs.ExitUsage {
 				t.Errorf("--help says the part size minimum is %d, but --multipart --part-size-mb %s "+
 					"sent %q (exit %d), want no request and exit %d", minMB, below, got, code, errs.ExitUsage)
+			}
+			// The automatic path must enforce the same floor: a file one byte over the
+			// threshold the help states goes multipart with no flag, so a part size
+			// under the minimum has to stop it before the init request too.
+			over := statedNumber(t, helpBytesThreshold, c.Long, "multipart threshold in bytes") + 1
+			if got, code := dispatchFirstRequest(t, mc, over, "--part-size-mb", below); got != "" || code != errs.ExitUsage {
+				t.Errorf("--help says the part size minimum is %d, but a %d-byte file (multipart automatically, "+
+					"no --multipart) with --part-size-mb %s sent %q (exit %d), want no request and exit %d",
+					minMB, over, below, got, code, errs.ExitUsage)
 			}
 			if got, _ := dispatchFirstRequest(t, mc, 1, "--multipart", "--part-size-mb", strconv.FormatInt(minMB, 10)); got != mc.multiInit {
 				t.Errorf("--help says the part size minimum is %d, but --multipart --part-size-mb %d "+
@@ -326,6 +342,7 @@ func TestMultipartThreshold_EverySurfaceStatesIt(t *testing.T) {
 		}
 	}
 
+	var statedDefaults, statedMinimums int
 	for _, s := range multipartDocSurfaces {
 		b, err := os.ReadFile(s.file)
 		if err != nil {
@@ -346,5 +363,30 @@ func TestMultipartThreshold_EverySurfaceStatesIt(t *testing.T) {
 			t.Errorf("%s: the %q line does not state the multipart threshold (%q) — agents execute this text",
 				s.file, s.anchor, want)
 		}
+		// A part-size default or minimum a doc line states must be the one the
+		// flag and the preflight use; the help is rendered from the constants, the
+		// docs are not.
+		for _, check := range []struct {
+			re   *regexp.Regexp
+			want int
+			seen *int
+		}{
+			{docPartDefault, defaultPartSizeMB, &statedDefaults},
+			{docPartMinimum, minPartSizeMB, &statedMinimums},
+		} {
+			for _, m := range check.re.FindAllStringSubmatch(line, -1) {
+				*check.seen++
+				if m[1] != strconv.Itoa(check.want) {
+					t.Errorf("%s: the %q line states %q, but the code uses %d", s.file, s.anchor, m[0], check.want)
+				}
+			}
+		}
+	}
+	if statedDefaults == 0 || statedMinimums == 0 {
+		t.Errorf("no doc line states the --part-size-mb default (%d lines) or minimum (%d lines) — the check above "+
+			"is vacuous", statedDefaults, statedMinimums)
 	}
 }
+
+var docPartDefault = regexp.MustCompile(`\bdefault (\d+)\b`)
+var docPartMinimum = regexp.MustCompile(`\bmin(?:imum)? (\d+)\b`)
