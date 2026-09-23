@@ -57,7 +57,12 @@ plain JSON.
 
 ---
 
-## auth (handled by login.go / register.go, not resource commands)
+## auth (handled by login.go / register.go / auth.go, not resource commands)
+- `mio auth token` (`cmd/auth.go`, MIO-2995) makes NO request: it prints the key
+  `login`/`register` stored (`config.LoadAPIKey`) to stdout for
+  `export MIO_API_KEY="$(mio auth token)"`; exit 3 with empty stdout when none
+  is stored. The store is a file (`<config dir>/mio/keyring/api-key`) on the
+  macOS release binaries — `whoami` `key_source` names the one in use.
 - `POST /api/auth/login` {email,password} → tokens (plain JSON)
 - `POST /api/auth/register` {email,password,first_name?,last_name?} → 201 tokens
   (same TokenResponse as login; unauthenticated). Surfaced as `mio register`

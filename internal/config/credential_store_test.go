@@ -13,9 +13,14 @@ package config
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/99designs/keyring"
@@ -371,5 +376,210 @@ func TestResolve_UnreadableBlobStillResolvesContext(t *testing.T) {
 	}
 	if _, statErr := os.Stat(blobPathFor(dir)); statErr != nil {
 		t.Fatalf("the unreadable blob was removed by a read: %v", statErr)
+	}
+}
+
+// completeBlob reports whether data is a whole JWE compact token as the file
+// backend writes it: five dot-separated parts, the last being the 16-byte
+// A256GCM auth tag (22 base64url characters). Any prefix of a real blob fails
+// this: a cut inside the ciphertext leaves fewer parts, a cut inside the tag a
+// shorter one.
+func completeBlob(data []byte) bool {
+	parts := strings.Split(string(data), ".")
+	return len(parts) == 5 && len(parts[4]) == 22
+}
+
+// TestSetAPIKey_ReaderNeverSeesTheBlobMissingOrPartial pins what the inode
+// test above cannot: that the new blob is PUBLISHED atomically, not merely
+// that it lands on a new inode. An implementation that removed the live blob
+// and then renamed its replacement in would pass the inode test while a
+// concurrent reader saw no blob at all — "no API key found", MIO-2995's exact
+// symptom. A reader spins on the live path for the whole of a run of writes
+// and must see a complete blob every single time.
+func TestSetAPIKey_ReaderNeverSeesTheBlobMissingOrPartial(t *testing.T) {
+	dir := withXDG(t)
+	withFileBackendOnly(t)
+	if err := SetAPIKey("mio_sk_live_publication_0"); err != nil {
+		t.Fatalf("seed SetAPIKey: %v", err)
+	}
+	blob := blobPathFor(dir)
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		reads   int
+		missing int
+		partial int
+		first   string
+	)
+	stop := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			data, err := os.ReadFile(blob)
+			mu.Lock()
+			reads++
+			switch {
+			case err != nil:
+				missing++
+				if first == "" {
+					first = err.Error()
+				}
+			case !completeBlob(data):
+				partial++
+				if first == "" {
+					first = fmt.Sprintf("a %d-byte partial blob", len(data))
+				}
+			}
+			mu.Unlock()
+		}
+	}()
+
+	const writes = 150
+	for i := 1; i <= writes; i++ {
+		if err := SetAPIKey("mio_sk_live_publication_" + strings.Repeat("x", i%7)); err != nil {
+			close(stop)
+			wg.Wait()
+			t.Fatalf("SetAPIKey #%d: %v", i, err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+
+	if missing > 0 || partial > 0 {
+		t.Fatalf("across %d writes a concurrent reader saw the stored blob MISSING %d times and PARTIAL %d times (of %d reads; first: %s); "+
+			"SetAPIKey must publish the new blob with a single rename over the old one", writes, missing, partial, reads, first)
+	}
+	if reads < writes {
+		t.Fatalf("the reader only managed %d reads across %d writes, too few to have watched the publication windows", reads, writes)
+	}
+}
+
+// TestGetAPIKey_LegacyCleanupNeverDeletesANewerKey pins the delete step of the
+// legacy path. Between recognising a legacy blob and removing it, another
+// process can publish a fresh key over the same path (`mio login` does exactly
+// that). A plain remove at that point deletes the NEW key. The removal must
+// only ever take the blob it verified.
+func TestGetAPIKey_LegacyCleanupNeverDeletesANewerKey(t *testing.T) {
+	withXDG(t)
+	withFileBackendOnly(t)
+	noRetryWait(t)
+
+	legacyRing, err := openKeyringWithPassword(legacyFilePassphrase, "")
+	if err != nil {
+		t.Fatalf("open legacy ring: %v", err)
+	}
+	if err := legacyRing.Set(legacyKeyringItem("mio_sk_old_legacy_key")); err != nil {
+		t.Fatalf("seed legacy blob: %v", err)
+	}
+
+	const fresh = "mio_sk_live_published_by_a_concurrent_login"
+	published := false
+	orig := beforeLegacyRemoval
+	beforeLegacyRemoval = func() {
+		if published {
+			return
+		}
+		published = true
+		if err := SetAPIKey(fresh); err != nil {
+			t.Errorf("concurrent SetAPIKey: %v", err)
+		}
+	}
+	t.Cleanup(func() { beforeLegacyRemoval = orig })
+
+	if _, err := GetAPIKey(); !errors.Is(err, ErrLegacyCredentials) {
+		t.Fatalf("first read = %v, want ErrLegacyCredentials (it saw the legacy blob)", err)
+	}
+	if !published {
+		t.Fatal("the removal hook never ran, so this test did not exercise the race")
+	}
+	got, err := GetAPIKey()
+	if err != nil || got != fresh {
+		t.Fatalf("after the legacy cleanup the store holds (%q, %v); the key published between recognition and removal was deleted", got, err)
+	}
+}
+
+// TestSetAPIKey_StagesBesideTheBlob: the replacement blob must be staged in
+// the SAME directory as the live one, the only place a rename is guaranteed
+// not to cross a filesystem (the keyring dir can be a mount point or a
+// symlink to another volume). A cross-device mount cannot be built in a unit
+// test, so this uses a proxy that tells the two layouts apart just as well:
+// the keyring dir is writable but its parent is not.
+func TestSetAPIKey_StagesBesideTheBlob(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permission bits do not restrict writes on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permission bits")
+	}
+	dir := withXDG(t)
+	withFileBackendOnly(t)
+	if err := SetAPIKey("mio_sk_live_first"); err != nil {
+		t.Fatalf("seed SetAPIKey: %v", err)
+	}
+	mioDir := filepath.Join(dir, "mio")
+	if err := os.Chmod(mioDir, 0o500); err != nil {
+		t.Fatalf("chmod %s: %v", mioDir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(mioDir, 0o700) })
+
+	if err := SetAPIKey("mio_sk_live_second"); err != nil {
+		t.Fatalf("SetAPIKey with only the keyring dir writable: %v — the staging dir must sit beside the blob, not in its parent", err)
+	}
+	if got, err := GetAPIKey(); err != nil || got != "mio_sk_live_second" {
+		t.Fatalf("GetAPIKey = (%q, %v), want the second key", got, err)
+	}
+}
+
+// TestGetAPIKey_KeyFileFilesystemErrorIsNotACredentialVerdict: a key file that
+// exists but cannot be READ (EACCES, EIO) is an environment failure, the same
+// class as an unreadable blob, and takes the same generic path (exit 1). Only
+// a key file that is missing or invalid says something about the credential
+// itself (exit 3, re-authenticate). The injected error stands in for EACCES,
+// which cannot be produced on the key file alone without root.
+func TestGetAPIKey_KeyFileFilesystemErrorIsNotACredentialVerdict(t *testing.T) {
+	dir := withXDG(t)
+	withFileBackendOnly(t)
+	noRetryWait(t)
+	if err := SetAPIKey("mio_sk_live_key_file_unreadable"); err != nil {
+		t.Fatalf("SetAPIKey: %v", err)
+	}
+	keyPath := filepath.Join(dir, "mio", fileKeyName)
+	orig := readFileKey
+	readFileKey = func(string) (string, error) {
+		return "", &fs.PathError{Op: "open", Path: keyPath, Err: syscall.EACCES}
+	}
+	t.Cleanup(func() { readFileKey = orig })
+
+	_, err := GetAPIKey()
+	if err == nil {
+		t.Fatal("GetAPIKey succeeded with an unreadable key file")
+	}
+	if StoredKeyUnusable(err) {
+		t.Fatalf("GetAPIKey = %v; a key file that cannot be READ is a filesystem failure (exit 1), not a verdict on the stored credential (exit 3)", err)
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("GetAPIKey error = %v; want the underlying permission error", err)
+	}
+	if _, statErr := os.Stat(blobPathFor(dir)); statErr != nil {
+		t.Errorf("the blob was removed: %v", statErr)
+	}
+}
+
+// TestDeleteAPIKey_NothingStoredIsNotAnError: DeleteAPIKey (`mio logout`) is
+// documented as "a missing key is not an error", but the file backend answers
+// a missing blob with a raw os.ErrNotExist rather than keyring.ErrKeyNotFound,
+// so `mio logout` with nothing stored used to exit 1.
+func TestDeleteAPIKey_NothingStoredIsNotAnError(t *testing.T) {
+	withXDG(t)
+	withFileBackendOnly(t)
+	if err := DeleteAPIKey(); err != nil {
+		t.Fatalf("DeleteAPIKey with nothing stored = %v, want nil", err)
 	}
 }

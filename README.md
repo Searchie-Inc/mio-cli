@@ -440,6 +440,7 @@ Scripts and agents can branch on these stable codes.
 | `login` / `logout` | Interactive auth |
 | `register` | Create a new account (email + password, optional first/last name) and auto-login — interactive, or headless via `--email`/`--password` (or `MIO_EMAIL`/`MIO_PASSWORD`). Replaces any stored key. |
 | `whoami` | Print resolved identity — user, team, hub, api-base, profile, key source |
+| `auth` | `token` — print the stored API key to stdout (`export MIO_API_KEY="$(mio auth token)"`); exit 3 with empty stdout when none is stored |
 | `config` | `set`, `get`, `list` |
 | `api-keys` | `create`, `list`, `retrieve`, `delete` |
 | `teams` | `create`, `list`, `retrieve`, `update`, `delete`, `switch` (server-side switch + updates local context); `members list/add/remove` |

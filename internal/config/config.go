@@ -536,12 +536,17 @@ func readFilePassword(string) (string, error) {
 	if err != nil {
 		return "", &filePasswordError{err: err}
 	}
-	key, err := readAndValidateFileKey(filepath.Join(dir, fileKeyName))
+	key, err := readFileKey(filepath.Join(dir, fileKeyName))
 	if err != nil {
 		return "", &filePasswordError{err: err}
 	}
 	return key, nil
 }
+
+// readFileKey is readFilePassword's key-file reader. A variable only so a test
+// can inject a filesystem failure (EACCES) that cannot be produced on the key
+// file alone without root.
+var readFileKey = readAndValidateFileKey
 
 // writeFilePassword is the passphrase lookup for WRITING the file keyring: it
 // creates the per-install key file on first use.
@@ -599,6 +604,11 @@ const unreadableRetries = 4
 
 var unreadableRetryWait = func() { time.Sleep(25 * time.Millisecond) }
 
+// beforeLegacyRemoval runs between recognising a legacy blob and removing it.
+// It does nothing in production; a test uses it to publish a new key into
+// exactly that window.
+var beforeLegacyRemoval = func() {}
+
 // GetAPIKey returns the stored API key, or "" (no error) if none is stored.
 // See LoadAPIKey, which also reports the store it read.
 func GetAPIKey() (string, error) {
@@ -634,15 +644,21 @@ func LoadAPIKey() (string, Store, error) {
 		unreadableRetryWait()
 		item, err = ring.Get(keyringKeyName)
 	}
+	// A key file that is missing or invalid is a verdict on the stored
+	// credential. One that exists but cannot be READ (EACCES, EIO) is an
+	// environment failure, the same class as an unreadable blob, and takes the
+	// generic path below.
 	var passErr *filePasswordError
+	keyFileRejected := errors.As(err, &passErr) && !isFilesystemFailure(passErr)
 	switch {
 	case err == nil:
 		return string(item.Data), store, nil
 	case errors.Is(err, keyring.ErrKeyNotFound):
 		return "", store, nil
-	case isUndecodableBlob(store, err), errors.As(err, &passErr):
+	case isUndecodableBlob(store, err) || keyFileRejected:
 		if isLegacyBlob(store) {
-			if derr := os.Remove(store.Path); derr != nil && !errors.Is(derr, os.ErrNotExist) {
+			beforeLegacyRemoval()
+			if derr := removeLegacyBlob(store); derr != nil {
 				// Deletion failed: the stale blob remains. Still typed as legacy
 				// so callers map it to ExitAuth.
 				return "", store, fmt.Errorf("%w (cleanup failed: %v)", ErrLegacyCredentials, derr)
@@ -671,6 +687,43 @@ func isUndecodableBlob(store Store, err error) bool {
 	var pathErr *fs.PathError
 	var passErr *filePasswordError
 	return !errors.As(err, &pathErr) && !errors.As(err, &passErr)
+}
+
+// isFilesystemFailure reports whether err is the filesystem refusing an
+// operation on a path that exists (EACCES, EIO, ...) rather than reporting it
+// missing.
+func isFilesystemFailure(err error) bool {
+	var pathErr *fs.PathError
+	return errors.As(err, &pathErr) && !errors.Is(err, fs.ErrNotExist)
+}
+
+// removeLegacyBlob deletes the blob at store.Path only if it is STILL the
+// legacy blob that was recognised. Between recognising it and removing it
+// another process can publish a fresh key over the same path — `mio login`
+// does exactly that — and a plain remove would delete the new key. So the
+// blob is first detached with a rename into a private directory beside it
+// (atomic, same filesystem), the detached copy is re-checked, and if it is not
+// legacy it is linked back, unless an even newer blob already took its place.
+func removeLegacyBlob(store Store) error {
+	hold, err := os.MkdirTemp(filepath.Dir(store.Path), ".legacy-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(hold) }()
+	held := filepath.Join(hold, filepath.Base(store.Path))
+	if err := os.Rename(store.Path, held); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if isLegacyBlob(Store{Backend: keyring.FileBackend, Path: held}) {
+		return nil // the deferred RemoveAll deletes it
+	}
+	if err := os.Link(held, store.Path); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	return nil
 }
 
 // isLegacyBlob reports whether the blob at store.Path decrypts under the v0.1
@@ -740,14 +793,16 @@ func SetAPIKey(key string) error {
 }
 
 // replaceFileBlob encrypts item with the file backend into a fresh staging
-// directory next to the keyring directory (so both are on one filesystem) and
-// renames the result over store.Path.
+// directory INSIDE the keyring directory and renames the result over
+// store.Path. Staging beside the blob is the only way to guarantee the rename
+// stays on one filesystem: the keyring directory can be a mount point or a
+// symlink to another volume, and a rename across devices fails.
 func replaceFileBlob(store Store, item keyring.Item) error {
 	liveDir := filepath.Dir(store.Path)
 	if err := os.MkdirAll(liveDir, 0o700); err != nil {
 		return err
 	}
-	stage, err := os.MkdirTemp(filepath.Dir(liveDir), ".keyring-staging-")
+	stage, err := os.MkdirTemp(liveDir, ".staging-")
 	if err != nil {
 		return err
 	}
@@ -769,7 +824,9 @@ func DeleteAPIKey() error {
 	if err != nil {
 		return err
 	}
-	if err := ring.Remove(keyringKeyName); err != nil && !errors.Is(err, keyring.ErrKeyNotFound) {
+	// The file backend reports a missing blob as a raw os.ErrNotExist, not
+	// keyring.ErrKeyNotFound; both mean there was nothing to delete.
+	if err := ring.Remove(keyringKeyName); err != nil && !errors.Is(err, keyring.ErrKeyNotFound) && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("delete API key from %s: %w", store.Describe(), err)
 	}
 	return nil
