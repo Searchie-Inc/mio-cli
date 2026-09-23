@@ -86,8 +86,9 @@ func TestAuthTokenExportIdiom_StopsASetEScript(t *testing.T) {
 // authTokenCapture finds a shell capture of `mio auth token`'s stdout: a
 // $(…) substitution, or an old-style backtick one right after an assignment
 // (elsewhere a backticked `mio auth token` is a Markdown code span, not a
-// capture). It tolerates extra spaces, a `command` prefix and a path to mio.
-var authTokenCapture = regexp.MustCompile("(\\$\\(|=[\"']?`)\\s*(command\\s+)?(\\S*/)?mio\\s+auth\\s+token\\b")
+// capture). Anything may sit between the opener and `mio`, and between `mio`
+// and `auth token`: an env assignment, `command`, a path, global flags.
+var authTokenCapture = regexp.MustCompile("(\\$\\(|=[\"']?`)[^)`]*\\bmio\\b[^)`]*\\bauth\\s+token\\b")
 
 // exportsTheKey matches the second statement of authTokenExport alone on its
 // line, optionally followed by a comment.
@@ -153,7 +154,14 @@ func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 				continue
 			}
 			captures[name]++
-			rest := strings.ReplaceAll(line, authTokenExportOneLine, "")
+			rest, prefixed := stripOneLineIdiom(line)
+			if prefixed {
+				t.Errorf("%s:%d does not use the one-line idiom as a statement of its own: a word before it "+
+					"(`local`, `readonly`, `declare`, `!`, …) hides its exit 3 from set -e, and text run onto its end "+
+					"changes what is exported. Only a code-span backtick, `(`, `:`, `;` or `{` may precede it:\n  %s",
+					name, i+1, strings.TrimSpace(line))
+				continue
+			}
 			if !authTokenCapture.MatchString(rest) {
 				continue
 			}
@@ -175,6 +183,35 @@ func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 		if captures[must] == 0 {
 			t.Errorf("%s never captures `mio auth token`: the scan is not reading it, or it lost its export instructions", must)
 		}
+	}
+}
+
+// stripOneLineIdiom removes every occurrence of authTokenExportOneLine from
+// line and reports whether any of them was not a statement of its own. A
+// prefix such as `local` or `readonly` returns its own status (0), which hides
+// the exit 3 from set -e exactly like `export` does, so the only thing allowed
+// just before the idiom is the start of the line, the backtick opening a
+// Markdown code span, or `(`, `:`, `;` or `{`. The idiom must also end its
+// statement: `export MIO_API_KEY_OTHER` is not an export of the key.
+func stripOneLineIdiom(line string) (rest string, prefixed bool) {
+	var b strings.Builder
+	for {
+		i := strings.Index(line, authTokenExportOneLine)
+		if i < 0 {
+			b.WriteString(line)
+			return b.String(), prefixed
+		}
+		before := strings.TrimRight(line[:i], " \t")
+		after := line[i+len(authTokenExportOneLine):]
+		if before != "" && !strings.ContainsRune("`(:;{", rune(before[len(before)-1])) {
+			prefixed = true
+		}
+		if after != "" && (after[0] == '_' || after[0] == '=' ||
+			'a' <= after[0] && after[0] <= 'z' || 'A' <= after[0] && after[0] <= 'Z' || '0' <= after[0] && after[0] <= '9') {
+			prefixed = true
+		}
+		b.WriteString(line[:i])
+		line = after
 	}
 }
 

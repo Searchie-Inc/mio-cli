@@ -61,7 +61,7 @@ Before MIO-2995, a bare `go test ./...` failed exactly twice on any machine that
 
 Both read the developer's real `~/.config/mio`, and the first sent the stored key to the production default API base. MIO-2995 gave `cmd` a `TestMain` (`cmd/main_test.go`) that moves `HOME`, `USERPROFILE` and `XDG_CONFIG_HOME` to temp dirs and pins the keyring to the file backend under them, and refuses to run the package if any of that did not take (`TestMain_IsolatesEveryUserStore` reports the same checks). So:
 
-- **On a tree that has that `TestMain`, a bare `go test ./...` is green.** A break its checks detect does not fail these two tests: the `cmd` package fails with `TestMain: refusing to run: …` on stderr, one line per problem, and no test runs. If these two tests fail BY NAME there, the isolation broke in a way the checks do not cover. That is a regression to chase, not something to wave off as environmental.
+- **On a tree that has that `TestMain`, a bare `go test ./...` is green.** A break its checks detect does not fail these two tests: the `cmd` package fails with a `TestMain: refusing to run: …` header on stderr followed by one `  - <problem>` line per problem, and no test runs. If these two tests fail BY NAME there, the isolation broke in a way the checks do not cover. That is a regression to chase, not something to wave off as environmental.
 - **On a branch cut before MIO-2995** (no `TestMain` in `cmd/main_test.go`), the old hazard stands: the two failures are your credentials. Prefix with `XDG_CONFIG_HOME=$(mktemp -d)` and they are green.
 
 Either way, never "fix" them by changing the assertion. The gate command keeps the `XDG_CONFIG_HOME` prefix: it costs nothing, and it covers older branches.
