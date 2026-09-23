@@ -11,10 +11,20 @@ import (
 
 // withXDG points config storage at a temp dir for the duration of the test and
 // clears the auth env vars so resolution is deterministic.
+//
+// It also points HOME (and USERPROFILE) at a second temp dir. Every path this
+// package derives goes through XDG_CONFIG_HOME first, so HOME should never be
+// consulted here — but a bug that derived a path from HOME anyway would
+// otherwise read or WRITE the developer's real ~/.config/mio. That is not
+// hypothetical: during MIO-2995's mutation run, a store path derived from
+// $HOME made SetAPIKey replace the real ~/.config/mio/keyring/api-key.
 func withXDG(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv(EnvAPIKey, "")
 	t.Setenv(EnvAPIBase, "")
 	return dir
