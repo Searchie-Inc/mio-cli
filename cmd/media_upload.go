@@ -40,8 +40,11 @@ const (
 	// `files replace` switch to multipart automatically (single-part presigned PUT
 	// handles up to 5 GB, so this is well within S3 limits — it's about chunking,
 	// not a cap). The help is rendered from it, so changing it here changes what
-	// --help says; the hand-maintained docs are held to it by
-	// TestMultipartThreshold_EverySurfaceStatesIt.
+	// --help says. The hand-maintained doc lines are held to it by two tests:
+	// TestMultipartThreshold_EverySurfaceStatesIt ("above N MB", and the
+	// --part-size-mb default and minimum) and
+	// TestMultipartThreshold_StatedBoundaryIsTheWire (the "N bytes" figure, and
+	// where a file of exactly N bytes goes, checked against the wire).
 	autoMultipartThreshold = 100 * 1024 * 1024 // 100 MB
 	// minPartSizeMB is S3's minimum multipart part size (all parts but the last).
 	minPartSizeMB = 5
@@ -577,9 +580,10 @@ func replaceSinglePart(c *cmdContext, teamID, fileID, path, filename, mimeType s
 	return c.client.Action(c.ctx, http.MethodPost, replaceFinalizePath(teamID, fileID, repl.ID), nil)
 }
 
-// replaceMultipart runs the chunked replace flow: init → per-part → complete →
-// replace/finalize. There is no replace-multipart abort route, so a failure just
-// surfaces (the backend reaps the pending replacement).
+// replaceMultipart runs the chunked replace flow: init → per-part → terminal
+// complete, which relinks the file itself (no separate replace/finalize). There
+// is no replace-multipart abort route, so a failure just surfaces (the backend
+// reaps the pending replacement).
 func replaceMultipart(c *cmdContext, teamID, fileID, path, filename, mimeType string, size, partSize int64) (*client.Resource, error) {
 	repl, err := c.client.Create(c.ctx, replaceMultipartInitPath(teamID, fileID), map[string]any{
 		"original_filename": filename,

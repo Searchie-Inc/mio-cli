@@ -8,7 +8,8 @@ package cmd
 // --multipart and --part-size-mb, `files replace` called itself "Single-part
 // upload.", and the group help and the docs said "auto-multipart for large
 // files" with no number — while the code has switched to multipart above
-// autoMultipartThreshold (100 MB) since MIO-2267.
+// autoMultipartThreshold (100 MB) since MIO-2423 (#43). MIO-2267 (#42) shipped
+// single-part only, and its help sentence outlived it.
 //
 // The guards below take the threshold FROM THE HELP TEXT and drive the real
 // command across it, so the oracle is the request the CLI actually sends, not a
@@ -243,7 +244,7 @@ func TestMultipartPartSize_HelpIsWhatTheCommandEnforces(t *testing.T) {
 }
 
 // staleMultipartClaims are the phrasings MIO-4155 found in shipped help. Each
-// contradicts the multipart dispatch that has existed since MIO-2267.
+// contradicts the multipart dispatch that has existed since MIO-2423.
 var staleMultipartClaims = []struct {
 	name string
 	re   *regexp.Regexp
@@ -344,19 +345,8 @@ func TestMultipartThreshold_EverySurfaceStatesIt(t *testing.T) {
 
 	var statedDefaults, statedMinimums int
 	for _, s := range multipartDocSurfaces {
-		b, err := os.ReadFile(s.file)
-		if err != nil {
-			t.Fatalf("read %s: %v", s.file, err)
-		}
-		var line string
-		for _, l := range strings.Split(string(b), "\n") {
-			if strings.Contains(l, s.anchor) {
-				line = l
-				break
-			}
-		}
+		line := anchoredDocLine(t, s.file, s.anchor)
 		if line == "" {
-			t.Errorf("%s has no line containing %q to check", s.file, s.anchor)
 			continue
 		}
 		if !strings.Contains(line, want) {
@@ -390,3 +380,111 @@ func TestMultipartThreshold_EverySurfaceStatesIt(t *testing.T) {
 
 var docPartDefault = regexp.MustCompile(`\bdefault (\d+)\b`)
 var docPartMinimum = regexp.MustCompile(`\bmin(?:imum)? (\d+)\b`)
+
+// anchoredDocLine returns the first line of file containing anchor, reporting
+// an error (and returning "") when there is none.
+func anchoredDocLine(t *testing.T, file, anchor string) string {
+	t.Helper()
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.Contains(l, anchor) {
+			return l
+		}
+	}
+	t.Errorf("%s has no line containing %q to check", file, anchor)
+	return ""
+}
+
+// TestMultipartThreshold_StatedBoundaryIsTheWire: the "above 100 MB" check above
+// cannot see the two other statements the same lines make — the exact byte
+// figure, and which side of the switch a file of EXACTLY that size lands on
+// ("at or below it is one presigned PUT"). Both can go stale while "above 100 MB"
+// stays true, so this holds them to the wire: every "N bytes" a surface states
+// must be the threshold, every surface that states it must also say where a
+// file of exactly that size goes, and every such claim, on any surface, must be
+// what upload and replace actually send for a file of exactly that size.
+func TestMultipartThreshold_StatedBoundaryIsTheWire(t *testing.T) {
+	const mib = 1024 * 1024
+	threshold := int64(autoMultipartThreshold)
+
+	// The oracle: what the real commands send for a file of exactly the
+	// threshold. Upload and replace must agree — every doc says "same threshold".
+	var atThresholdSingle []bool
+	for _, path := range []string{"mio media files upload", "mio media files replace"} {
+		mc := multipartCapableCommands[path]
+		switch got, code := dispatchFirstRequest(t, mc, threshold); got {
+		case mc.singleInit:
+			atThresholdSingle = append(atThresholdSingle, true)
+		case mc.multiInit:
+			atThresholdSingle = append(atThresholdSingle, false)
+		default:
+			t.Fatalf("%s on a %d-byte file sent %q first (exit %d), neither init route", path, threshold, got, code)
+		}
+	}
+	if atThresholdSingle[0] != atThresholdSingle[1] {
+		t.Fatalf("upload and replace disagree about a file of exactly %d bytes (upload single-PUT: %v, "+
+			"replace single-PUT: %v); every surface says they share one threshold", threshold,
+			atThresholdSingle[0], atThresholdSingle[1])
+	}
+	wireSingle := atThresholdSingle[0]
+	wireSays := map[bool]string{true: "goes up as one presigned PUT", false: "goes multipart"}[wireSingle]
+
+	// A phrase that refers to the threshold itself: "it", "that size", "100 MB",
+	// "104857600 bytes".
+	ref := fmt.Sprintf(`(?:it|that(?: size)?|the threshold|%d ?MB|%d bytes)`, threshold/mib, threshold)
+	claimsSingleAtThreshold := regexp.MustCompile(`(?i)\b(?:at or below|at or under|up to and including|no (?:larger|more|bigger) than) ` +
+		ref + `\b|\b` + ref + ` or (?:smaller|less|under|below)\b`)
+	claimsMultiAtThreshold := regexp.MustCompile(`(?i)\b(?:at or above|at or over|at least|no (?:smaller|less) than) ` +
+		ref + `\b|\b` + ref + ` or (?:larger|more|bigger|greater|over|above)\b`)
+	statedBytes := regexp.MustCompile(`\b(\d+) bytes\b`)
+
+	surfaces := map[string]string{}
+	for path, c := range commandsWithMultipartFlag() {
+		surfaces[path+" (Long)"] = c.Long
+		c.LocalFlags().VisitAll(func(f *pflag.Flag) { surfaces[path+" --"+f.Name] = f.Usage })
+	}
+	surfaces["mio media (Long)"] = mediaCmd.Long
+	surfaces["mio media files (Long)"] = mediaFilesCmd.Long
+	for _, s := range multipartDocSurfaces {
+		surfaces[fmt.Sprintf("%s (the %q line)", s.file, s.anchor)] = anchoredDocLine(t, s.file, s.anchor)
+	}
+	keys := make([]string, 0, len(surfaces))
+	for k := range surfaces {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var docLinesStatingBytes int
+	for _, where := range keys {
+		text := surfaces[where]
+		bytesMatches := statedBytes.FindAllStringSubmatch(text, -1)
+		for _, m := range bytesMatches {
+			if m[1] != strconv.FormatInt(threshold, 10) {
+				t.Errorf("%s states %q, but the multipart threshold is %d bytes", where, m[0], threshold)
+			}
+		}
+		if len(bytesMatches) > 0 && strings.HasPrefix(where, "../") {
+			docLinesStatingBytes++
+		}
+
+		single := claimsSingleAtThreshold.FindAllString(text, -1)
+		multi := claimsMultiAtThreshold.FindAllString(text, -1)
+		if len(bytesMatches) > 0 && len(single)+len(multi) == 0 {
+			t.Errorf("%s states the threshold in bytes but not where a file of exactly that size goes "+
+				"(it %s)", where, wireSays)
+		}
+		wrong := multi
+		if !wireSingle {
+			wrong = single
+		}
+		for _, claim := range wrong {
+			t.Errorf("%s says %q, but a file of exactly %d bytes %s", where, claim, threshold, wireSays)
+		}
+	}
+	if docLinesStatingBytes == 0 {
+		t.Errorf("no doc line states the multipart threshold in bytes — the byte and boundary checks above are vacuous")
+	}
+}
