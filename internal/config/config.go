@@ -620,6 +620,16 @@ var unreadableRetryWait = func() { time.Sleep(25 * time.Millisecond) }
 // exactly that window.
 var beforeLegacyRemoval = func() {}
 
+// legacyHoldPrefix names the private directories removeLegacyBlob moves a
+// blob into, beside the live one, while it decides whether to delete it.
+const legacyHoldPrefix = ".legacy-"
+
+// beforeLegacyDetach runs once removeLegacyBlob has found the live path still
+// names the recognised file and before it moves that file aside. It does
+// nothing in production; a test uses it to publish a new key into exactly
+// that window.
+var beforeLegacyDetach = func() {}
+
 // afterLegacyDetach runs once removeLegacyBlob has moved the live blob aside
 // and before it decides whether to put it back. It does nothing in
 // production; a test uses it to look at the live path inside that window.
@@ -655,13 +665,18 @@ func GetAPIKey() (string, error) {
 // Either way, a blob that decrypts under the legacy passphrase is deleted
 // (ErrLegacyCredentials — v0.1 installs have no key file at all), and
 // anything else is ErrUnreadableCredentials with the blob left in place.
+//
+// A MISSING blob is "no key stored" only when no legacy cleanup has one moved
+// aside (see removeLegacyBlob). While one does, the read is retried like an
+// undecodable blob, and if the blob is still not back it is
+// ErrUnreadableCredentials naming where it is.
 func LoadAPIKey() (string, Store, error) {
 	ring, store, err := openKeyring()
 	if err != nil {
 		return "", store, fmt.Errorf("open credential store: %w", err)
 	}
 	item, err := ring.Get(keyringKeyName)
-	for i := 0; i < unreadableRetries && isUndecodableBlob(store, err); i++ {
+	for i := 0; i < unreadableRetries && (isUndecodableBlob(store, err) || isMovedAside(store, err)); i++ {
 		unreadableRetryWait()
 		item, err = ring.Get(keyringKeyName)
 	}
@@ -675,6 +690,11 @@ func LoadAPIKey() (string, Store, error) {
 	case err == nil:
 		return string(item.Data), store, nil
 	case errors.Is(err, keyring.ErrKeyNotFound):
+		if held := movedAsideBlobs(store); len(held) > 0 {
+			return "", store, fmt.Errorf("%w: %s holds no blob, but a legacy-credential cleanup moved one aside to %s and has not put it back. "+
+				"It was left there: if no other mio process is running, move it back to %s; or run `mio login` (or export MIO_API_KEY) to store a new key",
+				ErrUnreadableCredentials, store.Describe(), held[0], store.Path)
+		}
 		return "", store, nil
 	case isUndecodableBlob(store, err) || keyFileRejected:
 		// The blob's identity is taken BEFORE it is recognised: what the check
@@ -714,6 +734,38 @@ func isUndecodableBlob(store Store, err error) bool {
 	return !errors.As(err, &pathErr) && !errors.As(err, &passErr)
 }
 
+// isMovedAside reports whether err is the file backend finding no blob while
+// a legacy cleanup has one moved aside: a window a re-read may see closed.
+func isMovedAside(store Store, err error) bool {
+	return errors.Is(err, keyring.ErrKeyNotFound) && len(movedAsideBlobs(store)) > 0
+}
+
+// movedAsideBlobs lists the blobs removeLegacyBlob has moved out of
+// store.Path into a .legacy-* directory beside it and not yet deleted or put
+// back: normally for a few syscalls, indefinitely if the process died there.
+// File backend only.
+func movedAsideBlobs(store Store) []string {
+	if store.Backend != keyring.FileBackend || store.Path == "" {
+		return nil
+	}
+	dir := filepath.Dir(store.Path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var held []string
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), legacyHoldPrefix) {
+			continue
+		}
+		p := filepath.Join(dir, e.Name(), filepath.Base(store.Path))
+		if _, err := os.Lstat(p); err == nil {
+			held = append(held, p)
+		}
+	}
+	return held
+}
+
 // isFilesystemFailure reports whether err is the filesystem refusing an
 // operation on a path that exists (EACCES, EIO, ...) rather than reporting it
 // missing.
@@ -739,10 +791,12 @@ func isFilesystemFailure(err error) bool {
 //     unless an even newer blob already took the live path; if the link
 //     fails, the detached copy is kept and the error says where.
 //
-// A narrow window remains: a rename landing between the identity check and
-// the detach is linked straight back without decrypting anything, and an
-// in-place rewrite of the recognised file stays detached while it is
-// re-checked.
+// POSIX has no compare-and-rename, so a narrow window remains: a key renamed
+// in between the identity check and the detach is moved aside too (and linked
+// straight back, without decrypting anything), and an in-place rewrite of the
+// recognised file stays aside while it is re-checked. Readers cover it:
+// LoadAPIKey re-reads while a blob is moved aside, and names the .legacy-*
+// copy rather than answer "no key stored" if it never comes back.
 func removeLegacyBlob(store Store, recognised fs.FileInfo) error {
 	if cur, err := os.Lstat(store.Path); err != nil || !os.SameFile(cur, recognised) {
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -750,7 +804,8 @@ func removeLegacyBlob(store Store, recognised fs.FileInfo) error {
 		}
 		return nil // gone, or replaced since it was recognised: nothing of ours to remove
 	}
-	hold, err := os.MkdirTemp(filepath.Dir(store.Path), ".legacy-")
+	beforeLegacyDetach()
+	hold, err := os.MkdirTemp(filepath.Dir(store.Path), legacyHoldPrefix)
 	if err != nil {
 		return err
 	}

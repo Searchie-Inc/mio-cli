@@ -562,6 +562,114 @@ func TestGetAPIKey_LegacyCleanupNeverHidesANewerKey(t *testing.T) {
 	}
 }
 
+// TestGetAPIKey_KeyMovedAsideByLegacyCleanupIsNeverReportedMissing: the
+// identity check cannot close the race completely. A login whose rename lands
+// between that check and the detach still has its key moved aside for a
+// moment, and a crash there strands it in the .legacy-* directory. POSIX has
+// no compare-and-rename, so the reader has to cope: while a detached blob
+// exists and the live one does not, a read must never answer "no key stored".
+// It waits (the bounded retry) for the blob to be put back, and failing that
+// names where the key is. Here the reader runs inside the window, on the
+// cleanup's own goroutine, so the blob cannot come back while it waits: the
+// answer must be the unusable-credential error naming the detached copy.
+func TestGetAPIKey_KeyMovedAsideByLegacyCleanupIsNeverReportedMissing(t *testing.T) {
+	dir := withXDG(t)
+	withFileBackendOnly(t)
+	noRetryWait(t)
+
+	legacyRing, err := openKeyringWithPassword(legacyFilePassphrase, "")
+	if err != nil {
+		t.Fatalf("open legacy ring: %v", err)
+	}
+	if err := legacyRing.Set(legacyKeyringItem("mio_sk_old_legacy_key")); err != nil {
+		t.Fatalf("seed legacy blob: %v", err)
+	}
+
+	const fresh = "mio_sk_live_published_after_the_identity_check"
+	published := false
+	origBefore := beforeLegacyDetach
+	beforeLegacyDetach = func() {
+		if published {
+			return
+		}
+		published = true
+		if err := SetAPIKey(fresh); err != nil {
+			t.Errorf("concurrent SetAPIKey: %v", err)
+		}
+	}
+	var midKey string
+	var midErr error
+	midRead := false
+	origDetach := afterLegacyDetach
+	afterLegacyDetach = func() {
+		midRead = true
+		midKey, _, midErr = LoadAPIKey()
+	}
+	t.Cleanup(func() { beforeLegacyDetach, afterLegacyDetach = origBefore, origDetach })
+
+	if _, err := GetAPIKey(); !errors.Is(err, ErrLegacyCredentials) {
+		t.Fatalf("first read = %v, want ErrLegacyCredentials (it saw the legacy blob)", err)
+	}
+	if !published || !midRead {
+		t.Fatalf("the detach hooks did not both run (published=%v, mid-window read=%v), so this test did not exercise the race", published, midRead)
+	}
+	if midErr == nil {
+		t.Fatalf("a read while the published key was moved aside answered (%q, nil): no key stored, for a key that exists", midKey)
+	}
+	if !errors.Is(midErr, ErrUnreadableCredentials) || !strings.Contains(midErr.Error(), filepath.Join(filepath.Dir(blobPathFor(dir)), ".legacy-")) {
+		t.Errorf("a read while the key was moved aside = %v; want ErrUnreadableCredentials naming the .legacy-* copy", midErr)
+	}
+	if got, err := GetAPIKey(); err != nil || got != fresh {
+		t.Fatalf("after the cleanup the store holds (%q, %v), want the published key put back", got, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(blobPathFor(dir)), ".legacy-*")); len(left) != 0 {
+		t.Errorf("the cleanup left %v behind", left)
+	}
+}
+
+// TestLoadAPIKey_WaitsOutALegacyCleanupInFlight: the other half. A reader
+// that finds the live blob missing while a .legacy-* copy exists backs off
+// and re-reads, so a cleanup that puts the key back within the bounded retry
+// is invisible to it.
+func TestLoadAPIKey_WaitsOutALegacyCleanupInFlight(t *testing.T) {
+	dir := withXDG(t)
+	withFileBackendOnly(t)
+
+	const want = "mio_sk_live_moved_aside_for_a_moment"
+	if err := SetAPIKey(want); err != nil {
+		t.Fatalf("SetAPIKey: %v", err)
+	}
+	live := blobPathFor(dir)
+	hold, err := os.MkdirTemp(filepath.Dir(live), ".legacy-")
+	if err != nil {
+		t.Fatalf("hold dir: %v", err)
+	}
+	held := filepath.Join(hold, filepath.Base(live))
+	if err := os.Rename(live, held); err != nil {
+		t.Fatalf("move the blob aside: %v", err)
+	}
+
+	waits := 0
+	orig := unreadableRetryWait
+	unreadableRetryWait = func() {
+		waits++
+		if waits == 1 {
+			if err := os.Rename(held, live); err != nil {
+				t.Errorf("put the blob back: %v", err)
+			}
+		}
+	}
+	t.Cleanup(func() { unreadableRetryWait = orig })
+
+	got, _, err := LoadAPIKey()
+	if err != nil || got != want {
+		t.Fatalf("LoadAPIKey while a cleanup had the blob moved aside = (%q, %v), want %q: the read must back off and re-read", got, err, want)
+	}
+	if waits == 0 {
+		t.Fatal("LoadAPIKey never backed off, so this test did not exercise the window")
+	}
+}
+
 // TestGetAPIKey_LegacyCleanupPutsBackAKeyRewrittenInPlace: a mio from v0.22.0
 // or earlier writes the blob IN PLACE, so a key it logs in with between the
 // cleanup recognising the legacy blob and removing it keeps the recognised
