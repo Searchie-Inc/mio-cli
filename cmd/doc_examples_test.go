@@ -29,10 +29,11 @@ package cmd
 //   - A requirement enforced only inside a RunE body. cobra cannot report it, so
 //     neither can this. Declare required flags with markFlagsRequired (products
 //     create moved to it in MIO-4154 for exactly this reason). MIO-4154 moved
-//     the `missing required flag(s)` checks only. 44 other requirement checks,
-//     mostly phrased `--x is required[: hint]`, still live in RunE and are
-//     invisible here until they move. Some are conditional and cannot move.
-//     List them with: grep -nE 'ExitUsage, *"[^"]*(required|missing)' cmd/*.go
+//     the `missing required flag(s)` checks, except `hubs policies gate
+//     --enabled`, which stays in RunE to keep its usage hint. That one and 43
+//     others, mostly phrased `--x is required[: hint]`, still live in RunE and
+//     are invisible here until they move. Some are conditional and cannot move.
+//     List all 44 with: grep -nE 'ExitUsage, *"[^"]*(required|missing)' cmd/*.go
 //   - Flag VALUES. Every flag is parsed into a stub that accepts anything, so
 //     placeholders (<id>, "$HUB_ID") never false-positive; an invalid enum value
 //     in a doc is out of scope.

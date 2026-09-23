@@ -217,6 +217,8 @@ func TestFromScript_TranscriptOutputMentionIsReported(t *testing.T) {
 // straight after one is prose, not code (lines 17-19). Each half fails on its
 // own mutation; the second exists because the first alone passed with the
 // container-end check deleted (the stray backticks parsed as a substitution).
+// Lines 22-25: only the fence's OWN quote depth is stripped from its body, so a
+// `>` redirect at the start of a quoted line stays a redirect.
 func TestFromMarkdown_BlockquoteFences(t *testing.T) {
 	doc := strings.Join([]string{
 		"> **Note:** rename it:", // 1
@@ -240,6 +242,10 @@ func TestFromMarkdown_BlockquoteFences(t *testing.T) {
 		"prose: mio pages list",        // 19: here by prose, which is not read
 		"",                             // 20
 		"more prose",                   // 21
+		"> ```sh",                      // 22: only the fence's OWN depth is stripped,
+		`> mio pages tree get <p> --jq '{root: .tree}' \`, // 23
+		"> > tree.json", // 24: so this `>` stays a redirect
+		"> ```",         // 25
 	}, "\n")
 	res := FromMarkdown("doc.md", doc)
 	want := []got{
@@ -249,6 +255,7 @@ func TestFromMarkdown_BlockquoteFences(t *testing.T) {
 		{13, 13, "version", false},
 		{15, 15, "hubs·list", false},
 		{18, 18, "contacts·retrieve·<id>", false},
+		{23, 23, "pages·tree·get·<p>·--jq·{root: .tree}", false},
 	}
 	if g := view(res.Invocations); !reflect.DeepEqual(g, want) {
 		t.Errorf("invocations\n got %+v\nwant %+v", g, want)
