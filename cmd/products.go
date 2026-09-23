@@ -294,10 +294,10 @@ Allowed values for --currency: usd, cad, gbp, eur, aud
 Allowed values for --type:     one_time, recurring
 Allowed values for --interval: month, year, week, day (required when --type=recurring)
 
---trial-period-days sets a free trial in days (the API accepts 0 or more; 0
-means no trial). Checkout applies it only to a recurring price: the API also
-stores it on a one_time price, where it has no effect. Omit the flag for no
-trial.
+--trial-period-days sets a free trial in days (the API accepts 0 to
+2147483647; 0 means no trial). Checkout applies it only to a recurring
+price: the API also stores it on a one_time price, where it has no effect.
+Omit the flag for no trial.
 
 FIXED AFTER CREATE: amount, currency, type, interval, interval_count and
 trial_period_days cannot be changed by 'prices update' (the API rejects them).
@@ -466,7 +466,7 @@ func init() {
 	productsPricesCreateCmd.Flags().String("type", "", "Price type: one_time or recurring. Required.")
 	productsPricesCreateCmd.Flags().String("interval", "", "Billing interval: month, year, week, or day. Required when --type=recurring.")
 	productsPricesCreateCmd.Flags().Int("interval-count", 0, "Number of intervals between billings (≥1). Required when --type=recurring.")
-	productsPricesCreateCmd.Flags().Int("trial-period-days", 0, "Free-trial length in days (≥0; 0 = no trial). Applied at checkout to recurring prices only. Omit for no trial. Fixed after create.")
+	productsPricesCreateCmd.Flags().Int("trial-period-days", 0, "Free-trial length in days (0-2147483647; 0 = no trial). Applied at checkout to recurring prices only. Omit for no trial. Fixed after create.")
 	productsPricesCreateCmd.Flags().String("name", "", "Human-readable price label (max 100 chars).")
 	productsPricesCreateCmd.Flags().String("description", "", "Price description (max 500 chars).")
 	productsPricesCreateCmd.Flags().Bool("is-active", true, "Whether the price is active.")
