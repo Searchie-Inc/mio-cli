@@ -257,13 +257,14 @@ func TestSkillRefreshExec_RealBinaryArgv(t *testing.T) {
 		t.Skip("builds a binary")
 	}
 	bin := filepath.Join(t.TempDir(), "mio")
-	build := exec.Command("go", "build",
+	build := exec.Command("go", "build", "-tags", childKeyringTag,
 		"-ldflags", "-X github.com/Searchie-Inc/mio-cli/internal/version.Version=9.9.9",
 		"-o", bin, ".")
 	build.Dir = repoRoot(t)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build stand-in binary: %v\n%s", err, out)
 	}
+	requireChildOnFileKeyring(t, bin)
 
 	home := isolateSkillHome(t)
 	claude := claudeSkillPath(home)
