@@ -20,9 +20,11 @@ package cmd
 //     flag documented under some other word can stay green;
 //   - the list example guard takes EVERY --jq on each list command's help (any
 //     line but the flag's own usage line, and one it cannot run fails),
-//     rejects any that reads a key the rows do not have (from gojq's own
-//     parse tree, and again from the output: rows carry no null, so a null
-//     was manufactured), RUNS each against 2, 1 and 0 rows and rejects any
+//     rejects any that reads a key the rows do not have by a literal name
+//     (from gojq's own parse tree) or that yields a null (rows carry no null,
+//     so a null was manufactured — a computed key name hidden behind a
+//     `// default` escapes both), RUNS each against 2, 1 and 0 rows (JSON
+//     output, whatever -o the line shows) and rejects any
 //     whose JSON type changes with the row count, and requires some example
 //     to return every editable attribute per row with its value — so the
 //     example cannot vanish, drift to a key the rows do not have, or hand an
@@ -384,7 +386,8 @@ func helpJQExamples(t *testing.T, page, help string) []string {
 // `{k: .k}`), and destructuring `as {k: $v}` / `as {$k}`. It walks gojq's own
 // parse tree, so what counts as a read is jq's grammar, not a regexp's guess.
 // A read by a computed name (`.[$k]`, `getpath(...)`) is invisible here; the
-// no-null output check below is the net for those.
+// no-null output check below is the net for those, unless a default
+// (`.[$k] // false`) replaces the null — nothing here catches that.
 func jqFieldReads(t *testing.T, program string) []string {
 	t.Helper()
 	q, err := gojq.Parse(program)
@@ -540,9 +543,11 @@ func yieldsEachRow(out any, wire []wireRow, editable []string) string {
 //     `{price}`, `select(.is_visible)` and `hidden: .is_hidden` all fail here;
 //   - output: run against the API's rows (which hold no null), the example
 //     must not yield a null anywhere — a missing key answers null silently,
-//     however it was read — and every object it yields may carry only
-//     `id`, `type` and the rows' own attribute names;
-//   - shape: run against 2, 1 and 0 rows, its JSON type must not change —
+//     however it was read, unless a `// default` replaces the null — and
+//     every object it yields may carry only `id`, `type` and the rows' own
+//     attribute names;
+//   - shape: run against 2, 1 and 0 rows (JSON output; an -o on the example
+//     line is not applied), its JSON type must not change —
 //     `.[] | {…}` yields an array, then a bare object, then null, so an agent
 //     that pipes it breaks on a hub with one row;
 //   - coverage: some example must yield one object per row carrying every
