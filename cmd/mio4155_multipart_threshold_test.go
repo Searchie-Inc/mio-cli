@@ -399,21 +399,26 @@ func anchoredDocLine(t *testing.T, file, anchor string) string {
 }
 
 // TestMultipartThreshold_StatedBoundaryIsTheWire: the "above 100 MB" check above
-// cannot see the two other statements the same lines make — the exact byte
-// figure, and which side of the switch a file of EXACTLY that size lands on
-// ("at or below it is one presigned PUT"). Both can go stale while "above 100 MB"
-// stays true, so this holds them to the wire: every "N bytes" a surface states
-// must be the threshold, every surface that states it must also say where a
-// file of exactly that size goes, and every such claim must be what upload and
-// replace actually send for a file of exactly that size.
+// cannot see the two other statements the same lines make: the exact byte
+// figure, and which side of the switch a file of EXACTLY that size lands on.
+// Both can go stale while "above 100 MB" stays true, so this holds them to the
+// wire. It measures what upload and replace send for a file of exactly the
+// threshold, then requires:
 //
-// The claims are recognised by phrasing (the claims* regexes below), so this is
-// only as wide as that list. A surface that states the byte figure cannot evade
-// it: it must make a claim in one of those phrasings. A surface that states
-// only "above 100 MB" is checked only for claims in those phrasings. A wrong
-// claim worded some other way on such a line passes.
+//   - every "N bytes" on a surface to be the threshold;
+//   - every surface that states it to carry the canonical boundary clause for
+//     what the wire does (canonicalBoundaryClauses);
+//   - every statement about the threshold's edge, anywhere on a surface, to BE
+//     one of those clauses (checkBoundaryWording). A statement that is not a
+//     canonical clause fails whatever it says, right or wrong, negated or not,
+//     so the test never has to read meaning into free prose;
+//   - at least one surface to carry a canonical clause at all, so dropping the
+//     check from the loop below cannot pass silently.
+//
+// Its reach is exactly thresholdEdgeWording: a statement about the edge that
+// uses none of that wording is not seen. TestMultipartBoundaryWording_Cases
+// pins which phrasings it does and does not see.
 func TestMultipartThreshold_StatedBoundaryIsTheWire(t *testing.T) {
-	const mib = 1024 * 1024
 	threshold := int64(autoMultipartThreshold)
 
 	// The oracle: what the real commands send for a file of exactly the
@@ -436,21 +441,6 @@ func TestMultipartThreshold_StatedBoundaryIsTheWire(t *testing.T) {
 			atThresholdSingle[0], atThresholdSingle[1])
 	}
 	wireSingle := atThresholdSingle[0]
-	wireSays := map[bool]string{true: "goes up as one presigned PUT", false: "goes multipart"}[wireSingle]
-
-	// A phrase that refers to the threshold itself: "it", "that size", "100 MB",
-	// "104857600 bytes".
-	ref := fmt.Sprintf(`(?:it|that(?: size)?|the threshold|%d ?MB|%d bytes)`, threshold/mib, threshold)
-	// "exactly 100 MB ... goes multipart": the verb must follow within one clause
-	// (no sentence, clause or dash break), so "exactly 100 MB is one PUT — or at
-	// any size with --multipart" is not read as a multipart claim.
-	exactly := `\bexactly ` + ref + `\b[^.;:,—()]{0,40}?`
-	claimsSingleAtThreshold := regexp.MustCompile(`(?i)\b(?:at or below|at or under|up to and including|no (?:larger|more|bigger) than) ` +
-		ref + `\b|\b` + ref + ` or (?:smaller|less|under|below)\b|` +
-		exactly + `\b(?:one presigned PUT|one PUT|single[- ]part|a single PUT)\b`)
-	claimsMultiAtThreshold := regexp.MustCompile(`(?i)\b(?:at or above|at or over|at least|no (?:smaller|less) than) ` +
-		ref + `\b|\b` + ref + ` or (?:larger|more|bigger|greater|over|above)\b|` +
-		exactly + `\b(?:multipart|in parts)\b`)
 	statedBytes := regexp.MustCompile(`\b(\d+) bytes\b`)
 
 	surfaces := map[string]string{}
@@ -469,7 +459,7 @@ func TestMultipartThreshold_StatedBoundaryIsTheWire(t *testing.T) {
 	}
 	sort.Strings(keys)
 
-	var docLinesStatingBytes int
+	var docLinesStatingBytes, canonicalClauses int
 	for _, where := range keys {
 		text := surfaces[where]
 		bytesMatches := statedBytes.FindAllStringSubmatch(text, -1)
@@ -481,22 +471,170 @@ func TestMultipartThreshold_StatedBoundaryIsTheWire(t *testing.T) {
 		if len(bytesMatches) > 0 && strings.HasPrefix(where, "../") {
 			docLinesStatingBytes++
 		}
-
-		single := claimsSingleAtThreshold.FindAllString(text, -1)
-		multi := claimsMultiAtThreshold.FindAllString(text, -1)
-		if len(bytesMatches) > 0 && len(single)+len(multi) == 0 {
-			t.Errorf("%s states the threshold in bytes but not where a file of exactly that size goes "+
-				"(it %s)", where, wireSays)
-		}
-		wrong := multi
-		if !wireSingle {
-			wrong = single
-		}
-		for _, claim := range wrong {
-			t.Errorf("%s says %q, but a file of exactly %d bytes %s", where, claim, threshold, wireSays)
+		accepted := checkBoundaryWording(text, threshold, wireSingle, func(format string, args ...any) {
+			t.Errorf("%s %s", where, fmt.Sprintf(format, args...))
+		})
+		canonicalClauses += accepted
+		if len(bytesMatches) > 0 && accepted == 0 {
+			t.Errorf("%s states the threshold in bytes but not where a file of exactly that size goes; "+
+				"add one of %q", where, canonicalBoundaryClauses(wireSingle))
 		}
 	}
 	if docLinesStatingBytes == 0 {
 		t.Errorf("no doc line states the multipart threshold in bytes — the byte and boundary checks above are vacuous")
+	}
+	if canonicalClauses == 0 {
+		t.Errorf("no surface carries a canonical boundary clause %q — the boundary check above is vacuous",
+			canonicalBoundaryClauses(wireSingle))
+	}
+}
+
+// canonicalBoundaryClauses is the only wording a surface may use for where a
+// file of exactly the threshold goes, chosen by what the wire does with one:
+// the doc form and the --help form.
+func canonicalBoundaryClauses(wireSingle bool) []string {
+	if wireSingle {
+		return []string{"at or below it is one presigned PUT", "of that size or smaller goes up as one presigned PUT"}
+	}
+	return []string{"at or above it goes multipart", "of that size or larger goes multipart"}
+}
+
+// thresholdEdgeWording matches wording that says something about a file AT the
+// threshold rather than above it: "exactly 100 MB", "at or below it", "100 MB or
+// more", "at least 100 MB", "from 100 MB up", "a 100 MB file", ">= 100 MB". The
+// threshold may be named as 100 MB / 100MB / 100 MiB or as 104857600 /
+// 104,857,600 bytes, may carry a parenthetical such as "(104857600 bytes)", and
+// in the "at or below", "or smaller", "exactly" and "at least" forms may be
+// "that size" or "the threshold" ("it" only after "at or above/below"). "above
+// 100 MB" and "larger than 104857600 bytes" say nothing about the edge and do
+// not match.
+func thresholdEdgeWording(threshold int64) *regexp.Regexp {
+	digits := strconv.FormatInt(threshold, 10)
+	var grouped strings.Builder
+	for i, d := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			grouped.WriteString(",?")
+		}
+		grouped.WriteRune(d)
+	}
+	num := fmt.Sprintf(`(?:%d ?Mi?B|%s bytes)`, threshold/(1024*1024), grouped.String())
+	named := `(?:` + num + `|that size|the threshold)`
+	paren := `(?:\s*\([^)]*\))?`
+	return regexp.MustCompile(`(?i)` + strings.Join([]string{
+		`\bexactly ` + named + `\b`,
+		`\bat or (?:above|below|over|under) (?:` + named + `|it)\b`,
+		`\b` + named + `\b` + paren + ` (?:or|and) (?:more|less|larger|smaller|bigger|greater|fewer|over|under|above|below|up)\b`,
+		`\b(?:at least|at most|up to and including|no (?:more|less|larger|smaller|bigger|greater) than) ` + named + `\b`,
+		`\bfrom ` + num + `\b` + paren + ` (?:up|upwards?|onwards?)\b`,
+		`\ba ` + num + `\b` + paren + ` (?:file|upload|replacement)\b`,
+		`(?:>=|<=|≥|≤) ?` + num + `\b`,
+	}, "|"))
+}
+
+// checkBoundaryWording reports through errorf each statement in text about a
+// file at the threshold's edge that is not a canonical clause for what the wire
+// does, and returns how many edge statements it accepted as canonical. Reporting
+// and counting happen in one pass, so a caller cannot keep the count and lose
+// the reports. Whitespace is collapsed first, so a clause wrapped across help
+// lines still counts.
+func checkBoundaryWording(text string, threshold int64, wireSingle bool, errorf func(format string, args ...any)) (accepted int) {
+	text = strings.Join(strings.Fields(text), " ")
+	var allowed [][2]int
+	for _, c := range canonicalBoundaryClauses(wireSingle) {
+		for from := 0; ; {
+			i := strings.Index(text[from:], c)
+			if i < 0 {
+				break
+			}
+			allowed = append(allowed, [2]int{from + i, from + i + len(c)})
+			from += i + len(c)
+		}
+	}
+	wireSays := map[bool]string{true: "goes up as one presigned PUT", false: "goes multipart"}[wireSingle]
+	for _, m := range thresholdEdgeWording(threshold).FindAllStringIndex(text, -1) {
+		inside := false
+		for _, a := range allowed {
+			if m[0] >= a[0] && m[1] <= a[1] {
+				inside = true
+				break
+			}
+		}
+		if inside {
+			accepted++
+			continue
+		}
+		errorf("says %q about a file at the multipart threshold. A file of exactly %d bytes %s, and the only "+
+			"wording accepted for that is one of %q", text[m[0]:m[1]], threshold, wireSays, canonicalBoundaryClauses(wireSingle))
+	}
+	return accepted
+}
+
+// TestMultipartBoundaryWording_Cases pins the reach of checkBoundaryWording, in
+// both wire directions, so a narrowed pattern or a lost direction fails here by
+// name rather than silently letting doc wording through.
+func TestMultipartBoundaryWording_Cases(t *testing.T) {
+	threshold := int64(autoMultipartThreshold)
+	check := func(text string, wireSingle bool) (msgs []string, accepted int) {
+		accepted = checkBoundaryWording(text, threshold, wireSingle, func(format string, args ...any) {
+			msgs = append(msgs, fmt.Sprintf(format, args...))
+		})
+		return msgs, accepted
+	}
+	flagged := []string{
+		// Wrong claims (the wire sends exactly-threshold files as one PUT today).
+		"a file of exactly 100 MB also goes multipart",
+		"a file of exactly 100 MB (104857600 bytes) goes multipart",
+		"at exactly 100 MB, uploads go multipart",
+		"a file of exactly 100 MB is split into parts",
+		"exactly 100 MiB goes multipart",
+		"a file of exactly 100 MB is not one PUT",
+		"at or above it goes multipart",
+		"a file of that size or larger goes multipart",
+		"100 MB or more goes multipart",
+		"100 MB (104857600 bytes) or more goes multipart",
+		"104,857,600 bytes and up go multipart",
+		"at least 100 MB is sent in parts",
+		"a 100 MB file goes multipart",
+		"from 100 MB up, uploads go multipart",
+		">= 100 MB",
+		// Right claims in non-canonical wording: flagged too, by design.
+		"a file of exactly 100 MB (104857600 bytes) goes up as one presigned PUT",
+		"a file of exactly 100 MB does not go multipart",
+		"100 MB or less is one PUT",
+		"up to and including 104857600 bytes is one PUT",
+	}
+	for _, text := range flagged {
+		if msgs, _ := check(text, true); len(msgs) == 0 {
+			t.Errorf("wire=single-PUT at the threshold: %q says something about the threshold's edge but was not flagged", text)
+		}
+	}
+	unflagged := []string{
+		"multipart above 100 MB (104857600 bytes) — at or below it is one presigned PUT — or at any size with `--multipart`",
+		"a file larger than 104857600 bytes is sent in parts; a file of that size or smaller goes up as one presigned PUT.",
+		"a file of that size or smaller goes up as one\npresigned PUT",
+		"multipart above 100 MB or at any size with --multipart, exactly as upload",
+		"above 100 MB (104857600 bytes) or with `--multipart`",
+		"--multipart forces the multipart path at any size",
+		"`--part-size-mb` default 16, min 5",
+		"reads the upload id from it, at least once",
+	}
+	for _, text := range unflagged {
+		if msgs, _ := check(text, true); len(msgs) != 0 {
+			t.Errorf("wire=single-PUT at the threshold: %q was flagged but is canonical or says nothing about the edge: %v", text, msgs)
+		}
+	}
+	// Each direction's canonical clauses are accepted (and counted) under that
+	// direction, and rejected under the other.
+	for _, wireSingle := range []bool{true, false} {
+		for _, clause := range canonicalBoundaryClauses(wireSingle) {
+			if msgs, accepted := check(clause, wireSingle); len(msgs) != 0 || accepted != 1 {
+				t.Errorf("wire single-PUT=%v: canonical clause %q gave %d accepted, messages %v; want 1 accepted, none",
+					wireSingle, clause, accepted, msgs)
+			}
+			if msgs, accepted := check(clause, !wireSingle); len(msgs) == 0 || accepted != 0 {
+				t.Errorf("wire single-PUT=%v: the other direction's clause %q was accepted (%d accepted, messages %v)",
+					!wireSingle, clause, accepted, msgs)
+			}
+		}
 	}
 }
