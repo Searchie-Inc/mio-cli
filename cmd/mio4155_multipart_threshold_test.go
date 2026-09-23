@@ -404,8 +404,14 @@ func anchoredDocLine(t *testing.T, file, anchor string) string {
 // ("at or below it is one presigned PUT"). Both can go stale while "above 100 MB"
 // stays true, so this holds them to the wire: every "N bytes" a surface states
 // must be the threshold, every surface that states it must also say where a
-// file of exactly that size goes, and every such claim, on any surface, must be
-// what upload and replace actually send for a file of exactly that size.
+// file of exactly that size goes, and every such claim must be what upload and
+// replace actually send for a file of exactly that size.
+//
+// The claims are recognised by phrasing (the claims* regexes below), so this is
+// only as wide as that list. A surface that states the byte figure cannot evade
+// it: it must make a claim in one of those phrasings. A surface that states
+// only "above 100 MB" is checked only for claims in those phrasings. A wrong
+// claim worded some other way on such a line passes.
 func TestMultipartThreshold_StatedBoundaryIsTheWire(t *testing.T) {
 	const mib = 1024 * 1024
 	threshold := int64(autoMultipartThreshold)
@@ -435,10 +441,16 @@ func TestMultipartThreshold_StatedBoundaryIsTheWire(t *testing.T) {
 	// A phrase that refers to the threshold itself: "it", "that size", "100 MB",
 	// "104857600 bytes".
 	ref := fmt.Sprintf(`(?:it|that(?: size)?|the threshold|%d ?MB|%d bytes)`, threshold/mib, threshold)
+	// "exactly 100 MB ... goes multipart": the verb must follow within one clause
+	// (no sentence, clause or dash break), so "exactly 100 MB is one PUT — or at
+	// any size with --multipart" is not read as a multipart claim.
+	exactly := `\bexactly ` + ref + `\b[^.;:,—()]{0,40}?`
 	claimsSingleAtThreshold := regexp.MustCompile(`(?i)\b(?:at or below|at or under|up to and including|no (?:larger|more|bigger) than) ` +
-		ref + `\b|\b` + ref + ` or (?:smaller|less|under|below)\b`)
+		ref + `\b|\b` + ref + ` or (?:smaller|less|under|below)\b|` +
+		exactly + `\b(?:one presigned PUT|one PUT|single[- ]part|a single PUT)\b`)
 	claimsMultiAtThreshold := regexp.MustCompile(`(?i)\b(?:at or above|at or over|at least|no (?:smaller|less) than) ` +
-		ref + `\b|\b` + ref + ` or (?:larger|more|bigger|greater|over|above)\b`)
+		ref + `\b|\b` + ref + ` or (?:larger|more|bigger|greater|over|above)\b|` +
+		exactly + `\b(?:multipart|in parts)\b`)
 	statedBytes := regexp.MustCompile(`\b(\d+) bytes\b`)
 
 	surfaces := map[string]string{}
