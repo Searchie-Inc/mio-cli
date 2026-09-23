@@ -18,13 +18,18 @@ package cmd
 //     update command actually sends with every one of its flags set) and requires
 //     the help to name each one verbatim, so neither a reworded help nor a new
 //     flag documented under some other word can stay green;
-//   - the list example guard RUNS each list command's documented --jq example
-//     against the API's shape and requires every one of those editable
-//     attributes back with its value, so the example cannot vanish or drift
-//     to a key the rows do not have.
+//   - the list example guard takes EVERY --jq example on each list command's
+//     help, rejects any that reads a key the rows do not have (from gojq's own
+//     parse tree, and again from the output: rows carry no null, so a null
+//     was manufactured), RUNS each against 2, 1 and 0 rows and rejects any
+//     whose JSON type changes with the row count, and requires some example
+//     to return every editable attribute per row with its value — so the
+//     example cannot vanish, drift to a key the rows do not have, or hand an
+//     agent an array on one hub and a bare object on the next.
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -33,6 +38,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/itchyny/gojq"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
@@ -343,14 +349,177 @@ func TestCheckoutHubDisplayHelp_NamesEachEditableWireAttribute(t *testing.T) {
 	}
 }
 
-// jqExample pulls the --jq program out of a rendered help page's examples.
+// jqExample pulls each --jq program out of a rendered help page's examples.
 var jqExample = regexp.MustCompile(`--jq '([^']+)'`)
 
-// TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute: each list
-// command's help carries a --jq example, and running THAT example against the
-// API's shape must yield every editable attribute (taken from the update wire,
-// as above) with the value the API sent. An example that is deleted, or that
-// selects a key rows do not have (`.visibility` answers null), fails here.
+// jqFieldReads returns every field a jq program reads by a LITERAL name: `.k`,
+// `."k"`, `.["k"]`, the object shorthand `{k}` / `{"k"}` (which means
+// `{k: .k}`), and destructuring `as {k: $v}` / `as {$k}`. It walks gojq's own
+// parse tree, so what counts as a read is jq's grammar, not a regexp's guess.
+// A read by a computed name (`.[$k]`, `getpath(...)`) is invisible here; the
+// no-null output check below is the net for those.
+func jqFieldReads(t *testing.T, program string) []string {
+	t.Helper()
+	q, err := gojq.Parse(program)
+	if err != nil {
+		t.Fatalf("--jq '%s' does not parse: %v", program, err)
+	}
+	literal := func(s *gojq.String) (string, bool) {
+		if s == nil || s.Queries != nil {
+			return "", false
+		}
+		return s.Str, true
+	}
+	seen := map[string]bool{}
+	var walk func(v reflect.Value)
+	walk = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.Pointer, reflect.Interface:
+			if !v.IsNil() {
+				walk(v.Elem())
+			}
+			return
+		case reflect.Slice:
+			for i := range v.Len() {
+				walk(v.Index(i))
+			}
+			return
+		case reflect.Struct:
+		default:
+			return
+		}
+		switch n := v.Addr().Interface().(type) {
+		case *gojq.Index:
+			if n.Name != "" {
+				seen[n.Name] = true
+			}
+			if k, ok := literal(n.Str); ok {
+				seen[k] = true
+			}
+			if s := n.Start; s != nil && !n.IsSlice && s.Left == nil && s.Term != nil &&
+				s.Term.Type == gojq.TermTypeString && len(s.Term.SuffixList) == 0 {
+				if k, ok := literal(s.Term.Str); ok {
+					seen[k] = true
+				}
+			}
+		case *gojq.ObjectKeyVal:
+			if n.Val == nil { // shorthand: {k} reads .k; {$k} reads a variable
+				if n.Key != "" && !strings.HasPrefix(n.Key, "$") {
+					seen[n.Key] = true
+				}
+				if k, ok := literal(n.KeyString); ok {
+					seen[k] = true
+				}
+			}
+		case *gojq.PatternObject:
+			if k := strings.TrimPrefix(n.Key, "$"); k != "" {
+				seen[k] = true
+			}
+			if k, ok := literal(n.KeyString); ok {
+				seen[k] = true
+			}
+		}
+		for i := range v.NumField() {
+			if v.Type().Field(i).IsExported() {
+				walk(v.Field(i))
+			}
+		}
+	}
+	walk(reflect.ValueOf(q))
+	reads := make([]string, 0, len(seen))
+	for k := range seen {
+		reads = append(reads, k)
+	}
+	sort.Strings(reads)
+	return reads
+}
+
+// TestJQFieldReads_SeesEachLiteralRead keeps the walker honest: every read
+// form jqFieldReads claims to see must be seen, and an output key or a
+// variable must not be mistaken for a read.
+func TestJQFieldReads_SeesEachLiteralRead(t *testing.T) {
+	program := `. as {p: $x, $q} | map({a, "b", out: .c, $x}) | .[0].d | ."e" | .["f"] | select(.g) | "\(.h)"`
+	want := []string{"a", "b", "c", "d", "e", "f", "g", "h", "p", "q"}
+	if got := jqFieldReads(t, program); !reflect.DeepEqual(got, want) {
+		t.Errorf("jqFieldReads(%s) = %v, want %v", program, got, want)
+	}
+}
+
+// jsonKind names a decoded JSON value's type.
+func jsonKind(v any) string {
+	switch v.(type) {
+	case nil:
+		return "null"
+	case []any:
+		return "an array"
+	case map[string]any:
+		return "an object"
+	case string:
+		return "a string"
+	case bool:
+		return "a bool"
+	default:
+		return "a number"
+	}
+}
+
+func containsNull(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return true
+	case []any:
+		for _, e := range x {
+			if containsNull(e) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, e := range x {
+			if containsNull(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// yieldsEachRow reports why out is not one object per wire row, in order,
+// carrying every editable key with that row's value ("" when it is).
+func yieldsEachRow(out any, wire []wireRow, editable []string) string {
+	arr, ok := out.([]any)
+	if !ok || len(arr) != len(wire) {
+		return fmt.Sprintf("yields %s, not one object per row (%d rows)", jsonKind(out), len(wire))
+	}
+	for i, e := range arr {
+		obj, ok := e.(map[string]any)
+		if !ok {
+			return fmt.Sprintf("row %d yields %s, not an object", i, jsonKind(e))
+		}
+		for _, k := range editable {
+			if v, ok := obj[k]; !ok || !reflect.DeepEqual(v, wire[i].Attributes[k]) {
+				return fmt.Sprintf("row %d: editable attribute %q = %v (present=%v), want %v", i, k, v, ok, wire[i].Attributes[k])
+			}
+		}
+	}
+	return ""
+}
+
+// TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute checks EVERY
+// --jq example on each list command's help (not just the first):
+//
+//   - reads: every field the example reads by a literal name (jqFieldReads)
+//     must be `id`, `type` or an attribute the API's rows carry — `.visibility`,
+//     `{price}`, `select(.is_visible)` and `hidden: .is_hidden` all fail here;
+//   - output: run against the API's rows (which hold no null), the example
+//     must not yield a null anywhere — a missing key answers null silently,
+//     however it was read — and every object it yields may carry only
+//     `id`, `type` and the rows' own attribute names;
+//   - shape: run against 2, 1 and 0 rows, its JSON type must not change —
+//     `.[] | {…}` yields an array, then a bare object, then null, so an agent
+//     that pipes it breaks on a hub with one row;
+//   - coverage: some example must yield one object per row carrying every
+//     editable attribute (taken from the update wire, as above) with the
+//     row's value, so deleting or narrowing the example fails.
 func TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute(t *testing.T) {
 	cases := []struct {
 		list       hubDisplayListCase
@@ -364,29 +533,98 @@ func TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute(t *testing.T
 		t.Run(tc.list.name, func(t *testing.T) {
 			keys := updateWireAttributes(t, tc.updateCmd, tc.updatePath)
 			page := "mio " + strings.Join(tc.list.args, " ") + " --help"
-			m := jqExample.FindStringSubmatch(helpOutput(t, tc.list.args...))
-			if m == nil {
+			examples := jqExample.FindAllStringSubmatch(helpOutput(t, tc.list.args...), -1)
+			if len(examples) == 0 {
 				t.Fatalf("`%s` has no --jq example; show how to select %v", page, keys)
 			}
 
 			wire := tc.list.rows(t)
-			srv, _, _, _ := captureCommerceRequest(t, http.StatusOK, `{"data":`+tc.list.data+`,"meta":{"count":2}}`)
-			var got []map[string]any
-			out := tc.list.run(t, srv.URL, "--jq", m[1])
-			if err := json.Unmarshal([]byte(out), &got); err != nil {
-				t.Fatalf("`%s` example --jq '%s' did not yield one object per row: %v; stdout=%q", page, m[1], err, out)
+			rowKeys := map[string]bool{"id": true, "type": true}
+			for _, r := range wire {
+				for k := range r.Attributes {
+					rowKeys[k] = true
+				}
 			}
-			if len(got) != len(wire) {
-				t.Fatalf("`%s` example --jq '%s' yielded %d objects for %d rows", page, m[1], len(got), len(wire))
+			known := sortedKeysOfBool(rowKeys)
+
+			counts := []int{len(wire), 1, 0}
+			srvURL := make([]string, len(counts))
+			for i, n := range counts {
+				data, err := json.Marshal(wire[:n])
+				if err != nil {
+					t.Fatal(err)
+				}
+				srv, _, _, _ := captureCommerceRequest(t, http.StatusOK,
+					fmt.Sprintf(`{"data":%s,"meta":{"count":%d}}`, data, n))
+				srvURL[i] = srv.URL
 			}
-			for i, obj := range got {
-				for _, k := range keys {
-					if v, ok := obj[k]; !ok || !reflect.DeepEqual(v, wire[i].Attributes[k]) {
-						t.Errorf("`%s` example --jq '%s' row %d: editable attribute %q = %v (present=%v), want %v",
-							page, m[1], i, k, v, ok, wire[i].Attributes[k])
+
+			var shortfalls []string
+			for _, m := range examples {
+				prog := m[1]
+				ex := fmt.Sprintf("`%s` example --jq '%s'", page, prog)
+
+				for _, k := range jqFieldReads(t, prog) {
+					if !rowKeys[k] {
+						t.Errorf("%s reads %q, a key no row has (rows have %v); gojq answers null for it, silently (MIO-4156)", ex, k, known)
 					}
 				}
+
+				outs := make([]any, len(counts))
+				for i := range counts {
+					raw := tc.list.run(t, srvURL[i], "--jq", prog)
+					if err := json.Unmarshal([]byte(raw), &outs[i]); err != nil {
+						t.Fatalf("%s against %d rows did not print JSON: %v; stdout=%q", ex, counts[i], err, raw)
+					}
+				}
+
+				for i := 1; i < len(counts); i++ {
+					if jsonKind(outs[i]) != jsonKind(outs[0]) {
+						t.Errorf("%s yields %s for %d rows, %s for %d row and %s for %d rows; its shape must not depend "+
+							"on how many rows the hub has (wrap a per-row program in map(...))",
+							ex, jsonKind(outs[0]), counts[0], jsonKind(outs[1]), counts[1], jsonKind(outs[2]), counts[2])
+						break
+					}
+				}
+
+				if containsNull(outs[0]) {
+					t.Errorf("%s yields a null against rows that hold none: it reads something the rows do not have; output=%v", ex, outs[0])
+				}
+				objs := []any{outs[0]}
+				if arr, ok := outs[0].([]any); ok {
+					objs = arr
+				}
+				foreign := map[string]bool{}
+				for _, o := range objs {
+					obj, _ := o.(map[string]any)
+					for k := range obj {
+						if !rowKeys[k] {
+							foreign[k] = true
+						}
+					}
+				}
+				if len(foreign) > 0 {
+					t.Errorf("%s yields key(s) %v, which no row has (rows have %v); show each attribute under its own name",
+						ex, sortedKeysOfBool(foreign), known)
+				}
+
+				if why := yieldsEachRow(outs[0], wire, keys); why != "" {
+					shortfalls = append(shortfalls, fmt.Sprintf("--jq '%s': %s", prog, why))
+				}
+			}
+			if len(shortfalls) == len(examples) {
+				t.Errorf("no --jq example on `%s` yields one object per row carrying every editable attribute %v:\n  %s",
+					page, keys, strings.Join(shortfalls, "\n  "))
 			}
 		})
 	}
+}
+
+func sortedKeysOfBool(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

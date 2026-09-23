@@ -107,7 +107,7 @@ var checkoutHubProductsListCmd = &cobra.Command{
 	Short: "List the products offered by a hub.",
 	Long:  "List all hub_product_display rows for the active hub, ordered by position. Requires --hub.",
 	Example: `  mio checkout hub-products list --hub hub_abc123
-  mio checkout hub-products list --hub hub_abc123 --jq '.[] | {id, product_id, position, visible, is_free_tier}'`,
+  mio checkout hub-products list --hub hub_abc123 --jq 'map({id, product_id, position, visible, is_free_tier})'`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := checkoutHubContext(cmd)
@@ -257,7 +257,7 @@ var checkoutHubPricesListCmd = &cobra.Command{
 	Short: "List a hub's price display rows.",
 	Long:  "List all hub_price_display rows for the active hub, ordered by position. Requires --hub.",
 	Example: `  mio checkout hub-prices list --hub hub_abc123
-  mio checkout hub-prices list --hub hub_abc123 --jq '.[] | {id, price_id, position, visible}'`,
+  mio checkout hub-prices list --hub hub_abc123 --jq 'map({id, price_id, position, visible})'`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := checkoutHubContext(cmd)
