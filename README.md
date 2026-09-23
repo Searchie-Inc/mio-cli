@@ -326,7 +326,7 @@ mio pages tree get <page-id> --hub <hub-id> --jq '{root: .tree}' > tree.json
 
 # Products & prices  (the product id is a positional argument, not a flag)
 mio products list
-mio products create --name "Pro Plan" --description "Full access"
+mio products create --name "Pro Plan" --type membership --description "Full access"   # --type: course|membership|bundle|digital_download|booking
 mio products prices list <product-id>
 # --amount, --currency and --type are required; --interval AND --interval-count are
 # required when --type=recurring. The label flag is --name (there is no --nickname).

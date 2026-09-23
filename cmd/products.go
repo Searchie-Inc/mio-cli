@@ -98,20 +98,8 @@ var productsCreateCmd = &cobra.Command{
 			return err
 		}
 
-		// Both --name and --type are required by the backend
-		// ProductCreateAttributes schema; validate client-side so a
-		// partial-required body never reaches the API.
-		var missing []string
-		if !cmd.Flags().Changed("name") {
-			missing = append(missing, "--name")
-		}
-		if !cmd.Flags().Changed("type") {
-			missing = append(missing, "--type")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
-		}
-
+		// --name and --type are required by the backend ProductCreateAttributes
+		// schema; cobra enforces both before RunE (markFlagsRequired in init).
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "type")
@@ -262,6 +250,7 @@ func init() {
 		cmd.Flags().String("description", "", "Product description.")
 		cmd.Flags().Bool("is-active", false, "Whether the product is active.")
 	}
+	markFlagsRequired(productsCreateCmd, "name", "type")
 	addPaginationFlags(productsListCmd)
 }
 
