@@ -1,7 +1,7 @@
 # mio CLI — machine-readable command index
 # Format: mio <resource> [sub-resource] <action> — purpose
 # Auth: export MIO_API_KEY=mio_sk_live_<key>  (exit 3 if missing/invalid)
-#       resolution order: --api-key flag > MIO_API_KEY env > OS-keychain key (mio login); --anonymous forces unauthenticated — it SENDS the request with no Authorization header and lets the API answer (a 401 under it is the server's verdict, not a local precondition; whoami reports key_source "none (--anonymous)"), an explicit --api-key still wins (MIO-2694)
+#       resolution order: --api-key flag > MIO_API_KEY env > key stored by mio login (MIO-2995: release builds keep it in an ENCRYPTED FILE, $XDG_CONFIG_HOME/mio/keyring/api-key else ~/.config/mio/keyring/api-key — macOS release binaries never use the Keychain — so a shell with a different XDG_CONFIG_HOME/HOME sees no key; the exit-3 "no API key found" error names the store it read and whoami's key_source names it too; export it once with MIO_API_KEY="$(mio auth token)", release after v0.22.0); --anonymous forces unauthenticated — it SENDS the request with no Authorization header and lets the API answer (a 401 under it is the server's verdict, not a local precondition; whoami reports key_source "none (--anonymous)"), an explicit --api-key still wins (MIO-2694)
 #       key auth works against https://api.member.dev; override with MIO_API_BASE_URL or --api-base
 # Config: TOML at ~/.config/mio/config.toml ($XDG_CONFIG_HOME/mio/config.toml); keys: current_team|current_hub|api_base
 # Output: JSON by default when piped; --output json|table|plain; --jq <expr>; --raw for envelope
@@ -36,6 +36,7 @@ mio login — interactive login (stores key; auto-resolves team for single-team 
 mio register — create a new account (email+password, optional --first-name/--last-name; or MIO_EMAIL/MIO_PASSWORD) then auto-login (mints+stores a key, REPLACING any stored key); unauthenticated; in agents prefer a pre-provisioned MIO_API_KEY
 mio whoami — print resolved user, active team, hub, api-base, profile, and key source; use as "did my setup work?" check
 mio logout — clear stored credentials
+mio auth token — print the key mio login stored, and nothing else, to stdout (export MIO_API_KEY="$(mio auth token)"); reads only the store, never --api-key/MIO_API_KEY; no request; exit 3 with EMPTY stdout when none is stored (MIO-2995; release after v0.22.0 — exit 2 unknown command before)
 
 mio config set — set a config value (keys: current_team, current_hub, api_base; validated as UUID / http(s) URL)
 mio config get — get a config value

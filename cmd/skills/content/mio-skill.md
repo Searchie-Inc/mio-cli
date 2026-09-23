@@ -23,6 +23,7 @@ mio config set current_team <team-uuid>   # a UUID (see 'mio teams list'); drop 
   `mio config set team …` / `hub …` exit `2` with
   `unknown config key "team" (valid: [current_team current_hub api_base])` (MIO-2568).
 - **Auth resolution (first wins):** `--api-key` flag → `MIO_API_KEY` env → key stored by `mio login`. No key ⇒ exit `3`.
+  The stored key is an encrypted FILE under the config dir in the release builds (`$XDG_CONFIG_HOME/mio/keyring/api-key`, else `~/.config/mio/keyring/api-key`; the macOS release binary never uses the Keychain), so a shell with a different `XDG_CONFIG_HOME` or `HOME` sees no key — the exit-3 error names the store it read, and `mio whoami` reports it as `key_source`. Export it once instead of reading the store on every call: `export MIO_API_KEY="$(mio auth token)"` (stored key only, to stdout; exit `3` with empty stdout when none is stored).
 - **Output:** JSON when piped/non-interactive (agent default), table on a TTY. Force with `--output json`. Filter inline with `--jq '<expr>'` (no external `jq` needed). Use `--raw` for the unflattened JSON:API envelope (`meta`/`links`/`included`).
 - **Capturing a STRING id? Add `-o plain` (MIO-2792).** `--jq` renders through the JSON formatter, so a string result comes back **JSON-quoted** and `$(…)` captures the quotes: `HUB_ID=$(mio hubs list --jq '.[0].id')` yields `"019f…"`, which then 404s when you pass it to the next command. `-o plain` prints the bare scalar:
   ```bash
@@ -964,7 +965,7 @@ mio hub-memberships add "$CID" --hub hub_abc123
 Discover everything with `mio --help`, `mio <group> --help`, or the machine-readable
 index at `mio gen-docs --dir ./docs`. Core groups:
 
-- **Auth/context:** `mio whoami` · `mio config set|get|list` · `mio teams list|switch` · `mio api-keys create|list`
+- **Auth/context:** `mio whoami` · `mio auth token` · `mio config set|get|list` · `mio teams list|switch` · `mio api-keys create|list`
 - **Hubs:** `mio hubs scaffold|templates` · `mio hubs create|retrieve|update|list` · `mio hubs policies get|update|gate` · `mio hubs navigation list|add|remove|reorder`
 - **Pages:** `mio pages create|list|retrieve|home` · `mio pages catalog templates|section-types|scaffold` · `mio pages tree get|set` · `mio pages publish` · `mio pages sections create|list|reorder`
 - **Media:** `mio media files upload|list|durable-url` · `mio media playlists create|set-cover` (+ `playlists items add|list|remove|reorder`) · `mio media hub-media publish` · `mio media hub-playlists publish` · `mio media search` · `mio media transcripts get|edit|revert`
