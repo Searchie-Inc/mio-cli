@@ -165,6 +165,19 @@ func TestFromScript_UncoveredMentionIsReported(t *testing.T) {
 	}
 }
 
+// TestFromScript_UncoveredMentionBesideAnExtractedOne: coverage is per `mio`
+// word, not per line. An extracted invocation must not vouch for a second,
+// unfollowed one on the same line (codex review, MIO-4154 round 1).
+func TestFromScript_UncoveredMentionBesideAnExtractedOne(t *testing.T) {
+	res := FromScript("x.md", 1, "mio version; watch -n5 mio contacts list")
+	if len(res.Invocations) != 1 || strings.Join(res.Invocations[0].Args, " ") != "version" {
+		t.Fatalf("want only `mio version` extracted, got %+v", res.Invocations)
+	}
+	if len(res.Uncovered) != 1 || res.Uncovered[0].Line != 1 {
+		t.Fatalf("want the `watch … mio contacts list` mention reported at line 1, got %+v", res.Uncovered)
+	}
+}
+
 // TestFromMarkdown_FencesAndLineNumbers checks that only fenced code is read,
 // that line numbers are DOCUMENT lines (what a failure message names), and that
 // indented fences (inside list items) and ~~~ fences are handled.

@@ -21,9 +21,9 @@
 //     an unquoted `[--flag <v>]` optional group is dropped, and a bare `…`/`...`
 //     marks an invocation as ELIDED (deliberately incomplete)
 //
-// Every line that visibly mentions `mio <word>` in code but is covered by no
-// extracted invocation is reported in Result.Uncovered, so a shape the parser
-// does not understand surfaces as a failure instead of an unguarded example.
+// Every `mio <word>` visible in code that is not the head of an extracted
+// invocation is reported in Result.Uncovered, so a shape the parser does not
+// understand surfaces as a failure instead of an unguarded example.
 package docexamples
 
 import (
@@ -56,8 +56,8 @@ func (i Invocation) Text() string {
 	return strings.Join(parts, " ")
 }
 
-// Mention is a code line that names `mio <word>` but that no extracted
-// invocation covers — a shape the parser could not see.
+// Mention is a code line naming `mio <word>` that is not the head of any
+// extracted invocation — a shape the parser could not see.
 type Mention struct {
 	File string
 	Line int
@@ -70,10 +70,11 @@ type Result struct {
 	Uncovered   []Mention
 }
 
-// mentionRE matches `mio <word>` in command position on a code line. It is the
-// coverage oracle for the parser: anything it matches must be inside an
-// invocation. `go build -o mio .` does not match (no word follows).
-var mentionRE = regexp.MustCompile("(?:^|[\\s;&|(`])(?:\\./)?mio[ \\t]+[a-z-]")
+// mentionRE matches `mio <word>` in command position on a code line; group 1 is
+// the `mio` word itself. It is the coverage oracle for the parser: every match
+// must be the head of an extracted invocation. `go build -o mio .` does not match
+// (no word follows).
+var mentionRE = regexp.MustCompile("(?:^|[\\s;&|(`])((?:\\./)?mio)[ \\t]+[a-z-]")
 
 // FromMarkdown extracts the invocations inside every fenced code block of a
 // Markdown/MDX document. Prose — including inline `code spans` — is not read.
@@ -547,14 +548,13 @@ func (p *parser) emit(words []word) {
 	p.invocations = append(p.invocations, inv)
 }
 
-// uncovered lists the code lines that mention `mio <word>` outside any
-// extracted invocation's line span.
+// uncovered lists the code lines holding a `mio <word>` that is not the head of
+// an extracted invocation. Coverage is per `mio` word, not per line: an
+// extracted invocation never vouches for a second one beside it.
 func (p *parser) uncovered() []Mention {
-	covered := map[int]bool{}
+	heads := map[int]bool{}
 	for _, inv := range p.invocations {
-		for l := inv.Line; l <= inv.EndLine; l++ {
-			covered[l] = true
-		}
+		heads[inv.pos] = true
 	}
 	var out []Mention
 	for idx, start := range p.lineStarts {
@@ -562,31 +562,26 @@ func (p *parser) uncovered() []Mention {
 		if idx+1 < len(p.lineStarts) {
 			end = p.lineStarts[idx+1] - 1
 		}
-		code := p.codeText(start, end)
-		line := p.firstLine + idx
-		if mentionRE.MatchString(code) && !covered[line] {
-			out = append(out, Mention{File: p.file, Line: line, Text: strings.TrimSpace(p.src[start:end])})
+		for _, m := range mentionRE.FindAllStringSubmatchIndex(p.src[start:end], -1) {
+			at := start + m[2]
+			if heads[at] || p.inNonCode(at) {
+				continue
+			}
+			out = append(out, Mention{File: p.file, Line: p.firstLine + idx, Text: strings.TrimSpace(p.src[start:end])})
+			break
 		}
 	}
 	return out
 }
 
-// codeText returns src[start:end] with comment and heredoc bytes removed.
-func (p *parser) codeText(start, end int) string {
-	var b strings.Builder
-	for i := start; i < end; i++ {
-		skip := false
-		for _, r := range p.nonCode {
-			if i >= r[0] && i < r[1] {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			b.WriteByte(p.src[i])
+// inNonCode reports whether byte offset i is inside a comment or heredoc body.
+func (p *parser) inNonCode(i int) bool {
+	for _, r := range p.nonCode {
+		if i >= r[0] && i < r[1] {
+			return true
 		}
 	}
-	return b.String()
+	return false
 }
 
 func isAllDigits(s string) bool {
