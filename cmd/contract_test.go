@@ -44,6 +44,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -263,13 +265,17 @@ func indexContaining(lines []string, substr string) int {
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	bin := dir + "/mio"
+	bin := filepath.Join(dir, "mio")
+	if runtime.GOOS == "windows" {
+		bin += ".exe" // exec.Command will not run an extensionless file there
+	}
 
-	moduleRoot, err := os.Getwd()
+	// go test runs in the package dir, cmd/; the module root is its parent.
+	cmdDir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	moduleRoot = strings.TrimSuffix(moduleRoot, "/cmd")
+	moduleRoot := filepath.Dir(cmdDir)
 
 	cmd := exec.Command("go", "build", "-tags", childKeyringTag, "-o", bin, ".")
 	cmd.Dir = moduleRoot
@@ -306,7 +312,7 @@ const (
 func requireChildOnFileKeyring(t *testing.T, bin string) {
 	t.Helper()
 	probe := exec.Command(bin, childBackendsCmd)
-	probe.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
+	probe.Env = childBaseEnv(t.TempDir())
 	var stdout, stderr bytes.Buffer
 	probe.Stdout, probe.Stderr = &stdout, &stderr
 	if err := probe.Run(); err != nil {
@@ -323,7 +329,7 @@ func requireChildOnFileKeyring(t *testing.T, bin string) {
 // TestBuildBinary_ChildReadsOnlyAnIsolatedFileKeyring: the child binary every
 // subprocess test runs may open only the file keyring (checked inside
 // buildBinary itself, so no test can run an unpinned child), and the store it
-// actually reads is the file under the temp HOME runBinary gives it.
+// actually reads is the file under the temp home runBinary gives it.
 func TestBuildBinary_ChildReadsOnlyAnIsolatedFileKeyring(t *testing.T) {
 	bin := buildBinary(t)
 	requireChildOnFileKeyring(t, bin)
@@ -332,9 +338,34 @@ func TestBuildBinary_ChildReadsOnlyAnIsolatedFileKeyring(t *testing.T) {
 	if code != errs.ExitAuth || stdout != "" {
 		t.Fatalf("auth token with nothing stored: exit %d, stdout %q; want exit %d and no stdout. stderr=%q", code, stdout, errs.ExitAuth, stderr)
 	}
+	var envelope struct {
+		Errors []struct {
+			Detail string `json:"detail"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || len(envelope.Errors) == 0 {
+		t.Fatalf("auth token stderr is not a JSON:API error envelope (%v): %q", err, stderr)
+	}
+	detail := envelope.Errors[0].Detail
+	homeVar := "HOME" // the variable os.UserHomeDir reads, which configDir names
+	if runtime.GOOS == "windows" {
+		homeVar = "USERPROFILE"
+	}
 	want := "the file keyring at " + os.TempDir()
-	if !strings.Contains(stderr, want) || !strings.Contains(stderr, "config dir from $HOME; XDG_CONFIG_HOME is unset") {
-		t.Errorf("the child did not read a file keyring under the temp HOME runBinary gives it; want %q in stderr=%q", want, stderr)
+	if !strings.Contains(detail, want) || !strings.Contains(detail, "config dir from $"+homeVar+"; XDG_CONFIG_HOME is unset") {
+		t.Errorf("the child did not read a file keyring under the temp $%s runBinary gives it; want %q in %q", homeVar, want, detail)
+	}
+}
+
+// childBaseEnv is the environment every child mio starts from: PATH, and home
+// pointing at home under every name os.UserHomeDir reads (HOME on Unix,
+// USERPROFILE on Windows), so the child's config dir and file keyring resolve
+// under home on every platform. XDG_CONFIG_HOME is left unset.
+func childBaseEnv(home string) []string {
+	return []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + home,
+		"USERPROFILE=" + home,
 	}
 }
 
@@ -343,10 +374,7 @@ func TestBuildBinary_ChildReadsOnlyAnIsolatedFileKeyring(t *testing.T) {
 func runBinary(t *testing.T, bin string, envPairs []string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 
-	env := []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + t.TempDir(), // isolate config files
-	}
+	env := childBaseEnv(t.TempDir()) // isolate config files and the file keyring
 	for _, kv := range envPairs {
 		k, v, _ := strings.Cut(kv, "=")
 		if v != "" {

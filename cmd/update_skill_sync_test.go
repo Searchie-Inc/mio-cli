@@ -257,6 +257,9 @@ func TestSkillRefreshExec_RealBinaryArgv(t *testing.T) {
 		t.Skip("builds a binary")
 	}
 	bin := filepath.Join(t.TempDir(), "mio")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	build := exec.Command("go", "build", "-tags", childKeyringTag,
 		"-ldflags", "-X github.com/Searchie-Inc/mio-cli/internal/version.Version=9.9.9",
 		"-o", bin, ".")
