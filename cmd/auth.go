@@ -64,8 +64,10 @@ D-Bus session bus uses that. Only a macOS build compiled from source with cgo
 uses the macOS Keychain. 'mio whoami' reports the one in use as key_source.
 
 With no stored key it exits 3 with nothing on stdout, and the error names the
-store it read. A stored key that cannot be read also exits 3; 'mio login'
-replaces it.`,
+store it read. A stored key that does not decode, or whose key file is missing
+or invalid, also exits 3 ('mio login' replaces it). A filesystem error while
+reading the store (permission denied, I/O error) exits 1: re-authenticating
+cannot fix that.`,
 	Example: `  export MIO_API_KEY="$(mio auth token)"
   mio auth token >/dev/null && echo "a key is stored"`,
 	Args: cobra.NoArgs,

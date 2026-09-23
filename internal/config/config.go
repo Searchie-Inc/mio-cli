@@ -296,7 +296,9 @@ func loadOrCreateFileKey() (string, error) {
 //   - it contains exactly 64 lowercase hex characters
 //
 // On any validation failure the offending path is removed (best-effort) and
-// an error is returned so loadOrCreateFileKey regenerates.
+// an error is returned. On the write path loadOrCreateFileKey then generates a
+// fresh key; the read path (readFilePassword) never does, and reports the
+// stored key unusable instead.
 func readAndValidateFileKey(keyPath string) (string, error) {
 	// Lstat so we see the symlink itself, not its target.
 	info, err := os.Lstat(keyPath)
@@ -306,16 +308,16 @@ func readAndValidateFileKey(keyPath string) (string, error) {
 	// Reject anything that is not a plain regular file.
 	if !info.Mode().IsRegular() {
 		_ = os.Remove(keyPath)
-		return "", fmt.Errorf("file keyring key is not a regular file (mode %v); regenerating", info.Mode())
+		return "", fmt.Errorf("file keyring key is not a regular file (mode %v)", info.Mode())
 	}
 	// Permission drift means the key may have been readable by others.
 	// Treat it as compromised: remove it and the encrypted credential blob so
 	// the user must re-login with a fresh key.
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		_ = os.Remove(keyPath)
-		// Ignore blob-deletion errors here; loadOrCreateFileKey will regenerate
-		// the key, and the next GetAPIKey / Resolve call will surface any
-		// remaining stale-blob issue via the normal decryption-error path.
+		// If the blob cannot be deleted it stays behind, undecryptable without
+		// the key removed above; a later read reports it unusable and the
+		// next `mio login` replaces it.
 		if derr := deleteKeyringFile(); derr != nil {
 			return "", fmt.Errorf(
 				"file keyring key had permissions %04o (expected 0600); key invalidated (blob cleanup failed: %v) — please run `mio login` to re-login",
@@ -332,7 +334,7 @@ func readAndValidateFileKey(keyPath string) (string, error) {
 	key := strings.TrimSpace(string(data))
 	if !isValidFileKey(key) {
 		_ = os.Remove(keyPath)
-		return "", fmt.Errorf("file keyring key content is invalid; regenerating")
+		return "", fmt.Errorf("file keyring key content is invalid")
 	}
 	return key, nil
 }

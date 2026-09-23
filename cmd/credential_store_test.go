@@ -217,6 +217,32 @@ func TestLogin_ReplacesAnUnreadableStoredKey(t *testing.T) {
 	}
 }
 
+// TestRegister_ReplacesAnUnreadableStoredKey: `mio register` reads the store
+// before minting, exactly like login, and must likewise treat an unusable
+// stored key as "no key" and overwrite it instead of aborting with exit 1.
+func TestRegister_ReplacesAnUnreadableStoredKey(t *testing.T) {
+	_, blob := isolatedStore(t)
+	if err := config.SetAPIKey("mio_sk_live_stale"); err != nil {
+		t.Fatalf("SetAPIKey: %v", err)
+	}
+	if err := os.WriteFile(blob, nil, 0o600); err != nil {
+		t.Fatalf("empty the blob: %v", err)
+	}
+	var regBody map[string]any
+	mintReached := false
+	srv := registerMintServer(t, "t_reg", &regBody, &mintReached)
+
+	res, err := runCaptured(t, []string{"MIO_API_BASE_URL=" + srv.URL},
+		"register", "--email", "new@test.member.dev", "--password", "s3cr3tpass")
+	if res.Code != errs.ExitOK {
+		t.Fatalf("register over an unreadable stored key: exit = %d, want 0; err = %v; stderr=%q", res.Code, err, res.Stderr)
+	}
+	got, gerr := config.GetAPIKey()
+	if gerr != nil || got != "mio_sk_registertest123" {
+		t.Fatalf("after register the store holds (%q, %v), want the freshly minted key", got, gerr)
+	}
+}
+
 // TestAuthToken_PrintsTheStoredKeyAndNothingElse is the headless recovery path:
 // `export MIO_API_KEY=$(mio auth token)` once, then stop touching the store.
 // stdout is exactly the key and a newline whatever --output says; the key
