@@ -249,7 +249,7 @@ mio products list — list products in the active team
 mio products retrieve — retrieve a product by id
 mio products update — update a product
 mio products delete — delete a product
-mio products prices create — create a price for a product; product id is a POSITIONAL arg. REQUIRED: --amount (minor units) --currency (usd|cad|gbp|eur|aud) --type (one_time|recurring); --interval (month|year|week|day) and --interval-count (>=1) are REQUIRED when --type=recurring. Optional: --name (label, <=100) --description (<=500) --is-active (default true). There is NO --nickname. e.g. mio products prices create <product_id> --amount 4900 --currency usd --type recurring --interval month --interval-count 1
+mio products prices create — create a price for a product; product id is a POSITIONAL arg. REQUIRED: --amount (minor units) --currency (usd|cad|gbp|eur|aud) --type (one_time|recurring); --interval (month|year|week|day) and --interval-count (>=1) are REQUIRED when --type=recurring. Optional: --name (label, <=100) --description (<=500) --is-active (default true) --trial-period-days (0..2147483647, 0 = no trial; keep it <=730, Stripe Checkout's documented maximum, which the API does not check; checkout applies it to recurring prices only). There is NO --nickname. amount/currency/type/interval/interval-count/trial-period-days are FIXED after create: to change one, create a new price and deactivate the old one. e.g. mio products prices create <product_id> --amount 4900 --currency usd --type recurring --interval month --interval-count 1
 mio products prices list — list prices for a product; product id is a POSITIONAL arg: mio products prices list <product_id>
 mio products prices retrieve — retrieve a price by id
 mio products prices update — update a price

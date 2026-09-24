@@ -256,6 +256,7 @@ plain JSON.
 ## products  (`cmd/products.go`) — REFERENCE RESOURCE
 - products:     `create/list/retrieve/update/delete` `/api/teams/{team_id}/products[/{id}]`
 - prices:       `create/list/retrieve/update/delete` `/api/teams/{team_id}/products/{id}/prices[/{pid}]`
+  (create `--trial-period-days` → `trial_period_days`, int, sent only when given, no client-side bound — the API's is 0..2147483647, and Stripe's documented 730-day Checkout trial maximum is unchecked by the API, so the help says keep it ≤730; amount/currency/type/interval/interval_count/trial_period_days are immutable, so `update` takes only `--name` `--description` `--is-active`) (MIO-4159)
 - deliverables: `create/list/delete` `/api/teams/{team_id}/products/{id}/deliverables[/{did}]`
   (CLI `mio products deliverables`; type `product_deliverables`; `--type` enum: hub_access, content_enrollment, tag, file_download, community_access) (MIO-2268)
 - hub-products: `attach/list/update/detach` `/api/teams/{team_id}/hubs/{hid}/products[/{did}]`
