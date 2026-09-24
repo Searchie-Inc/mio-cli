@@ -2,14 +2,19 @@ package cmd
 
 // media_upload.go — media ingest commands (MIO-2267):
 //
-//	files upload <path>       create → presigned S3 PUT → finalize (single-part)
+//	files upload <path>       create → presigned S3 PUT → finalize, or multipart
+//	                          (init → parts → complete → finalize)
+//	files replace <id> <path> replace init → PUT → replace finalize, or multipart
+//	                          (init → parts → terminal complete)
 //	files finalize <id>       POST /api/teams/{team}/files/{id}/finalize
 //	files transcode <id>      POST /api/teams/{team}/files/{id}/transcode  (202)
 //	files register-synthetic  POST /api/admin/teams/{team}/files/synthetic (MIO-2285)
 //
-// Single-part uploads only; multipart (very large files) + the replace lifecycle
-// are a follow-on. All routes are team-scoped and accept the CLI's team-owner
-// API key.
+// upload and replace pick their path with useMultipart: multipart when
+// --multipart is set or the file is larger than autoMultipartThreshold, one
+// presigned PUT otherwise. Every help surface that states the threshold renders
+// it from the constant (MIO-4155). All routes are team-scoped and accept the
+// CLI's team-owner API key.
 
 import (
 	"fmt"
@@ -31,13 +36,59 @@ import (
 var syntheticAssetKinds = map[string]bool{"document": true, "pdf": true}
 
 const (
-	// autoMultipartThreshold is the size above which `files upload` switches to
-	// multipart automatically (single-part presigned PUT handles up to 5 GB, so
-	// this is well within S3 limits — it's about resumable chunking, not a cap).
+	// autoMultipartThreshold is the size above which `files upload` and
+	// `files replace` switch to multipart automatically (single-part presigned PUT
+	// handles up to 5 GB, so this is well within S3 limits — it's about chunking,
+	// not a cap). The help is rendered from it, so changing it here changes what
+	// --help says. The hand-maintained doc lines are held to it by two tests:
+	// TestMultipartThreshold_EverySurfaceStatesIt ("above N MB", and the
+	// --part-size-mb default and minimum) and
+	// TestMultipartThreshold_StatedBoundaryIsTheWire (the "N bytes" figure, and
+	// where a file of exactly N bytes goes, checked against the wire).
 	autoMultipartThreshold = 100 * 1024 * 1024 // 100 MB
 	// minPartSizeMB is S3's minimum multipart part size (all parts but the last).
 	minPartSizeMB = 5
+	// defaultPartSizeMB is the --part-size-mb default for upload and replace.
+	defaultPartSizeMB = 16
 )
+
+// useMultipart is THE dispatch rule for upload and replace: multipart when forced
+// with --multipart or when the file is larger than autoMultipartThreshold, one
+// presigned PUT otherwise. A file of exactly the threshold goes single-part.
+func useMultipart(force bool, size int64) bool {
+	return force || size > autoMultipartThreshold
+}
+
+// multipartThresholdMB renders autoMultipartThreshold in the unit --part-size-mb
+// uses (1 MB = 1024*1024 bytes), e.g. "100 MB".
+func multipartThresholdMB() string {
+	return fmt.Sprintf("%d MB", autoMultipartThreshold/(1024*1024))
+}
+
+// uploadMultipartHelp and replaceMultipartHelp are the multipart paragraphs of
+// upload's and replace's --help, rendered from the constants so the help cannot
+// state a threshold, default or minimum the command does not use (MIO-4155:
+// upload's help said "Single-part upload only" while dispatching multipart).
+func uploadMultipartHelp() string {
+	return fmt.Sprintf(`Multipart is automatic above %[1]s: a file larger than %[2]d bytes is sent in
+parts (S3 multipart: init, presign and PUT each part, complete, then finalize);
+a file of that size or smaller goes up as one presigned PUT. --multipart forces
+the multipart path at any size. --part-size-mb sets the part size in MB
+(default %[3]d, minimum %[4]d, S3's floor for every part but the last) and is
+read only on the multipart path.`,
+		multipartThresholdMB(), autoMultipartThreshold, defaultPartSizeMB, minPartSizeMB)
+}
+
+func replaceMultipartHelp() string {
+	return fmt.Sprintf(`Multipart is automatic above %[1]s, as for 'files upload': a replacement larger
+than %[2]d bytes is sent in parts (S3 multipart: init, presign and PUT each
+part, then complete, which relinks the file itself; there is no separate
+finalize); one of that size or smaller goes up as one presigned PUT and is then
+finalized. --multipart forces the multipart path at any size. --part-size-mb
+sets the part size in MB (default %[3]d, minimum %[4]d) and is read only on the
+multipart path.`,
+		multipartThresholdMB(), autoMultipartThreshold, defaultPartSizeMB, minPartSizeMB)
+}
 
 func init() {
 	mediaFilesCmd.AddCommand(
@@ -57,13 +108,17 @@ func init() {
 			"boundaries, so allow one extra poll interval; if it never starts — video processing "+
 			"disabled, or a backed-up queue — this warns and returns 0 rather than waiting out --timeout.")
 	mediaFilesUploadCmd.Flags().Duration("timeout", 5*time.Minute, "Max time to --wait for processing.")
-	mediaFilesUploadCmd.Flags().Bool("multipart", false, "Force a multipart (chunked) upload regardless of size.")
-	mediaFilesUploadCmd.Flags().Int("part-size-mb", 16, "Multipart chunk size in MB (min 5).")
+	mediaFilesUploadCmd.Flags().Bool("multipart", false,
+		"Upload in parts at any size (without it, only files above "+multipartThresholdMB()+" go multipart).")
+	mediaFilesUploadCmd.Flags().Int("part-size-mb", defaultPartSizeMB,
+		fmt.Sprintf("Multipart part size in MB (min %d); read only on the multipart path.", minPartSizeMB))
 
 	mediaFilesReplaceCmd.Flags().String("mime-type", "", "Content type of the replacement (default: sniffed).")
 	mediaFilesReplaceCmd.Flags().String("filename", "", "Original filename to record (default: the file's base name).")
-	mediaFilesReplaceCmd.Flags().Bool("multipart", false, "Force a multipart (chunked) replace regardless of size.")
-	mediaFilesReplaceCmd.Flags().Int("part-size-mb", 16, "Multipart chunk size in MB (min 5).")
+	mediaFilesReplaceCmd.Flags().Bool("multipart", false,
+		"Replace in parts at any size (without it, only files above "+multipartThresholdMB()+" go multipart).")
+	mediaFilesReplaceCmd.Flags().Int("part-size-mb", defaultPartSizeMB,
+		fmt.Sprintf("Multipart part size in MB (min %d); read only on the multipart path.", minPartSizeMB))
 
 	mediaFilesRegisterSyntheticCmd.Flags().String("title", "", "File title. Required.")
 	mediaFilesRegisterSyntheticCmd.Flags().String("asset-kind", "document", "Synthetic asset kind: document or pdf.")
@@ -141,7 +196,7 @@ warning is a bound, not a verdict: a busy transcode queue produces it too, so
 re-check with 'mio media files retrieve <id>' rather than reading exit 0 as
 "transcoded".
 
-Single-part upload only (multipart for very large files is a follow-on).
+` + uploadMultipartHelp() + `
 
 New files default to visibility: private — make one public later with
 'mio media files update <id> --visibility public'. For a member or visitor to
@@ -175,7 +230,7 @@ members). See the media-workflow guide's visibility section.`,
 		}
 
 		forceMultipart, _ := cmd.Flags().GetBool("multipart")
-		if pmb, _ := cmd.Flags().GetInt("part-size-mb"); (forceMultipart || fi.Size() > autoMultipartThreshold) && pmb < minPartSizeMB {
+		if pmb, _ := cmd.Flags().GetInt("part-size-mb"); useMultipart(forceMultipart, fi.Size()) && pmb < minPartSizeMB {
 			return errs.New(errs.ExitUsage, "--part-size-mb must be >= %d (S3 minimum part size)", minPartSizeMB)
 		}
 
@@ -186,7 +241,7 @@ members). See the media-workflow guide's visibility section.`,
 
 		var fileID string
 		var res *client.Resource
-		if forceMultipart || fi.Size() > autoMultipartThreshold {
+		if useMultipart(forceMultipart, fi.Size()) {
 			partMB, _ := cmd.Flags().GetInt("part-size-mb")
 			fileID, res, err = uploadMultipart(c, teamID, path, title, mimeType, fi.Size(), int64(partMB)*1024*1024)
 		} else {
@@ -220,7 +275,9 @@ var mediaFilesReplaceCmd = &cobra.Command{
 	Use:   "replace <file_id> <path>",
 	Short: "Replace an existing file's content.",
 	Long: `Replace the bytes of an existing file with a new local file, keeping the same
-file id — the media is relinked atomically on finalize. Single-part upload.`,
+file id — the media is relinked atomically once the new bytes are in.
+
+` + replaceMultipartHelp(),
 	Example: `  mio media files replace file_abc123 ./updated.png`,
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -246,7 +303,7 @@ file id — the media is relinked atomically on finalize. Single-part upload.`,
 		}
 
 		forceMultipart, _ := cmd.Flags().GetBool("multipart")
-		if pmb, _ := cmd.Flags().GetInt("part-size-mb"); (forceMultipart || fi.Size() > autoMultipartThreshold) && pmb < minPartSizeMB {
+		if pmb, _ := cmd.Flags().GetInt("part-size-mb"); useMultipart(forceMultipart, fi.Size()) && pmb < minPartSizeMB {
 			return errs.New(errs.ExitUsage, "--part-size-mb must be >= %d (S3 minimum part size)", minPartSizeMB)
 		}
 
@@ -256,7 +313,7 @@ file id — the media is relinked atomically on finalize. Single-part upload.`,
 		}
 
 		var res *client.Resource
-		if forceMultipart || fi.Size() > autoMultipartThreshold {
+		if useMultipart(forceMultipart, fi.Size()) {
 			partMB, _ := cmd.Flags().GetInt("part-size-mb")
 			res, err = replaceMultipart(c, teamID, fileID, path, filename, mimeType, fi.Size(), int64(partMB)*1024*1024)
 		} else {
@@ -523,9 +580,10 @@ func replaceSinglePart(c *cmdContext, teamID, fileID, path, filename, mimeType s
 	return c.client.Action(c.ctx, http.MethodPost, replaceFinalizePath(teamID, fileID, repl.ID), nil)
 }
 
-// replaceMultipart runs the chunked replace flow: init → per-part → complete →
-// replace/finalize. There is no replace-multipart abort route, so a failure just
-// surfaces (the backend reaps the pending replacement).
+// replaceMultipart runs the chunked replace flow: init → per-part → terminal
+// complete, which relinks the file itself (no separate replace/finalize). There
+// is no replace-multipart abort route, so a failure just surfaces (the backend
+// reaps the pending replacement).
 func replaceMultipart(c *cmdContext, teamID, fileID, path, filename, mimeType string, size, partSize int64) (*client.Resource, error) {
 	repl, err := c.client.Create(c.ctx, replaceMultipartInitPath(teamID, fileID), map[string]any{
 		"original_filename": filename,
