@@ -51,6 +51,7 @@ var BlockNames = []string{
 	"section-types",
 	"section-templates",
 	"surface-templates",
+	"page-template-kinds",
 	"page-templates",
 	"row-variants",
 	"node-settings",
@@ -99,8 +100,8 @@ var BlockNames = []string{
 //	NOT COVERED — stated so the list above is not read as a blanket guarantee:
 //	  - the catalog outside nodeKinds/settingsSchema: templates[],
 //	    pageTemplates[], sectionTypes[], nestingRules, profiles. Those feed the id
-//	    lists and the surface-declaring set; a new FIELD on them is unused rather
-//	    than mis-documented.
+//	    lists, the surface-declaring set and the page-template outline/complete/
+//	    system split; a new FIELD on them is unused rather than mis-documented.
 //	  - the VALUES inside a rendered key (an enum member's spelling, a default's
 //	    type). Those flow through to the output, so the byte-comparison catches a
 //	    change; nothing asserts they are sane.
@@ -195,6 +196,8 @@ func Render(cat *catalog.Catalog) (map[string]string, error) {
 		pageTemplates = append(pageTemplates, t.ID)
 	}
 	out["page-templates"] = inlineList(pageTemplates)
+
+	out["page-template-kinds"] = renderPageTemplateKinds(cat.Meta.CatalogVersion, cat.PageTemplates)
 
 	rowTpl, ok := cat.TemplateByID("row")
 	if !ok {
@@ -648,6 +651,90 @@ func valuesCell(spec map[string]any) string {
 		return "—"
 	}
 	return strings.Join(parts, " · ")
+}
+
+// renderPageTemplateKinds splits the page templates three ways by reading each
+// recipe:
+//
+//   - a SYSTEM page has root children and none of them carries a section
+//     `template`. The hub routes these pages in code, and their root children
+//     are fixed regions, not sections: mio-hub's page-tree README ("The section
+//     contract") lists exactly these templates as its code-routed scaffolds.
+//     Copy on a system page is a region placeholder, so this test comes first.
+//   - an OUTLINE carries no copy (no node with a non-empty `value`): every
+//     value is the author's to write, and a templated section may arrive as a
+//     bare stub.
+//   - any other page is COMPLETE: finished sections with placeholder copy.
+//
+// The skill used to call every page template an outline, which was wrong for
+// page-sales. The first fix split them on copy alone, which filed
+// page-file-detail (three slot placeholders around a locked file-player) under
+// "finished sections" (blind review of #137). The block names the catalog
+// version, because the backend an agent scaffolds against may serve a
+// different set of templates.
+func renderPageTemplateKinds(version string, pages []catalog.Template) string {
+	var outlines, complete, system []string
+	for _, t := range pages {
+		switch {
+		case isSystemPage(t.Starter):
+			system = append(system, t.ID)
+		case nodeCarriesCopy(t.Starter):
+			complete = append(complete, t.ID)
+		default:
+			outlines = append(outlines, t.ID)
+		}
+	}
+	return "In catalog " + version + ", the one this binary embeds:\n\n" +
+		"Outlines — content pages with no copy on any node; you build and fill the sections:\n\n" + inlineList(outlines) +
+		"\nComplete — finished sections with placeholder copy; edit the values in place:\n\n" + inlineList(complete) +
+		"\nSystem pages — routed by the hub itself, with fixed regions instead of sections; fill in their values and add no sections:\n\n" + inlineList(system)
+}
+
+// isSystemPage reports whether a page starter has root children and none of
+// them carries a section `template` (a non-empty string). A root with no
+// children at all (page-generic) is a blank content page, not a system page.
+func isSystemPage(root map[string]any) bool {
+	kids, _ := root["children"].([]any)
+	if len(kids) == 0 {
+		return false
+	}
+	for _, k := range kids {
+		if child, ok := k.(map[string]any); ok {
+			if tpl, _ := child["template"].(string); tpl != "" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// nodeCarriesCopy reports whether node or any descendant has a `value` an
+// author would edit: present and not null, "", {} or [].
+func nodeCarriesCopy(node map[string]any) bool {
+	switch v := node["value"].(type) {
+	case nil:
+	case string:
+		if v != "" {
+			return true
+		}
+	case map[string]any:
+		if len(v) > 0 {
+			return true
+		}
+	case []any:
+		if len(v) > 0 {
+			return true
+		}
+	default:
+		return true
+	}
+	kids, _ := node["children"].([]any)
+	for _, k := range kids {
+		if child, ok := k.(map[string]any); ok && nodeCarriesCopy(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // inlineList renders ids as a wrapped `·`-separated backticked list.
