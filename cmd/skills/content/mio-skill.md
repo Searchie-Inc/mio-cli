@@ -31,7 +31,8 @@ mio config set current_team <team-uuid>   # a UUID (see 'mio teams list'); drop 
   V=$(mio pages tree get "$PAGE_ID" --jq .draft_version)  # 3 — numbers are unquoted either way
   ```
   Numeric captures (`draft_version`, counts) are safe without it; every string capture needs it.
-- **Exit codes (stable contract):** `0` ok · `1` error · `2` bad args (400/409/422) · `3` auth (401/403) · `4` not found · `5` needs `--yes` in a non-TTY · `6` rate limited (429) · `7` server (5xx). They are deliberately coarse; when you need the exact status the API returned (403 vs 401, 409 vs 422), read `errors[0].status` from the JSON:API envelope on stderr — it carries the real HTTP status verbatim, while `errors[0].meta.exit_code` echoes the coarse code (MIO-2656).
+- **Exit codes (stable contract):** `0` ok · `1` error · `2` bad args (400/409/422) · `3` auth (401/403) · `4` not found · `5` needs `--yes` in a non-TTY · `6` rate limited (429) · `7` server (5xx). They are deliberately coarse; when you need the exact status the API returned (403 vs 401, 409 vs 422), read `errors[0].status` from the JSON:API envelope on stderr — without `--raw` it carries the real HTTP status verbatim (under `--raw` it is the API body's own `status` member), while `errors[0].meta.exit_code` echoes the coarse code (MIO-2656).
+- **API error members are kept (MIO-3912):** on an API error the stderr envelope has one entry per API error object with every member the API sent — branch on `errors[].code` (the stable machine token), never on `detail` text, and quote `errors[0].meta.request_id` when reporting a backend failure (present when the API sent one — a few endpoints send no `meta`). `meta.exit_code` is added into the API's `meta`. `errors[0].detail` is the CLI's message (it may carry context or a `hint:`); add `--raw` to get the API's own error document on stderr instead, unchanged except for `meta.exit_code` on each error object and a `status` filled in where the API sent none. Failures with no JSON:API error body keep `{status, detail, meta.exit_code}`.
 - **Destructive ops** (`delete`/`cancel`/`refund`) require `--yes`/`-y` in a non-interactive shell or they exit `5`.
 - Info/hints print to **stderr**, so machine-readable stdout stays clean. `--jq .id` on a create gives you the new id for the next step.
 
@@ -69,7 +70,7 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   SAME command converges (deterministic idempotency key) instead of creating a
   second hub — but re-running the same `--name`/`--slug` after the backend's catalog
   pin moved, or with different override flags, exits `2` having applied **nothing**
-  (the message carries the literal token `[idempotency_fingerprint_mismatch]`); and any branding
+  (branch on `errors[0].code` = `idempotency_fingerprint_mismatch`; the CLI's message also carries `[idempotency_fingerprint_mismatch]`, but under `--raw` stderr has the API's own `detail`, without it); and any branding
   override (`--branding-json` or a palette flag like `--primary-color`, as in the
   example above), plus `--hub`, `--dry-run`, `--catalog`, or omitting `--name`/`--slug`,
   forces the client-side path — the op cannot express them (an empty or whitespace-only value for

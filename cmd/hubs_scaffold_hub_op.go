@@ -219,9 +219,12 @@ const hubOpFingerprintMismatch = "idempotency_fingerprint_mismatch"
 func hubOpError(err error) error {
 	if client.HasAPIErrorCode(err, hubOpFingerprintMismatch) {
 		// The CODE is named in the message on purpose. apiError.message() renders
-		// detail-over-code, so without this the machine-readable token never
-		// appears anywhere in the CLI's output — while the agent-facing docs tell
-		// agents to branch on exactly that token.
+		// detail-over-code, so without this the token is absent from the message
+		// — the TTY line and the default envelope's errors[0].detail — which
+		// v0.23.0-and-earlier agents branch on. Since MIO-3912 the envelope also
+		// carries it as errors[0].code (--raw included, where detail is the
+		// API's own and has no bracketed token); %w keeps the document that
+		// code comes from in the chain.
 		return errs.Wrap(errs.CodeOf(err), fmt.Errorf(
 			"%w ["+hubOpFingerprintMismatch+"] (this hub name+slug was already scaffolded from this template with a DIFFERENT request — "+
 				"the backend's catalog pin or your override flags have changed since. Nothing was applied. "+
