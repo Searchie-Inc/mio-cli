@@ -372,8 +372,17 @@ func TestMoreRowsNote_Wording(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := moreRowsNote(tc.cmd, tc.col); got != tc.want {
+			got := moreRowsNote(tc.cmd, tc.col)
+			if got != tc.want {
 				t.Errorf("moreRowsNote\n got: %q\nwant: %q", got, tc.want)
+			}
+			// Whatever the spelling, a suggested cursor must come back out of a
+			// real shell as the API's cursor, byte for byte.
+			if more, cursor := tc.col.NextPage(); more && cursor != "" && strings.Contains(got, "fetch the next page") {
+				words := followNote(t, got)
+				if len(words) != 2 || words[1] != cursor {
+					t.Errorf("through sh the suggestion gives argv %q; want the cursor %q intact", words, cursor)
+				}
 			}
 		})
 	}
