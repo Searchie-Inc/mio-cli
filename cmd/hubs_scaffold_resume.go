@@ -438,7 +438,8 @@ func stepBlobsFillGaps(sc *scaffoldContext, t *catalog.HubTemplate) error {
 // a fill-gaps PATCH. To fill one navigation bucket the run must send the hub's
 // other buckets back as they are (the API stores navigation whole), and the
 // API refuses EVERY navigation write while a type=page item points at a page
-// that is gone — page deletion does not cascade to the menu. The item it names
+// that is not one of this hub's active pages — typically a deleted one, since
+// page deletion does not cascade to the menu. The item it names
 // is then usually the hub's own, and re-running the printed "Resume with:"
 // command would only hit it again. Dropping it here would change a menu the
 // run reports as kept, so the run stops, and says where the item lives.
@@ -456,7 +457,7 @@ func explainKeptNavRejection(err error, hubID string, curNav map[string]any) err
 		return err
 	}
 	return errs.Wrap(errs.CodeOf(err), fmt.Errorf(
-		"%w — this run sent the hub's own navigation bucket(s) [%s] back unchanged alongside the one(s) it filled (the API stores navigation whole), and the API refuses every navigation write while a page item points at a page that no longer exists. If the item it names is in one of those buckets it is already on the hub's menu: remove it (`mio hubs navigation list %s`, then `mio hubs navigation remove %s <bucket> --index <n>`) and re-run",
+		"%w — this run sent the hub's own navigation bucket(s) [%s] back unchanged alongside the one(s) it filled (the API stores navigation whole), and the API refuses every navigation write while a page item points at a page that is not one of this hub's active pages (a deleted page, typically). If the item it names is in one of those buckets it is already on the hub's menu: remove it (`mio hubs navigation list %s`, then `mio hubs navigation remove %s <bucket> --index <n>`) and re-run",
 		err, strings.Join(kept, ", "), hubID, hubID))
 }
 
