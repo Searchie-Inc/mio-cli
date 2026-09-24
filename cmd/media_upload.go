@@ -131,7 +131,9 @@ func init() {
 	mediaFilesRegisterSyntheticCmd.Flags().String("title", "", "File title. Required.")
 	mediaFilesRegisterSyntheticCmd.Flags().String("asset-kind", "document", "Synthetic asset kind: document or pdf.")
 	mediaFilesRegisterSyntheticCmd.Flags().String("visibility", "", "Visibility: private, public, or unlisted.")
-	mediaFilesRegisterSyntheticCmd.Flags().String("mime-type", "", "Optional mime type.")
+	mediaFilesRegisterSyntheticCmd.Flags().String("mime-type", "",
+		"Mime type to store. Omitted, the endpoint stores application/octet-stream whatever --asset-kind "+
+			"says, so pass application/pdf with --asset-kind pdf.")
 	mediaFilesRegisterSyntheticCmd.Flags().String("original-filename", "", "Optional original filename.")
 	mediaFilesRegisterSyntheticCmd.Flags().String("description", "", "Optional description.")
 }
@@ -420,12 +422,15 @@ server-generated storage path — no upload/finalize/transcode. Mirrors the
 seeder's stub-document path; requires a team-owner key.
 
 --mime-type defaults to the endpoint's own application/octet-stream when
-omitted. For a placeholder text lesson (no real bytes — the body IS its
+omitted: the CLI sends no mime_type, and the endpoint does not derive one from
+--asset-kind. A pdf registered without --mime-type application/pdf is stored as
+a generic blob, which a consumer that reads mime_type does not recognise as a
+pdf. For a placeholder text lesson (no real bytes — the body IS its
 description), pass --mime-type text/markdown: that is the convention 'hub
 scaffold' uses for playlists[].documents[] template placeholders (MIO-3116),
 and mime_type is the field mime-keyed branches downstream (document viewers,
 transcode-wait checks) actually read.`,
-	Example: `  mio media files register-synthetic --title "Terms.pdf" --asset-kind pdf
+	Example: `  mio media files register-synthetic --title "Terms.pdf" --asset-kind pdf --mime-type application/pdf
   mio media files register-synthetic --title "Add your first lesson" --mime-type text/markdown --description "A placeholder lesson."`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
