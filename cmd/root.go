@@ -11,7 +11,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -177,7 +176,7 @@ var versionCmd = &cobra.Command{
 
 // cmdContext is the resolved per-invocation state a resource command needs. It
 // is built lazily by newContext so commands like `version`/`config` that don't
-// hit the API never touch the keychain.
+// hit the API never touch the credential store.
 type cmdContext struct {
 	ctx      context.Context
 	cfg      *config.Config
@@ -205,9 +204,10 @@ func newContext(cmd *cobra.Command) (*cmdContext, error) {
 		Profile:   flags.profile,
 	})
 	if err != nil {
-		// Legacy encrypted credentials → exit 3 (same as missing/invalid auth)
-		// so agents and CI handle it like any other auth failure.
-		if errors.Is(err, config.ErrLegacyCredentials) {
+		// A stored key that exists but cannot be used (legacy encryption, or a
+		// blob that does not decode) → exit 3, same as missing/invalid auth, so
+		// agents and CI handle it like any other auth failure (MIO-2995).
+		if config.StoredKeyUnusable(err) {
 			return nil, errs.Wrap(errs.ExitAuth, err)
 		}
 		return nil, errs.Wrap(errs.ExitGeneric, err)
@@ -252,10 +252,23 @@ func (c *cmdContext) requireAuth() error {
 		return nil
 	}
 	if c.resolved.APIKey == "" {
-		return errs.New(errs.ExitAuth,
-			"no API key found: set --api-key, export MIO_API_KEY, or run `mio login`")
+		return errNoAPIKey(c.resolved.KeyStore)
 	}
 	return nil
+}
+
+// errNoAPIKey is the exit-3 "no API key found" error. Its prefix is a stable
+// string agents and docs match on; after it comes the credential store the
+// lookup actually read (MIO-2995). The release binaries keep the key in a FILE
+// under the config dir, so a process whose XDG_CONFIG_HOME or HOME differs
+// from the one `mio login` ran in looks in another, empty store — without the
+// store in the message that reads as a flaky keychain.
+func errNoAPIKey(store *config.Store) error {
+	const msg = "no API key found: set --api-key, export MIO_API_KEY, or run `mio login`"
+	if store == nil {
+		return errs.New(errs.ExitAuth, msg)
+	}
+	return errs.New(errs.ExitAuth, "%s (%s)", msg, store.MissingKeyDetail())
 }
 
 // requireTeam returns the resolved team id, or a usage error if none can be

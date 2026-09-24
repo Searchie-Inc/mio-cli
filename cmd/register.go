@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -30,8 +29,8 @@ var registerCmd = &cobra.Command{
 
 Registration is unauthenticated — it does NOT require an existing API key. On
 success the backend provisions the account (and a personal team), and the CLI
-mints a "mio-cli@<host>" API key for that team and stores it in the OS keychain
-(file fallback when none is available), exactly like ` + "`mio login`" + `. Your
+mints a "mio-cli@<host>" API key for that team and stores it in the credential
+store (see 'mio login --help'), exactly like ` + "`mio login`" + `. Your
 password is never echoed or saved.
 
 Because it logs you in, register REPLACES any API key already stored — you end
@@ -67,10 +66,11 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 		TeamID:  flags.team,
 		Profile: flags.profile,
 	})
-	// A legacy-credentials error means the stale blob was cleared; that is
-	// irrelevant here since register mints a fresh key regardless. Any other
-	// resolution error is fatal.
-	if err != nil && !errors.Is(err, config.ErrLegacyCredentials) {
+	// A stored key that cannot be used (legacy or unreadable, left in place by
+	// the read and about to be overwritten) is irrelevant here since register
+	// mints and stores a fresh key regardless. Any other resolution error is
+	// fatal.
+	if err != nil && !config.StoredKeyUnusable(err) {
 		return errs.Wrap(errs.ExitGeneric, err)
 	}
 

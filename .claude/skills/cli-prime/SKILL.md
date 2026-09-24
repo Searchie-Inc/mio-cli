@@ -50,16 +50,21 @@ CI installs golangci-lint with `go install …@v2.12.2` rather than using a rele
 
 **Read these before writing a test result, a cross-repo claim, or a subagent brief.** Each one has already caused a wrong answer here.
 
-### 3.1 Two tests fail from *your own credentials*, not from a regression
+### 3.1 Your own credentials must not reach the tests (and since MIO-2995, they cannot)
 
-A bare `go test ./...` fails exactly twice on a clean tree:
+Before MIO-2995, a bare `go test ./...` failed exactly twice on any machine that had run `mio login`:
 
 ```
 --- FAIL: TestContract_ExitCodes_NoCredentials   contract_test.go: exit code = 4, want 3 (ExitAuth)
 --- FAIL: TestWiring_SingleHubAutoDefault        resolve_wiring_test.go: content path did not use the auto-defaulted hub
 ```
 
-Both read the developer's real `~/.config/mio/config.toml`. **Prefix with `XDG_CONFIG_HOME=$(mktemp -d)` and the full suite is green.** Verify before reporting either as a regression, and never "fix" them by changing the assertion.
+Both read the developer's real `~/.config/mio`, and the first sent the stored key to the production default API base. MIO-2995 gave `cmd` a `TestMain` (`cmd/main_test.go`) that moves `HOME`, `USERPROFILE` and `XDG_CONFIG_HOME` to temp dirs and pins the keyring to the file backend under them, and refuses to run the package if any of that did not take (`TestMain_IsolatesEveryUserStore` reports the same checks). So:
+
+- **On a tree that has that `TestMain`, a bare `go test ./...` is green.** A break its checks detect does not fail these two tests: the `cmd` package fails with a `TestMain: refusing to run: …` header on stderr followed by one `  - <problem>` line per problem, and no test runs. If these two tests fail BY NAME there, the isolation broke in a way the checks do not cover. That is a regression to chase, not something to wave off as environmental.
+- **On a branch cut before MIO-2995** (no `TestMain` in `cmd/main_test.go`), the old hazard stands: the two failures are your credentials. Prefix with `XDG_CONFIG_HOME=$(mktemp -d)` and they are green.
+
+Either way, never "fix" them by changing the assertion. The gate command keeps the `XDG_CONFIG_HOME` prefix: it costs nothing, and it covers older branches.
 
 ### 3.2 Never write to `~/.config/mio/`
 
@@ -185,4 +190,4 @@ Conventions: file CLI work under component **CLI V1** (id `10257`) and parent it
 
 ## 9. Then summarize
 
-Report: branch and open PRs · gate status (naming any failure and whether it is 3.1) · catalog pin versus backend `origin/main` · unreleased commits · open CLI V1 tickets worth picking up · anything in sections 3–5 that is currently in an unexpected state.
+Report: branch and open PRs · gate status (naming any failure, and whether it is the pre-MIO-2995 credential leak of 3.1 or a regression of its isolation) · catalog pin versus backend `origin/main` · unreleased commits · open CLI V1 tickets worth picking up · anything in sections 3–5 that is currently in an unexpected state.

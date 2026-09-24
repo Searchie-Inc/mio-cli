@@ -11,7 +11,7 @@ package cmd
 //   - the active hub id + display name
 //   - the API base URL
 //   - the active config profile
-//   - where the API key was resolved from (flag / env / keychain)
+//   - where the API key was resolved from (flag / env / the credential store)
 //
 // Off a TTY it renders JSON by default (respecting --output), so agents can
 // parse it; on a TTY it renders a friendly key/value table.
@@ -60,7 +60,7 @@ This is the canonical "did my setup work?" command. Off a TTY it prints JSON
 		info := map[string]any{
 			"api_base":   c.resolved.APIBase,
 			"profile":    flags.profile,
-			"key_source": keySource(),
+			"key_source": keySource(c.resolved),
 			"hub_id":     c.resolved.HubID,
 		}
 
@@ -86,10 +86,10 @@ This is the canonical "did my setup work?" command. Off a TTY it prints JSON
 		// env), the key carries its own team identity. Use the team_id from the
 		// /api/auth/me response as the authoritative team for this invocation,
 		// ignoring whatever current_team is stored in the config file.
-		// When using a keychain key (no explicit override), fall back to the
+		// When using a stored key (no explicit override), fall back to the
 		// resolved config team id as before.
 		teamID := c.resolved.TeamID
-		if ks := keySource(); ks == "flag (--api-key)" || ks == "env ("+config.EnvAPIKey+")" {
+		if ks := keySource(c.resolved); ks == "flag (--api-key)" || ks == "env ("+config.EnvAPIKey+")" {
 			// Prefer the team_id the server reports for this key over config.
 			if v, ok := me["team_id"].(string); ok && v != "" {
 				teamID = v
@@ -119,13 +119,19 @@ This is the canonical "did my setup work?" command. Off a TTY it prints JSON
 }
 
 // keySource reports where the resolved API key came from, mirroring the
-// precedence in config.Resolve (flag > env > keychain). It does NOT print the
-// key itself — only its origin — so whoami output is safe to share.
-func keySource() string {
+// precedence in config.Resolve (flag > env > stored key). It does NOT print
+// the key itself — only its origin — so whoami output is safe to share.
+//
+// A stored key is named by the store Resolve actually read it from (MIO-2995):
+// "keychain" only for the macOS Keychain, "file keyring (<path>)" for the
+// encrypted file every release macOS binary uses, and so on. It used to say
+// "keychain" for all of them, and re-read the store to decide — a second read
+// that could disagree with the one whose key is being sent.
+func keySource(r config.Resolved) string {
 	if flags.apiKey != "" {
 		return "flag (--api-key)"
 	}
-	// --anonymous skips the env + keychain fallbacks in config.Resolve, so
+	// --anonymous skips the env + stored-key fallbacks in config.Resolve, so
 	// reporting either of them here would name a key that is NOT being sent —
 	// exactly the kind of misreporting MIO-2694 is about. An explicit --api-key
 	// still wins, which is why it is checked first.
@@ -135,8 +141,8 @@ func keySource() string {
 	if os.Getenv(config.EnvAPIKey) != "" {
 		return "env (" + config.EnvAPIKey + ")"
 	}
-	if key, err := config.GetAPIKey(); err == nil && key != "" {
-		return "keychain"
+	if r.APIKey != "" && r.KeyStore != nil {
+		return r.KeyStore.Label()
 	}
 	return "none"
 }

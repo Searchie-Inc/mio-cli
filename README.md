@@ -148,7 +148,7 @@ rather than version skew.
 # 1. Install (see above) — e.g. the curl one-liner.
 
 # 2. Authenticate (pick one)
-mio login                              # interactive — stores a key in your OS keychain
+mio login                              # interactive — stores a key (see "Where the key is stored")
 # …or, for scripts / CI / agents:
 export MIO_API_KEY=mio_sk_live_xxxxx   # no login step needed
 
@@ -174,7 +174,27 @@ Run `mio login` and choose one of two paths:
 1. **Paste an existing API key** — a `mio_sk_live_…` key, validated against the API and stored.
 2. **Email + password** — logs you in (JWT), then auto-mints an API key named `mio-cli@<host>` on your team and stores it. **Your password is never saved** — only the minted key is kept.
 
-The key is stored in your **OS keychain** (with an encrypted-file fallback on headless/CI environments where no keychain is available). `mio logout` deletes it.
+`mio logout` deletes the stored key.
+
+#### Where the key is stored
+
+| build | store |
+|---|---|
+| Release binaries on **macOS** (and Linux without a desktop keyring) | encrypted file `$XDG_CONFIG_HOME/mio/keyring/api-key` (else `~/.config/mio/keyring/api-key`), unlocked by `file-keyring.key` one level up, in the `mio` config dir (`$XDG_CONFIG_HOME/mio/file-keyring.key`). The release binaries are built without cgo, so **on macOS they never use the Keychain** |
+| Linux with a Secret Service or KWallet on the D-Bus session bus | that keyring |
+| Windows | Credential Manager |
+| macOS, compiled from source with cgo | the macOS Keychain |
+
+`mio whoami` names the store in use as `key_source` (`file keyring (<path>)`, `keychain`, `secret service`, `kwallet`, `wincred`). The file store lives under the config dir, so a shell whose `XDG_CONFIG_HOME` or `HOME` differs reads a different, empty store — the `no API key found` error (exit 3) names the store it read.
+
+To hand the stored key to a script or agent session once, instead of every command reading the store:
+
+```sh
+MIO_API_KEY="$(mio auth token)"   # prints only the stored key; exit 3 and empty stdout when none is stored
+export MIO_API_KEY                # a separate statement: export MIO_API_KEY="$(…)" returns 0 and hides that exit 3 from set -e
+```
+
+`mio auth token` lands in the release after `v0.22.0`.
 
 ### `mio register` (create an account)
 
@@ -205,7 +225,7 @@ export MIO_API_KEY=mio_sk_live_xxxxx
 The key is read in this order (first match wins):
 
 ```
---api-key <key>   →   MIO_API_KEY env   →   key stored in the OS keychain
+--api-key <key>   →   MIO_API_KEY env   →   key stored by `mio login`
 ```
 
 ### Pointing at a non-production backend
@@ -355,7 +375,7 @@ Every command inherits these flags.
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--api-key` | | env/keychain | API key. Overrides `MIO_API_KEY` and the stored key. |
+| `--api-key` | | env/stored key | API key. Overrides `MIO_API_KEY` and the stored key. |
 | `--anonymous` | | false | Ignore `MIO_API_KEY` and the stored key; send the request with no `Authorization` header and let the API answer (diagnostics). An explicit `--api-key` still wins. |
 | `--team` | | config | Team ID for team-scoped resources. |
 | `--hub` | | config | Hub ID for hub-scoped resources. |
@@ -423,6 +443,7 @@ Scripts and agents can branch on these stable codes.
 | `login` / `logout` | Interactive auth |
 | `register` | Create a new account (email + password, optional first/last name) and auto-login — interactive, or headless via `--email`/`--password` (or `MIO_EMAIL`/`MIO_PASSWORD`). Replaces any stored key. |
 | `whoami` | Print resolved identity — user, team, hub, api-base, profile, key source |
+| `auth` | `token` — print the stored API key to stdout (`MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY`); exit 3 with empty stdout when none is stored |
 | `config` | `set`, `get`, `list` |
 | `api-keys` | `create`, `list`, `retrieve`, `delete` |
 | `teams` | `create`, `list`, `retrieve`, `update`, `delete`, `switch` (server-side switch + updates local context); `members list/add/remove` |
@@ -457,7 +478,7 @@ Run `mio <resource> --help` or `mio <resource> <action> --help` for flag details
 
 ## Config File
 
-`mio` stores its config as **TOML** at `~/.config/mio/config.toml` (or `$XDG_CONFIG_HOME/mio/config.toml` when `XDG_CONFIG_HOME` is set). It holds non-secret context only — current team/hub, API base, and named profiles. **Your API key is never written here**; it lives in the OS keychain (managed by `mio login` / `mio logout`).
+`mio` stores its config as **TOML** at `~/.config/mio/config.toml` (or `$XDG_CONFIG_HOME/mio/config.toml` when `XDG_CONFIG_HOME` is set). It holds non-secret context only — current team/hub, API base, and named profiles. **Your API key is never written here**; it lives in the credential store managed by `mio login` / `mio logout` — for the release macOS binaries an encrypted file under this same `mio` directory (see [Where the key is stored](#where-the-key-is-stored)).
 
 Manage it with the `config` command (writable keys: `current_team`, `current_hub`, `api_base`). Values are validated at the setter — `current_team`/`current_hub` must be a UUID and `api_base` must be an `http(s)` URL, so a typo is rejected here (exit 2) instead of failing later on an unrelated command:
 
