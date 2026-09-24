@@ -27,9 +27,13 @@ const globalContactIDHint = "this verb needs the GLOBAL contact id: use the .att
 // the divergent backend 404 messages across these surfaces. The original exit
 // code is preserved, so the exit-code contract is unchanged. Any other error
 // (or nil) passes through untouched.
+//
+// The hint WRAPS err (%w) rather than re-formatting its message into a new
+// string, so the API's error document stays in the chain and the stderr
+// envelope keeps its code, title and meta.request_id (MIO-3912).
 func hintGlobalContactID(err error) error {
 	if err == nil || errs.CodeOf(err) != errs.ExitNotFound {
 		return err
 	}
-	return errs.New(errs.ExitNotFound, "%s\nhint: %s", err.Error(), globalContactIDHint)
+	return errs.New(errs.ExitNotFound, "%w\nhint: %s", err, globalContactIDHint)
 }

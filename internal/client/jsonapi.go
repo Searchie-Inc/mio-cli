@@ -220,7 +220,7 @@ func DecodeResource(body []byte) (*Resource, error) {
 		return nil, fmt.Errorf("decode resource: %w", err)
 	}
 	if len(doc.Errors) > 0 {
-		return nil, &apiErrorList{Errors: doc.Errors}
+		return nil, newAPIErrorList(doc.Errors, body)
 	}
 	if doc.Data == nil {
 		return nil, fmt.Errorf("decode resource: response had no `data` member")
@@ -240,7 +240,7 @@ func DecodeCollection(body []byte) (*Collection, error) {
 		return nil, fmt.Errorf("decode collection: %w", err)
 	}
 	if len(doc.Errors) > 0 {
-		return nil, &apiErrorList{Errors: doc.Errors}
+		return nil, newAPIErrorList(doc.Errors, body)
 	}
 
 	// Retain the original envelope bytes so --raw can preserve top-level

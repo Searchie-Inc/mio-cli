@@ -33,9 +33,11 @@ mio config set current_team <team-uuid>   # a UUID (see 'mio teams list'); drop 
   Numeric captures (`draft_version`, counts) are safe without it; every string capture needs it.
   A `--jq` that yields several scalars prints **one bare value per line** under `-o plain`, whatever the count, and nothing when it yields none (objects stay `key=value` blocks; a string holding a newline prints verbatim and spans lines, so use `-o json` for those): `mio products list -o plain --jq '.[].id' | while read -r id; do …; done` (MIO-4174).
 - **A list returns one page (usually 20 rows).** When the API reports more (or, on `checkout orders|subscriptions|payments|webhooks list`, which report nothing, when a page comes back full), a one-line `note:` on **stderr** names the flag and cursor for the next page: `--after <cursor>` (`--page-after` on `segments search`; `--limit` on `media search`, which returns no cursor); a cursor a shell would split is single-quoted, so the suggestion pastes as-is. stdout stays the bare array. Before concluding a record doesn't exist, check stderr for that note (MIO-4174).
-- **Exit codes (stable contract):** `0` ok · `1` error · `2` bad args (400/409/422) · `3` auth (401/403) · `4` not found · `5` needs `--yes` in a non-TTY · `6` rate limited (429) · `7` server (5xx). They are deliberately coarse; when you need the exact status the API returned (403 vs 401, 409 vs 422), read `errors[0].status` from the JSON:API envelope on stderr — it carries the real HTTP status verbatim, while `errors[0].meta.exit_code` echoes the coarse code (MIO-2656).
+- **Exit codes (stable contract):** `0` ok · `1` error · `2` bad args (400/409/422) · `3` auth (401/403) · `4` not found · `5` needs `--yes` in a non-TTY · `6` rate limited (429) · `7` server (5xx). They are deliberately coarse; when you need the exact status the API returned (403 vs 401, 409 vs 422), read `errors[0].status` from the JSON:API envelope on stderr — without `--raw` it carries the real HTTP status verbatim (under `--raw` it is the API body's own `status` member), while `errors[0].meta.exit_code` echoes the coarse code (MIO-2656).
+- **API error members are kept (MIO-3912):** on an API error the stderr envelope has one entry per API error object with every member the API sent — branch on `errors[].code` (the stable machine token), never on `detail` text, and quote `errors[0].meta.request_id` when reporting a backend failure (present when the API sent one — a few endpoints send no `meta`). `meta.exit_code` is added into the API's `meta`. `errors[0].detail` is the CLI's message (it may carry context or a `hint:`); add `--raw` to get the API's own error document on stderr instead, unchanged except for `meta.exit_code` on each error object and a `status` filled in where the API sent none. Failures with no JSON:API error body keep `{status, detail, meta.exit_code}`.
 - **Destructive ops** (`delete`/`cancel`/`refund`) require `--yes`/`-y` in a non-interactive shell or they exit `5`.
 - Info/hints print to **stderr**, so machine-readable stdout stays clean. `--jq .id` on a create gives you the new id for the next step.
+- **This skill is a snapshot of the binary that wrote it.** Its frontmatter's `x-mio-skill-version` should match `mio version`; when it is older, verbs and templates the binary has are missing from it. `mio update` refreshes the user-level copy and the project copies (`./.claude/skills/mio/SKILL.md`, `./.codex/skills/mio/SKILL.md`) of the directory it runs in, and no others: refresh another project's copy from its directory with `mio skills install --project --target <claude|codex>`.
 
 ## Start here: `mio hubs scaffold` (one command, whole hub)
 
@@ -71,7 +73,7 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   SAME command converges (deterministic idempotency key) instead of creating a
   second hub — but re-running the same `--name`/`--slug` after the backend's catalog
   pin moved, or with different override flags, exits `2` having applied **nothing**
-  (the message carries the literal token `[idempotency_fingerprint_mismatch]`); and any branding
+  (branch on `errors[0].code` = `idempotency_fingerprint_mismatch`; the CLI's message also carries `[idempotency_fingerprint_mismatch]`, but under `--raw` stderr has the API's own `detail`, without it); and any branding
   override (`--branding-json` or a palette flag like `--primary-color`, as in the
   example above), plus `--hub`, `--dry-run`, `--catalog`, or omitting `--name`/`--slug`,
   forces the client-side path — the op cannot express them (an empty or whitespace-only value for
@@ -145,8 +147,10 @@ hub-frontend host yourself.
 
 Branding / settings / meta are opaque JSONB blobs. The `--branding-json` /
 `--settings-json` / `--meta-json` flags **merge** (read-modify-write, so a partial
-edit never clobbers siblings) and **validate keys** (unknown key warns and is still
-sent; add `--strict-keys` to make it a hard error instead).
+edit never clobbers siblings) and **validate keys** (an unknown branding or meta key
+warns and is still sent — the API stores it as sent, so a typo does nothing; add
+`--strict-keys` to make it a hard error instead). An unknown top-level settings key
+is the API's to reject: a 422 naming it, exit 2, with or without `--strict-keys`.
 
 ```bash
 mio hubs update hub_abc123 \
@@ -209,12 +213,11 @@ theme key.
   **viewer's** `mio-hub-theme` cookie (default `'system'`) and their OS
   `prefers-color-scheme`. The hub's own mode is consulted for exactly one value:
   `custom`. Writing `light` or `dark` anywhere is a **no-op** — the viewer decides.
-- **There is no `settings.theme` key either.** Writing one is a silent no-op; the
+- **There is no `settings.theme` key either.** The API rejects one (422, exit 2); the
   frontend's parsed `theme.mode` is *derived* from `settings.background.type`, and
   nothing reads a raw `settings.theme`.
 - **`custom` is the one thing a hub can force**, via `settings.background.type`
-  (`background` is already on the CLI's settings-key allowlist, so this needs no
-  warning suppression). It is also the **only** mode in which `branding.background`
+  (`background` is an accepted settings key). It is also the **only** mode in which `branding.background`
   and `branding.text` do anything at all:
 
   ```bash

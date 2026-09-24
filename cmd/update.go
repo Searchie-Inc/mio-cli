@@ -38,7 +38,13 @@ release, or --prefix to install into a different directory.
 
 macOS and Linux re-run the official release installer. Windows updates natively
 (download, SHA-256 verify against checksums.txt, then swap the .exe), so no Unix
-shell and no curl are required.`,
+shell and no curl are required.
+
+After a successful update the NEW binary refreshes any unmodified mio agent
+skill: the user-level copy (~/.claude, $CODEX_HOME), and the project-level
+copies in the CURRENT directory only (./.claude, ./.codex) — run 'mio update'
+from a project to refresh its copy. A hand-edited copy is never overwritten;
+stderr names it and the exact 'mio skills install' command that updates it.`,
 	Example: `  mio update
   mio update --version 0.2.1
   mio update --prefix "$HOME/.local/bin"`,
@@ -70,7 +76,7 @@ shell and no curl are required.`,
 		// The refresh is delegated to the binary we just installed — this
 		// process still holds the OLD embedded skill body and cannot render the
 		// new one (MIO-2874). Best-effort: never fails the update.
-		refreshManagedSkills(cmd.OutOrStdout(), installedBinaryPath(opts.Prefix))
+		refreshManagedSkills(cmd.OutOrStdout(), cmd.ErrOrStderr(), installedBinaryPath(opts.Prefix))
 		return nil
 	},
 }

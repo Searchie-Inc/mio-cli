@@ -293,9 +293,12 @@ func stepHub(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 // no double application. The template has no `meta` blob (the catalog
 // hubTemplates[] schema carries no Meta field), so none is sent.
 //
-// It runs in STRICT key mode (a bad template branding/settings key ERRORS, not
-// warns — the whole point of the feature is that a malformed template is caught,
-// not silently dropped) and passes SlugKnown:true with the hub's own slug so the
+// It runs in STRICT key mode (a bad template branding key, or settings.
+// achievements sub-key, ERRORS, not warns — the whole point of the feature is
+// that a malformed template is caught, not silently dropped; every other
+// settings key is left to the API, which 422s an unknown top-level key or
+// policies/registration/email/auth sub-key, MIO-4171) and passes
+// SlugKnown:true with the hub's own slug so the
 // navigation href validator scopes links to THIS hub. Navigation is carried ONLY
 // via blobPatches.Navigation (the seam's single nav source); applyHubBlobs
 // validates its hub-scoped hrefs and injects it into the PATCH itself.
