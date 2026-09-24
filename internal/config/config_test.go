@@ -11,10 +11,20 @@ import (
 
 // withXDG points config storage at a temp dir for the duration of the test and
 // clears the auth env vars so resolution is deterministic.
+//
+// It also points HOME (and USERPROFILE) at a second temp dir. Every path this
+// package derives goes through XDG_CONFIG_HOME first, so HOME should never be
+// consulted here — but a bug that derived a path from HOME anyway would
+// otherwise read or WRITE the developer's real ~/.config/mio. That is not
+// hypothetical: during MIO-2995's mutation run, a store path derived from
+// $HOME made SetAPIKey replace the real ~/.config/mio/keyring/api-key.
 func withXDG(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv(EnvAPIKey, "")
 	t.Setenv(EnvAPIBase, "")
 	return dir
@@ -433,7 +443,8 @@ func TestKeyring_DeleteRemovesKey(t *testing.T) {
 
 // TestKeyring_LegacyHardcodedPassphraseInvalidated verifies that a keyring file
 // encrypted with the old hardcoded passphrase produces an error that tells the
-// user to re-login, and that the stale file is removed so the next login works.
+// user to re-login, and that the next login's write replaces it. (The read
+// leaves the file in place; see TestLegacyBlob_EveryReadReportsItAndLeavesItInPlace.)
 func TestKeyring_LegacyHardcodedPassphraseInvalidated(t *testing.T) {
 	withXDG(t)
 	// Force file backend only so this test is deterministic (no OS keychain).
@@ -454,8 +465,8 @@ func TestKeyring_LegacyHardcodedPassphraseInvalidated(t *testing.T) {
 	// decrypted with the hardcoded passphrase again), and must return an error
 	// whose message tells the user to re-login.
 	//
-	// After this call the stale file should be deleted so a subsequent SetAPIKey
-	// works without error.
+	// The stale file stays where it is; a subsequent SetAPIKey (login) must
+	// replace it without error.
 	_, err = GetAPIKey()
 	if err == nil {
 		t.Fatal("expected an error for legacy-encrypted keyring, got nil — hardcoded passphrase still in use!")
@@ -464,9 +475,9 @@ func TestKeyring_LegacyHardcodedPassphraseInvalidated(t *testing.T) {
 		t.Errorf("error message should mention re-login, got: %v", err)
 	}
 
-	// After invalidation, writing and reading a fresh key must succeed.
+	// Writing over the legacy blob and reading the fresh key back must succeed.
 	if err := SetAPIKey("mio_sk_fresh_key"); err != nil {
-		t.Fatalf("SetAPIKey after invalidation: %v", err)
+		t.Fatalf("SetAPIKey over the legacy blob: %v", err)
 	}
 	got, err := GetAPIKey()
 	if err != nil {

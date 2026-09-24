@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -161,7 +160,10 @@ Resolution order:
        (b) email + password → the CLI mints a key named "mio-cli@<host>"
            on your team and stores it (your password is never saved).
 
-The key is stored in the OS keychain (file fallback when none is available).
+The key is stored in an OS credential store when this build can open one,
+otherwise in an encrypted file under the config dir — always the file for the
+macOS release binaries, which are built without the Keychain backend. 'mio
+whoami' names the store as key_source; 'mio auth token' prints the stored key.
 Off a TTY with no resolvable key or credentials, login exits with code 3.`,
 	Args: cobra.NoArgs,
 	RunE: runLogin,
@@ -192,14 +194,16 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		Profile: flags.profile,
 	})
 	if err != nil {
-		if errors.Is(err, config.ErrLegacyCredentials) {
-			// The stale blob has already been deleted; resolved is populated with
-			// APIBase/TeamID but no key.  Inform the user once and fall through to
-			// the interactive login prompt as if no key was stored.
-			fmt.Fprintln(cmd.ErrOrStderr(), "Note: your stored credentials used an old format and have been cleared. Please log in again.")
-		} else {
+		// A stored blob that exists but cannot be used — legacy (v0.1)
+		// encryption, or one that does not decode — is left in place by the
+		// read, and logging in replaces it (MIO-2995). resolved still carries
+		// APIBase/TeamID, so fall through as if no key was stored. An
+		// unreadable blob used to abort login with exit 1, leaving no way out
+		// but deleting the file by hand.
+		if !config.StoredKeyUnusable(err) {
 			return errs.Wrap(errs.ExitGeneric, err)
 		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "Note: %v\nLogging in will replace it.\n", err)
 	}
 
 	// Path 1: env / flag key — validate and store.
@@ -302,7 +306,7 @@ func loginPassword(cmd *cobra.Command, reader *bufio.Reader, apiBase, teamID str
 }
 
 // mintAndStore resolves the team for the given JWT access token, mints a
-// "mio-cli@<host>" API key, stores it in the OS keychain, persists the resolved
+// "mio-cli@<host>" API key, stores it in the credential store, persists the resolved
 // team to config, and returns a human display string for the team ("Name (id)"
 // or the bare id when the name is unknown). It is the shared tail of every
 // password→key flow — `login` (interactive + headless) and `register` — which
@@ -360,7 +364,8 @@ func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamI
 }
 
 // validateAndStore validates a key against /api/auth/me and, on success, stores
-// it in the keychain.
+// it in the credential store. It never reads the stored key first, which is
+// why `MIO_API_KEY=<key> mio login` can replace a blob mio cannot read.
 func validateAndStore(cmd *cobra.Command, apiBase, key string) error {
 	cli := client.New(apiBase, key, client.WithDebug(flags.debug))
 	if _, err := cli.Me(cmd.Context()); err != nil {

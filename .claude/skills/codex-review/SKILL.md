@@ -166,7 +166,7 @@ golangci-lint run ./...   # 0 issues (v2.12.2 — same as CI)
 XDG_CONFIG_HOME=$(mktemp -d) go test ./... -race -timeout 120s
 ```
 
-**Without `XDG_CONFIG_HOME`, two tests fail from the developer's real credentials** — `TestContract_ExitCodes_NoCredentials` and `TestWiring_SingleHubAutoDefault`. They are environmental, not regressions. Do not "fix those first" and above all do not change their assertions; isolate and they are green. See `cli-prime` §3.1.
+**`TestContract_ExitCodes_NoCredentials` and `TestWiring_SingleHubAutoDefault` failing means different things on different trees.** On a branch cut before MIO-2995 (no `TestMain` in `cmd/main_test.go`) a run without `XDG_CONFIG_HOME` fails them from the developer's real credentials: that is environmental, and isolating makes them green. On a tree WITH that `TestMain` the `cmd` tests isolate themselves. A break its checks catch shows as `TestMain: refusing to run: …` with no test run at all, so the same two tests failing by name is a regression of that isolation that the checks miss. Either way, do not change their assertions. See `cli-prime` §3.1.
 
 Then collect: `git log <base>..HEAD --oneline`, `git diff <base>...HEAD --stat`, `git diff --name-only <base>...HEAD`, and the pass count.
 
@@ -322,7 +322,7 @@ This is currently the operative path — the workspace has been out of credits, 
 - The **diff** and the commit range.
 - The **primary sources** it needs to check claims against — the relevant `mio-backend` route/serializer on `origin/main`, the catalog schema, the mio-hub consumption site. Tell it to `git fetch origin` first and read `origin/main`, never the working tree.
 - The **repo conventions** block from this skill, and the exit-code contract.
-- The **environmental hazards** — point it at `.claude/skills/cli-prime/SKILL.md` §3 rather than restating them. In particular: the two credential-leak test failures, and that it must never write to `~/.config/mio/` (isolate with `XDG_CONFIG_HOME=$(mktemp -d)`).
+- The **environmental hazards** — point it at `.claude/skills/cli-prime/SKILL.md` §3 rather than restating them. In particular: the two credential-leak test failures (environmental only on a branch cut before MIO-2995, a regression after it), and that it must never write to `~/.config/mio/` (isolate with `XDG_CONFIG_HOME=$(mktemp -d)`).
 
 ### What the reviewer must NOT get
 

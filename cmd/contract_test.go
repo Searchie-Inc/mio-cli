@@ -44,9 +44,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/99designs/keyring"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
@@ -262,20 +265,108 @@ func indexContaining(lines []string, substr string) int {
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	bin := dir + "/mio"
+	bin := filepath.Join(dir, "mio")
+	if runtime.GOOS == "windows" {
+		bin += ".exe" // exec.Command will not run an extensionless file there
+	}
 
-	moduleRoot, err := os.Getwd()
+	// go test runs in the package dir, cmd/; the module root is its parent.
+	cmdDir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	moduleRoot = strings.TrimSuffix(moduleRoot, "/cmd")
+	moduleRoot := filepath.Dir(cmdDir)
 
-	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd := exec.Command("go", "build", "-tags", childKeyringTag, "-o", bin, ".")
 	cmd.Dir = moduleRoot
 	if out, buildErr := cmd.CombinedOutput(); buildErr != nil {
 		t.Fatalf("build failed: %v\n%s", buildErr, out)
 	}
+	requireChildOnFileKeyring(t, bin)
 	return bin
+}
+
+// childKeyringTag is the build tag that compiles cmd/childbinary_keyring.go
+// into a mio binary a test runs as a child process: it pins that binary to
+// the encrypted file keyring and adds the hidden childBackendsCmd reporting
+// the backends it may open. Release and plain `go build` binaries never
+// carry it.
+const (
+	childKeyringTag  = "mio_test_file_keyring"
+	childBackendsCmd = "__test-keyring-backends"
+)
+
+// requireChildOnFileKeyring fails the test unless the child binary at bin may
+// open ONLY the file keyring. TestMain's config.UseFileBackendOnly pins this
+// test process, but a child is a fresh process with the default backend list:
+// on a macOS cgo build, on Windows, or on a Linux desktop it would read the
+// developer's real Keychain, Credential Manager or Secret Service whatever HOME
+// runBinary gives it, because none of those stores is found through HOME (the
+// Secret Service's session bus is found from the uid, /run/user/<uid>/bus).
+// TestContract_ErrorEnvelope_Shape runs the child with no MIO_API_KEY and the
+// production default API base, so it would send that key there.
+//
+// The child's own list is the oracle, not the build command: a runner with no
+// OS store falls back to the file keyring whether or not the child is pinned,
+// so no behaviour of the child tells the two apart there.
+func requireChildOnFileKeyring(t *testing.T, bin string) {
+	t.Helper()
+	probe := exec.Command(bin, childBackendsCmd)
+	probe.Env = childBaseEnv(t.TempDir())
+	var stdout, stderr bytes.Buffer
+	probe.Stdout, probe.Stderr = &stdout, &stderr
+	if err := probe.Run(); err != nil {
+		t.Fatalf("the child mio binary cannot report its keyring backends (%v; is it built with -tags %s?): "+
+			"unpinned, a child reads the developer's real OS credential store. stderr=%q", err, childKeyringTag, stderr.String())
+	}
+	var backends []string
+	if err := json.Unmarshal(stdout.Bytes(), &backends); err != nil || len(backends) != 1 || backends[0] != string(keyring.FileBackend) {
+		t.Fatalf("the child mio binary may open keyring backends %s (%v), want only [%q]: "+
+			"it would read the developer's real Keychain, Credential Manager or Secret Service", strings.TrimSpace(stdout.String()), err, keyring.FileBackend)
+	}
+}
+
+// TestBuildBinary_ChildReadsOnlyAnIsolatedFileKeyring: the child binary every
+// subprocess test runs may open only the file keyring (checked inside
+// buildBinary itself, so no test can run an unpinned child), and the store it
+// actually reads is the file under the temp home runBinary gives it.
+func TestBuildBinary_ChildReadsOnlyAnIsolatedFileKeyring(t *testing.T) {
+	bin := buildBinary(t)
+	requireChildOnFileKeyring(t, bin)
+
+	stdout, stderr, code := runBinary(t, bin, nil, "auth", "token")
+	if code != errs.ExitAuth || stdout != "" {
+		t.Fatalf("auth token with nothing stored: exit %d, stdout %q; want exit %d and no stdout. stderr=%q", code, stdout, errs.ExitAuth, stderr)
+	}
+	var envelope struct {
+		Errors []struct {
+			Detail string `json:"detail"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || len(envelope.Errors) == 0 {
+		t.Fatalf("auth token stderr is not a JSON:API error envelope (%v): %q", err, stderr)
+	}
+	detail := envelope.Errors[0].Detail
+	homeVar := "HOME" // the variable os.UserHomeDir reads, which configDir names
+	if runtime.GOOS == "windows" {
+		homeVar = "USERPROFILE"
+	}
+	want := "the file keyring at " + os.TempDir()
+	if !strings.Contains(detail, want) || !strings.Contains(detail, "config dir from $"+homeVar+"; XDG_CONFIG_HOME is unset") {
+		t.Errorf("the child did not read a file keyring under the temp $%s runBinary gives it; want %q in %q", homeVar, want, detail)
+	}
+}
+
+// childBaseEnv is the environment every child mio starts from: PATH, and home
+// pointing at home under every name os.UserHomeDir reads (HOME on Unix,
+// USERPROFILE on Windows), so the child's config dir and file keyring resolve
+// under home on every platform. XDG_CONFIG_HOME is left unset.
+func childBaseEnv(home string) []string {
+	return []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + home,
+		"USERPROFILE=" + home,
+	}
 }
 
 // runBinary executes the compiled mio binary with the given env vars and args,
@@ -283,10 +374,7 @@ func buildBinary(t *testing.T) string {
 func runBinary(t *testing.T, bin string, envPairs []string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 
-	env := []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + t.TempDir(), // isolate config files
-	}
+	env := childBaseEnv(t.TempDir()) // isolate config files and the file keyring
 	for _, kv := range envPairs {
 		k, v, _ := strings.Cut(kv, "=")
 		if v != "" {

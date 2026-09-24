@@ -57,13 +57,19 @@ plain JSON.
 
 ---
 
-## auth (handled by login.go / register.go, not resource commands)
+## auth (handled by login.go / register.go / auth.go, not resource commands)
+- `mio auth token` (`cmd/auth.go`, MIO-2995) makes NO request: it prints the key
+  `login`/`register` stored (`config.LoadAPIKey`) to stdout for
+  `MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY` (two statements, so
+  `set -e` sees the exit); exit 3 with empty stdout when none
+  is stored. The store is a file (`<config dir>/mio/keyring/api-key`) on the
+  macOS release binaries — `whoami` `key_source` names the one in use.
 - `POST /api/auth/login` {email,password} → tokens (plain JSON)
 - `POST /api/auth/register` {email,password,first_name?,last_name?} → 201 tokens
   (same TokenResponse as login; unauthenticated). Surfaced as `mio register`
   (`cmd/register.go`): creates the account then auto-logs-in by feeding the
   returned access token into the shared `mintAndStore` tail (resolveTeamID →
-  MintAPIKey → keychain), so it REPLACES any stored key. Names sent only when
+  MintAPIKey → credential store), so it REPLACES any stored key. Names sent only when
   non-empty. Backend auto-provisions a personal team, so the JWT team_id claim
   resolves the mint target with no `GET /api/teams` round-trip.
 - `POST /api/auth/refresh` (Bearer refresh)

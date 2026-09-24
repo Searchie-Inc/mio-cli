@@ -18,9 +18,18 @@ API keys are `mio_sk_live_…`. Resolution order (first wins):
 
 1. `--api-key <key>` flag on the command line
 2. `MIO_API_KEY` environment variable
-3. Key stored in the OS keychain by `mio login`
+3. Key stored by `mio login` in the credential store (where that is: see below)
 
-If no key is found the command exits with code **3** (`ExitAuth`). Always set `MIO_API_KEY` before running any resource command. Pass `--anonymous` to deliberately run unauthenticated — it skips both `MIO_API_KEY` and the keychain (an explicit `--api-key` still takes effect). `--anonymous` **sends the request** with no `Authorization` header and lets the API answer, so a 401 you see under it is the server's verdict, not a local precondition (MIO-2694); `whoami` reports `key_source: "none (--anonymous)"`.
+If no key is found the command exits with code **3** (`ExitAuth`). Always set `MIO_API_KEY` before running any resource command. Pass `--anonymous` to deliberately run unauthenticated — it skips both `MIO_API_KEY` and the stored key (an explicit `--api-key` still takes effect). `--anonymous` **sends the request** with no `Authorization` header and lets the API answer, so a 401 you see under it is the server's verdict, not a local precondition (MIO-2694); `whoami` reports `key_source: "none (--anonymous)"`.
+
+**Where the stored key lives, and exporting it (MIO-2995).** The release binaries are built with `CGO_ENABLED=0`, so on **macOS they never touch the Keychain**: the key is an encrypted file at `$XDG_CONFIG_HOME/mio/keyring/api-key` (else `~/.config/mio/keyring/api-key`), unlocked by `file-keyring.key` one level up, in the `mio` config dir (`$XDG_CONFIG_HOME/mio/file-keyring.key`, not inside `keyring/`). Linux uses the Secret Service (or KWallet) when the process can reach a D-Bus session bus offering one, else the same file; Windows uses the Credential Manager; only a macOS build compiled from source with cgo uses the Keychain. Because the file lives under the config dir, **a shell whose `XDG_CONFIG_HOME` or `HOME` differs reads a different, empty store** and exits 3 — the `no API key found` error names the store it read, and `whoami` reports it as `key_source` (`file keyring (<path>)`, `keychain`, `secret service`, `kwallet` or `wincred`; the flag/env/none labels are unchanged). To stop depending on the store for a session, export the key once — `auth token` prints only the stored key to stdout, makes no request, and exits 3 with empty stdout when none is stored. Assign, then export, as two statements: `export MIO_API_KEY="$(…)"` returns `export`'s own status (0), so `set -e` never sees the exit 3 and the script runs on with an empty key:
+
+```sh
+MIO_API_KEY="$(mio auth token)"
+export MIO_API_KEY
+```
+
+> **Version gate (MIO-2995).** `mio auth token`, the store-naming `no API key found` message and the backend-specific `key_source` land in the release AFTER `v0.22.0`. On `v0.22.0` and earlier `auth token` exits 2 (`unknown command`) and `key_source` says `"keychain"` for every stored key, whatever holds it.
 
 Key auth works against `https://api.member.dev` by default. Point elsewhere with `--api-base <url>` or `MIO_API_BASE_URL`.
 
@@ -135,6 +144,7 @@ Every implemented resource and its verbs.
 | `register` | Create an account + auto-login: `--email`/`--password` (or `MIO_EMAIL`/`MIO_PASSWORD`), optional `--first-name`/`--last-name`. Unauthenticated; stores a freshly minted key, REPLACING any current one. Agents that already have a `MIO_API_KEY` do not need this. |
 | `logout` | _(interactive only)_ |
 | `whoami` | _(no subcommand — prints resolved user, team, hub, api-base, profile, key source)_ |
+| `auth` | `token` — print the key `mio login` stored, and nothing else, to stdout: `MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY` (two statements, so `set -e` sees the exit 3). Reads only the store (not `--api-key`/`MIO_API_KEY`), no request; exit 3 with empty stdout when none is stored (MIO-2995; release after `v0.22.0`) |
 | `version` | _(no subcommand)_ |
 | `update` | _(self-update; supports `--version` and `--prefix`. macOS/Linux rerun the official release installer; Windows updates natively — Go-native download + SHA-256 verify + binary swap, no `sh`/`curl` required)_ |
 | `config` | `set` `get` `list` |
