@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 )
 
 // Resource is a single JSON:API resource object: a typed, identified bag of
@@ -63,6 +64,64 @@ type Collection struct {
 	Data    []Resource     `json:"data"`
 	Meta    map[string]any `json:"meta"`
 	RawBody []byte         `json:"-"`
+}
+
+// NextPage reports whether the API said more rows exist past this page, and
+// the page[after] cursor for the next page when the response carries one
+// (MIO-4174).
+//
+// mio-backend has no single list envelope (origin/main, 2026-09-24), so this
+// reads every shape it emits:
+//
+//   - has_more sits at meta.page.has_more (build_page_meta, products, coupons,
+//     contacts, content, pages, hubs, checkout) or at top-level meta.has_more
+//     (tags, users, roles, api-keys, automations, segments, events, discussions,
+//     moderation, hub members, activity, media search).
+//   - the cursor sits at meta.page.next_cursor, at meta.next_cursor, or only as
+//     the page[after] parameter of links.next (products, coupons, tags and every
+//     other list that emits no next_cursor).
+//
+// A top-N list (media search) reports has_more with no cursor at all: more is
+// true and cursor is empty. links is not modelled on Collection, so it is read
+// from the retained RawBody.
+func (c *Collection) NextPage() (more bool, cursor string) {
+	if c == nil {
+		return false, ""
+	}
+	page, _ := c.Meta["page"].(map[string]any)
+	pageMore, _ := page["has_more"].(bool)
+	topMore, _ := c.Meta["has_more"].(bool)
+	if !pageMore && !topMore {
+		return false, ""
+	}
+	if cur, _ := page["next_cursor"].(string); cur != "" {
+		return true, cur
+	}
+	if cur, _ := c.Meta["next_cursor"].(string); cur != "" {
+		return true, cur
+	}
+	return true, afterFromNextLink(c.RawBody)
+}
+
+// afterFromNextLink returns the page[after] parameter of the envelope's
+// links.next URL, or "" when there is no next link or it carries no cursor.
+func afterFromNextLink(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var doc struct {
+		Links struct {
+			Next string `json:"next"`
+		} `json:"links"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil || doc.Links.Next == "" {
+		return ""
+	}
+	u, err := url.Parse(doc.Links.Next)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("page[after]")
 }
 
 // Flatten returns one flattened map per resource, preserving order.
