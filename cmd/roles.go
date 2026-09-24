@@ -12,7 +12,6 @@ package cmd
 import (
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -75,17 +74,6 @@ var rolesCreateCmd = &cobra.Command{
 		}
 		if err := c.requireAuth(); err != nil {
 			return err
-		}
-
-		var missing []string
-		if !cmd.Flags().Changed("name") {
-			missing = append(missing, "--name")
-		}
-		if !cmd.Flags().Changed("slug") {
-			missing = append(missing, "--slug")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flags: %s", strings.Join(missing, ", "))
 		}
 
 		attrs := map[string]any{}
@@ -216,6 +204,7 @@ func init() {
 	// create: name + slug are both required; slug is immutable after creation.
 	rolesCreateCmd.Flags().String("name", "", "Role name. Required.")
 	rolesCreateCmd.Flags().String("slug", "", "Role slug (unique identifier). Required.")
+	markFlagsRequired(rolesCreateCmd, "name", "slug")
 
 	// update: only name is mutable per the backend RoleUpdate schema.
 	rolesUpdateCmd.Flags().String("name", "", "Role name.")
@@ -279,11 +268,8 @@ operation is not available to API keys.`,
 	Example: `  mio roles permissions assign role_abc123 --slug content.publish`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate required flags BEFORE resolving auth so a usage error fires
-		// no HTTP request.
-		if !cmd.Flags().Changed("slug") {
-			return errs.New(errs.ExitUsage, "missing required flag: --slug")
-		}
+		// --slug is required (cobra enforces it before RunE); an EMPTY value is
+		// rejected here, before auth, so a usage error fires no HTTP request.
 		slug := flagValue(cmd, "slug")
 		if slug == "" {
 			return errs.New(errs.ExitUsage, "--slug must not be empty")
@@ -347,4 +333,5 @@ func init() {
 	addPaginationFlags(rolesPermissionsListCmd)
 
 	rolesPermissionsAssignCmd.Flags().String("slug", "", "Permission slug to assign (e.g. content.publish). Required.")
+	markFlagsRequired(rolesPermissionsAssignCmd, "slug")
 }

@@ -48,6 +48,7 @@ func init() {
 
 	// create flags: deliverable_type is required.
 	productsDeliverablesCreateCmd.Flags().String("type", "", "Deliverable type: hub_access, content_enrollment, tag, file_download, or community_access. Required.")
+	markFlagsRequired(productsDeliverablesCreateCmd, "type")
 	productsDeliverablesCreateCmd.Flags().String("resource-id", "", "Id of the resource this deliverable grants (e.g. hub id, content id, tag id). Max 255 chars.")
 	productsDeliverablesCreateCmd.Flags().String("resource-meta", "", "Optional JSON object of extra metadata for the deliverable (or @file.json).")
 	productsDeliverablesCreateCmd.Flags().Int("duration-days", 0, "Access duration in days (>= 1). Omit for permanent access.")
@@ -120,9 +121,7 @@ access.`,
 		if productID == "" {
 			return errs.New(errs.ExitUsage, "product id must not be empty")
 		}
-		if !cmd.Flags().Changed("type") {
-			return errs.New(errs.ExitUsage, "missing required flag: --type")
-		}
+		// --type is required (cobra enforces its presence before RunE).
 		dtype := flagValue(cmd, "type")
 		if !deliverableTypes[dtype] {
 			return errs.New(errs.ExitUsage, "invalid --type %q: must be one of %s", dtype, deliverableTypesList())

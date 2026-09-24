@@ -47,12 +47,15 @@ func init() {
 		mediaPlaylistsItemsReorderCmd,
 	} {
 		cmd.Flags().String("playlist-id", "", "Playlist id to operate on. Required.")
+		markFlagsRequired(cmd, "playlist-id")
 	}
 
 	mediaPlaylistsItemsAddCmd.Flags().String("file-id", "", "Media file id to add to the playlist. Required.")
+	markFlagsRequired(mediaPlaylistsItemsAddCmd, "file-id")
 	mediaPlaylistsItemsAddCmd.Flags().Int("position", 0, "Optional 0-based position for the item; if omitted, the backend inserts it at position 0 (front).")
 
 	mediaPlaylistsItemsReorderCmd.Flags().Int("position", 0, "New position (>= 0) for the item. Required.")
+	markFlagsRequired(mediaPlaylistsItemsReorderCmd, "position")
 
 	addPaginationFlags(mediaPlaylistsItemsListCmd)
 }
@@ -83,14 +86,15 @@ var mediaPlaylistsItemsAddCmd = &cobra.Command{
   mio media playlists items add --playlist-id pl_abc123 --file-id file_xyz789 --position 2`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate before resolving auth/team so a missing flag fires no request.
+		// Required flags are enforced by cobra before RunE; their VALUES are
+		// validated here, before resolving auth/team, so a bad one fires no request.
 		pid := flagValue(cmd, "playlist-id")
 		if pid == "" {
-			return errs.New(errs.ExitUsage, "missing required flag: --playlist-id")
+			return errs.New(errs.ExitUsage, "--playlist-id must not be empty")
 		}
 		fileID := flagValue(cmd, "file-id")
 		if fileID == "" {
-			return errs.New(errs.ExitUsage, "missing required flag: --file-id")
+			return errs.New(errs.ExitUsage, "--file-id must not be empty")
 		}
 		if cmd.Flags().Changed("position") {
 			if pos, _ := cmd.Flags().GetInt("position"); pos < 0 {
@@ -122,10 +126,11 @@ var mediaPlaylistsItemsListCmd = &cobra.Command{
   mio media playlists items list --playlist-id pl_abc123 --limit 50`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate before resolving auth/team so a missing flag fires no request.
+		// Required flags are enforced by cobra before RunE; their VALUES are
+		// validated here, before resolving auth/team, so a bad one fires no request.
 		pid := flagValue(cmd, "playlist-id")
 		if pid == "" {
-			return errs.New(errs.ExitUsage, "missing required flag: --playlist-id")
+			return errs.New(errs.ExitUsage, "--playlist-id must not be empty")
 		}
 
 		c, teamID, err := mediaContext(cmd)
@@ -151,10 +156,11 @@ var mediaPlaylistsItemsRemoveCmd = &cobra.Command{
 	Example: `  mio media playlists items remove it_abc123 --playlist-id pl_abc123 --yes`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate before resolving auth/team so a missing flag fires no request.
+		// Required flags are enforced by cobra before RunE; their VALUES are
+		// validated here, before resolving auth/team, so a bad one fires no request.
 		pid := flagValue(cmd, "playlist-id")
 		if pid == "" {
-			return errs.New(errs.ExitUsage, "missing required flag: --playlist-id")
+			return errs.New(errs.ExitUsage, "--playlist-id must not be empty")
 		}
 
 		c, teamID, err := mediaContext(cmd)
@@ -181,15 +187,14 @@ var mediaPlaylistsItemsReorderCmd = &cobra.Command{
 	Example: `  mio media playlists items reorder it_abc123 --playlist-id pl_abc123 --position 3`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate before resolving auth/team so a missing/no-op flag fires no request.
+		// Required flags are enforced by cobra before RunE; their VALUES are
+		// validated here, before resolving auth/team, so a bad one fires no request.
 		pid := flagValue(cmd, "playlist-id")
 		if pid == "" {
-			return errs.New(errs.ExitUsage, "missing required flag: --playlist-id")
+			return errs.New(errs.ExitUsage, "--playlist-id must not be empty")
 		}
-		// The backend treats an omitted position as a no-op, so require it.
-		if !cmd.Flags().Changed("position") {
-			return errs.New(errs.ExitUsage, "missing required flag: --position")
-		}
+		// The backend treats an omitted position as a no-op, so --position is
+		// required (markFlagsRequired in init).
 		pos, _ := cmd.Flags().GetInt("position")
 		if pos < 0 {
 			return errs.New(errs.ExitUsage, "invalid --position: must be >= 0")

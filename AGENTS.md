@@ -95,7 +95,7 @@ Any `delete`, `cancel`, `refund`, or member-moderation command (`ban` / `unban` 
 ```sh
 mio contacts delete <id> --yes
 mio checkout subscriptions cancel <id> --yes
-mio checkout payments refund <id> --yes
+mio checkout payments refund <id> --reason requested_by_customer --yes
 mio community members ban <contact_id> --hub <hub> --yes
 ```
 

@@ -238,20 +238,6 @@ var contactAttributesCreateCmd = &cobra.Command{
 			return err
 		}
 
-		var missing []string
-		if !cmd.Flags().Changed("name") {
-			missing = append(missing, "--name")
-		}
-		if !cmd.Flags().Changed("slug") {
-			missing = append(missing, "--slug")
-		}
-		if !cmd.Flags().Changed("field-type") {
-			missing = append(missing, "--field-type")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flags: %s", strings.Join(missing, ", "))
-		}
-
 		attrs, err := buildAttrDefCreateAttrs(AttrDefInput{
 			Name:              changedString(cmd, "name"),
 			Slug:              changedString(cmd, "slug"),
@@ -376,6 +362,7 @@ func init() {
 	contactAttributesCreateCmd.Flags().String("name", "", "Attribute name. Required.")
 	contactAttributesCreateCmd.Flags().String("slug", "", "Attribute slug (unique identifier within the team). Required.")
 	contactAttributesCreateCmd.Flags().String("field-type", "", "Attribute field type: text, number, boolean, date, multiple, or single. Required.")
+	markFlagsRequired(contactAttributesCreateCmd, "name", "slug", "field-type")
 	contactAttributesCreateCmd.Flags().String("description", "", "Optional description or hint for this attribute.")
 	contactAttributesCreateCmd.Flags().Bool("is-contact-editable", true, "Whether contacts can edit this attribute themselves.")
 	contactAttributesCreateCmd.Flags().Int("position", 0, "Display order position (lower numbers appear first).")

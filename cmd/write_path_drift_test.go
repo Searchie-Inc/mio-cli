@@ -363,6 +363,19 @@ func TestWritePath_ProductsCreate_RequiredFlags(t *testing.T) {
 			}
 		})
 	}
+
+	// MIO-4154: the requirement is declared to COBRA (MarkFlagRequired), not
+	// checked inside RunE, so it is a usage error even with no credentials at all
+	// — a RunE check sits behind requireAuth and would answer 3 here. This is the
+	// observable difference that lets doc_examples_test.go see the requirement.
+	t.Run("missing type, no credentials: still a usage error", func(t *testing.T) {
+		res := runContract(t, []string{"MIO_API_KEY=", "MIO_API_BASE_URL=http://127.0.0.1:1"},
+			"products", "create", "--name", "Intro to Go", "--team", "t_team1")
+		if res.Code != errs.ExitUsage {
+			t.Errorf("exit code = %d, want %d (ExitUsage): --type must be enforced by cobra, before auth; stderr=%q",
+				res.Code, errs.ExitUsage, res.Stderr)
+		}
+	})
 }
 
 // TestWritePath_ProductsCreate_NoStaleStatusFlag pins that the stale --status

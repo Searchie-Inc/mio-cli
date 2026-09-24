@@ -35,6 +35,7 @@ func init() {
 	mediaCmd.AddCommand(mediaTranscriptsCmd)
 
 	mediaTranscriptsEditCmd.Flags().String("words", "", "JSON array of words (or @file.json). Each: {word,start_ms,end_ms,confidence?,speaker_label?}. Required.")
+	markFlagsRequired(mediaTranscriptsEditCmd, "words")
 	mediaTranscriptsEditCmd.Flags().String("language", "", "Optional language code for the edited transcript (defaults to 'und').")
 	mediaTranscriptsRevertCmd.Flags().Int("version", 0, "Transcript version to revert to (>= 1). Required.")
 }

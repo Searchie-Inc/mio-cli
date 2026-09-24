@@ -394,13 +394,10 @@ section-type-specific.`,
   mio pages sections create page_abc123 --hub hub_123 --type grid --settings @section-settings.json`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate --type against the catalog FIRST, before any HTTP or scope
-		// resolution (mirrors the publish command's --if-match pre-check). The
+		// --type is required (cobra enforces its presence before RunE). Validate
+		// it against the catalog FIRST, before any HTTP or scope resolution. The
 		// check is read-tolerant: a KNOWN non-writable type fails fast here, while
 		// an unknown type is deferred to the backend (see validateSectionType).
-		if !cmd.Flags().Changed("type") {
-			return errs.New(errs.ExitUsage, "missing required flag: --type")
-		}
 		if err := validateSectionType(getString(cmd, "type")); err != nil {
 			return err
 		}
@@ -581,6 +578,7 @@ func init() {
 	// help never drifts from the page-builder vocabulary (MIO-2340).
 	pagesSectionsCreateCmd.Flags().String("type", "",
 		"Section type — one of the catalog writable types ("+writableSectionTypesHelp+"). Required.")
+	markFlagsRequired(pagesSectionsCreateCmd, "type")
 
 	// Shared mutable flags for create and update.
 	for _, c := range []*cobra.Command{pagesSectionsCreateCmd, pagesSectionsUpdateCmd} {
