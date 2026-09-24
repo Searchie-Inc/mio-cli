@@ -216,7 +216,7 @@ plain JSON.
 - replace  single-part: POST `…/files/{id}/replace` → presigned PUT → POST `…/files/{id}/replace/{replacement_id}/finalize`. Multipart (above 100 MB, or `--multipart` at any size): init `…/files/{id}/replace/multipart` → parts → POST `…/files/{id}/replace/{replacement_id}/multipart/{upload_id}/complete` — the complete is TERMINAL (relinks + returns the file; NO separate finalize — unlike upload-multipart, a finalize call 404s). `--mime-type` `--filename` `--multipart` `--part-size-mb`
 - finalize POST `…/files/{id}/finalize`
 - transcode POST `…/files/{id}/transcode`
-- register-synthetic POST `/api/admin/teams/{team_id}/files/synthetic` (MIO-2285); `--title`(required) `--asset-kind`(document|pdf) `--visibility` `--mime-type` `--original-filename` `--description`
+- register-synthetic POST `/api/admin/teams/{team_id}/files/synthetic` (MIO-2285); `--title`(required) `--asset-kind`(document|pdf) `--visibility` `--mime-type` `--original-filename` `--description`. `mime_type` is sent only when `--mime-type` is passed; the endpoint then stores `mime_type or "application/octet-stream"` (`register_synthetic_file`, app/media/service.py), ignoring `asset_kind`, so a pdf needs `--mime-type application/pdf` (MIO-4175)
 - cards    `get` GET / `set` PUT `…/files/{id}/cards` (type `file_cards`; `--cards` JSON array/@file)
 - chapters `get` GET / `set` PUT `…/files/{id}/chapters` (type `file_chapters`; `--chapters` JSON array/@file)
 
