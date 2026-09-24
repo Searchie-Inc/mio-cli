@@ -932,7 +932,10 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 // errorForResponse maps a non-2xx response into a *errs.CLIError. If the body
 // carries a JSON:API `errors` array, its joined message is used; otherwise a
 // generic status-based message is returned. The exit code is derived from the
-// HTTP status so it is correct regardless of body shape.
+// HTTP status so it is correct regardless of body shape. A JSON:API body is
+// also retained on the error as its document (errs.APIErrorDocumentOf), so the
+// stderr envelope can carry every member the API sent — code, title, source,
+// meta.request_id — not only the ones the message renders (MIO-3912).
 //
 // The TRANSPORT status (the one the HTTP response line actually carried) is
 // also recorded on the error via errs.WrapHTTP/errs.NewHTTP so main.go can put
@@ -966,7 +969,7 @@ func (c *Client) errorForResponse(status int, body []byte) error {
 		Errors []apiError `json:"errors"`
 	}
 	if json.Unmarshal(body, &doc) == nil && len(doc.Errors) > 0 {
-		return errs.WrapHTTP(status, &apiErrorList{Errors: doc.Errors})
+		return errs.WrapHTTP(status, newAPIErrorList(doc.Errors, body))
 	}
 
 	msg := strings.TrimSpace(string(body))

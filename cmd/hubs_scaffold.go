@@ -125,6 +125,22 @@ type scaffoldContext struct {
 	// deleted looks identical to one that just posted a fresh welcome.
 	welcomePostID, welcomePostStatus string
 
+	// contentNodes is what the content-nodes step (client path) or the backend
+	// op's own content step (op path) reported, one entry per content item
+	// (MIO-4167). contentNodesKnown is false when the run did not reconcile at
+	// all — the result reports null then, never an empty list.
+	contentNodes      []scaffoldContentNode
+	contentNodesKnown bool
+
+	// playlistsNotInHub holds the playlist ids a resume RECOVERED whose own
+	// hub_id is not this hub: a team-library playlist (hub_id null) or another
+	// hub's, published into this one. A page binding may use one; the content
+	// reconcile may not (it 422s playlist_not_in_hub and rejects the whole
+	// request), so stepContentNodes leaves these out and names them. Ids the
+	// playlists step created are scoped to the hub by construction and never
+	// land here.
+	playlistsNotInHub map[string]bool
+
 	// publish is the --publish intent (Task 21 registers the flag; read
 	// existence-guarded in runHubsScaffold, so it defaults false until then). When
 	// false the publish step is a skip-with-note and the hub stays private.
@@ -237,6 +253,9 @@ var scaffoldPipeline = []scaffoldStep{
 	{"onboarding", stepOnboarding},
 	{"policies", stepPolicies},
 	{"playlists", stepPlaylists},
+	// MIO-4167: content items for the playlists just built, where the backend
+	// op's own _step_content_nodes runs — after playlists, before pages.
+	{"content-nodes", stepContentNodes},
 	{"pages", stepPages},
 	{"publish", stepPublish},
 	// Renamed from "backend-gated" by MIO-2558: both things that step deferred
@@ -315,9 +334,12 @@ func stepHub(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 // no double application. The template has no `meta` blob (the catalog
 // hubTemplates[] schema carries no Meta field), so none is sent.
 //
-// It runs in STRICT key mode (a bad template branding/settings key ERRORS, not
-// warns — the whole point of the feature is that a malformed template is caught,
-// not silently dropped) and passes SlugKnown:true with the hub's own slug so the
+// It runs in STRICT key mode (a bad template branding key, or settings.
+// achievements sub-key, ERRORS, not warns — the whole point of the feature is
+// that a malformed template is caught, not silently dropped; every other
+// settings key is left to the API, which 422s an unknown top-level key or
+// policies/registration/email/auth sub-key, MIO-4171) and passes
+// SlugKnown:true with the hub's own slug so the
 // navigation href validator scopes links to THIS hub. Navigation is carried ONLY
 // via blobPatches.Navigation (the seam's single nav source); applyHubBlobs
 // validates its hub-scoped hrefs and injects it into the PATCH itself.
@@ -789,7 +811,7 @@ type templatePolicies struct {
 //
 // That purity is the point. It is called from rebuildScaffoldPlan — the
 // WRITE-FREE preflight, beside HubTemplate.Validate — so a malformed policies
-// block fails before the hub is created, not at pipeline stage 5 of 9 with a
+// block fails before the hub is created, not at pipeline stage 5 of 10 with a
 // hub and its blobs, spaces and onboarding defs already written and no
 // rollback (MIO-2567 review). stepPolicies calls it again at apply time so the
 // step stays self-contained for the unit-driven contexts that never run
@@ -1309,8 +1331,11 @@ func recoverPlaylistIDsForBindings(sc *scaffoldContext, t *catalog.HubTemplate) 
 		keyForTitle[p.Title] = p.Key
 	}
 
-	// Hub side: walk the publication rows, read each playlist's title back.
+	// Hub side: walk the publication rows, read each playlist's title back, and
+	// its own hub_id: a publication row says the playlist is published INTO the
+	// hub, not that it belongs to it (MIO-4167, see playlistsNotInHub).
 	idsForTitle := map[string][]string{}
+	scopeOf := map[string]string{}
 	query := url.Values{}
 	seen := map[string]bool{}
 	const maxPages = 1000
@@ -1330,6 +1355,7 @@ func recoverPlaylistIDsForBindings(sc *scaffoldContext, t *catalog.HubTemplate) 
 			}
 			title, _ := res.Attributes["title"].(string)
 			idsForTitle[title] = append(idsForTitle[title], playlistID)
+			scopeOf[playlistID], _ = res.Attributes["hub_id"].(string)
 		}
 		next := nextPageCursor(col)
 		if next == "" || seen[next] {
@@ -1349,6 +1375,12 @@ func recoverPlaylistIDsForBindings(sc *scaffoldContext, t *catalog.HubTemplate) 
 			continue // absent, or ambiguous on the hub — stepPages reports it
 		}
 		sc.playlistIDsByKey[key] = ids[0]
+		if scopeOf[ids[0]] != sc.hubID {
+			if sc.playlistsNotInHub == nil {
+				sc.playlistsNotInHub = map[string]bool{}
+			}
+			sc.playlistsNotInHub[ids[0]] = true
+		}
 		sc.notef("playlist %q recovered from the hub as %s (the playlists step skipped — this hub already has published playlists)", key, ids[0])
 	}
 	return nil
@@ -1986,7 +2018,7 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 	// 4b. PROBE the whole-hub backend op (MIO-2976). In create mode the op builds
 	//     the entire hub in ONE server-side transaction; when it is absent (the
 	//     dormant flag, or a backend that predates it) this falls back to the
-	//     nine-step pipeline below, which stays the legacy path and the path for
+	//     ten-step pipeline below, which stays the legacy path and the path for
 	//     every invocation the op cannot express (--hub, --dry-run, the branding
 	//     overrides, --catalog). It runs AFTER the preflight on purpose: the
 	//     preflight is write-free and resolves the catalog + template both paths
@@ -2263,7 +2295,13 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 //     --primary-color) without a second GET. It is the override layer, not the
 //     hub's final branding: template defaults the operator never touched are not
 //     in it, and `mio hubs retrieve <id> --jq .branding` remains the way to read
-//     the whole blob back. `{}` when nothing was overridden.
+//     the whole blob back. `{}` when nothing was overridden;
+//   - content_nodes (MIO-4167) is the content items materialised for the
+//     template's playlists, one {legacy_hash, outcome, node_id} per item in the
+//     backend's order — from the reconcile response on the client path and from
+//     the op's `content_node:` summary rows on the op path. `[]` when the template
+//     has no playlists; null when the run did not reconcile (a backend without
+//     the route, or a resume holding no playlist id) — see contentNodesResult.
 func scaffoldResult(sc *scaffoldContext, templateID string) map[string]any {
 	t := &sc.hubTmpl
 
@@ -2325,6 +2363,7 @@ func scaffoldResult(sc *scaffoldContext, templateID string) map[string]any {
 		"playlists":             playlists,
 		"policies":              policies,
 		"policy_gate":           policyGateResult(sc.policyGate),
+		"content_nodes":         contentNodesResult(sc),
 	}
 	// The catalog revision the template was sourced from — the provenance the
 	// stderr "catalog: …" line carries for a human, so a machine run can record

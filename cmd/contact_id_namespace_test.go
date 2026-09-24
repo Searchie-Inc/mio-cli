@@ -25,28 +25,52 @@ import (
 
 // TestContract_MemberVerb404_HintsGlobalContactID: every member-shaped verb that
 // routes on the GLOBAL {contact_id} must, on a 404, append an actionable hint
-// telling the user to use the .attributes.contact_id from `mio contacts` (not
-// the .id). The hint keys off exit code 4, not a server message string, so it
-// survives divergent backend messages. Driven as a subprocess because the
-// JSON:API error envelope is written by main.go after os.Exit.
+// that hands the user a capture of the global contact id from `mio contacts`
+// (not the .id) — and that capture is RUN, so it must actually print the id
+// (MIO-3413: the hint used to name .attributes.contact_id, which yields null
+// in every output mode). The hint keys off exit code 4, not a server message
+// string, so it survives divergent backend messages. Driven as a subprocess
+// because the JSON:API error envelope is written by main.go after os.Exit.
 func TestContract_MemberVerb404_HintsGlobalContactID(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Status: 404, Body: `{"errors":[{"status":"404","detail":"Membership Not Found"}]}`},
 	})
 	bin := buildBinary(t)
 
-	cases := []struct {
+	// The rest of each invocation, keyed by the verb. Every verb in
+	// memberVerbHelpPages must have one, so the 404 check cannot cover fewer
+	// verbs than the help check does (it covered 8 of the 13 before MIO-3413).
+	rest := map[string][]string{
+		"hub-memberships add":               {"contact_x"},
+		"hub-memberships set-role":          {"contact_x", "--role", "admin"},
+		"hub-memberships ban":               {"contact_x", "--yes"},
+		"hub-memberships unban":             {"contact_x", "--yes"},
+		"hub-memberships warn":              {"contact_x", "--yes"},
+		"activity contact":                  {"contact_x"},
+		"community members ban":             {"contact_x", "--yes"},
+		"community members unban":           {"contact_x", "--yes"},
+		"community members warn":            {"contact_x", "--yes"},
+		"community members soft-ban":        {"contact_x", "--yes"},
+		"email enrollments create":          {"dc_1", "--contact-id", "contact_x"},
+		"email enrollments list-by-contact": {"contact_x"},
+		"access-rules overrides create":     {"--contact-id", "contact_x", "--scope", "full"},
+	}
+	type memberVerbCase struct {
 		name string
 		args []string
-	}{
-		{"hub-memberships add", []string{"--team", "t_team1", "--hub", "hub_1", "hub-memberships", "add", "contact_x"}},
-		{"hub-memberships set-role", []string{"--team", "t_team1", "--hub", "hub_1", "hub-memberships", "set-role", "contact_x", "--role", "admin"}},
-		{"hub-memberships ban", []string{"--team", "t_team1", "--hub", "hub_1", "hub-memberships", "ban", "contact_x", "--yes"}},
-		{"activity contact", []string{"--team", "t_team1", "--hub", "hub_1", "activity", "contact", "contact_x"}},
-		{"community members ban", []string{"--team", "t_team1", "--hub", "hub_1", "community", "members", "ban", "contact_x", "--yes"}},
-		{"email enrollments create", []string{"--team", "t_team1", "--hub", "hub_1", "email", "enrollments", "create", "dc_1", "--contact-id", "contact_x"}},
-		{"email enrollments list-by-contact", []string{"--team", "t_team1", "--hub", "hub_1", "email", "enrollments", "list-by-contact", "contact_x"}},
-		{"access-rules overrides create", []string{"--team", "t_team1", "--hub", "hub_1", "access-rules", "overrides", "create", "--contact-id", "contact_x", "--scope", "full"}},
+	}
+	var cases []memberVerbCase
+	for _, page := range memberVerbHelpPages {
+		name := strings.Join(page, " ")
+		r, ok := rest[name]
+		if !ok {
+			t.Fatalf("member verb %q has no 404 invocation here; add one", name)
+		}
+		args := append([]string{"--team", "t_team1", "--hub", "hub_1"}, page...)
+		cases = append(cases, memberVerbCase{name, append(args, r...)})
+	}
+	if len(rest) != len(cases) {
+		t.Fatalf("%d 404 invocations for %d member verbs; keep them in step with memberVerbHelpPages", len(rest), len(cases))
 	}
 	// NOTE (MIO-3412): the achievements earn verbs are deliberately NOT in
 	// this list. A wrong contact id never produces a 404 on them (grant 422s,
@@ -81,6 +105,8 @@ func TestContract_MemberVerb404_HintsGlobalContactID(t *testing.T) {
 			if !strings.Contains(strings.ToLower(detail), "global contact id") {
 				t.Errorf("404 detail must hint the GLOBAL contact id; got %q", detail)
 			}
+			// MIO-3413: the hint must hand over a capture that WORKS — run it.
+			requireWorkingContactIDCapture(t, "the 404 hint of `mio "+tc.name+"`", detail)
 		})
 	}
 }
@@ -134,22 +160,7 @@ func TestContract_ContactsHelp_ExplainsIDNamespaces(t *testing.T) {
 // help must state that its positional takes the GLOBAL contact id, not the
 // team-contact .id from `mio contacts`.
 func TestContract_MemberVerbHelp_SaysGlobalContactID(t *testing.T) {
-	cases := [][]string{
-		{"hub-memberships", "add"},
-		{"hub-memberships", "set-role"},
-		{"hub-memberships", "ban"},
-		{"hub-memberships", "unban"},
-		{"hub-memberships", "warn"},
-		{"activity", "contact"},
-		{"community", "members", "ban"},
-		{"community", "members", "unban"},
-		{"community", "members", "warn"},
-		{"community", "members", "soft-ban"},
-		{"email", "enrollments", "create"},
-		{"email", "enrollments", "list-by-contact"},
-		{"access-rules", "overrides", "create"},
-	}
-	for _, args := range cases {
+	for _, args := range memberVerbHelpPages {
 		out := strings.ToLower(helpOutput(t, args...))
 		if !strings.Contains(out, "global contact id") {
 			t.Errorf("`mio %s --help` must mention the GLOBAL contact id; got:\n%s", strings.Join(args, " "), out)

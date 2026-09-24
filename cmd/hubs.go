@@ -525,22 +525,25 @@ func buildHubCreateAttrs(p hubCreateParams, warnW io.Writer) (map[string]any, er
 		attrs["branding"] = branding
 	}
 
-	// Best-effort key validation for the opaque JSONB blobs: an unknown key is
-	// stored verbatim by the API (no server-side schema), so a typo silently has
-	// no effect. Warn by default (to warnW, so --output json/yaml on stdout is
-	// never corrupted); Strict turns it into a usage error. (MIO-2515)
+	// Best-effort key validation, only where the API would store a typo and
+	// silently do nothing with it: branding and meta keys, and settings.
+	// achievements sub-keys. Every other settings key is left to the API, which
+	// rejects an unknown top-level key or policies/registration/email/auth
+	// sub-key with a 422 (MIO-4171). Warn by default (to
+	// warnW, so --output json/yaml on stdout is never corrupted); Strict turns
+	// it into a usage error. (MIO-2515)
 	if b, ok := attrs["branding"].(map[string]any); ok {
-		if err := validateBlobKeys(warnW, "branding", b, brandingKeys, nil, p.Strict); err != nil {
+		if err := validateBlobKeys(warnW, brandingKeyCheck, b, p.Strict); err != nil {
 			return nil, err
 		}
 	}
 	if s, ok := attrs["settings"].(map[string]any); ok {
-		if err := validateBlobKeys(warnW, "settings", s, settingsKeys, settingsNestedKeys, p.Strict); err != nil {
+		if err := validateBlobKeys(warnW, settingsKeyCheck, s, p.Strict); err != nil {
 			return nil, err
 		}
 	}
 	if m, ok := attrs["meta"].(map[string]any); ok {
-		if err := validateBlobKeys(warnW, "meta", m, metaKeys, nil, p.Strict); err != nil {
+		if err := validateBlobKeys(warnW, metaKeyCheck, m, p.Strict); err != nil {
 			return nil, err
 		}
 	}
@@ -686,7 +689,7 @@ the ambient context (--hub, or current_hub in config).`,
 		if err != nil {
 			return err
 		}
-		// `policies` is a legitimate settings key and passes the allowlist, but the
+		// `policies` is a legitimate settings key the API accepts, but the
 		// backend pops it on the UPDATE path — so this flag reports success and
 		// changes nothing. Checked HERE, against the user's flag, rather than inside
 		// applyHubBlobs: the scaffold routes the community template's settings
@@ -739,7 +742,7 @@ the ambient context (--hub, or current_hub in config).`,
 		}
 		strictKeys, _ := cmd.Flags().GetBool("strict-keys")
 
-		// `policies` is a legitimate settings key and passes the allowlist, but the
+		// `policies` is a legitimate settings key the API accepts, but the
 		// backend pops it on the UPDATE path — so both --settings-json and
 		// --unset settings.policies.* report success and change nothing. Checked
 		// HERE, against the user's flags, rather than inside applyHubBlobs: the
@@ -891,14 +894,15 @@ func applyHubBlobs(ctx context.Context, cl *client.Client, teamID, hubID, hubSlu
 
 	// Best-effort key validation on the INCOMING patch keys only (never the merged
 	// blob — older hubs legitimately carry unlisted keys the caller did not touch).
-	// Runs BEFORE the retrieve so a strict rejection fires no PATCH/GET. (MIO-2515)
-	if err := validateBlobKeys(warnW, "branding", p.Branding, brandingKeys, nil, p.Strict); err != nil {
+	// Runs BEFORE the retrieve so a strict rejection fires no PATCH/GET. (MIO-2515;
+	// settings keys other than achievements sub-keys are the API's, MIO-4171.)
+	if err := validateBlobKeys(warnW, brandingKeyCheck, p.Branding, p.Strict); err != nil {
 		return nil, err
 	}
-	if err := validateBlobKeys(warnW, "settings", p.Settings, settingsKeys, settingsNestedKeys, p.Strict); err != nil {
+	if err := validateBlobKeys(warnW, settingsKeyCheck, p.Settings, p.Strict); err != nil {
 		return nil, err
 	}
-	if err := validateBlobKeys(warnW, "meta", p.Meta, metaKeys, nil, p.Strict); err != nil {
+	if err := validateBlobKeys(warnW, metaKeyCheck, p.Meta, p.Strict); err != nil {
 		return nil, err
 	}
 
@@ -1060,13 +1064,24 @@ func init() {
 		cmd.Flags().Bool("published", false, "Whether the hub is publicly published.")
 		cmd.Flags().String("discussions-default-title", "", "Default title for the hub's discussions surface (MIO-2274). Pass \"\" to clear.")
 		cmd.Flags().String("discussions-default-description", "", "Default description for the hub's discussions surface. Pass \"\" to clear.")
-		// MIO-2515: an unknown key in --branding-json/--settings-json/--meta-json is
-		// stored verbatim (the API has no schema for these blobs), so a typo looks
-		// like success. By default the CLI WARNS naming the bad key + the accepted
-		// set; --strict-keys makes it a usage error. The allowlist is best-effort —
-		// the hub frontend is the authoritative render schema (see the flag help of
-		// each *-json flag and docs/internal/api-surface.md for the accepted keys).
-		cmd.Flags().Bool("strict-keys", false, "Reject unknown keys in --branding-json/--settings-json/--meta-json with an error instead of a warning (best-effort allowlist; accepted keys are listed in each *-json flag's help and docs/internal/api-surface.md).")
+		// MIO-2515: an unknown key in --branding-json/--meta-json (or a
+		// settings.achievements sub-key) is stored as sent by the API, so a typo
+		// looks like success. By default the CLI WARNS naming the bad key + the
+		// accepted set; --strict-keys makes it a usage error. The allowlist is
+		// best-effort — the hub frontend is the authoritative render schema (see
+		// the flag help of each *-json flag and docs/internal/api-surface.md for
+		// the accepted keys). Every other --settings-json key is left to the API
+		// (MIO-4171): it rejects an unknown top-level key, or an unknown sub-key of
+		// policies/registration/email/auth (MIO-3334), and stores the sub-keys of
+		// its other sections as sent (MIO-4020) — the CLI never checked those.
+		// Update's help differs: there --strict-keys also escalates the
+		// settings.policies warning (MIO-2811), so create's "checks no other
+		// --settings-json key" would be false on it.
+		strictHelp := strictKeysHelpText
+		if cmd == hubsUpdateCmd {
+			strictHelp = strictKeysUpdateHelpText
+		}
+		cmd.Flags().Bool("strict-keys", false, strictHelp)
 	}
 
 	// Presentation-blob flags, all authorable on create. The accepted keys are
@@ -1075,7 +1090,7 @@ func init() {
 	for _, f := range []struct{ name, desc string }{
 		{"branding-json", "Hub branding as a JSON object — colors, fonts, logo. Inline JSON or @file. Accepted keys: " + brandingKeysHelp + ". Unknown keys warn (error with --strict-keys)."},
 		{"navigation-json", "Hub navigation as a JSON object — header/footer menu items. Inline JSON or @file."},
-		{"settings-json", "Hub settings as a JSON object — header/footer chrome, appearance, policies. Inline JSON or @file. Accepted top-level keys: " + settingsKeysHelp + ". Unknown keys warn (error with --strict-keys)."},
+		{"settings-json", "Hub settings as a JSON object — header/footer chrome, appearance, policies. Inline JSON or @file. " + settingsKeysHelpText},
 		{"meta-json", "Hub meta as a JSON object — feature guards. Inline JSON or @file. Accepted keys: " + metaKeysHelp + ". Unknown keys warn (error with --strict-keys)."},
 	} {
 		hubsCreateCmd.Flags().String(f.name, "", f.desc)
@@ -1089,7 +1104,7 @@ func init() {
 	hubsUpdateCmd.Flags().String("branding-json",
 		"", "Hub branding keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted keys: "+brandingKeysHelp+". Unknown keys warn (error with --strict-keys).")
 	hubsUpdateCmd.Flags().String("settings-json",
-		"", "Hub settings keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted top-level keys: "+settingsKeysHelp+". Unknown keys warn (error with --strict-keys).")
+		"", "Hub settings keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. "+settingsKeysUpdateHelpText)
 	hubsUpdateCmd.Flags().String("meta-json",
 		"", "Hub meta keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted keys: "+metaKeysHelp+". Unknown keys warn (error with --strict-keys).")
 

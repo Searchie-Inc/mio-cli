@@ -155,7 +155,7 @@ func resolveScaffoldBranding(cmd *cobra.Command) (scaffoldBranding, error) {
 		// --dry-run (which never reaches applyHubBlobs at all) and before any
 		// request. io.Discard for warnW: strict mode returns the error instead of
 		// writing a warning, so nothing is ever written there.
-		if verr := validateBlobKeys(io.Discard, "branding", obj, brandingKeys, nil, true); verr != nil {
+		if verr := validateBlobKeys(io.Discard, brandingKeyCheck, obj, true); verr != nil {
 			return scaffoldBranding{}, scaffoldStrictKeyErr(verr, scaffoldFlagStrictKeyHint)
 		}
 		b.jsonBlob = obj
@@ -195,7 +195,8 @@ func resolveScaffoldBranding(cmd *cobra.Command) (scaffoldBranding, error) {
 // on `hubs create`/`hubs update`, a dead end here: `hubs scaffold` has no such
 // flag and checks blob keys strictly and unconditionally, because a key that
 // silently does nothing is exactly how you end up with an unbranded hub and no
-// error.
+// error. Only that tail is swapped: the blob's own sentence on what the API does
+// with its keys (blobKeyCheck.stored) precedes it and survives the swap.
 //
 // There are TWO of them because a strict rejection on a scaffold has two
 // possible ORIGINS, and each needs different advice. Worse, the shared message
@@ -206,11 +207,11 @@ func resolveScaffoldBranding(cmd *cobra.Command) (scaffoldBranding, error) {
 const (
 	// scaffoldFlagStrictKeyHint: the key came from the operator's own
 	// --branding-json, so the named flag is real and the fix is theirs.
-	scaffoldFlagStrictKeyHint = "These blobs are stored verbatim by the API with no server-side validation, so a misspelled key silently has no effect — and `hubs scaffold` always checks them strictly (it has no --strict-keys to drop). Fix the key; to send one this best-effort allowlist does not know, scaffold first and then apply it with `mio hubs update <hub-id> --branding-json` (the hub frontend is the authoritative render schema)."
+	scaffoldFlagStrictKeyHint = "`hubs scaffold` always checks these keys strictly (it has no --strict-keys to drop). Fix the key; to send one this best-effort allowlist does not know, scaffold first and then apply it with `mio hubs update <hub-id> --branding-json`."
 
 	// scaffoldTemplateStrictKeyHint: the key came from the HUB TEMPLATE, so the
 	// operator passed no such flag at all and cannot fix it by editing one.
-	scaffoldTemplateStrictKeyHint = "These blobs are stored verbatim by the API with no server-side validation, so a misspelled key silently has no effect — which is why `hubs scaffold` checks them strictly and has no --strict-keys to drop. This key came from the HUB TEMPLATE, not from a flag you passed (the flag named above is the equivalent `hubs create`/`hubs update` one): fix the template in the page-builder catalog, or scaffold from a corrected copy with --catalog <file>. The hub frontend is the authoritative render schema."
+	scaffoldTemplateStrictKeyHint = "`hubs scaffold` checks these keys strictly and has no --strict-keys to drop. This key came from the HUB TEMPLATE, not from a flag you passed (the flag named above is the equivalent `hubs create`/`hubs update` one): fix the template in the page-builder catalog, or scaffold from a corrected copy with --catalog <file>."
 )
 
 // scaffoldStrictKeyErr re-points a strict blob-key rejection at guidance that

@@ -48,9 +48,9 @@ var activityContactCmd = &cobra.Command{
 	Short: "Retrieve activity for a contact within a hub.",
 	Long: `Retrieve the activity history for a specific contact within the active hub.
 
-<contact_id> is the GLOBAL contact id — the .attributes.contact_id field from
-'mio contacts', NOT its .id (that is the team-contact id and this route will 404
-on it).
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts' (that is
+the team-contact id and this route will 404 on it). Capture it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)
 
 Requires --hub (or a configured current hub) and --team (or a configured current team).`,
 	Example: `  # Retrieve activity for contact abc123 in hub hub456

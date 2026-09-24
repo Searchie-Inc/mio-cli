@@ -6,7 +6,7 @@ package cmd
 // Same shape as the pages op in hubs_scaffold_op.go, one level up: in CREATE
 // mode the runner PROBES POST /api/teams/{team}/hubs/from-template by simply
 // calling it — the probe IS the real POST, never a separate capability check —
-// and an absent op falls back to the nine-step client-side pipeline. Both paths
+// and an absent op falls back to the ten-step client-side pipeline. Both paths
 // produce a real hub; a missing op is never an error.
 //
 // WHAT MAKES THE ABSENCE SIGNAL DIFFERENT HERE. The pages probe treats 404 and
@@ -42,6 +42,9 @@ var hubOpRowKinds = []struct{ name, prefix, kind string }{
 	{"", "page:", "pages"},
 	{"", "playlist:", "playlists"},
 	{"", "onboarding:", "contact_attribute_definitions"},
+	// MIO-4167: _step_content_nodes' rows. Listed so the count check below
+	// covers them; recordHubOpContentNodes does the recording.
+	{"", "content_node:", "content_nodes"},
 }
 
 // hubOpRowKind returns the created_resource_ids key a row contributes to and the
@@ -113,14 +116,13 @@ func hubOpSkipReason(cmd *cobra.Command, sc *scaffoldContext) (reason string, an
 		return fmt.Sprintf("%s cannot be expressed in the op's overrides",
 			strings.Join(changed, ", ")), true
 	}
-	// MIO-3065 — same rule one level up from the flags: the op silently drops
-	// template vocabulary it does not model, and a hub that looks built but is
-	// not is worse than a slower client-side build. See
-	// hubOpUnappliedVocabulary for what and why.
-	if unapplied := hubOpUnappliedVocabulary(sc); len(unapplied) > 0 {
-		return fmt.Sprintf("the template declares %s, which the op does not apply (mio-backend parity: MIO-3073)",
-			strings.Join(unapplied, ", ")), true
-	}
+	// NOTE: there is no TEMPLATE-vocabulary skip here any more. MIO-3065 added
+	// one for spaces[].icon, playlists[].documents and a playlist dataSource
+	// key, which the op did not model then; mio-backend #680 (MIO-3073,
+	// 54679a96) made it apply all three, so a template declaring them takes the
+	// op like any other (MIO-4167). A future template field the op cannot apply
+	// would need this branch back — the op ignores what it does not model.
+	//
 	// NOTE: an EMPTY --logo-url/--favicon-url does not appear here. It is not a
 	// reason to prefer the client path — the API rejects an empty branding *_url
 	// on hub create and hub update too — so it is refused outright, pre-HTTP, by
@@ -222,9 +224,12 @@ const hubOpFingerprintMismatch = "idempotency_fingerprint_mismatch"
 func hubOpError(err error) error {
 	if client.HasAPIErrorCode(err, hubOpFingerprintMismatch) {
 		// The CODE is named in the message on purpose. apiError.message() renders
-		// detail-over-code, so without this the machine-readable token never
-		// appears anywhere in the CLI's output — while the agent-facing docs tell
-		// agents to branch on exactly that token.
+		// detail-over-code, so without this the token is absent from the message
+		// — the TTY line and the default envelope's errors[0].detail — which
+		// v0.23.0-and-earlier agents branch on. Since MIO-3912 the envelope also
+		// carries it as errors[0].code (--raw included, where detail is the
+		// API's own and has no bracketed token); %w keeps the document that
+		// code comes from in the chain.
 		return errs.Wrap(errs.CodeOf(err), fmt.Errorf(
 			"%w ["+hubOpFingerprintMismatch+"] (this hub name+slug was already scaffolded from this template with a DIFFERENT request — "+
 				"the backend's catalog pin or your override flags have changed since. Nothing was applied. "+
@@ -313,6 +318,7 @@ func recordHubOpResult(sc *scaffoldContext, res client.HubFromTemplateResult) {
 			sc.welcomePostID, sc.welcomePostStatus = id, "created"
 		}
 	}
+	recordHubOpContentNodes(sc, res, trusted["content_nodes"])
 
 	// The homepage id the summary cannot name: rows are slug-keyed, so resolve
 	// the template's isHomepage entry to its slug and read the id back.

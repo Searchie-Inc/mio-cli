@@ -31,9 +31,13 @@ mio config set current_team <team-uuid>   # a UUID (see 'mio teams list'); drop 
   V=$(mio pages tree get "$PAGE_ID" --jq .draft_version)  # 3 — numbers are unquoted either way
   ```
   Numeric captures (`draft_version`, counts) are safe without it; every string capture needs it.
-- **Exit codes (stable contract):** `0` ok · `1` error · `2` bad args (400/409/422) · `3` auth (401/403) · `4` not found · `5` needs `--yes` in a non-TTY · `6` rate limited (429) · `7` server (5xx). They are deliberately coarse; when you need the exact status the API returned (403 vs 401, 409 vs 422), read `errors[0].status` from the JSON:API envelope on stderr — it carries the real HTTP status verbatim, while `errors[0].meta.exit_code` echoes the coarse code (MIO-2656).
+  A `--jq` that yields several scalars prints **one bare value per line** under `-o plain`, whatever the count, and nothing when it yields none (objects stay `key=value` blocks; a string holding a newline prints verbatim and spans lines, so use `-o json` for those): `mio products list -o plain --jq '.[].id' | while read -r id; do …; done` (MIO-4174).
+- **A list returns one page (usually 20 rows).** When the API reports more (or, on `checkout orders|subscriptions|payments|webhooks list`, which report nothing, when a page comes back full), a one-line `note:` on **stderr** names the flag and cursor for the next page: `--after <cursor>` (`--page-after` on `segments search`; `--limit` on `media search`, which returns no cursor); a cursor a shell would split is single-quoted, so the suggestion pastes as-is. stdout stays the bare array. Before concluding a record doesn't exist, check stderr for that note (MIO-4174).
+- **Exit codes (stable contract):** `0` ok · `1` error · `2` bad args (400/409/422) · `3` auth (401/403) · `4` not found · `5` needs `--yes` in a non-TTY · `6` rate limited (429) · `7` server (5xx). They are deliberately coarse; when you need the exact status the API returned (403 vs 401, 409 vs 422), read `errors[0].status` from the JSON:API envelope on stderr — without `--raw` it carries the real HTTP status verbatim (under `--raw` it is the API body's own `status` member), while `errors[0].meta.exit_code` echoes the coarse code (MIO-2656).
+- **API error members are kept (MIO-3912):** on an API error the stderr envelope has one entry per API error object with every member the API sent — branch on `errors[].code` (the stable machine token), never on `detail` text, and quote `errors[0].meta.request_id` when reporting a backend failure (present when the API sent one — a few endpoints send no `meta`). `meta.exit_code` is added into the API's `meta`. `errors[0].detail` is the CLI's message (it may carry context or a `hint:`); add `--raw` to get the API's own error document on stderr instead, unchanged except for `meta.exit_code` on each error object and a `status` filled in where the API sent none. Failures with no JSON:API error body keep `{status, detail, meta.exit_code}`.
 - **Destructive ops** (`delete`/`cancel`/`refund`) require `--yes`/`-y` in a non-interactive shell or they exit `5`.
 - Info/hints print to **stderr**, so machine-readable stdout stays clean. `--jq .id` on a create gives you the new id for the next step.
+- **This skill is a snapshot of the binary that wrote it.** Its frontmatter's `x-mio-skill-version` should match `mio version`; when it is older, verbs and templates the binary has are missing from it. `mio update` refreshes the user-level copy and the project copies (`./.claude/skills/mio/SKILL.md`, `./.codex/skills/mio/SKILL.md`) of the directory it runs in, and no others: refresh another project's copy from its directory with `mio skills install --project --target <claude|codex>`.
 
 ## Start here: `mio hubs scaffold` (one command, whole hub)
 
@@ -82,13 +86,14 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   text with the template's.
 - **A server-side op may build the hub in one shot (MIO-2976).** In create mode the
   CLI probes `POST …/hubs/from-template` first; if the backend has it enabled, the
-  whole hub is built in ONE transaction and the nine client-side steps never run.
-  It ships **dormant**, so today every run still takes the client-side path and
-  nothing above changes. Two things to know when it does turn on: re-running the
+  whole hub is built in ONE transaction and the ten client-side steps never run.
+  Its flag defaults **off** and is set per deployment, so whether a run takes it
+  depends on the backend; a run that falls back says so on stderr. Two things to
+  know when it is on: re-running the
   SAME command converges (deterministic idempotency key) instead of creating a
   second hub — but re-running the same `--name`/`--slug` after the backend's catalog
   pin moved, or with different override flags, exits `2` having applied **nothing**
-  (the message carries the literal token `[idempotency_fingerprint_mismatch]`); and any branding
+  (branch on `errors[0].code` = `idempotency_fingerprint_mismatch`; the CLI's message also carries `[idempotency_fingerprint_mismatch]`, but under `--raw` stderr has the API's own `detail`, without it); and any branding
   override (`--branding-json` or a palette flag like `--primary-color`, as in the
   example above), plus `--hub`, `--dry-run`, `--catalog`, or omitting `--name`/`--slug`,
   forces the client-side path — the op cannot express them (an empty or whitespace-only value for
@@ -97,11 +102,11 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   branding `*_url` on create *and* update, so neither path can honour it; clear a
   key with `mio hubs update <hub_id> --unset branding.logo_url` instead).
   The run names the flag on stderr; `--dry-run` is silent, being structural. `-o json` is identical either way.
-  A **template** can force the client path too: one declaring `spaces[].icon`,
+  A **template** no longer forces it: one declaring `spaces[].icon`,
   `playlists[].documents`, or a page node binding a playlist `dataSource` by `key`
-  is applied client-side, because the op models none of those and would build a
-  hub that looks finished and is not (MIO-3065; backend parity is MIO-3073). The
-  skip is announced and names what would have been dropped.
+  (`starter` declares all three) takes the op, which has applied all of them since
+  MIO-3073 (MIO-4167). A binary before that change still skips the op for them and
+  says `(mio-backend parity: MIO-3073)` on stderr.
 - **A template's playlists arrive hub-scoped, filled, and bound (MIO-3065).** Each
   playlist is created with `hub_id` — without it its detail page 404s for everyone —
   and its per-hub publication row is `visibility: public`. A `playlists[].documents[]`
@@ -174,8 +179,10 @@ hub-frontend host yourself.
 
 Branding / settings / meta are opaque JSONB blobs. The `--branding-json` /
 `--settings-json` / `--meta-json` flags **merge** (read-modify-write, so a partial
-edit never clobbers siblings) and **validate keys** (unknown key warns and is still
-sent; add `--strict-keys` to make it a hard error instead).
+edit never clobbers siblings) and **validate keys** (an unknown branding or meta key
+warns and is still sent — the API stores it as sent, so a typo does nothing; add
+`--strict-keys` to make it a hard error instead). An unknown top-level settings key
+is the API's to reject: a 422 naming it, exit 2, with or without `--strict-keys`.
 
 ```bash
 mio hubs update hub_abc123 \
@@ -238,12 +245,11 @@ theme key.
   **viewer's** `mio-hub-theme` cookie (default `'system'`) and their OS
   `prefers-color-scheme`. The hub's own mode is consulted for exactly one value:
   `custom`. Writing `light` or `dark` anywhere is a **no-op** — the viewer decides.
-- **There is no `settings.theme` key either.** Writing one is a silent no-op; the
+- **There is no `settings.theme` key either.** The API rejects one (422, exit 2); the
   frontend's parsed `theme.mode` is *derived* from `settings.background.type`, and
   nothing reads a raw `settings.theme`.
 - **`custom` is the one thing a hub can force**, via `settings.background.type`
-  (`background` is already on the CLI's settings-key allowlist, so this needs no
-  warning suppression). It is also the **only** mode in which `branding.background`
+  (`background` is an accepted settings key). It is also the **only** mode in which `branding.background`
   and `branding.text` do anything at all:
 
   ```bash
@@ -351,19 +357,25 @@ mio media hub-playlists publish --hub hub_abc123 --playlist-id pl_abc \
 are two separate surfaces: a file that lives only in a playlist has **no content
 item**, so everything keyed on one is missing for it — progress and completion
 tracking, "My List" saves, comments, and the page builder's single-file
-`dataSource: {"type":"file"}` binding. The card appears on `/content` and plays,
+`dataSource: {"type":"file"}` binding, whose `id` is that content item's id (see
+*Which id each `dataSource` takes*). The card appears on `/content` and plays,
 which is exactly why this is easy to miss. Materialise the content items:
 
 ```bash
 mio content reconcile --hub hub_abc123 --playlist-id pl_abc
 ```
 
-**Pass `--playlist-id` explicitly for a hub you built by hand.** With no
-`--playlist-id` the backend reconciles the playlists the hub was *scaffolded*
-with, derived from its `HubTemplateApplication` provenance. A hub created with
-`mio hubs create` has no such row, so a bare run is **rejected with `422
-no_playlist_provenance` (exit 2)** — it does not silently do nothing, and it
-never falls back to "every playlist on the hub". Name the playlists. It is additive
+**Pass `--playlist-id` explicitly unless the server-side scaffold op built the
+hub.** With no `--playlist-id` the backend reconciles the playlists in the hub's
+`HubTemplateApplication` provenance, and **only** the server-side whole-hub op
+records that. A hub created with `mio hubs create` has no such row, and neither
+does one `mio hubs scaffold` built client-side (`--hub`, a palette or
+`--branding-json` flag, `--catalog`, a missing `--name`/`--slug`, or the op off),
+so a bare run there is **rejected with `422 no_playlist_provenance` (exit 2)** — it
+does not silently do nothing, and it never falls back to "every playlist on the
+hub". Name the playlists (`hubs scaffold -o json` reports them as
+`.playlists[].playlist_id`). `hubs scaffold` already reconciles the playlists it
+creates, and reports the result as `content_nodes`. It is additive
 and safe to re-run: it creates one container per playlist and one lesson per
 item, and leaves existing items alone. Created lessons land **unpublished**
 unless the file *and* the playlist are each already published to the hub — so run
@@ -438,11 +450,44 @@ digest-pinned copy; `--catalog <file>` overrides both).
 A `page-*` template emits a complete `{"root": …}` tree ready for `tree set`. A
 **section** template emits a bare node to splice into a root's `children`.
 
-**The page templates are outlines, not finished sections.** `page-homepage`'s hero
-child arrives as `{"kind":"row","template":"hero","settings":{}}` — no surface, no
-values. Scaffold the page for the skeleton, then scaffold each section on its own
-for the real, DS-conformed recipe (correct `kind`, `settings.surface`, column
-widths) and swap it in:
+**Page templates come in three kinds; check which before you edit.** An outline has
+no copy on any node, a complete page is finished sections with placeholder copy, and
+a system page is one the hub routes itself, built from fixed regions rather than
+sections. The split below is generated from the catalog this binary embeds:
+
+<!-- catalog-gen:page-template-kinds -->
+In catalog 0.18.1, the one this binary embeds:
+
+Outlines — content pages with no copy on any node; you build and fill the sections:
+
+`page-homepage` · `page-generic`
+
+Complete — finished sections with placeholder copy; edit the values in place:
+
+`page-homepage-community` · `page-about` · `page-faq` · `page-sales`
+
+System pages — routed by the hub itself, with fixed regions instead of sections; fill in their values and add no sections:
+
+`page-login` · `page-register` · `page-onboarding` · `page-account-activity` ·
+`page-account-profile` · `page-members` · `page-file-detail` ·
+`page-discussions-index`
+<!-- /catalog-gen -->
+
+`pages catalog scaffold` fetches the backend's live catalog unless you pass
+`--offline`, and that catalog can hold different templates. `mio pages catalog
+templates` lists the ones it serves. To classify one of them, run this; it prints
+`"outline"`, `"complete"` or `"system"` (scaffold output is always JSON, so the word
+keeps its quotes even with `-o plain`):
+
+```bash
+mio pages catalog scaffold --template <id> --jq 'if (.root.children | length) > 0 and all(.root.children[]; (.template // "") == "") then "system" elif any(.. | objects; has("value") and (.value | . != null and . != "" and . != {} and . != [])) then "complete" else "outline" end'
+```
+
+**An outline is a skeleton.** `page-homepage`'s hero child arrives as
+`{"kind":"row","template":"hero","settings":{}}` — no surface, no values. Scaffold
+the page for the skeleton, then scaffold each section on its own for the real,
+DS-conformed recipe (correct `kind`, `settings.surface`, column widths) and swap it
+in:
 
 ```bash
 mio pages catalog scaffold --template page-homepage > tree.json
@@ -451,6 +496,37 @@ mio pages catalog scaffold --template row --variant 3eq > cols.json   # 3 equal 
 mio pages catalog scaffold --template grid            > grid.json
 # splice: tree.json .root.children = [hero.json, cols.json, grid.json], then fill values
 ```
+
+**A system page is not built from sections.** The hub routes it itself, and its root
+children are fixed regions (mio-hub's page-tree README calls these templates
+code-routed scaffolds). `page-login` arrives as an image, a headline and a button
+with no values; `page-file-detail` as a locked `file-player` plus title, meta and
+description placeholders. Fill in the values in place and do not splice section
+scaffolds into it.
+
+**A complete page is finished.** Its sections already have their surfaces and
+placeholder copy. Scaffold it and edit the `value`s in place. Do **not** splice
+section scaffolds into it. `page-sales` is a complete page. Here is the whole sales-page
+recipe:
+
+```bash
+PAGE_ID=$(mio pages create --hub hub_abc123 --type sales --privacy public \
+  --title "Join Pro" --slug pro -o plain --jq .id)
+mio pages catalog scaffold --template page-sales > sales.json
+# ...edit sales.json: replace the placeholder headline/text/button values, prices, FAQ answers...
+mio pages tree set "$PAGE_ID" --hub hub_abc123 --file sales.json   # first tree: --if-match defaults to 0
+mio pages publish "$PAGE_ID" --hub hub_abc123 --if-match 1          # section_count = len(root.children)
+```
+
+`--type sales` makes the hub render the page without its header and mobile
+navigation, because a sales page owns its full-bleed layout; the footer, with its
+footer menu, still renders. The default type is `generic`, and every type but `sales`
+keeps the full hub chrome. A few types are refused (exit 2): `content` needs the slug
+`content` (422), a hub has at most one `login`, `register` and `payments` page each
+(a second is 409), and `pages update --type` cannot change a page to or from those
+three (422). Pass
+`--privacy public`: the API defaults privacy to `members` for every page type except
+`login`, `register` and `payments`.
 
 `row` is the unified 1–4 column section; pick the layout with `--variant`:
 
@@ -468,6 +544,41 @@ of `text` items keyed by `settings.tab_label`), and `bound-cards` (two
 the binding — fill in every `dataSource.id`).
 `hero`, `grid` and `compact` carry variants too; `mio pages catalog templates`
 prints them all.
+
+#### Which id each `dataSource` takes
+
+`pages tree set` checks only that `dataSource` is an object, and `publish` accepts
+any `dataSource.id` it cannot resolve, so an id from the wrong namespace publishes
+cleanly and then renders an empty section. The one id `publish` does check is a real
+content node's: bind a `members` or paid content node with no gate on the node or an
+ancestor and it fails with 422, exit 2 (`R3 invariant violation: … Add a gate to this
+node or an ancestor.`). A lesson that `content reconcile` makes is `members` unless the
+file and the playlist are public and each was published to the hub with
+`--visibility public` before the lesson was made. The namespace depends on
+`dataSource.type`:
+
+| `dataSource.type` | `id` is | where to get it |
+|---|---|---|
+| `playlist` | a media **playlist** id | `mio media playlists create … -o plain --jq .id`, or the `id` from `mio media playlists list` |
+| `file` | a **content-node** id: the hub's content item for the file. It is *not* the media file id and *not* a playlist id | the lesson that `mio content reconcile` makes for the file (below) |
+
+```bash
+CONTAINER=$(mio content reconcile --hub hub_abc123 --playlist-id pl_abc -o plain \
+  --jq '.results[] | select(.node_type == "container") | .node_id')
+NODE_ID=$(mio content children "$CONTAINER" --hub hub_abc123 --limit 100 -o plain \
+  --jq '.[] | select(.file_id == "file_intro") | .id')     # the `file` binding's id
+: "${NODE_ID:?file_intro is not in the first 100 lessons: page on with --after <the last lesson id>}"
+```
+
+`content children` returns one page: 20 rows unless you pass `--limit`, and at most
+100. A lesson past that page leaves `NODE_ID` empty with exit 0, and an empty
+`dataSource.id` publishes an empty section, so the last line stops there instead.
+
+Suppose a `file` binding holds a playlist id or a media file id. On every view the
+renderer requests `GET /hub/{hub}/content/<that id>`, the API answers `404 Content
+node '…' not found in hub`, and the section renders as an empty shell (MIO-4176).
+A `playlist` binding with `"resume": true` (the "Continue watching" hero) still
+takes the playlist id; the renderer picks the item itself.
 
 #### The tree envelope: `get` returns one shape, `set` wants another
 
