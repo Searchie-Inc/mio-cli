@@ -28,6 +28,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -350,13 +353,23 @@ func TestHubsUpdate_AchievementsUnknownNestedKeyWarns(t *testing.T) {
 // of its own. The expected outcomes are not a second list — they are what the
 // live API answered (mio-backend app/hubs/validation.py validate_settings; see
 // the MIO-4171 PR for the recorded run).
+//
+// Every level the API validates itself — the top level and each of
+// policies/registration/email/auth — has a REJECT-side probe: a key no allowlist
+// would list. Only that shape fails for ANY client-side copy of that level,
+// including an up-to-date one; an accept-side probe catches only a stale copy
+// (MIO-4171 blind review: with policies/auth/email probed accept-side or not at
+// all, re-adding a mirror of any of the three kept the suite green).
 var settingsDeferCases = []struct {
 	name, settings, key string
 }{
 	{"top-level key the API accepts", `{"language":"de"}`, "language"},
 	{"email sub-key the API accepts", `{"email":{"from_localpart":"news"}}`, "email"},
 	{"top-level key the API rejects", `{"qa_probe":{"x":1}}`, "qa_probe"},
+	{"policies sub-key the API rejects", `{"policies":{"qa_probe":true}}`, "policies"},
 	{"registration sub-key the API rejects", `{"registration":{"enabld":true}}`, "registration"},
+	{"email sub-key the API rejects", `{"email":{"qa_probe":"x"}}`, "email"},
+	{"auth sub-key the API rejects", `{"auth":{"qa_probe":[]}}`, "auth"},
 }
 
 // TestHubsUpdate_SettingsKeysAreTheAPIsToCheck (MIO-4171): the CLI no longer
@@ -366,6 +379,15 @@ var settingsDeferCases = []struct {
 func TestHubsUpdate_SettingsKeysAreTheAPIsToCheck(t *testing.T) {
 	for _, tc := range settingsDeferCases {
 		for _, strict := range []bool{false, true} {
+			if strict && tc.key == "policies" {
+				// On update, settings.policies has a check of its own (MIO-2811:
+				// the API accepts the key there and discards it), and --strict-keys
+				// makes it an error before any key check runs — so this one pairing
+				// cannot show whether the CLI checks policies' SUB-keys. The
+				// non-strict run below and the create mirror (which runs with
+				// --strict-keys) do.
+				continue
+			}
 			name := tc.name
 			if strict {
 				name += " --strict-keys"
@@ -541,6 +563,87 @@ func TestBlobKeyMessages_EachBlobSaysWhatTheAPIDoes(t *testing.T) {
 			}
 			if !strings.Contains(strictMsg, "drop --strict-keys") {
 				t.Errorf("%s --strict-keys error must say how to send the key anyway; got %q", tc.blob, strictMsg)
+			}
+		})
+	}
+}
+
+// settingsSectionProbes are the settings sections the help test below sends to
+// each command: every top-level key the API's own allowlist accepts
+// (_SETTINGS_TOP_LEVEL_KEYS, mio-backend app/hubs/validation.py, origin/main
+// 85baccb6), plus one it does not. They are INPUTS, not an oracle — what the CLI
+// does with each is measured, not listed.
+var settingsSectionProbes = []string{
+	"registration", "policies", "header", "menu", "email", "auth", "customCss",
+	"background", "appearance", "language", "footer", "achievements",
+	"speaker_diarization", "moderation", "word_boost", "playlistHero",
+	"discussionsBanner", "buttonColors",
+	"qa_probe", // a top-level key the API rejects
+}
+
+// TestHubsSettingsHelp_NamesExactlyTheChecksEachCommandMakes (MIO-4171 blind
+// review): the --strict-keys and --settings-json help of `hubs create` and `hubs
+// update` say which settings keys the CLI itself checks — and an agent reading
+// an exit 2 needs that to tell the CLI's check from the API's 422. The two
+// commands do not check the same things (update also stops settings.policies,
+// MIO-2811, which the API discards there), so a help string true of one command
+// copied onto the other is false. It was: "It checks no other --settings-json
+// key" was registered on both, and on update it is not true.
+//
+// The oracle is the wire. For each section, send `{"<section>":{"qa_probe":1}}`
+// with --strict-keys and record whether the CLI stopped it client-side (exit 2,
+// no request). Both help strings of that command must then name every section
+// it stopped as settings.<section>, and name no section it let through.
+func TestHubsSettingsHelp_NamesExactlyTheChecksEachCommandMakes(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  *cobra.Command
+		args []string
+	}{
+		{"create", hubsCreateCmd, []string{"hubs", "create", "--name", "X"}},
+		{"update", hubsUpdateCmd, []string{"hubs", "update", "hub_abc123"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stopped := map[string]bool{}
+			for _, section := range settingsSectionProbes {
+				srv, fired := firedAnyServer(t)
+				args := append(append([]string{}, c.args...),
+					"--settings-json", `{"`+section+`":{"qa_probe":1}}`, "--strict-keys")
+				res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+				if res.Code == errs.ExitUsage && !*fired {
+					stopped[section] = true
+				}
+			}
+			if len(stopped) == 0 {
+				t.Fatalf("hubs %s stopped no settings section client-side; the probe is not reaching the CLI's checks", c.name)
+			}
+
+			for _, flag := range []string{"strict-keys", "settings-json"} {
+				f := c.cmd.Flags().Lookup(flag)
+				if f == nil {
+					t.Fatalf("hubs %s has no --%s flag", c.name, flag)
+				}
+				// pflag renders the first backquoted span of a usage string as
+				// the flag's value name, so naming a command in backquotes here
+				// prints `--strict-keys mio hubs policies` — a bool flag that
+				// reads as if it took an argument. (The first cut of this fix
+				// did exactly that; the live run's --help caught it.)
+				wantVar := map[string]string{"strict-keys": "", "settings-json": "string"}[flag]
+				if varName, _ := pflag.UnquoteUsage(f); varName != wantVar {
+					t.Errorf("hubs %s --%s renders its value name as %q, want %q: a backquoted span in the help becomes the value name; help=%q",
+						c.name, flag, varName, wantVar, f.Usage)
+				}
+				for _, section := range settingsSectionProbes {
+					named := strings.Contains(f.Usage, "settings."+section)
+					switch {
+					case stopped[section] && !named:
+						t.Errorf("hubs %s stops settings.%s client-side under --strict-keys (exit 2, no request), but its --%s help never names settings.%s — an agent reading that help would take the exit 2 for the API's 422; help=%q",
+							c.name, section, flag, section, f.Usage)
+					case !stopped[section] && named:
+						t.Errorf("hubs %s --%s help names settings.%s as a key the CLI checks, but the command sends it to the API under --strict-keys; help=%q",
+							c.name, flag, section, f.Usage)
+					}
+				}
 			}
 		})
 	}

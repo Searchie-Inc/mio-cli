@@ -105,6 +105,8 @@ var metaKeys = map[string]bool{
 //
 // Do NOT add a section the API validates itself (top-level keys, policies,
 // registration, email, auth): that is the stale-mirror bug MIO-4171 removed.
+// settingsDeferCases probes each of those five levels with a key no allowlist
+// would list, so a copy of any of them — stale or current — fails the suite.
 var settingsVerbatimNestedKeys = map[string]map[string]bool{
 	"achievements": {"enabled": true},
 }
@@ -118,10 +120,29 @@ var (
 	metaKeysHelp     = strings.Join(sortedKeySet(metaKeys), ", ")
 )
 
-// settingsKeysHelpText is the --settings-json help clause on create and update:
-// who checks which settings keys, now that the API has an allowlist of its own.
-const settingsKeysHelpText = "Settings keys are left to the API, which rejects an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, with a 422 (exit 2) that names it. " +
-	"The CLI checks only the sub-keys of settings.achievements, which the API stores as sent (unknown ones warn; error with --strict-keys)."
+// The --settings-json and --strict-keys help say which settings keys the CLI
+// checks itself, now that the API has an allowlist of its own. They differ per
+// command, because the commands check different things: `hubs update` also
+// stops settings.policies (checkPoliciesOnUpdate, MIO-2811), which the API
+// accepts there and discards, and `hubs create` does not. A string true of one
+// command registered on the other is false there — which is how "It checks no
+// other --settings-json key" reached `hubs update` (MIO-4171 blind review).
+// TestHubsSettingsHelp_NamesExactlyTheChecksEachCommandMakes measures each
+// command's checks on the wire and holds both strings to them.
+const (
+	settingsKeysHelpText = "Settings keys are left to the API, which rejects an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, with a 422 (exit 2) that names it. " +
+		"The CLI checks only the sub-keys of settings.achievements, which the API stores as sent (unknown ones warn; error with --strict-keys)."
+	settingsKeysUpdateHelpText = "Settings keys are left to the API, which rejects an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, with a 422 (exit 2) that names it. " +
+		"The CLI checks two things itself, each a warning (error with --strict-keys): the sub-keys of settings.achievements, which the API stores as sent, and settings.policies, which the API accepts on update and discards (use 'mio hubs policies' instead)."
+
+	strictKeysHelpText = "Reject unknown keys with an error instead of a warning, where the API would store them as sent: --branding-json and --meta-json keys, and settings.achievements sub-keys. " +
+		"It checks no other --settings-json key: the API rejects an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, with a 422 (exit 2) either way. " +
+		"Best-effort allowlist; accepted keys are listed in each *-json flag's help and docs/internal/api-surface.md."
+	strictKeysUpdateHelpText = "Reject unknown keys with an error instead of a warning, where the API would store them as sent: --branding-json and --meta-json keys, and settings.achievements sub-keys. " +
+		"On update it also turns the settings.policies warning into an error, with no request: the API accepts settings.policies on update and discards it (use 'mio hubs policies' instead). " +
+		"It checks no other --settings-json key: the API rejects an unknown top-level key, or an unknown sub-key of registration/email/auth, with a 422 (exit 2) either way. " +
+		"Best-effort allowlist; accepted keys are listed in each *-json flag's help and docs/internal/api-surface.md."
+)
 
 // blobKeyCheck is one presentation blob's best-effort key check: the keys the
 // CLI can vouch for, and — the reason the check exists at all — what the API

@@ -1057,7 +1057,14 @@ func init() {
 		// (MIO-4171): it rejects an unknown top-level key, or an unknown sub-key of
 		// policies/registration/email/auth (MIO-3334), and stores the sub-keys of
 		// its other sections as sent (MIO-4020) — the CLI never checked those.
-		cmd.Flags().Bool("strict-keys", false, "Reject unknown keys with an error instead of a warning, where the API would store them as sent: --branding-json and --meta-json keys, and settings.achievements sub-keys. It checks no other --settings-json key: the API rejects an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, with a 422 (exit 2) either way. Best-effort allowlist; accepted keys are listed in each *-json flag's help and docs/internal/api-surface.md.")
+		// Update's help differs: there --strict-keys also escalates the
+		// settings.policies warning (MIO-2811), so create's "checks no other
+		// --settings-json key" would be false on it.
+		strictHelp := strictKeysHelpText
+		if cmd == hubsUpdateCmd {
+			strictHelp = strictKeysUpdateHelpText
+		}
+		cmd.Flags().Bool("strict-keys", false, strictHelp)
 	}
 
 	// Presentation-blob flags, all authorable on create. The accepted keys are
@@ -1080,7 +1087,7 @@ func init() {
 	hubsUpdateCmd.Flags().String("branding-json",
 		"", "Hub branding keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted keys: "+brandingKeysHelp+". Unknown keys warn (error with --strict-keys).")
 	hubsUpdateCmd.Flags().String("settings-json",
-		"", "Hub settings keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. "+settingsKeysHelpText)
+		"", "Hub settings keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. "+settingsKeysUpdateHelpText)
 	hubsUpdateCmd.Flags().String("meta-json",
 		"", "Hub meta keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted keys: "+metaKeysHelp+". Unknown keys warn (error with --strict-keys).")
 
