@@ -60,11 +60,20 @@ EMAIL=$(mio contacts retrieve <id> -o plain --jq '.email')
 # Pluck IDs from a list
 mio products list --jq '.[].id'
 
+# One bare id per line, for a shell loop (-o plain: same shape for 0, 1 or 20 ids)
+mio products list -o plain --jq '.[].id' | while read -r id; do echo "$id"; done
+
 # Capture into a variable
 HUB_ID=$(mio hubs list -o plain --jq '.[0].id')   # -o plain: --jq alone JSON-quotes a string (MIO-2792)
 ```
 
 Use `--raw` to get the unflattened JSON:API envelope if you need `meta`, `links`, or `included` fields.
+
+Under `-o plain`, a `--jq` result that is a stream or an array of scalars (strings, numbers, booleans; a null prints an empty line) prints **one bare value per line, whatever the count**, and a filter that yields nothing prints nothing. Objects, and arrays holding objects or arrays, still print as `key=value` blocks separated by a blank line.
+
+**A list command returns one page** — the API's default size, usually 20 rows. When the API reports more, a one-line `note:` on **stderr** names the flag and cursor for the next page: `--after <cursor>` (`--page-after` on `segments search`; `--limit` on `media search`, which is top-N and returns no cursor). stdout is unchanged: still the bare array, so `.[0].id` and `.[].id` keep working. `--raw` prints no note, because its `meta`/`links` already carry `has_more` and `links.next`.
+
+> **Version gate (MIO-4174).** Both land in the release AFTER `v0.23.0`. On `v0.23.0` and earlier, a `-o plain --jq` stream of two or more values prints `value=X` records separated by blank lines (one value prints bare, zero prints an empty line), and nothing tells you a list has more rows: read `meta` under `--raw`.
 
 When a resource has a business-level `type` attribute (products: `course`/`membership`/`booking`; contact-attributes: `text`/`number`/…), the flattened `.type` is THAT value, not the JSON:API document type. The document type (e.g. `"products"`) is available under `--raw` as `.data.type`.
 
