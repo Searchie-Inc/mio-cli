@@ -61,7 +61,7 @@ func moreRowsNote(cmd *cobra.Command, col *client.Collection) string {
 func shellQuote(s string) string {
 	safe := s != ""
 	for _, r := range s {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-.:/=+,@%", r)) {
+		if !shellSafeRune(r) {
 			safe = false
 			break
 		}
@@ -70,6 +70,17 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellSafeRune reports whether r needs no quoting anywhere in a POSIX shell
+// argument word.
+func shellSafeRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	default:
+		return strings.ContainsRune("_-.:/=+,@%", r)
+	}
 }
 
 // registeredFlag returns the first of names that cmd registers, or "".
