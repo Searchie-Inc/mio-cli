@@ -845,9 +845,9 @@ var emailEnrollmentsCreateCmd = &cobra.Command{
 	Short: "Manually enroll a contact in a drip campaign.",
 	Long: `Manually enroll a contact in the specified drip campaign. The contact must be a member of the hub.
 
---contact-id takes the GLOBAL contact id — the .attributes.contact_id field from
-'mio contacts', NOT its .id (that is the team-contact id and enrollment will 404
-on it).`,
+--contact-id takes the GLOBAL contact id, NOT the .id from 'mio contacts' (that
+is the team-contact id and enrollment will 404 on it). Capture it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  mio email enrollments create dc_abc123 --contact-id contact_xyz789`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -929,8 +929,9 @@ var emailEnrollmentsListByContactCmd = &cobra.Command{
 	Short: "List all drip enrollments for a contact.",
 	Long: `List every drip campaign enrollment for a given contact across all campaigns.
 
-<contact_id> is the GLOBAL contact id — the .attributes.contact_id field from
-'mio contacts', NOT its .id (the team-contact id).`,
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts' (the
+team-contact id). Capture it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  mio email enrollments list-by-contact contact_xyz789`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -954,7 +955,7 @@ var emailEnrollmentsListByContactCmd = &cobra.Command{
 }
 
 func init() {
-	emailEnrollmentsCreateCmd.Flags().String("contact-id", "", "GLOBAL contact id to enroll (the .attributes.contact_id from 'mio contacts', not its .id).")
+	emailEnrollmentsCreateCmd.Flags().String("contact-id", "", "GLOBAL contact id to enroll, NOT the .id from 'mio contacts' (capture it with: mio contacts retrieve <team-contact-id> -o plain --jq .contact_id).")
 	addPaginationFlags(emailEnrollmentsListCmd)
 	addPaginationFlags(emailEnrollmentsListByContactCmd)
 }

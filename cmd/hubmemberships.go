@@ -92,9 +92,10 @@ var hubMembershipsCmd = &cobra.Command{
 	Short: "Manage hub member status.",
 	Long: `Perform moderation actions on hub members.
 
-The <contact_id> positional on every action below is the GLOBAL contact id — the
-.attributes.contact_id field from 'mio contacts', NOT its .id (that is the
-team-contact id and these verbs will 404 on it).
+The <contact_id> positional on every action below is the GLOBAL contact id, NOT
+the .id from 'mio contacts' (that is the team-contact id and these verbs will
+404 on it). Capture it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)
 
 All commands require --hub (and optionally --team if not auto-defaulted) and a
 team-owner API key. Use 'mio community members' for the same actions within the
@@ -140,8 +141,9 @@ var hubMembershipsBanCmd = &cobra.Command{
 	Short: "Ban a hub member.",
 	Long: `Issue a hard ban against a hub member, blocking their access to the hub.
 
-<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
-'mio contacts', NOT its .id).`,
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts'. Capture
+it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  mio hub-memberships ban contact_xyz --hub hub_abc123 --yes
   mio hub-memberships ban contact_xyz --hub hub_abc123 --notes "Repeated ToS violations" --yes`,
 	Args: cobra.ExactArgs(1),
@@ -178,8 +180,9 @@ var hubMembershipsUnbanCmd = &cobra.Command{
 	Short: "Unban a hub member.",
 	Long: `Lift a ban against a hub member, restoring their access to the hub.
 
-<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
-'mio contacts', NOT its .id).`,
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts'. Capture
+it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  mio hub-memberships unban contact_xyz --hub hub_abc123 --yes
   mio hub-memberships unban contact_xyz --hub hub_abc123 --notes "Appealed, cleared" --yes`,
 	Args: cobra.ExactArgs(1),
@@ -216,8 +219,9 @@ var hubMembershipsWarnCmd = &cobra.Command{
 	Short: "Warn a hub member.",
 	Long: `Issue a formal warning to a hub member without banning them.
 
-<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
-'mio contacts', NOT its .id).`,
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts'. Capture
+it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  mio hub-memberships warn contact_xyz --hub hub_abc123 --yes
   mio hub-memberships warn contact_xyz --hub hub_abc123 --notes "First offense" --yes`,
 	Args: cobra.ExactArgs(1),

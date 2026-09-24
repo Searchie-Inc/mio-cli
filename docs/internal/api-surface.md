@@ -151,7 +151,7 @@ plain JSON.
 - **ID NAMESPACE TRAP (MIO-2504):** `{id}` on these routes is the TEAM-contact id
   (route param `{team_contact_id}`; surfaced as `.id`, also used by
   contact-attributes + tags). The GLOBAL contact id is a *separate* field,
-  `.attributes.contact_id` (top-level `.contact_id` when flattened), and is what
+  the `contact_id` attribute (capture: `mio contacts retrieve <team-contact-id> -o plain --jq .contact_id`), and is what
   the `{contact_id}` routes below require: hub-memberships add/set-role/ban/
   unban/warn, activity contact, community members ban/unban/warn/soft-ban, email
   enrollments create, email enrollments list-by-contact, access-rules overrides
