@@ -408,6 +408,13 @@ func (c *cmdContext) render(cmd *cobra.Command, v any) error {
 	if err := output.Render(cmd.OutOrStdout(), v, c.out); err != nil {
 		return errs.Wrap(errs.ExitGeneric, err)
 	}
+	// A list page that is not the last says so on stderr (MIO-4174); stdout is
+	// untouched. --raw already shows the API's meta and links, so it gets none.
+	if col, ok := v.(*client.Collection); ok && !c.out.Raw {
+		if note := moreRowsNote(cmd, col); note != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), note)
+		}
+	}
 	return nil
 }
 
