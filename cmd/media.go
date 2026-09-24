@@ -44,7 +44,7 @@ package cmd
 //
 // files also supports the full ingest lifecycle end-to-end from the CLI (see
 // cmd/media_upload.go): `upload` orchestrates create → presigned S3 PUT →
-// finalize (auto-multipart for large files), `replace` swaps an existing file's
+// finalize (multipart above autoMultipartThreshold), `replace` swaps an existing file's
 // asset, `finalize`/`transcode` re-drive processing, and `register-synthetic`
 // registers a synthetic (document/pdf) file. No dashboard/API detour is needed.
 //
@@ -156,9 +156,9 @@ var mediaCmd = &cobra.Command{
 
 Files: full library management plus the complete upload lifecycle — list,
   retrieve, update, delete, and ingest with 'files upload' (create → presigned
-  S3 PUT → finalize, all from the CLI; large files chunk automatically), plus
-  'files replace', 'files finalize', 'files transcode', and
-  'files register-synthetic'. See 'mio media files --help'.
+  S3 PUT → finalize, all from the CLI; multipart above ` + multipartThresholdMB() + `, or at any size
+  with --multipart), plus 'files replace', 'files finalize', 'files transcode',
+  and 'files register-synthetic'. See 'mio media files --help'.
 Folders: full CRUD (create/list/retrieve/update/delete) plus 'move'.
 Search: 'media search' runs hybrid search over the team's transcripts.
 Playlists: full CRUD, 'set-cover', and 'playlists items' to curate contents.
@@ -398,9 +398,10 @@ var mediaFilesCmd = &cobra.Command{
 	Long: `Manage files in the team media library — and ingest new ones from the CLI.
 
 Library:  list, retrieve, update, delete.
-Ingest:   upload (create → presigned S3 PUT → finalize, auto-multipart for large
-          files), replace (swap an existing file's asset), finalize/transcode
-          (re-drive processing), register-synthetic (register a document/pdf).
+Ingest:   upload (create → presigned S3 PUT → finalize; multipart above ` + multipartThresholdMB() + `,
+          or at any size with --multipart), replace (swap an existing file's
+          asset; same threshold), finalize/transcode (re-drive processing),
+          register-synthetic (register a document/pdf).
 Enrich:   cards (in-video CTAs) and chapters, each get/set.`,
 }
 
