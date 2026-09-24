@@ -732,7 +732,7 @@ type templatePolicies struct {
 //
 // That purity is the point. It is called from rebuildScaffoldPlan — the
 // WRITE-FREE preflight, beside HubTemplate.Validate — so a malformed policies
-// block fails before the hub is created, not at pipeline stage 5 of 9 with a
+// block fails before the hub is created, not at pipeline stage 5 of 10 with a
 // hub and its blobs, spaces and onboarding defs already written and no
 // rollback (MIO-2567 review). stepPolicies calls it again at apply time so the
 // step stays self-contained for the unit-driven contexts that never run
