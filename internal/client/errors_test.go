@@ -179,3 +179,33 @@ func TestHasAPIErrorCode_MatchesCodeNotMessage(t *testing.T) {
 		t.Error("a non-API error must not match any code")
 	}
 }
+
+// MIO-3912: every error the client builds from a JSON:API errors body carries
+// that body, byte-for-byte, as its document — so the stderr envelope can keep
+// the members apiError does not model (id, links, unknown ones) and the ones it
+// models but message() does not render (code, title, meta.request_id). Covers
+// all three places such an error is built: a non-2xx answer, and a 2xx answer
+// whose body is an errors document (single-resource and collection decoders).
+// A body that is not a JSON:API errors document carries none.
+func TestAPIErrorDocument_IsTheBodyVerbatim(t *testing.T) {
+	body := []byte(`{"errors":[{"id":"e1","status":"422","code":"invalid_price_config","title":"Invalid price config","detail":"too many","links":{"about":"https://example.test"},"meta":{"request_id":"rid-1","n":12345678901234567890}}],"meta":{"top":true}}`)
+
+	c := &Client{}
+	_, resErr := DecodeResource(body)
+	_, colErr := DecodeCollection(body)
+	for name, err := range map[string]error{
+		"errorForResponse": c.errorForResponse(422, body),
+		"DecodeResource":   resErr,
+		"DecodeCollection": colErr,
+	} {
+		if got := errs.APIErrorDocumentOf(err); string(got) != string(body) {
+			t.Errorf("%s: APIErrorDocumentOf = %q, want the response body verbatim", name, got)
+		}
+	}
+
+	for _, nonDoc := range []string{`<html>bad gateway</html>`, ``, `{"errors":[]}`, `{"detail":"no errors member"}`} {
+		if got := errs.APIErrorDocumentOf(c.errorForResponse(502, []byte(nonDoc))); got != nil {
+			t.Errorf("body %q: APIErrorDocumentOf = %q, want nil (not a JSON:API errors document)", nonDoc, got)
+		}
+	}
+}

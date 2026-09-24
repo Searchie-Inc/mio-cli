@@ -65,8 +65,9 @@ package cmd
 //
 //	mio hubs update <hub> --settings-json '{"achievements":{"enabled":true}}'
 //
-// (`achievements` is an allowlisted settings key — see hubs_blob_keys.go; the
-// merge is read-modify-write so sibling settings survive.)
+// (`achievements` is on the API's settings allowlist, and the CLI checks its
+// sub-keys — see hubs_blob_keys.go; the merge is read-modify-write so sibling
+// settings survive.)
 //
 // JSON:API write envelope types (app/achievements/schemas.py Literals):
 // definitions self-derive "achievements" from the path; the hub-offering and
@@ -278,7 +279,9 @@ const achievementsRestore409Hint = "if this 409 says no earn exists and you beli
 // hintAchievementsEarnErr appends the status-appropriate hint above to an
 // earn-verb error, preserving the transport status (and therefore the exit
 // code). verb is "grant", "revoke" or "restore". Any other error (or nil)
-// passes through untouched.
+// passes through untouched. The hint wraps err (%w), so the API's error
+// document — code, title, meta.request_id — stays in the chain for the stderr
+// envelope (MIO-3912).
 func hintAchievementsEarnErr(verb string, err error) error {
 	if err == nil {
 		return err
@@ -299,7 +302,7 @@ func hintAchievementsEarnErr(verb string, err error) error {
 	if hint == "" {
 		return err
 	}
-	return errs.NewHTTP(errs.HTTPStatusOf(err), "%s\nhint: %s", err.Error(), hint)
+	return errs.NewHTTP(errs.HTTPStatusOf(err), "%w\nhint: %s", err, hint)
 }
 
 // requireContactID reads the required --contact-id flag for the earn verbs.
@@ -736,12 +739,14 @@ const achievementsUpdateRulePiecesHint = "a badge can't move away from award_mod
 // 422 can come from several unrelated validation failures
 // (validate_rule_pieces alone raises more than this one code), and only
 // rule_pieces_not_allowed has this fix. Any other error (or nil) passes
-// through untouched.
+// through untouched. The hint wraps err (%w) so the code it is keyed on — and
+// the rest of the API's error document — still reaches the stderr envelope
+// (MIO-3912).
 func hintAchievementsUpdateErr(err error) error {
 	if err == nil || !client.HasAPIErrorCode(err, "rule_pieces_not_allowed") {
 		return err
 	}
-	return errs.NewHTTP(errs.HTTPStatusOf(err), "%s\nhint: %s", err.Error(), achievementsUpdateRulePiecesHint)
+	return errs.NewHTTP(errs.HTTPStatusOf(err), "%w\nhint: %s", err, achievementsUpdateRulePiecesHint)
 }
 
 // ---- archive ----------------------------------------------------------------

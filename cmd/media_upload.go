@@ -90,6 +90,18 @@ multipart path.`,
 		multipartThresholdMB(), autoMultipartThreshold, defaultPartSizeMB, minPartSizeMB)
 }
 
+// addWaitFlags registers --wait and --timeout. upload and replace both call it
+// and both run waitForFileReady, so the two commands cannot state different
+// wait semantics or defaults (MIO-4172).
+func addWaitFlags(c *cobra.Command) {
+	c.Flags().Bool("wait", false,
+		"Wait until the file finishes processing (upload/transcode READY). For video, waits ~30s "+
+			"(or --timeout, whichever is smaller) for transcoding to START — bounds are checked at poll "+
+			"boundaries, so allow one extra poll interval; if it never starts — video processing "+
+			"disabled, or a backed-up queue — this warns and returns 0 rather than waiting out --timeout.")
+	c.Flags().Duration("timeout", 5*time.Minute, "Max time to --wait for processing.")
+}
+
 func init() {
 	mediaFilesCmd.AddCommand(
 		mediaFilesUploadCmd,
@@ -102,12 +114,7 @@ func init() {
 	mediaFilesUploadCmd.Flags().String("title", "", "File title (default: the file's base name).")
 	mediaFilesUploadCmd.Flags().String("mime-type", "", "Content type (default: sniffed from the file).")
 	mediaFilesUploadCmd.Flags().String("folder-id", "", "Place the file in this folder after upload.")
-	mediaFilesUploadCmd.Flags().Bool("wait", false,
-		"Wait until the file finishes processing (upload/transcode READY). For video, waits ~30s "+
-			"(or --timeout, whichever is smaller) for transcoding to START — bounds are checked at poll "+
-			"boundaries, so allow one extra poll interval; if it never starts — video processing "+
-			"disabled, or a backed-up queue — this warns and returns 0 rather than waiting out --timeout.")
-	mediaFilesUploadCmd.Flags().Duration("timeout", 5*time.Minute, "Max time to --wait for processing.")
+	addWaitFlags(mediaFilesUploadCmd)
 	mediaFilesUploadCmd.Flags().Bool("multipart", false,
 		"Upload in parts at any size (without it, only files above "+multipartThresholdMB()+" go multipart).")
 	mediaFilesUploadCmd.Flags().Int("part-size-mb", defaultPartSizeMB,
@@ -115,6 +122,7 @@ func init() {
 
 	mediaFilesReplaceCmd.Flags().String("mime-type", "", "Content type of the replacement (default: sniffed).")
 	mediaFilesReplaceCmd.Flags().String("filename", "", "Original filename to record (default: the file's base name).")
+	addWaitFlags(mediaFilesReplaceCmd)
 	mediaFilesReplaceCmd.Flags().Bool("multipart", false,
 		"Replace in parts at any size (without it, only files above "+multipartThresholdMB()+" go multipart).")
 	mediaFilesReplaceCmd.Flags().Int("part-size-mb", defaultPartSizeMB,
@@ -123,7 +131,9 @@ func init() {
 	mediaFilesRegisterSyntheticCmd.Flags().String("title", "", "File title. Required.")
 	mediaFilesRegisterSyntheticCmd.Flags().String("asset-kind", "document", "Synthetic asset kind: document or pdf.")
 	mediaFilesRegisterSyntheticCmd.Flags().String("visibility", "", "Visibility: private, public, or unlisted.")
-	mediaFilesRegisterSyntheticCmd.Flags().String("mime-type", "", "Optional mime type.")
+	mediaFilesRegisterSyntheticCmd.Flags().String("mime-type", "",
+		"Mime type to store. Omitted, the endpoint stores application/octet-stream whatever --asset-kind "+
+			"says, so pass application/pdf with --asset-kind pdf.")
 	mediaFilesRegisterSyntheticCmd.Flags().String("original-filename", "", "Optional original filename.")
 	mediaFilesRegisterSyntheticCmd.Flags().String("description", "", "Optional description.")
 }
@@ -185,8 +195,9 @@ var mediaFilesUploadCmd = &cobra.Command{
 	Use:   "upload <path>",
 	Short: "Upload a local file into the team media library.",
 	Long: `Ingest a local file end-to-end: create the file record, stream the bytes to
-the returned presigned URL, and finalize. For video, finalize triggers transcoding
-asynchronously; pass --wait to block until processing reaches READY.
+the returned presigned URL, and finalize. For video, finalize enqueues a
+transcode only when the backend has video processing enabled (it is off by
+default); pass --wait to block until processing reaches READY.
 
 --wait keeps polling a video whose transcode has not started yet, but waits at
 most 30s (or --timeout, whichever is smaller) for it to start, then warns and
@@ -261,7 +272,7 @@ members). See the media-workflow guide's visibility section.`,
 		// Optional: block until processing reaches READY.
 		if wait, _ := cmd.Flags().GetBool("wait"); wait {
 			timeout, _ := cmd.Flags().GetDuration("timeout")
-			if res, err = waitForFileReady(c, cmd.ErrOrStderr(), teamID, fileID, timeout); err != nil {
+			if res, err = waitForFileReady(c, cmd.ErrOrStderr(), teamID, fileID, "", timeout); err != nil {
 				return err
 			}
 		}
@@ -277,9 +288,24 @@ var mediaFilesReplaceCmd = &cobra.Command{
 	Long: `Replace the bytes of an existing file with a new local file, keeping the same
 file id — the media is relinked atomically once the new bytes are in.
 
+The file gets a NEW media_id, and what described the old bytes is reset:
+status_transcode, status_transcribe and duration_seconds read null, and the old
+transcript is detached, until the new bytes are processed; the file's timed
+cards are cleared. For video, the relink enqueues a new transcode only when the
+backend has video processing enabled (it is off by default); pass --wait to
+block until processing reaches READY.
+
+--wait works as it does for 'files upload', including waiting at most 30s (or
+--timeout, whichever is smaller) for a video's transcode to START (see 'mio
+media files upload --help'), with one more condition: it first waits until the
+file points at the replacement's media_id. The backend commits the relink just
+after it answers, so a read made straight away can still show the OLD media,
+often already READY; the old media's statuses, FAILED included, are not counted.
+
 ` + replaceMultipartHelp(),
-	Example: `  mio media files replace file_abc123 ./updated.png`,
-	Args:    cobra.ExactArgs(2),
+	Example: `  mio media files replace file_abc123 ./updated.png
+  mio media files replace file_abc123 ./recut.mp4 --wait --timeout 15m`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Validate the file BEFORE resolving auth/team so a bad path fires no request.
 		fileID, path := args[0], args[1]
@@ -313,14 +339,24 @@ file id — the media is relinked atomically once the new bytes are in.
 		}
 
 		var res *client.Resource
+		var replacementID string
 		if useMultipart(forceMultipart, fi.Size()) {
 			partMB, _ := cmd.Flags().GetInt("part-size-mb")
-			res, err = replaceMultipart(c, teamID, fileID, path, filename, mimeType, fi.Size(), int64(partMB)*1024*1024)
+			replacementID, res, err = replaceMultipart(c, teamID, fileID, path, filename, mimeType, fi.Size(), int64(partMB)*1024*1024)
 		} else {
-			res, err = replaceSinglePart(c, teamID, fileID, path, filename, mimeType, fi.Size())
+			replacementID, res, err = replaceSinglePart(c, teamID, fileID, path, filename, mimeType, fi.Size())
 		}
 		if err != nil {
 			return err
+		}
+
+		// Optional: block until the REPLACEMENT is processed — not whatever media
+		// the file pointed at when the first poll landed.
+		if wait, _ := cmd.Flags().GetBool("wait"); wait {
+			timeout, _ := cmd.Flags().GetDuration("timeout")
+			if res, err = waitForFileReady(c, cmd.ErrOrStderr(), teamID, fileID, replacementID, timeout); err != nil {
+				return err
+			}
 		}
 		return renderFileOrFetch(cmd, c, teamID, fileID, res)
 	},
@@ -339,7 +375,7 @@ func replaceFinalizePath(teamID, fileID, replacementID string) string {
 var mediaFilesFinalizeCmd = &cobra.Command{
 	Use:     "finalize <file_id>",
 	Short:   "Finalize an already-uploaded file.",
-	Long:    "Finalize a file whose bytes were already PUT to its presigned URL — verifies the object, marks it READY, and (for video) triggers transcoding.",
+	Long:    "Finalize a file whose bytes were already PUT to its presigned URL — verifies the object, marks it READY, and, for video, enqueues a transcode only when the backend has video processing enabled (it is off by default).",
 	Example: `  mio media files finalize file_abc123`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -386,12 +422,15 @@ server-generated storage path — no upload/finalize/transcode. Mirrors the
 seeder's stub-document path; requires a team-owner key.
 
 --mime-type defaults to the endpoint's own application/octet-stream when
-omitted. For a placeholder text lesson (no real bytes — the body IS its
+omitted: the CLI sends no mime_type, and the endpoint does not derive one from
+--asset-kind. A pdf registered without --mime-type application/pdf is stored as
+a generic blob, which a consumer that reads mime_type does not recognise as a
+pdf. For a placeholder text lesson (no real bytes — the body IS its
 description), pass --mime-type text/markdown: that is the convention 'hub
 scaffold' uses for playlists[].documents[] template placeholders (MIO-3116),
 and mime_type is the field mime-keyed branches downstream (document viewers,
 transcode-wait checks) actually read.`,
-	Example: `  mio media files register-synthetic --title "Terms.pdf" --asset-kind pdf
+	Example: `  mio media files register-synthetic --title "Terms.pdf" --asset-kind pdf --mime-type application/pdf
   mio media files register-synthetic --title "Add your first lesson" --mime-type text/markdown --description "A placeholder lesson."`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -560,48 +599,52 @@ func streamParts(c *cmdContext, f *os.File, partSize int64, mimeType string, par
 }
 
 // replaceSinglePart runs the single presigned-PUT replace flow: init → PUT →
-// replace/finalize (atomic relink). Returns the relinked file resource.
-func replaceSinglePart(c *cmdContext, teamID, fileID, path, filename, mimeType string, size int64) (*client.Resource, error) {
+// replace/finalize (atomic relink). Returns the replacement's media id (the init
+// resource's id — the media the file points at once the relink commits) and the
+// relinked file resource.
+func replaceSinglePart(c *cmdContext, teamID, fileID, path, filename, mimeType string, size int64) (string, *client.Resource, error) {
 	repl, err := c.client.Create(c.ctx, replaceInitPath(teamID, fileID), map[string]any{
 		"original_filename": filename,
 		"mime_type":         mimeType,
 		"size_bytes":        size,
 	})
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	uploadURL, _ := repl.Meta["upload_url"].(string)
 	if uploadURL == "" {
-		return nil, errs.New(errs.ExitGeneric, "replace init did not return a presigned upload_url")
+		return repl.ID, nil, errs.New(errs.ExitGeneric, "replace init did not return a presigned upload_url")
 	}
 	if _, err := client.PutFileToURL(c.ctx, uploadURL, path, mimeType); err != nil {
-		return nil, err
+		return repl.ID, nil, err
 	}
-	return c.client.Action(c.ctx, http.MethodPost, replaceFinalizePath(teamID, fileID, repl.ID), nil)
+	res, err := c.client.Action(c.ctx, http.MethodPost, replaceFinalizePath(teamID, fileID, repl.ID), nil)
+	return repl.ID, res, err
 }
 
 // replaceMultipart runs the chunked replace flow: init → per-part → terminal
 // complete, which relinks the file itself (no separate replace/finalize). There
 // is no replace-multipart abort route, so a failure just surfaces (the backend
-// reaps the pending replacement).
-func replaceMultipart(c *cmdContext, teamID, fileID, path, filename, mimeType string, size, partSize int64) (*client.Resource, error) {
+// reaps the pending replacement). Returns the replacement's media id and the
+// relinked file resource, as replaceSinglePart does.
+func replaceMultipart(c *cmdContext, teamID, fileID, path, filename, mimeType string, size, partSize int64) (string, *client.Resource, error) {
 	repl, err := c.client.Create(c.ctx, replaceMultipartInitPath(teamID, fileID), map[string]any{
 		"original_filename": filename,
 		"mime_type":         mimeType,
 		"size_bytes":        size,
 	})
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	replID := repl.ID
 	uploadID, _ := repl.Meta["upload_id"].(string)
 	if uploadID == "" {
-		return nil, errs.New(errs.ExitGeneric, "replace multipart init did not return an upload_id")
+		return replID, nil, errs.New(errs.ExitGeneric, "replace multipart init did not return an upload_id")
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, errs.New(errs.ExitGeneric, "open %s: %s", path, err)
+		return replID, nil, errs.New(errs.ExitGeneric, "open %s: %s", path, err)
 	}
 	defer f.Close()
 
@@ -609,13 +652,14 @@ func replaceMultipart(c *cmdContext, teamID, fileID, path, filename, mimeType st
 		return replaceMultipartPartPath(teamID, fileID, replID, uploadID, partNumber)
 	})
 	if err != nil {
-		return nil, err
+		return replID, nil, err
 	}
 	// Unlike upload-multipart, the replace-multipart complete is TERMINAL: it
 	// relinks the file and returns the updated file resource (no separate
 	// finalize — calling one 404s the already-consumed replacement).
-	return c.client.ActionWith(c.ctx, client.StyleFlat, http.MethodPost,
+	res, err := c.client.ActionWith(c.ctx, client.StyleFlat, http.MethodPost,
 		replaceMultipartCompletePath(teamID, fileID, replID, uploadID), map[string]any{"parts": parts})
+	return replID, res, err
 }
 
 // replaceMultipartInitPath returns /api/teams/{team}/files/{id}/replace/multipart.
@@ -743,7 +787,17 @@ func awaitsTranscode(res *client.Resource) (waits, kindKnown bool) {
 // kind but video, and for video only once transcodeStartGrace has elapsed
 // without a transcode appearing — in which case it warns and returns rather than
 // failing, because the upload itself genuinely succeeded.
-func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID string, timeout time.Duration) (*client.Resource, error) {
+//
+// wantMediaID is "" for upload. replace passes the replacement's media id
+// (MIO-4172): until the file reports that media_id, a poll describes the media
+// being REPLACED and is not evaluated at all. mio-backend commits the relink
+// after the response is sent (get_db commits in a yield dependency that FastAPI
+// exits once the response has gone out), so the first poll can still see the
+// old media — usually already READY, and sometimes FAILED, which is why the
+// replace was made. Evaluating it would either return the pre-replace file with
+// exit 0 or fail on the old media's status, and a READY read of it would open
+// the transcode window before the new transcode could be enqueued.
+func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID, wantMediaID string, timeout time.Duration) (*client.Resource, error) {
 	start := time.Now()
 	deadline := start.Add(timeout)
 	// The transcode window opens when the UPLOAD is done, not when the command
@@ -759,6 +813,17 @@ func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID string, timeout
 		res, err := c.client.Retrieve(c.ctx, filesPath(teamID, fileID))
 		if err != nil {
 			return nil, err
+		}
+		if got := resAttrString(res, "media_id"); wantMediaID != "" && got != wantMediaID {
+			if time.Now().After(deadline) {
+				return res, errs.New(errs.ExitGeneric,
+					"timed out after %s waiting for file %s to point at the replacement media %s; it still reports media_id %s",
+					timeout, fileID, wantMediaID, statusOr(got))
+			}
+			if err := pollPause(c); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		up := resAttrString(res, "status_upload")
 		tc := resAttrString(res, "status_transcode")
@@ -817,7 +882,7 @@ func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID string, timeout
 				// when --timeout was already spent on the upload.
 				if !warnedGaveUp {
 					fmt.Fprintf(w, "warning: transcoding had not started for this video after %s — "+
-						"returning with status_transcode unset. The file uploaded fine, but it is NOT transcoded: "+
+						"returning with status_transcode unset. The file is stored and usable, but it is NOT transcoded: "+
 						"video processing may be disabled on this backend, or its transcode queue may be backed up. "+
 						"Check with `mio media files retrieve %s`.\n", time.Since(windowStart).Round(time.Millisecond), fileID)
 					warnedGaveUp = true
@@ -833,11 +898,20 @@ func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID string, timeout
 			return res, errs.New(errs.ExitGeneric, "timed out after %s (upload=%s transcode=%s transcribe=%s)",
 				timeout, statusOr(up), statusOr(tc), statusOr(tr))
 		}
-		select {
-		case <-c.ctx.Done():
-			return nil, c.ctx.Err()
-		case <-time.After(mediaPollInterval):
+		if err := pollPause(c); err != nil {
+			return nil, err
 		}
+	}
+}
+
+// pollPause waits one mediaPollInterval, or returns early with the command
+// context's error.
+func pollPause(c *cmdContext) error {
+	select {
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+	case <-time.After(mediaPollInterval):
+		return nil
 	}
 }
 

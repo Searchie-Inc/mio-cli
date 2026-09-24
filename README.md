@@ -115,18 +115,32 @@ running binary cannot do this itself: the skill body is compiled into each
 release, so the old process only holds the old surface and could at best write
 the *previous* content under the *new* version's label.
 
-Three consequences worth knowing:
+Four consequences worth knowing:
 
 - The path is named in the output **when the file changes**. If your skill is
   already current the update says nothing about it — silence there means
   "already current", not "failed"; a failure or a skipped hand-edited file
-  always prints a line.
+  always prints a line, on stderr.
 - The skill lives at `~/.claude/skills/mio/SKILL.md` (or, for Codex,
   `$CODEX_HOME/skills/mio/SKILL.md` — `~/.codex/skills/mio/SKILL.md` when
   `CODEX_HOME` is unset), which is **outside** `--prefix`.
+- A **project** copy (`./.claude/skills/mio/SKILL.md` or
+  `./.codex/skills/mio/SKILL.md`, from `mio skills install --project`) is
+  refreshed the same way, but **only when `mio update` runs from that project's
+  directory** — it checks the current directory and nothing else, no parent
+  directories and no other checkouts. A project you did not update from keeps
+  its old copy: refresh it from that directory with
+  `mio skills install --project --target <claude|codex>`. `mio skills install`
+  also warns on stderr when the other scope holds an older managed copy.
+  **Version gate (MIO-4178):** the refresh is run by the binary doing the
+  updating, so project copies are covered only when you update *from* the
+  release after v0.23.0 or later. The update that brings you onto that release
+  still leaves them alone — refresh each once, from its directory.
 - A skill file you hand-edited, or one that was not installed by `mio`, is never
   touched. The update names that file and gives you the command for **that
-  target** — `mio skills install --force --target <claude|codex>`. Note the
+  target** — `mio skills install --force --target <claude|codex>`, or for a
+  project copy `mio skills install --project --force --target <claude|codex>`
+  run in the directory it names. Note the
   `--target` is load-bearing, and omitting it **can destroy data**. `--force`
   alone defaults to `claude`, so running it for an edited **Codex** skill acts on
   the Claude file instead. Depending on what is there it reports "already up to
@@ -381,7 +395,7 @@ Every command inherits these flags.
 | `--hub` | | config | Hub ID for hub-scoped resources. |
 | `--output` | `-o` | json (piped) / table (TTY) | Output format: `json`, `table`, `plain`. |
 | `--jq` | | | Filter JSON output with a [gojq](https://github.com/itchyny/gojq) expression. |
-| `--raw` | | false | Emit the raw JSON:API envelope instead of the flattened resource. |
+| `--raw` | | false | Emit the raw JSON:API envelope instead of the flattened resource. On an API error, when stderr is not a terminal, stderr is the API's own error document plus `meta.exit_code` (and `status` on an error object that has none). |
 | `--yes` | `-y` | false | Skip confirmation prompts on destructive operations. |
 | `--profile` | | default | Named config profile. |
 | `--api-base` | | config | Override the API base URL (`MIO_API_BASE_URL`). |
@@ -411,11 +425,16 @@ mio contacts retrieve <id> --jq '.email'
 # Pluck IDs from a list
 mio products list --jq '.[].id'
 
+# One bare id per line for a shell loop: -o plain prints the same shape for 0, 1 or 20 ids
+mio products list -o plain --jq '.[].id' | while read -r id; do echo "$id"; done
+
 # Chain into shell variable
 # -o plain when CAPTURING a string id: --jq alone renders it JSON-quoted (MIO-2792).
 HUB_ID=$(mio hubs list -o plain --jq '.[0].id')
 mio content list --hub "$HUB_ID"
 ```
+
+List commands return one page, usually 20 rows. When the API reports more (or, on `checkout orders|subscriptions|payments|webhooks list`, which report nothing, when a page comes back full), a one-line `note:` on stderr names the flag and cursor that fetch the next page (`--after <cursor>`; `--page-after` on `segments search`; `--limit` on `media search`, which returns no cursor); stdout stays the bare array. Both this note and the one-value-per-line `-o plain` shape land in the release after `v0.23.0` (MIO-4174).
 
 ---
 
@@ -446,7 +465,7 @@ Scripts and agents can branch on these stable codes.
 | `auth` | `token` — print the stored API key to stdout (`MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY`); exit 3 with empty stdout when none is stored |
 | `config` | `set`, `get`, `list` |
 | `api-keys` | `create`, `list`, `retrieve`, `delete` |
-| `teams` | `create`, `list`, `retrieve`, `update`, `delete`, `switch` (server-side switch + updates local context); `members list/add/remove` |
+| `teams` | `create` (`--name` and `--slug`, both required; needs a user access token, since the API refuses an API key here with 403), `list`, `retrieve`, `update` (`--name` only; the slug is fixed at creation), `delete` and `switch` (server-side switch + updates local context), which refuse an API key with 403 too; `members list/add/remove` |
 | `users` | `me`, `list`, `retrieve`, `update` |
 | `roles` | `create`, `list`, `retrieve`, `update`, `delete`; `permissions list` |
 | `hubs` | `create`, `list`, `retrieve`, `update`, `delete`; `navigation list/add/remove/reorder` (edit the menu item-by-item); `policies get` (read both documents + the gate AS STORED — always two items; note `version` does NOT distinguish custom text from the platform default, so compare the `content`), `policies update` (the document) and `policies gate` (the hub-level enforcement switch — a policy written without the gate is never presented); `scaffold` (one-command full-experience hub from a template live-fetched from the backend catalog; provenance-guarded resume on re-runs; writes the template's policies AND flips the gate they declare), `templates` (list the backend catalog's hub templates); `branding attach` (attach an uploaded raster image file as a managed branding asset — role `logo`/`favicon`/`social_image`/`auth_logo` — replacing any prior asset for that role and reporting the resolved public CDN URL as `resolved_public_url`) |
@@ -456,7 +475,7 @@ Scripts and agents can branch on these stable codes.
 | `segments` | `create`, `list`, `retrieve`, `update`, `delete`, `search`, `members`, `count` |
 | `content` | `create`, `list`, `retrieve`, `children`, `update`, `delete`, `restore`, `reorder`, `reconcile`. Link media with `--file-id` (preferred — takes the file id from `media files upload` and resolves its media_id) or `--media-id` (the Media PK, unvalidated by the API); they are mutually exclusive and an empty value for either is rejected rather than treated as an unlink. Use `--unset-media` to unlink deliberately — it is destructive and prompts (needs `--yes` off a terminal). `reconcile` materialises content items for a hub's playlists so their files are trackable (`hubs scaffold` already does this for the playlists it creates — client-side only from the release after `v0.23.0`); pass `--playlist-id` explicitly unless the server-side scaffold op built the hub — only that op records the provenance a bare run reads, so a hand-built or client-side-scaffolded hub rejects one |
 | `pages` | `create` (`--privacy public\|members\|private`, **default `members`**), `list`, `retrieve` (add `--tree` for raw published node tree), `update`, `delete`, `home`, `publish` (requires `--if-match <draft_version>`); `tree get/set` (author a page's draft node-tree; `set` takes `--file` + optional `--if-match` — omit it for the first tree on a draft-less page, it defaults to `0`); `sections create/list/update/delete/reorder`; `catalog templates/section-types/scaffold` (the page-builder catalog — no `catalog list` verb exists) |
-| `media files` | `list`, `retrieve`, `durable-url` (non-expiring hub-scoped image URL for page trees), `update`, `delete`; ingest from the CLI: `upload` (create → presigned S3 PUT → finalize; multipart above 100 MB, or at any size with `--multipart`; `--part-size-mb` default 16, min 5), `replace` (same threshold and flags), `finalize`, `transcode`, `register-synthetic`; `cards get/set`, `chapters get/set` |
+| `media files` | `list`, `retrieve`, `durable-url` (non-expiring hub-scoped image URL for page trees), `update`, `delete`; ingest from the CLI: `upload` (create → presigned S3 PUT → finalize; multipart above 100 MB, or at any size with `--multipart`; `--part-size-mb` default 16, min 5), `replace` (same threshold and flags; `--wait`/`--timeout` as for upload, waiting first for the file to point at the replacement media), `finalize`, `transcode`, `register-synthetic`; `cards get/set`, `chapters get/set` |
 | `media folders` | `list`, `create`, `retrieve`, `update`, `delete`, `move` (`--parent-id`/`--to-root`) |
 | `media search` | hybrid search over the team's transcripts (`--query`, `--hub-id`, `--limit`) |
 | `media playlists` | `list`, `create`, `retrieve`, `update`, `delete`, `set-cover` (`--file-id`); `items add/list/remove/reorder` — populate a playlist with media files (`--playlist-id`, `--file-id`, `--position`). **`list` is TEAM-wide** — the API's team-playlists route has no hub filter, so `--hub` warns on stderr and you still get every playlist on the team; use `media hub-playlists list --hub <id>` for one hub's. On `create`, `--hub-id` sets which hub the playlist belongs to and is not the `--hub` scope flag |
@@ -538,7 +557,9 @@ Codex — and in [AGENTS.md](./AGENTS.md#page-tree-render-contract).
 
 Errors are rendered TTY-aware: on an interactive terminal you get a friendly one-line `Error: <detail>` plus a dimmed `(exit code N)`; when stderr is piped or otherwise non-interactive you get the machine-readable JSON:API `errors` array with the exit code echoed in `meta.exit_code`. Either way the process exit code is the same, so scripts can branch on the exit code (and, off a TTY, on the body).
 
-In that envelope — **from the release after `v0.12.1`; on `v0.12.1` and earlier `status` is reconstructed from the exit code, so a 403 reads `"401"` and a 409 or 422 reads `"400"` (MIO-2656)** — `errors[].status` is the **real HTTP status the API returned** — a 403 reads `"403"`, a 409 `"409"`, a 422 `"422"`, and so on. Exit codes stay deliberately coarse (401 and 403 both exit 3; 400, 409 and 422 all exit 2), so use `status` when you need the precise distinction and `meta.exit_code` when the coarse class is enough. For failures that never reached the network (bad flag, unreadable file, no API key) there is no HTTP status, and `status` falls back to the exit code's class.
+In that envelope — **from the release after `v0.12.1`; on `v0.12.1` and earlier `status` is reconstructed from the exit code, so a 403 reads `"401"` and a 409 or 422 reads `"400"` (MIO-2656)** — `errors[0].status` (without `--raw`; under `--raw` it is the API body's own `status` member, MIO-3912) is the **real HTTP status the API returned** — a 403 reads `"403"`, a 409 `"409"`, a 422 `"422"`, and so on. Exit codes stay deliberately coarse (401 and 403 both exit 3; 400, 409 and 422 all exit 2), so use `status` when you need the precise distinction and `meta.exit_code` when the coarse class is enough. For failures that never reached the network (bad flag, unreadable file, no API key) there is no HTTP status, and `status` falls back to the exit code's class.
+
+When the API answered with a JSON:API error body, the envelope also keeps **every member the API sent** — **from the release after `v0.23.0`; on `v0.23.0` and earlier only `status`, `detail` and `meta.exit_code` are there (MIO-3912)**. There is one entry per API error object, each with its `code` (the stable machine token — branch on it, not on `detail`), `title`, `source`, `id` and every `meta` member, including `meta.request_id` when the API sent one (quote it when reporting a backend failure; a few endpoints send no `meta`, and then there is none); `meta.exit_code` is added into that `meta`, not in place of it. `errors[0].status` stays the response's status and `errors[0].detail` the CLI's own message, which can add context or a `hint:`. With `--raw`, stderr is instead the API's error document itself — top-level members, member order, numbers and strings as sent — with exactly two additions: `meta.exit_code` on every error object, and `status` on any error object that arrived without one. Its `detail` is the API's, so the CLI's context and hints are not in it. A failure with no JSON:API error body (a network-free failure, or a proxy's HTML page) keeps the `status`/`detail`/`meta.exit_code` shape in both modes, and exit codes are the same in both.
 
 ---
 

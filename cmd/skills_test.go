@@ -26,8 +26,7 @@ func runSkills(t *testing.T, args ...string) (stdout, stderr string, err error) 
 }
 
 func TestSkillsInstall_WritesClaudeUserTarget(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateSkillHome(t)
 
 	stdout, _, err := runSkills(t, "skills", "install")
 	if err != nil {
@@ -69,9 +68,7 @@ func TestSkillsInstall_WritesClaudeUserTarget(t *testing.T) {
 func TestSkillsInstall_ProjectScopeWritesDotClaude(t *testing.T) {
 	// --project writes a relative ./.claude path, but isolate HOME too so target
 	// detection can never so much as stat a real home.
-	t.Setenv("HOME", t.TempDir())
-	dir := t.TempDir()
-	t.Chdir(dir)
+	_, dir := isolateSkillSandbox(t)
 
 	if _, _, err := runSkills(t, "skills", "install", "--project"); err != nil {
 		t.Fatalf("install --project: %v", err)
@@ -83,7 +80,8 @@ func TestSkillsInstall_ProjectScopeWritesDotClaude(t *testing.T) {
 }
 
 func TestSkillsInstall_CodexTarget(t *testing.T) {
-	codex := t.TempDir()
+	isolateSkillSandbox(t)
+	codex := resolvedTempDir(t)
 	t.Setenv("CODEX_HOME", codex)
 
 	if _, _, err := runSkills(t, "skills", "install", "--target", "codex"); err != nil {
@@ -128,9 +126,7 @@ func TestSkillsPrint_EmitsBody(t *testing.T) {
 }
 
 func TestRefreshManagedSkills_RefreshesUnmodifiedManagedInstall(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex")) // isolate codex target
+	home := isolateSkillHome(t)
 
 	// Simulate a prior install from an older CLI version: managed markers, but an
 	// untouched body (hash matches).
@@ -147,15 +143,15 @@ func TestRefreshManagedSkills_RefreshesUnmodifiedManagedInstall(t *testing.T) {
 	// Stand in for that binary writing its own content.
 	oldExec := skillRefreshExec
 	t.Cleanup(func() { skillRefreshExec = oldExec })
-	skillRefreshExec = func(_, target string) error {
-		if target != "claude" {
+	skillRefreshExec = func(_ string, loc skillLocation) error {
+		if loc.target != "claude" || loc.project {
 			return nil
 		}
 		return writeSkillFile(path, renderSkill("9.9.9"))
 	}
 
 	var buf bytes.Buffer
-	refreshManagedSkills(&buf, "/opt/mio/bin/mio")
+	refreshManagedSkills(&buf, &buf, "/opt/mio/bin/mio")
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -173,9 +169,7 @@ func TestRefreshManagedSkills_RefreshesUnmodifiedManagedInstall(t *testing.T) {
 }
 
 func TestRefreshManagedSkills_NeverClobbersHandEditedInstall(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	home := isolateSkillHome(t)
 
 	// A managed install the user hand-edited: body hash no longer matches.
 	edited := strings.Replace(renderSkill("0.0.1"),
@@ -189,7 +183,7 @@ func TestRefreshManagedSkills_NeverClobbersHandEditedInstall(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	refreshManagedSkills(&buf, "/opt/mio/bin/mio")
+	refreshManagedSkills(&buf, &buf, "/opt/mio/bin/mio")
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -204,12 +198,10 @@ func TestRefreshManagedSkills_NeverClobbersHandEditedInstall(t *testing.T) {
 }
 
 func TestRefreshManagedSkills_NudgesWhenNeverInstalled(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	isolateSkillSandbox(t)
 
 	var buf bytes.Buffer
-	refreshManagedSkills(&buf, "/opt/mio/bin/mio")
+	refreshManagedSkills(&buf, &buf, "/opt/mio/bin/mio")
 
 	// "mio skills install" alone cannot discriminate — it is a substring of the
 	// edited-locally message too ("run 'mio skills install --force --target ...'"), so
@@ -224,8 +216,7 @@ func TestRefreshManagedSkills_NudgesWhenNeverInstalled(t *testing.T) {
 }
 
 func TestSkillsInstall_ForceOverwritesHandEdited(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateSkillHome(t)
 
 	edited := strings.Replace(renderSkill("0.0.1"),
 		"# mio — Membership.io CLI", "# HAND EDITED", 1)

@@ -1,23 +1,33 @@
 package cmd
 
 // hubs_blob_keys.go — best-effort client-side key validation for the hub's
-// opaque JSONB presentation blobs authored via `mio hubs create` /
-// `mio hubs update` --branding-json / --settings-json / --meta-json (MIO-2515).
+// JSONB presentation blobs authored via `mio hubs create` / `mio hubs update`
+// --branding-json / --settings-json / --meta-json (MIO-2515, MIO-4171).
 //
-// WHY A CLIENT-SIDE ALLOWLIST (and not a hard server-enforced schema):
-// The backend stores branding/settings/meta as opaque JSONB — app/hubs/models.py
-// types them `dict[str, Any] | None` and app/hubs/schemas.py HubCreate/
-// UpdateAttributes accept arbitrary keys — so there is NO machine-readable
-// schema to publish or enforce, and a bogus key round-trips as success. The
-// authoritative RENDER contract for these blobs is the hub frontend (mio-hub, a
-// separate repo), whose accepted keys the CLI cannot enumerate, and the blob
-// shape is explicitly still evolving (legacy branding keys are being retired
-// once FE Epic 2 ships). A HARD reject of every unlisted key would therefore
-// false-positive on legitimate FE keys. So the CLI WARNS by default (naming the
-// offending key + the accepted set, on stderr so it never corrupts --output
-// json/yaml) and ERRORS only behind --strict-keys. The allowlist is a curated
-// set of keys we can cite to a real backend read or the demo-hub seeder — see
-// each map's provenance comment. Nothing here is invented.
+// WHY A CLIENT-SIDE ALLOWLIST AT ALL — and why only where it still earns it:
+// the CLI is a conduit, not a validation layer, so it checks keys only where the
+// API cannot report a typo because it stores the key and silently does nothing
+// with it. That is true, today, of:
+//   - branding: validate_branding (mio-backend app/hubs/validation.py) checks
+//     the VALUES of keys ending in _url and stores every other key as sent;
+//   - meta: no server-side validator at all (app/hubs/schemas.py);
+//   - settings.achievements sub-keys: see settingsVerbatimNestedKeys.
+//
+// It is NOT true of the rest of settings. Since MIO-3334 (mio-backend #757) the
+// API enforces its own settings allowlist — an unknown top-level key, or an
+// unknown sub-key of policies/registration/email/auth, is a 422 naming the key
+// and its JSON pointer. The CLI used to keep a hand-copied mirror of that list;
+// it fell behind the server in both directions (warning "stored verbatim" on
+// keys the API rejects, and warning on — or, under --strict-keys, blocking —
+// keys the API accepts), so it is gone (MIO-4171). Those keys are the API's to
+// judge, with or without --strict-keys.
+//
+// Where the CLI does check, it WARNS by default (naming the offending key + the
+// accepted set, on stderr so it never corrupts --output json/yaml) and ERRORS
+// only behind --strict-keys, because the authoritative RENDER contract is the
+// hub frontend (mio-hub), whose accepted keys the CLI cannot enumerate — a hard
+// reject of every unlisted key would false-positive on legitimate FE keys. Each
+// blob's message says what the API does with THAT blob's keys (blobKeyCheck).
 
 import (
 	"fmt"
@@ -71,28 +81,6 @@ var brandingKeys = map[string]bool{
 	"labels": true,
 }
 
-// settingsKeys is the accepted TOP-LEVEL key set for --settings-json.
-// Provenance: app/seeders/hub_seeder.py _DEMO_HUB_SETTINGS (customCss/menu/
-// header/footer/background/appearance/policies) plus the backend-read sections
-// registration (app/hubs/registration.py, MIO-761), email (app/hubs/service.py
-// settings.email.{from_name,reply_to}, MIO-1229), auth (app/hubs/service.py
-// settings.auth.allowed_redirect_origins, MIO-616) and achievements
-// (app/achievements/feature_flag.py settings.achievements.enabled — the
-// per-hub gate for the achievements module, MIO-3054/MIO-3412).
-var settingsKeys = map[string]bool{
-	"customCss":    true,
-	"menu":         true,
-	"header":       true,
-	"footer":       true,
-	"background":   true,
-	"appearance":   true,
-	"policies":     true,
-	"registration": true,
-	"email":        true,
-	"auth":         true,
-	"achievements": true,
-}
-
 // metaKeys is the accepted TOP-LEVEL key set for --meta-json (feature guards).
 // Provenance: app/seeders/hub_seeder.py _DEMO_HUB_META.
 var metaKeys = map[string]bool{
@@ -102,43 +90,102 @@ var metaKeys = map[string]bool{
 	"moderation":      true,
 }
 
-// settingsNestedKeys deep-validates ONLY the settings sections whose sub-key
-// schema is backend-COMPLETE and stable — safe to check one level deeper.
-// Provenance:
-//   - policies{enabled,show,tos,privacy_policy} — app/hubs/service.py (MIO-2020);
-//     tos/privacy_policy documents are stripped on write and managed via
-//     `hubs policies update`, but remain valid keys.
-//   - registration{enabled} — app/hubs/registration.py (MIO-761).
-//   - email{from_name,reply_to} — app/hubs/service.py (MIO-1229), mirrors
-//     `hubs email-settings update`.
-//   - auth{allowed_redirect_origins} — app/hubs/service.py (MIO-616); stripped on
-//     write and managed via `hubs redirect-origins set`, but a valid key.
-//   - achievements{enabled} — app/achievements/feature_flag.py (MIO-3054): the
-//     per-hub gate is an IDENTITY check (`is True`), read from exactly this key.
+// settingsVerbatimNestedKeys is the ONLY settings check the CLI still makes: the
+// sub-keys of the one settings section that the API stores as sent while
+// something reads it by exact key.
 //
-// Branding, meta, and the other settings sections are FE-owned / still evolving,
-// so they are validated only at the top level (no nested map here).
-var settingsNestedKeys = map[string]map[string]bool{
-	"policies":     {"enabled": true, "show": true, "tos": true, "privacy_policy": true},
-	"registration": {"enabled": true},
-	"email":        {"from_name": true, "reply_to": true},
-	"auth":         {"allowed_redirect_origins": true},
+//   - achievements{enabled} — app/achievements/feature_flag.py
+//     achievements_enabled() reads exactly settings.achievements.enabled, and
+//     opts a hub out only on the literal false (default-on, D-004). The API's
+//     own nested allowlist (_SETTINGS_NESTED_KEYS, app/hubs/validation.py)
+//     deliberately stops at policies/registration/email/auth and leaves
+//     achievements opaque past the top level, so `{"achievements":{"enabld":
+//     false}}` is saved and leaves achievements ON — verified against the live
+//     API in the MIO-4171 PR.
+//
+// Do NOT add a section the API validates itself (top-level keys, policies,
+// registration, email, auth): that is the stale-mirror bug MIO-4171 removed.
+// settingsDeferCases probes each of those five levels with a key no allowlist
+// would list, so a copy of any of them — stale or current — fails the suite.
+var settingsVerbatimNestedKeys = map[string]map[string]bool{
 	"achievements": {"enabled": true},
 }
 
-// *KeysHelp are the accepted top-level key sets rendered as sorted,
+// brandingKeysHelp / metaKeysHelp are the accepted key sets rendered as sorted,
 // comma-separated strings for --help text (so `mio hubs create --help` surfaces
 // the best-effort schema — MIO-2515 acceptance clause 1). Derived from the maps
 // above; Go initializes these after the maps they depend on.
 var (
 	brandingKeysHelp = strings.Join(sortedKeySet(brandingKeys), ", ")
-	settingsKeysHelp = strings.Join(sortedKeySet(settingsKeys), ", ")
 	metaKeysHelp     = strings.Join(sortedKeySet(metaKeys), ", ")
+)
+
+// The --settings-json and --strict-keys help say which settings keys the CLI
+// checks itself, now that the API has an allowlist of its own. They differ per
+// command, because the commands check different things: `hubs update` also
+// stops settings.policies (checkPoliciesOnUpdate, MIO-2811), which the API
+// accepts there and discards, and `hubs create` does not. A string true of one
+// command registered on the other is false there — which is how "It checks no
+// other --settings-json key" reached `hubs update` (MIO-4171 blind review).
+// TestHubsSettingsHelp_NamesExactlyTheChecksEachCommandMakes measures each
+// command's checks on the wire and holds both strings to them.
+const (
+	settingsKeysHelpText = "Settings keys are left to the API, which rejects an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, with a 422 (exit 2) that names it. " +
+		"The CLI checks only the sub-keys of settings.achievements, which the API stores as sent (unknown ones warn; error with --strict-keys)."
+	settingsKeysUpdateHelpText = "Settings keys are left to the API, which rejects an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, with a 422 (exit 2) that names it. " +
+		"The CLI checks two things itself, each a warning (error with --strict-keys): the sub-keys of settings.achievements, which the API stores as sent, and settings.policies, which the API accepts on update and discards (use 'mio hubs policies' instead)."
+
+	strictKeysHelpText = "Reject unknown keys with an error instead of a warning, where the API would store them as sent: --branding-json and --meta-json keys, and settings.achievements sub-keys. " +
+		"It checks no other --settings-json key: the API rejects an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, with a 422 (exit 2) either way. " +
+		"Best-effort allowlist; accepted keys are listed in each *-json flag's help and docs/internal/api-surface.md."
+	strictKeysUpdateHelpText = "Reject unknown keys with an error instead of a warning, where the API would store them as sent: --branding-json and --meta-json keys, and settings.achievements sub-keys. " +
+		"On update it also turns the settings.policies warning into an error, with no request: the API accepts settings.policies on update and discards it (use 'mio hubs policies' instead). " +
+		"It checks no other --settings-json key: the API rejects an unknown top-level key, or an unknown sub-key of registration/email/auth, with a 422 (exit 2) either way. " +
+		"Best-effort allowlist; accepted keys are listed in each *-json flag's help and docs/internal/api-surface.md."
+)
+
+// blobKeyCheck is one presentation blob's best-effort key check: the keys the
+// CLI can vouch for, and — the reason the check exists at all — what the API
+// does with a key outside them. Every message about a blob's keys carries its
+// own `stored` sentence, so no blob inherits a claim that is only true of
+// another (MIO-4171: one shared "stored verbatim" sentence outlived its truth
+// for settings by a month).
+type blobKeyCheck struct {
+	// name is the attribute name, and --<name>-json the flag.
+	name string
+	// top is the accepted top-level key set; nil means the CLI does not check
+	// this blob's top level (settings: the API does).
+	top map[string]bool
+	// nested deep-validates the sub-keys of the sections it names, one level
+	// down, when the section is present as an object.
+	nested map[string]map[string]bool
+	// stored says what the API does with an unrecognized key here.
+	stored string
+}
+
+var (
+	brandingKeyCheck = blobKeyCheck{
+		name: "branding",
+		top:  brandingKeys,
+		stored: "The API stores branding keys as sent (it validates only the values of keys ending in _url), so a misspelled key is saved and silently has no effect. " +
+			"This allowlist is best-effort; the hub frontend is the authoritative render schema.",
+	}
+	settingsKeyCheck = blobKeyCheck{
+		name:   "settings",
+		nested: settingsVerbatimNestedKeys,
+		stored: "The API stores the sub-keys of settings.achievements as sent and reads only settings.achievements.enabled, so a misspelled sub-key is saved and silently has no effect.",
+	}
+	metaKeyCheck = blobKeyCheck{
+		name: "meta",
+		top:  metaKeys,
+		stored: "The API stores meta keys as sent, with no server-side check, so a misspelled key is saved and silently has no effect. " +
+			"This allowlist is best-effort; the hub frontend is the authoritative render schema.",
+	}
 )
 
 // strictKeyDropHint is the tail of the strict-mode rejection message: what to do
 // about an unrecognized key on a command that HAS --strict-keys (hubs
-// create/update).
+// create/update). It follows the blob's own `stored` sentence.
 //
 // It is a named const, not an inline literal, because a caller with no
 // --strict-keys flag to drop must be able to swap it for guidance that actually
@@ -147,7 +194,7 @@ var (
 // would be a dead end (see scaffoldStrictKeyErr, MIO-2604). Referencing the same
 // const on both ends keeps the swap from silently no-op'ing if this wording ever
 // changes.
-const strictKeyDropHint = "These blobs are stored verbatim by the API with no server-side validation, so a misspelled key silently has no effect. Fix the key, or drop --strict-keys to send unrecognized keys anyway (the hub frontend is the authoritative render schema)."
+const strictKeyDropHint = "Fix the key, or drop --strict-keys to send it anyway."
 
 // unknownBlobKey records one key that is not on the allowlist, with the accepted
 // key set at the same level so the error/warning can suggest the right spelling.
@@ -158,38 +205,40 @@ type unknownBlobKey struct {
 }
 
 // validateBlobKeys checks the user-supplied keys of one presentation blob
-// against a curated allowlist. blobName is the top-level attribute name
-// ("branding"/"settings"/"meta"); allow is the accepted top-level key set;
-// nested (may be nil) deep-validates the sub-keys of the sections it names.
+// against its blobKeyCheck: c.top (when non-nil) is the accepted top-level key
+// set, and c.nested deep-validates the sub-keys of the sections it names.
 //
 // It follows validateNavigationBlob's shape: collect the violations, then in
 // strict mode return errs.ExitUsage naming the first offender (+ the accepted
-// set, + a hint that dropping --strict-keys allows it), else write a
-// "Warning: …" line to warnW (the caller passes cmd.ErrOrStderr()) so it never
-// corrupts --output json/yaml on stdout. warnW rather than a *cobra.Command
-// keeps this callable from the cobra-free applyHubBlobs builder (MIO-2543).
-// Only the KEYS the caller passed are inspected — on update this must be the
-// incoming object, never the retrieved/merged blob, so pre-existing keys on
-// older hubs are not flagged.
-func validateBlobKeys(warnW io.Writer, blobName string, obj map[string]any, allow map[string]bool, nested map[string]map[string]bool, strict bool) error {
+// set, + what the API does with it, + a hint that dropping --strict-keys sends
+// it), else write a "Warning: …" line to warnW (the caller passes
+// cmd.ErrOrStderr()) so it never corrupts --output json/yaml on stdout. warnW
+// rather than a *cobra.Command keeps this callable from the cobra-free
+// applyHubBlobs builder (MIO-2543). Only the KEYS the caller passed are
+// inspected — on update this must be the incoming object, never the
+// retrieved/merged blob, so pre-existing keys on older hubs are not flagged.
+func validateBlobKeys(warnW io.Writer, c blobKeyCheck, obj map[string]any, strict bool) error {
 	if obj == nil {
 		return nil
 	}
+	blobName := c.name
 
 	var unknown []unknownBlobKey
-	// Unknown top-level keys.
-	for k := range obj {
-		if !allow[k] {
-			unknown = append(unknown, unknownBlobKey{
-				path:    blobName + "." + k,
-				level:   blobName,
-				allowed: sortedKeySet(allow),
-			})
+	// Unknown top-level keys — only for a blob whose top level the CLI checks.
+	if c.top != nil {
+		for k := range obj {
+			if !c.top[k] {
+				unknown = append(unknown, unknownBlobKey{
+					path:    blobName + "." + k,
+					level:   blobName,
+					allowed: sortedKeySet(c.top),
+				})
+			}
 		}
 	}
-	// Unknown sub-keys, but only for the stable sections we deep-validate and
-	// only when the section is present as an object.
-	for section, sub := range nested {
+	// Unknown sub-keys, but only for the sections we deep-validate and only when
+	// the section is present as an object.
+	for section, sub := range c.nested {
 		m, ok := obj[section].(map[string]any)
 		if !ok {
 			continue
@@ -227,11 +276,9 @@ func validateBlobKeys(warnW io.Writer, blobName string, obj map[string]any, allo
 		flag, first.path, first.level, strings.Join(first.allowed, ", "), more)
 
 	if strict {
-		return errs.New(errs.ExitUsage, "%s. %s", detail, strictKeyDropHint)
+		return errs.New(errs.ExitUsage, "%s. %s %s", detail, c.stored, strictKeyDropHint)
 	}
-	fmt.Fprintf(warnW,
-		"Warning: %s. It is stored verbatim (a typo silently has no effect); pass --strict-keys to make this an error. This allowlist is best-effort — the hub frontend is the authoritative render schema.\n",
-		detail)
+	fmt.Fprintf(warnW, "Warning: %s. %s Pass --strict-keys to make this an error.\n", detail, c.stored)
 	return nil
 }
 
@@ -264,9 +311,10 @@ const policiesUnwritableOnUpdateMsg = "settings.policies cannot be written by `h
 // checkPoliciesOnUpdate warns (or, with --strict-keys, errors) when an update's
 // --settings-json carries `policies`.
 //
-// `policies` is a LEGITIMATE settings key — it is on the allowlist, it is real on
-// create, and validateBlobKeys is right not to flag it. This is a different
-// failure: a known key on the wrong verb. Without this, `hubs update
+// `policies` is a LEGITIMATE settings key — the API's own allowlist accepts it,
+// it is real on create, and no key check flags it. This is a different
+// failure: a known key on the wrong verb, which the API cannot report because
+// it accepts the key and then discards it. Without this, `hubs update
 // --settings-json '{"policies":{"enabled":true}}'` prints success, exits 0 and
 // changes nothing, and the only way to discover that is to read backend source.
 func checkPoliciesOnUpdate(warnW io.Writer, settings map[string]any, unsetPaths []unsetPath, strict bool) error {

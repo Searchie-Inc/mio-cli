@@ -93,6 +93,27 @@ func metaRefs(v any) []string {
 // message so the cause string is useful to humans and greppable by agents.
 type apiErrorList struct {
 	Errors []apiError
+
+	// doc is the response body the Errors were decoded from, byte-for-byte.
+	// Errors keeps only the members message() renders; doc keeps all of them
+	// (code, title, id, links, every meta member, members the CLI has never
+	// heard of), so main.go's error envelope can carry what the API sent
+	// instead of a CLI-side reconstruction of it (MIO-3912).
+	doc []byte
+}
+
+// newAPIErrorList builds the error for a body carrying a JSON:API `errors`
+// array, retaining the body itself as the error's document.
+func newAPIErrorList(list []apiError, body []byte) *apiErrorList {
+	return &apiErrorList{Errors: list, doc: append([]byte(nil), body...)}
+}
+
+// APIErrorDocument implements errs.APIErrorDocumentCarrier.
+func (l *apiErrorList) APIErrorDocument() []byte {
+	if l == nil {
+		return nil
+	}
+	return l.doc
 }
 
 // Error implements the error interface by joining all error messages.
