@@ -21,7 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -118,8 +118,6 @@ func newPagedStub(t *testing.T, shape, cursor string, forceMore bool) *pagedStub
 	return ps
 }
 
-var noteFlagCursor = regexp.MustCompile(`--(after|page-after) (\S+)`)
-
 // moreRowsCase is one list command in one backend shape.
 type moreRowsCase struct {
 	name    string
@@ -127,27 +125,64 @@ type moreRowsCase struct {
 	args    []string // command args, without --team / -o
 	flag    string   // the flag the note must name: "after", "page-after" or "limit"
 	usesCur bool     // whether the note must carry a cursor
+	cursor  string   // the cursor the stub hands out; "" = a plain token
 }
+
+// discussionsCursor is the shape community/routers/discussions_admin.py
+// _build_cursor emits (and comments, messages): "<isoformat>|<id>". The `|`
+// makes an unquoted copy of it a shell pipe.
+const discussionsCursor = "2026-09-24T11:00:00.123456+00:00|019f0000-0000-7000-8000-0000000000d9"
 
 func moreRowsCases() []moreRowsCase {
 	return []moreRowsCase{
 		// The four commands QA hit, each in its backend's real shape.
-		{"products list (meta.page.has_more + links.next)", "products", []string{"products", "list"}, "after", true},
-		{"coupons list (meta.page.has_more + links.next)", "products", []string{"coupons", "list"}, "after", true},
-		{"tags list (top-level has_more + links.next)", "tags", []string{"tags", "list"}, "after", true},
-		{"media files list (build_page_meta)", "build_page_meta", []string{"media", "files", "list"}, "after", true},
-		{"community discussions list (meta.next_cursor)", "discussions", []string{"community", "discussions", "list", "--hub", "019f0000-0000-7000-8000-0000000000a1"}, "after", true},
-		{"checkout payments list (meta.page.next_cursor, no links)", "checkout", []string{"checkout", "payments", "list", "--hub", "019f0000-0000-7000-8000-0000000000a1"}, "after", true},
+		{"products list (meta.page.has_more + links.next)", "products", []string{"products", "list"}, "after", true, ""},
+		{"coupons list (meta.page.has_more + links.next)", "products", []string{"coupons", "list"}, "after", true, ""},
+		{"tags list (top-level has_more + links.next)", "tags", []string{"tags", "list"}, "after", true, ""},
+		{"media files list (build_page_meta)", "build_page_meta", []string{"media", "files", "list"}, "after", true, ""},
+		{"community discussions list (meta.next_cursor)", "discussions", []string{"community", "discussions", "list", "--hub", "019f0000-0000-7000-8000-0000000000a1"}, "after", true, ""},
+		// The backend's real discussions cursor: the note must survive a shell.
+		{"community discussions list (<iso>|<id> cursor)", "discussions", []string{"community", "discussions", "list", "--hub", "019f0000-0000-7000-8000-0000000000a1"}, "after", true, discussionsCursor},
+		{"checkout payments list (meta.page.next_cursor, no links)", "checkout", []string{"checkout", "payments", "list", "--hub", "019f0000-0000-7000-8000-0000000000a1"}, "after", true, ""},
 		// segments search pages with --page-after, carried in the POST body.
-		{"segments search (--page-after)", "discussions", []string{"segments", "search", "--conditions", `{"version":1,"groups":[]}`}, "page-after", true},
+		{"segments search (--page-after)", "discussions", []string{"segments", "search", "--conditions", `{"version":1,"groups":[]}`}, "page-after", true, ""},
 		// media search is top-N: has_more with no cursor, and no --after flag.
-		{"media search (top_n, --limit only)", "top_n", []string{"media", "search", "--query", "x"}, "limit", false},
+		{"media search (top_n, --limit only)", "top_n", []string{"media", "search", "--query", "x"}, "limit", false, ""},
 	}
 }
 
+// followNote returns the argv a POSIX shell produces from the note's
+// "fetch the next page with …" suggestion — the oracle for "an agent can paste
+// it". printf prints one word per line, so an unquoted `|` in a cursor becomes
+// a pipe and the words come back wrong (or not at all).
+func followNote(t *testing.T, note string) []string {
+	t.Helper()
+	const lead = "fetch the next page with "
+	i := strings.Index(note, lead)
+	if i < 0 {
+		t.Fatalf("the note offers no next-page command; got %q", note)
+	}
+	suggestion := note[i+len(lead):]
+	if j := strings.Index(suggestion, " (or raise --"); j >= 0 {
+		suggestion = suggestion[:j]
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no POSIX sh on this platform; CI (ubuntu) runs this")
+	}
+	out, err := exec.Command(sh, "-c", "printf '%s\\n' "+suggestion).CombinedOutput()
+	if err != nil {
+		t.Fatalf("the note's suggestion %q is not valid shell: %v; output=%q", suggestion, err, out)
+	}
+	return strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+}
+
 func TestMoreRowsNote_StderrNamesTheFlag_StdoutUnchanged(t *testing.T) {
-	const cursor = "cur-page-2"
 	for _, tc := range moreRowsCases() {
+		cursor := tc.cursor
+		if cursor == "" {
+			cursor = "cur-page-2"
+		}
 		for _, format := range []string{"json", "table", "plain"} {
 			t.Run(tc.name+"/"+format, func(t *testing.T) {
 				more := newPagedStub(t, tc.shape, cursor, true)
@@ -178,18 +213,19 @@ func TestMoreRowsNote_StderrNamesTheFlag_StdoutUnchanged(t *testing.T) {
 					t.Errorf("the note must name --%s; got %q", tc.flag, lines[0])
 				}
 				if !tc.usesCur {
-					if strings.Contains(lines[0], cursor) || noteFlagCursor.MatchString(lines[0]) {
+					if strings.Contains(lines[0], cursor) || strings.Contains(lines[0], "fetch the next page") {
 						t.Errorf("this API returns no cursor, so the note must not offer one; got %q", lines[0])
 					}
 					return
 				}
-				m := noteFlagCursor.FindStringSubmatch(lines[0])
-				if m == nil || m[1] != tc.flag {
-					t.Fatalf("the note must read '--%s <cursor>'; got %q", tc.flag, lines[0])
-				}
-				// Follow the note literally: the cursor it printed must reach the
+				// Follow the note literally, through a shell: it must yield
+				// exactly `--<flag> <cursor>`, and that cursor must reach the
 				// wire and fetch the next page.
-				next := runContract(t, baseEnv(more.srv.URL), append(args, "--"+m[1], m[2])...)
+				words := followNote(t, lines[0])
+				if len(words) != 2 || words[0] != "--"+tc.flag || words[1] != cursor {
+					t.Fatalf("pasted into a shell, the note's suggestion gives argv %q; want [--%s %q]; note=%q", words, tc.flag, cursor, lines[0])
+				}
+				next := runContract(t, baseEnv(more.srv.URL), append(args, words...)...)
 				if next.Code != errs.ExitOK {
 					t.Fatalf("following the note exited %d; stderr=%q", next.Code, next.Stderr)
 				}
@@ -206,7 +242,7 @@ func TestMoreRowsNote_StderrNamesTheFlag_StdoutUnchanged(t *testing.T) {
 					sent = more.bodyAfter
 				}
 				if len(sent) == 0 || sent[len(sent)-1] != cursor {
-					t.Errorf("the note's cursor %q did not reach the wire as page[after]; sent %q", m[2], sent)
+					t.Errorf("the note's cursor %q did not reach the wire as page[after]; sent %q", words[1], sent)
 				}
 			})
 		}
@@ -327,6 +363,12 @@ func TestMoreRowsNote_Wording(t *testing.T) {
 		{"no paging flag at all", cmdWith(), col(20, withCursor),
 			"note: the API returned 20 rows and has more; this command has no paging flag, and --raw shows the API's meta and links"},
 		{"last page", cmdWith("limit", "after"), col(20, last), ""},
+		// A cursor a shell would split or reinterpret is single-quoted; a
+		// base64url / UUID cursor is printed bare, as above.
+		{"shell-unsafe cursor is quoted", cmdWith("after"), col(20, `{"data":[],"meta":{"has_more":true,"next_cursor":"2026-09-24T11:00:00+00:00|abc"}}`),
+			"note: the API returned 20 rows and has more; fetch the next page with --after '2026-09-24T11:00:00+00:00|abc'"},
+		{"single quote inside a cursor", cmdWith("after"), col(20, `{"data":[],"meta":{"has_more":true,"next_cursor":"a'b c"}}`),
+			`note: the API returned 20 rows and has more; fetch the next page with --after 'a'\''b c'`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

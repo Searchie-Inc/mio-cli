@@ -12,6 +12,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -38,7 +39,7 @@ func moreRowsNote(cmd *cobra.Command, col *client.Collection) string {
 	limit := registeredFlag(cmd, "limit", "page-size")
 	switch {
 	case cursor != "" && after != "":
-		s := fmt.Sprintf("%s; fetch the next page with --%s %s", head, after, cursor)
+		s := fmt.Sprintf("%s; fetch the next page with --%s %s", head, after, shellQuote(cursor))
 		if limit != "" {
 			s += fmt.Sprintf(" (or raise --%s)", limit)
 		}
@@ -48,6 +49,27 @@ func moreRowsNote(cmd *cobra.Command, col *client.Collection) string {
 	default:
 		return head + "; this command has no paging flag, and --raw shows the API's meta and links"
 	}
+}
+
+// shellQuote returns s as one POSIX shell word, so the note's suggestion can be
+// pasted as-is. Most cursors are base64url or UUIDs and print bare, but some
+// lists hand out "<isoformat>|<id>" (discussions, comments, messages on
+// mio-backend origin/main), where an unquoted `|` would pipe the command into
+// the cursor's second half. Anything outside a conservative safe set is
+// single-quoted; an embedded single quote closes the quoting, is written
+// backslash-escaped, and reopens it.
+func shellQuote(s string) string {
+	safe := s != ""
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-.:/=+,@%", r)) {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // registeredFlag returns the first of names that cmd registers, or "".
