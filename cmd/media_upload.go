@@ -193,8 +193,9 @@ var mediaFilesUploadCmd = &cobra.Command{
 	Use:   "upload <path>",
 	Short: "Upload a local file into the team media library.",
 	Long: `Ingest a local file end-to-end: create the file record, stream the bytes to
-the returned presigned URL, and finalize. For video, finalize triggers transcoding
-asynchronously; pass --wait to block until processing reaches READY.
+the returned presigned URL, and finalize. For video, finalize enqueues a
+transcode only when the backend has video processing enabled (it is off by
+default); pass --wait to block until processing reaches READY.
 
 --wait keeps polling a video whose transcode has not started yet, but waits at
 most 30s (or --timeout, whichever is smaller) for it to start, then warns and
@@ -288,8 +289,9 @@ file id — the media is relinked atomically once the new bytes are in.
 The file gets a NEW media_id, and what described the old bytes is reset:
 status_transcode, status_transcribe and duration_seconds read null, and the old
 transcript is detached, until the new bytes are processed; the file's timed
-cards are cleared. For video, the relink starts a new transcode asynchronously;
-pass --wait to block until processing reaches READY.
+cards are cleared. For video, the relink enqueues a new transcode only when the
+backend has video processing enabled (it is off by default); pass --wait to
+block until processing reaches READY.
 
 --wait works as it does for 'files upload', including waiting at most 30s (or
 --timeout, whichever is smaller) for a video's transcode to START (see 'mio
@@ -371,7 +373,7 @@ func replaceFinalizePath(teamID, fileID, replacementID string) string {
 var mediaFilesFinalizeCmd = &cobra.Command{
 	Use:     "finalize <file_id>",
 	Short:   "Finalize an already-uploaded file.",
-	Long:    "Finalize a file whose bytes were already PUT to its presigned URL — verifies the object, marks it READY, and (for video) triggers transcoding.",
+	Long:    "Finalize a file whose bytes were already PUT to its presigned URL — verifies the object, marks it READY, and, for video, enqueues a transcode only when the backend has video processing enabled (it is off by default).",
 	Example: `  mio media files finalize file_abc123`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

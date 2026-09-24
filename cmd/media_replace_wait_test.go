@@ -19,10 +19,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
@@ -257,6 +260,42 @@ func TestReplaceWait_FlagsAreUploads(t *testing.T) {
 		if rp.Usage != up.Usage || rp.DefValue != up.DefValue || rp.Value.Type() != up.Value.Type() {
 			t.Errorf("--%s differs between upload and replace:\n upload:  %s %q (default %s)\n replace: %s %q (default %s)",
 				name, up.Value.Type(), up.Usage, up.DefValue, rp.Value.Type(), rp.Usage, rp.DefValue)
+		}
+	}
+}
+
+// Every ingest step's help that says a transcode follows names the gate that
+// decides whether one does (MIO-4172 blind review). finalize (upload) and the
+// relink (replace) only EMIT MediaUploaded; the handler that turns that event
+// into a transcode job returns early unless FEATURE_MEDIA_VIDEO_ENABLED is on
+// (mio-backend app/media/handlers.py on_media_uploaded_dispatch_transcode), and
+// app/config.py declares it `FEATURE_MEDIA_VIDEO_ENABLED: bool = False`. Help
+// that says "the relink starts a new transcode" and stops there is false on a
+// backend left at the default, where status_transcode stays null for good.
+//
+// The probe set is every command whose Long help describes an ingest step that
+// hands the bytes to the transcoder: upload, replace and finalize. A command in
+// that set that no longer says a transcode follows at all fails too, so a
+// rewording that slips past the claim pattern cannot turn this green by
+// matching nothing.
+func TestIngestHelp_TranscodeClaimNamesTheVideoGate(t *testing.T) {
+	claim := regexp.MustCompile(`(?i)\b(trigger|start|enqueue|kick|begin|began|launch|dispatch|initiat)\w*\b.*\btranscod`)
+	split := regexp.MustCompile(`[.;] `)
+	for _, c := range []*cobra.Command{mediaFilesUploadCmd, mediaFilesReplaceCmd, mediaFilesFinalizeCmd} {
+		claims := 0
+		for _, s := range split.Split(strings.Join(strings.Fields(c.Long), " "), -1) {
+			if !claim.MatchString(s) {
+				continue
+			}
+			claims++
+			if !strings.Contains(strings.ToLower(s), "video processing") {
+				t.Errorf("media files %s --help says a transcode follows without naming the gate "+
+					"(video processing, FEATURE_MEDIA_VIDEO_ENABLED, off by default): %q", c.Name(), s)
+			}
+		}
+		if claims == 0 {
+			t.Errorf("media files %s --help no longer says a transcode follows, so this check is vacuous for it; it reads: %s",
+				c.Name(), c.Long)
 		}
 	}
 }
