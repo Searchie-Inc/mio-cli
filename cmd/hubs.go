@@ -1324,7 +1324,9 @@ declares no text for to the platform default. When the template's tos requires
 acceptance, that reset moves the version to "default-v1" and re-prompts every
 member who had accepted ONLY if this read showed another version first — one
 set by saving custom text with --require-acceptance, and kept by any later save
-or reset without the flag. At "default-v1" nobody is asked again.)
+or reset without the flag. At "default-v1" nobody who had accepted is asked
+again — but a member who never accepted is prompted whenever the gate is on,
+whatever the version.)
 
 The hub identifier may be given positionally; omit it to use the ambient hub
 (--hub, or current_hub in config).
