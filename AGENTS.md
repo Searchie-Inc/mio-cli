@@ -95,6 +95,10 @@ These codes are intentionally coarse. When you need the exact HTTP status the AP
 mio contacts retrieve <id> 2>err.json || jq -r '.errors[0].status' err.json
 ```
 
+**The API's own error members are kept (MIO-3912).** When the API answered with a JSON:API error body, the envelope has one entry per API error object, each carrying every member the API sent: `code` (the stable machine token — branch on `errors[].code`, never on `detail` text), `title`, `source`, `id`, and every `meta` member, including `meta.request_id` (the id that finds the backend's log line — quote it when reporting a failure). `meta.exit_code` is added into that `meta`, never in place of it. `errors[0].status` is still the response's status and `errors[0].detail` still the CLI's own message, which can carry command context or a `hint:`. **`--raw` switches stderr to the API's error document itself** — top-level members, member order, numbers and strings as sent — with exactly two CLI additions: `meta.exit_code` on every error object, and `status` on an error object that arrived without one; its `detail` is the API's, so the CLI's context and hints are absent. A failure with no JSON:API error body (it never reached the network, or a proxy answered with HTML) keeps the `status`/`detail`/`meta.exit_code` shape in both modes. Exit codes are identical in both modes and unchanged by this.
+
+> **Version gate (MIO-3912).** Kept API members and the `--raw` error document land in the release AFTER `v0.23.0`. On `v0.23.0` and earlier the envelope carries only `status`, `detail` and `meta.exit_code` (a `code` or `meta.request_id` reads as absent even when the API sent one), and `--raw` does not change stderr.
+
 ---
 
 ## Destructive Operations
