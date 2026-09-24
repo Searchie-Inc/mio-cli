@@ -68,8 +68,9 @@ type Collection struct {
 
 // PageInfo is what a list response says about the rows past it (MIO-4174).
 type PageInfo struct {
-	// More is true when the API reported more rows past this page: has_more
-	// true, or — on a list that sends no has_more at all — a links.next.
+	// More is true when the API pointed past this page: has_more true, or —
+	// on a list that sends no has_more at all — a links.next, which on some
+	// lists only means the page was full (see LinkOnly).
 	More bool
 	// LinkOnly is true when More rests on links.next alone. Such a link is
 	// weaker than has_more: media files and attachments send one on every

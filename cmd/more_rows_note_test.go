@@ -219,6 +219,9 @@ func moreRowsCases() []moreRowsCase {
 		// segments search takes pages of up to 200 (schemas.py page.size
 		// le=200), not the usual 100: 150 can still be raised, 200 cannot.
 		{"segments search at --page-size 150 (cap 200)", "discussions", []string{"segments", "search", "--conditions", `{"version":1,"groups":[]}`, "--page-size", "150"}, "page-after", true, "", "", "(or raise --page-size)"},
+		// segments members (router.py list_members page[size] le=200) too,
+		// through --limit.
+		{"segments members at --limit 150 (cap 200)", "discussions", []string{"segments", "members", "019f0000-0000-7000-8000-0000000000b1", "--limit", "150"}, "after", true, "", "", "(or raise --limit)"},
 		{"segments search at --page-size 200 (its cap)", "discussions", []string{"segments", "search", "--conditions", `{"version":1,"groups":[]}`, "--page-size", "200"}, "page-after", true, "", "raise --page-size", ""},
 		// media search is top-N: has_more with no cursor, and no --after flag.
 		{"media search (top_n, --limit only)", "top_n", []string{"media", "search", "--query", "x"}, "limit", false, "", "", ""},

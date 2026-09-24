@@ -67,8 +67,9 @@ func markUnsignalledPaging(cmd *cobra.Command, defaultPageSize int) {
 	cmd.Annotations[unsignalledPagingAnnotation] = strconv.Itoa(defaultPageSize)
 }
 
-// moreRowsNote returns the note for a list page that is not the last, or ""
-// when none is due. The flag it names is the one this command actually
+// moreRowsNote returns the note for a list page the API points past (has_more,
+// or a next link), or for a full page on a route marked with
+// markUnsignalledPaging, or "" when none is due. The flag it names is the one this command actually
 // registers: --after (the shared pagination flags) or --page-after (segments
 // search) for a cursor, else --limit / --page-size when there is no cursor to
 // offer (media search is top-N and takes no page[after]: more rows come only
