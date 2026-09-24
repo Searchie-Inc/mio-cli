@@ -6,7 +6,7 @@ package cmd
 // Same shape as the pages op in hubs_scaffold_op.go, one level up: in CREATE
 // mode the runner PROBES POST /api/teams/{team}/hubs/from-template by simply
 // calling it — the probe IS the real POST, never a separate capability check —
-// and an absent op falls back to the nine-step client-side pipeline. Both paths
+// and an absent op falls back to the ten-step client-side pipeline. Both paths
 // produce a real hub; a missing op is never an error.
 //
 // WHAT MAKES THE ABSENCE SIGNAL DIFFERENT HERE. The pages probe treats 404 and
@@ -42,6 +42,9 @@ var hubOpRowKinds = []struct{ name, prefix, kind string }{
 	{"", "page:", "pages"},
 	{"", "playlist:", "playlists"},
 	{"", "onboarding:", "contact_attribute_definitions"},
+	// MIO-4167: _step_content_nodes' rows. Listed so the count check below
+	// covers them; recordHubOpContentNodes does the recording.
+	{"", "content_node:", "content_nodes"},
 }
 
 // hubOpRowKind returns the created_resource_ids key a row contributes to and the
@@ -218,9 +221,12 @@ const hubOpFingerprintMismatch = "idempotency_fingerprint_mismatch"
 func hubOpError(err error) error {
 	if client.HasAPIErrorCode(err, hubOpFingerprintMismatch) {
 		// The CODE is named in the message on purpose. apiError.message() renders
-		// detail-over-code, so without this the machine-readable token never
-		// appears anywhere in the CLI's output — while the agent-facing docs tell
-		// agents to branch on exactly that token.
+		// detail-over-code, so without this the token is absent from the message
+		// — the TTY line and the default envelope's errors[0].detail — which
+		// v0.23.0-and-earlier agents branch on. Since MIO-3912 the envelope also
+		// carries it as errors[0].code (--raw included, where detail is the
+		// API's own and has no bracketed token); %w keeps the document that
+		// code comes from in the chain.
 		return errs.Wrap(errs.CodeOf(err), fmt.Errorf(
 			"%w ["+hubOpFingerprintMismatch+"] (this hub name+slug was already scaffolded from this template with a DIFFERENT request — "+
 				"the backend's catalog pin or your override flags have changed since. Nothing was applied. "+
@@ -309,6 +315,7 @@ func recordHubOpResult(sc *scaffoldContext, res client.HubFromTemplateResult) {
 			sc.welcomePostID, sc.welcomePostStatus = id, "created"
 		}
 	}
+	recordHubOpContentNodes(sc, res, trusted["content_nodes"])
 
 	// The homepage id the summary cannot name: rows are slug-keyed, so resolve
 	// the template's isHomepage entry to its slug and read the id back.

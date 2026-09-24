@@ -82,6 +82,11 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
+// RawRequested reports whether the invocation that Execute() just ran asked for
+// --raw. main.go reads it after Execute() returns, to decide whether the stderr
+// error envelope is the API's own error document (MIO-3912) or the CLI's.
+func RawRequested() bool { return flags.raw }
+
 // groupGuardsOnce ensures the group guards are attached exactly once, no matter
 // how many times Execute()/RootCmd() are called (the in-process contract tests
 // call RootCmd().Execute() directly, bypassing Execute()).
@@ -156,7 +161,7 @@ func init() {
 	pf.StringVar(&flags.hub, "hub", "", "Hub id context for hub-scoped resources. Overrides config.")
 	pf.BoolVarP(&flags.yes, "yes", "y", false, "Skip the confirmation prompt on destructive operations.")
 	pf.StringVar(&flags.jq, "jq", "", "Filter JSON output through this gojq expression.")
-	pf.BoolVar(&flags.raw, "raw", false, "Emit the raw JSON:API envelope instead of the flattened resource.")
+	pf.BoolVar(&flags.raw, "raw", false, "Emit the raw JSON:API envelope instead of the flattened resource. On an API error, when stderr is not a terminal, stderr is the API's own error document plus meta.exit_code (and status on an error object that has none).")
 	pf.StringVar(&flags.profile, "profile", "", "Named config profile to use.")
 	pf.BoolVar(&flags.debug, "debug", false, "Enable verbose request/response logging to stderr.")
 	_ = pf.MarkHidden("debug")
@@ -402,6 +407,13 @@ func (c *cmdContext) persistDefaultTeam(teamID string) {
 func (c *cmdContext) render(cmd *cobra.Command, v any) error {
 	if err := output.Render(cmd.OutOrStdout(), v, c.out); err != nil {
 		return errs.Wrap(errs.ExitGeneric, err)
+	}
+	// A list page that is not the last says so on stderr (MIO-4174); stdout is
+	// untouched. --raw already shows the API's meta and links, so it gets none.
+	if col, ok := v.(*client.Collection); ok && !c.out.Raw {
+		if note := moreRowsNote(cmd, col); note != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), note)
+		}
 	}
 	return nil
 }

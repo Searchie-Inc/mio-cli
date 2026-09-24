@@ -70,13 +70,25 @@ func teamsPath(id string) string {
 var teamsCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new team.",
-	Long:  "Create a new team with the given name and optional settings.",
-	Example: `  # Create a team
-  mio teams create --name="Acme Corp"
+	Long: `Create a new team. --name and --slug are both required: they are the only
+two fields the API's team create takes. The slug must be unique across all
+teams; a taken slug answers 409 (exit 2). A team's slug is set here, once —
+'mio teams update' cannot change it.
 
-  # Create a team with a subdomain
-  mio teams create --name="Acme Corp" --subdomain=acme`,
-	Args: cobra.NoArgs,
+A team is account-level, so the API creates one only for a USER session and
+answers an API key with 403 (exit 3): "This operation requires user (JWT)
+authentication, not an API key." That includes the key 'mio login' stores. To
+create a team from the CLI, pass a user access token (the access_token that
+POST /api/v1/auth/login returns) as the credential for this one call with
+--api-key, or create the team in the member.dev dashboard.`,
+	Example: `  # Create a team. Name and slug are both required, and the credential must be
+  # a user access token: the API refuses an API key here with 403 (exit 3).
+  mio teams create --name="Acme Corp" --slug=acme --api-key "$ACCESS_TOKEN"
+
+  # Capture the new team's id
+  TEAM_ID=$(mio teams create --name="Acme Corp" --slug=acme --api-key "$ACCESS_TOKEN" -o plain --jq .id)`,
+	Args:    cobra.NoArgs,
+	PreRunE: applyTeamsSubdomainAlias,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
 		if err != nil {
@@ -86,13 +98,12 @@ var teamsCreateCmd = &cobra.Command{
 			return err
 		}
 
+		// --name and --slug are required (cobra refuses the command without
+		// them), and --subdomain has already been folded into --slug by
+		// applyTeamsSubdomainAlias, so these are the only two keys sent.
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
-		setStringFlag(cmd, attrs, "subdomain")
-
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
-		}
+		setStringFlag(cmd, attrs, "slug")
 
 		res, err := c.client.Create(c.ctx, teamsPath(""), attrs)
 		if err != nil {
@@ -100,6 +111,38 @@ var teamsCreateCmd = &cobra.Command{
 		}
 		return c.render(cmd, res)
 	},
+}
+
+// applyTeamsSubdomainAlias folds the deprecated --subdomain onto --slug. It is
+// the create command's PreRunE, which cobra runs BEFORE its required-flag check,
+// so `--subdomain acme` alone satisfies the required --slug. It runs before any
+// credential lookup or request, so a conflict is a usage error that sends
+// nothing.
+//
+// This is an explicit mapping rather than a flag normalize func (the shape
+// contacts uses for --first_name) because a normalize func makes both spellings
+// the same flag, where a second value silently wins; here `--slug a
+// --subdomain b` must be refused, and --subdomain must say it is deprecated.
+// The notice goes to stderr so a JSON stdout stays parseable. (cobra's own
+// MarkDeprecated is not used: it prints through OutOrStderr, which resolves to
+// the command's OUTPUT writer whenever one is set, as the in-process tests do.)
+func applyTeamsSubdomainAlias(cmd *cobra.Command, _ []string) error {
+	fs := cmd.Flags()
+	if !fs.Changed("subdomain") {
+		return nil
+	}
+	sub, _ := fs.GetString("subdomain")
+	if fs.Changed("slug") {
+		if slug, _ := fs.GetString("slug"); slug != sub {
+			return errs.New(errs.ExitUsage,
+				"--slug %q and --subdomain %q disagree: --subdomain is a deprecated alias of --slug, so pass only --slug",
+				slug, sub)
+		}
+	} else if err := fs.Set("slug", sub); err != nil {
+		return errs.Wrap(errs.ExitGeneric, err)
+	}
+	fmt.Fprintln(cmd.ErrOrStderr(), "warning: --subdomain is deprecated and sends slug; use --slug")
+	return nil
 }
 
 var teamsListCmd = &cobra.Command{
@@ -155,10 +198,13 @@ var teamsRetrieveCmd = &cobra.Command{
 var teamsUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update a team by id.",
-	Long:  "Partially update a team. Only the flags you pass are sent to the server.",
-	Example: `  mio teams update team_abc123 --name="New Name"
-  mio teams update team_abc123 --subdomain=newslug`,
-	Args: cobra.ExactArgs(1),
+	Long: `Rename a team. --name is the only field the API's team update takes: a
+team's slug is set once, by 'mio teams create --slug', and cannot be changed.
+
+Only the team's owner can rename it. An API key works for the team it is bound
+to; a key bound to any other team is refused with 403 (exit 3).`,
+	Example: `  mio teams update team_abc123 --name="New Name"`,
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newContext(cmd)
 		if err != nil {
@@ -170,7 +216,6 @@ var teamsUpdateCmd = &cobra.Command{
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
-		setStringFlag(cmd, attrs, "subdomain")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -272,11 +317,18 @@ To set the local team context WITHOUT a server-side switch, use
 }
 
 func init() {
-	// Attribute flags for teams create/update.
+	// Attribute flags for teams create/update. They mirror the API's write
+	// schemas (mio-backend app/teams/schemas.py): TeamCreate takes name + slug,
+	// TeamUpdate takes name only, and both forbid any other field (MIO-3830).
 	for _, cmd := range []*cobra.Command{teamsCreateCmd, teamsUpdateCmd} {
 		cmd.Flags().String("name", "", "Team display name.")
-		cmd.Flags().String("subdomain", "", "Team subdomain slug.")
 	}
+	teamsCreateCmd.Flags().String("slug", "", "Team slug: unique across all teams, set once at creation.")
+	teamsCreateCmd.Flags().String("subdomain", "", "Deprecated alias of --slug.")
+	if err := teamsCreateCmd.Flags().MarkHidden("subdomain"); err != nil {
+		panic("MarkHidden subdomain: " + err.Error())
+	}
+	markFlagsRequired(teamsCreateCmd, "name", "slug")
 	addPaginationFlags(teamsListCmd)
 }
 

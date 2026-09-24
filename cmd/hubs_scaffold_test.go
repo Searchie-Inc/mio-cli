@@ -36,7 +36,7 @@ import (
 // scaffoldStepNames is the ordered pipeline the dry-run plan must name, in order.
 var scaffoldStepNames = []string{
 	"hub", "blobs", "spaces", "onboarding", "policies",
-	"playlists", "pages", "publish", "welcome-post",
+	"playlists", "content-nodes", "pages", "publish", "welcome-post",
 }
 
 // humanScaffold pins a scaffold invocation to the PROSE surface (the plan /
@@ -455,10 +455,13 @@ func TestStepBlobs_NoNavigationInTemplateOmitsNavFromPatch(t *testing.T) {
 	}
 }
 
-// TestStepBlobs_StrictRejectsUnknownSettingsKey: an unknown template settings key
-// ERRORS under strict mode (ExitUsage) and fires NO PATCH — the whole point of
-// the feature is that a malformed template is caught, not silently dropped.
-func TestStepBlobs_StrictRejectsUnknownSettingsKey(t *testing.T) {
+// TestStepBlobs_StrictRejectsUnknownTemplateBrandingKey: an unknown template
+// branding key ERRORS under strict mode (ExitUsage) and fires NO PATCH — the
+// API stores branding keys as sent, so a malformed template key would otherwise
+// be saved and silently do nothing. (This used to be pinned with a SETTINGS
+// typo; since MIO-3334 the API rejects an unknown settings key itself, so the
+// CLI leaves those to it — see TestStepBlobs_TemplateSettingsKeysAreTheAPIsToCheck.)
+func TestStepBlobs_StrictRejectsUnknownTemplateBrandingKey(t *testing.T) {
 	patched := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -471,14 +474,14 @@ func TestStepBlobs_StrictRejectsUnknownSettingsKey(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
-	// "registraton" is a typo of the accepted top-level key "registration".
+	// "primry" is a typo of the branding key "primary".
 	tmpl := &catalog.HubTemplate{
 		ID:       "community",
-		Settings: map[string]any{"registraton": map[string]any{"enabled": true}},
+		Branding: map[string]any{"primry": "#4F46E5"},
 	}
 	err := stepBlobs(sc, tmpl)
 	if err == nil {
-		t.Fatal("stepBlobs must ERROR under strict on an unknown settings key")
+		t.Fatal("stepBlobs must ERROR under strict on an unknown branding key")
 	}
 	if errs.CodeOf(err) != errs.ExitUsage {
 		t.Errorf("error code = %d, want ExitUsage (%d)", errs.CodeOf(err), errs.ExitUsage)
@@ -497,6 +500,59 @@ func TestStepBlobs_StrictRejectsUnknownSettingsKey(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no --strict-keys to drop") {
 		t.Errorf("a template strict-key rejection must carry the scaffold-specific guidance; err=%v", err)
+	}
+	if !strings.Contains(err.Error(), "HUB TEMPLATE") {
+		t.Errorf("a template strict-key rejection must say the key came from the template, not a flag; err=%v", err)
+	}
+	// The blob's own sentence survives the swap: only the drop-the-flag tail is
+	// scaffold-specific (MIO-4171).
+	if !strings.Contains(err.Error(), "The API stores branding keys as sent") {
+		t.Errorf("the swap must keep what the API does with branding keys; err=%v", err)
+	}
+}
+
+// TestStepBlobs_TemplateSettingsKeysAreTheAPIsToCheck (MIO-4171): the scaffold
+// applies template settings in strict key mode, and strict mode used to check
+// settings against the CLI's hand-kept copy of the API's allowlist — which had
+// fallen behind the server, so a template using a key the API accepts
+// (`language`, `email.from_localpart`) would have failed the blobs step with a
+// usage error, on a hub the run had already created. Settings keys are now the
+// API's to judge: they reach the PATCH untouched.
+func TestStepBlobs_TemplateSettingsKeysAreTheAPIsToCheck(t *testing.T) {
+	var patchBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patchBody, _ = io.ReadAll(r.Body)
+		}
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"hub_1","type":"hubs","attributes":{"slug":"acme"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	tmpl := &catalog.HubTemplate{
+		ID: "community",
+		Settings: map[string]any{
+			"language": "de",
+			"email":    map[string]any{"from_localpart": "news"},
+		},
+	}
+	if err := stepBlobs(sc, tmpl); err != nil {
+		t.Fatalf("stepBlobs must leave settings keys to the API; err=%v", err)
+	}
+	if len(patchBody) == 0 {
+		t.Fatal("the blobs PATCH must fire")
+	}
+	s, ok := decodeHubAttrs(t, patchBody)["settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("PATCH carries no settings; body=%s", patchBody)
+	}
+	if s["language"] != "de" {
+		t.Errorf("settings.language = %v, want de", s["language"])
+	}
+	if e, _ := s["email"].(map[string]any); e["from_localpart"] != "news" {
+		t.Errorf("settings.email.from_localpart = %v, want news", s["email"])
 	}
 }
 

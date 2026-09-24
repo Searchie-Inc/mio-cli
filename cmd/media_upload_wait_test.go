@@ -391,9 +391,17 @@ func TestUploadWait_DocumentedGraceMatchesTheConstant(t *testing.T) {
 	if flag == nil {
 		t.Fatal("--wait flag not registered")
 	}
+	// replace --wait runs the same poller (MIO-4172), so its help states the
+	// same grace.
+	replaceFlag := mediaFilesReplaceCmd.Flags().Lookup("wait")
+	if replaceFlag == nil {
+		t.Fatal("replace --wait flag not registered")
+	}
 	for name, text := range map[string]string{
-		"--wait help":      flag.Usage,
-		"upload Long help": mediaFilesUploadCmd.Long,
+		"--wait help":         flag.Usage,
+		"upload Long help":    mediaFilesUploadCmd.Long,
+		"replace --wait help": replaceFlag.Usage,
+		"replace Long help":   mediaFilesReplaceCmd.Long,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("%s does not state the real grace (%s); it reads: %s", name, want, text)
