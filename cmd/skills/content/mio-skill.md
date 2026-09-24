@@ -61,10 +61,29 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
 - Branding flags **merge** over the template's palette — a key you don't name keeps
   the template's value. `--primary-color` also fills `header_color` unless you gave
   one yourself. `--branding-json` takes a whole object; scalar flags win over it.
-- **Re-runs are safe for PAGES**: `mio hubs scaffold --template community --hub "$HUB_ID"`
-  resumes. A page you edited, or a foreign page at a template slug, exits `2` and is
-  **never** overwritten. Spaces, onboarding attributes and playlists skip if they
-  already exist. **Legal policy CONTENT is the exception — see the next bullet.**
+- **A `--hub` run fills gaps; it does not overwrite (MIO-4166).**
+  `mio hubs scaffold --template community --hub "$HUB_ID"` resumes a failed run, or applies
+  a template onto an existing hub, by adding only what the hub is missing. A branding or
+  settings key the hub already has keeps its value (so self-signup the owner closed stays
+  closed), a navigation bucket it has is kept whole (only an absent or empty one is filled,
+  and a bucket the template lacks, like `mobile`, is never dropped), and so are its policy
+  text, its policy gate and its onboarding configs. Flags on the command itself
+  (`--primary-color`, `--logo-url`, `--registration-enabled`, …) still win over the hub.
+  Every kept value is named on stderr and in `--dry-run`. A page you edited, or a foreign
+  page at a template slug, exits `2` **before anything is written** and is **never**
+  overwritten. Spaces, onboarding attributes and playlists skip if they already exist.
+  To let the template win instead, add `--reapply-template`: every branding and settings
+  key the template sets replaces the hub's (keys it does not set survive, and
+  `settings.policies` is dropped by the hub PATCH), its navigation replaces the whole menu
+  (a bucket it lacks, like `mobile`, is dropped), its policies are written (reset to the
+  default where it has no text), its onboarding configs are overwritten, and the policy
+  gate is turned on if it declares `enabled: true` — never off. It is destructive, so it
+  needs `--yes` off a TTY (exit `5` otherwise, nothing sent), and it is a usage error
+  without `--hub`. It does **not** touch pages: the page check runs on a
+  `--reapply-template` run (and a `--dry-run`) too, so a conflicting page still exits `2`
+  before anything is written — no flag overwrites a page. **Not in `v0.23.0` or
+  earlier**: there a `--hub` run overwrites the palette, menu, registration and policy
+  text with the template's.
 - **A server-side op may build the hub in one shot (MIO-2976).** In create mode the
   CLI probes `POST …/hubs/from-template` first; if the backend has it enabled, the
   whole hub is built in ONE transaction and the ten client-side steps never run.
@@ -98,7 +117,7 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   playlist's id written into `id` before the tree is PUT — the hub renderer ignores a
   section whose `ds.id` is empty, so an unfilled one renders as a blank band. A `key`
   naming no playlist of the same template exits `2` in preflight, before the hub exists.
-- **Legal policies come with their enforcement switch, and a resume rewrites them.**
+- **Legal policies come with their enforcement switch.**
   The scaffold writes each policy document *and* flips the hub-level gate
   (`settings.policies.enabled`) when the template declares `enabled: true`;
   `policy_gate` in the JSON result reports what it applied (`null` = none written,
@@ -107,14 +126,26 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   `tos_acceptance_required:false` and `POST …/tos/accept` returns a 404 (an
   enumeration-safe mask, not a missing route). Enforcement is one flag per hub, not
   one per policy.
-  **The catch:** the policy write always sends `content`, and the `community`
-  template carries none — so **every resume reverts that hub's ToS and Privacy text
-  to the backend default**, and because the ToS is acceptance-gated it also bumps the
-  version, **re-prompting every member who had already accepted**. Check BEFORE a resume with
-  `mio hubs policies get "$HUB_ID"` — but read the **content**, not the version:
-  the backend versions only a ToS saved WITH `--require-acceptance` and projects
-  everything else as `default-v1`, so custom text routinely reads as the default.
-  If you customized the legal text, re-apply it after any resume:
+  **A `--hub` run never resets a policy (MIO-2818):** it writes a template's policy text
+  only where the hub has none of its own, never sends `content: null`, and leaves a gate
+  the hub has already set — on or off — alone (an unset gate is filled).
+  **`--reapply-template` is the exception:** its policy write always sends `content`, and
+  the `community` template carries none — so it **reverts that hub's ToS and Privacy text
+  to the backend default**. Whether members are asked to accept the ToS again depends on
+  that write, not on how the ToS was last saved: the template's ToS requires acceptance,
+  so the reset moves the version to `default-v1`, and that **re-prompts every member who
+  had accepted** only when the ToS carried another version (the re-apply turns the gate on,
+  so the prompt shows). Check BEFORE a re-apply with `mio hubs policies get "$HUB_ID"`:
+  a ToS `version` other than `default-v1` (a `v_…` token, set by saving custom text WITH
+  `--require-acceptance` and kept by later saves or resets without it) means the reset
+  re-prompts; `default-v1` means nobody who had accepted is asked again, and there is no
+  version change to notice (a gate the re-apply turns on still asks every member who never
+  accepted, whatever the version).
+  To know whether your text is custom, read the **content**, not the version: the backend
+  versions only a ToS saved WITH `--require-acceptance` and projects everything else as
+  `default-v1`, so custom text routinely reads as the default.
+  If you customized the legal text, re-apply it afterwards (and after any `--hub` run on
+  `v0.23.0` or earlier, which behaves like `--reapply-template` here):
   `mio hubs policies update "$HUB_ID" --policy-type tos --content @tos.md --require-acceptance`.
   **Not in `v0.13.0` or earlier** — on those binaries the gate is never written at
   all, so fix a scaffolded hub with `mio hubs policies gate "$HUB_ID" --enabled`.

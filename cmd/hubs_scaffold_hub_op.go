@@ -158,6 +158,9 @@ var hubOpExpressibleFlags = map[string]bool{
 // a flag deliberately misfiled here is not something it can see.
 var hubOpStructuralFlags = map[string]bool{
 	"dry-run": true, // hubOpSkipReason returns before probing
+	// --reapply-template is a usage error without --hub, and --hub always takes
+	// the client path (the op is create-only), so it can never reach the op.
+	"reapply-template": true,
 }
 
 // maybeApplyViaHubOp is the runner's single entry point into the op branch: it

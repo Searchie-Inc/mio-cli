@@ -181,7 +181,8 @@ func rebuildScaffoldPlan(sc *scaffoldContext, cat *catalog.Catalog, src catalog.
 //  5. the instantiated page plan + a preliminary interpolation of the whole
 //     plan;
 //  6. the policies block — key, per-field JSON types, and the per-policy
-//     `enabled` collapse (MIO-2567; Validate covers only the field NAMES).
+//     `enabled` collapse (MIO-2567; Validate covers only the field NAMES);
+//  7. on --hub only, the page conflicts (MIO-4166) — reads, no writes.
 //
 // On success it leaves sc.cat / sc.hubTmpl / sc.pagePlan
 // populated for the apply pipeline.
@@ -233,6 +234,16 @@ func scaffoldPreflight(cmd *cobra.Command, sc *scaffoldContext, templateID strin
 	//
 	//    Discarded on success: stepPolicies re-resolves at apply time (cheap,
 	//    deterministic) so the step stays runnable without a preflight.
-	_, perr := resolveTemplatePolicies(&sc.hubTmpl)
-	return perr
+	if _, perr := resolveTemplatePolicies(&sc.hubTmpl); perr != nil {
+		return perr
+	}
+
+	// 7. --hub only (MIO-4166): the pages step's never-overwrite decision, made
+	//    for every planned page NOW, before the pipeline writes anything. Reads
+	//    only; a conflict exits 2 with nothing written, instead of at stage 7
+	//    with the blobs and policies already rewritten.
+	if sc.resume {
+		return preflightResumePages(sc)
+	}
+	return nil
 }

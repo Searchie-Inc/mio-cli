@@ -164,6 +164,23 @@ type scaffoldContext struct {
 	// cannot know them. runHubsScaffold points it at the command's stderr; a
 	// nil noteW (unit-driven contexts) discards.
 	noteW io.Writer
+
+	// resume is set by an explicit --hub: the run applies onto a hub that
+	// already exists. By default such a run FILLS GAPS — it never overwrites
+	// branding/settings keys, navigation buckets, policy text, the policy gate
+	// or onboarding hub-config the hub already has (MIO-4166, MIO-2818; see
+	// hubs_scaffold_resume.go). reapplyTemplate (--reapply-template, --hub
+	// only, destructive) restores the template-wins apply. resumeHub is the
+	// hub as the resume GET read it — what the --dry-run plan reports kept
+	// values against; a real run re-reads the hub before each write instead.
+	resume, reapplyTemplate bool
+	resumeHub               map[string]any
+}
+
+// fillGaps reports whether this run must leave the hub's existing state alone
+// and only fill what is missing: a --hub run without --reapply-template.
+func (sc *scaffoldContext) fillGaps() bool {
+	return sc.resume && !sc.reapplyTemplate
 }
 
 // notef writes one operator-facing note line (no-op when noteW is unset).
@@ -305,6 +322,11 @@ func stepHub(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 // resumed) by stepHub, via the shared read-modify-write helper applyHubBlobs
 // (design §Apply pipeline step 2, MIO-2543 Task 13).
 //
+// On a --hub run it FILLS GAPS instead (MIO-4166, stepBlobsFillGaps): the
+// template's keys and navigation buckets are defaults under the hub's own,
+// and only this invocation's flags win over the hub. The template-wins apply
+// described below is the create path, and --reapply-template.
+//
 // CREATE/BLOBS SPLIT: stepHub writes identity only; stepBlobs owns ALL of
 // branding (+ --favicon-url/--logo-url overrides), settings (incl.
 // registration.enabled honoring --registration-enabled), and the navigation
@@ -367,41 +389,24 @@ func scopeNavHrefs(nav map[string]any, slug string) {
 }
 
 func stepBlobs(sc *scaffoldContext, t *catalog.HubTemplate) error {
+	// A --hub run fills gaps and keeps what the hub already has (MIO-4166);
+	// only a create, or --reapply-template, applies the template over the hub.
+	if sc.fillGaps() {
+		return stepBlobsFillGaps(sc, t)
+	}
 	// The plan detail names the palette the run would apply (MIO-2604) so
 	// --dry-run is honest about the branding, not just the step. planDetail is
 	// empty when no override was passed, keeping the override-free plan line
 	// byte-identical to what it always was.
 	detail := fmt.Sprintf("PATCH %s — branding+settings+navigation (strict keys)%s",
 		hubsPath(sc.teamID, sc.hubIDOrPlaceholder()), sc.branding.planDetail())
+	if sc.reapplyTemplate {
+		detail += " — --reapply-template: the template's values overwrite the hub's, and its navigation replaces the hub's whole menu"
+	}
 	return sc.step("blobs", detail, func() error {
-		// Navigation is location (c) of the {{hub_name}}/{{hub_slug}} token
-		// contract (MIO-2573 §4.3: header/footer item LABELS), interpolated at
-		// APPLY time with the FINAL hub name/slug — stepBlobs runs after stepHub,
-		// so both values are the server-observed ones. Work on a deep CLONE
-		// (CloneNode(nil) is nil-safe): the template is preflight-resolved shared
-		// state, and neither interpolation nor scopeNavHrefs may mutate it.
-		nav := catalog.CloneNode(t.Navigation)
-		// applyHubBlobs runs the hub-scoped href check but, by design, leaves the
-		// navigation SHAPE check to the CALLER (see blobPatches' doc comment): both
-		// existing callers (hubs create/update) call validateNavigationBlob first,
-		// and the scaffold must too. Without it a malformed template menu — a
-		// non-array header/footer bucket, or items missing "type" — is neither
-		// shape- nor href-validated (validateNavigationHrefs silently skips a
-		// non-array bucket), gets PATCHed, and is then silently dropped by the hub
-		// renderer: exactly the silent-drop trap this feature exists to eliminate.
-		if nav != nil {
-			if err := catalog.InterpolateNavigation(nav, sc.hubName, sc.hubSlug); err != nil {
-				return errs.Wrap(errs.ExitUsage, err)
-			}
-			if err := validateNavigationBlob(nav); err != nil {
-				return err
-			}
-			// A template is authored slug-agnostically (e.g. href "/content"), but
-			// mio-hub mounts each hub under "/{slug}" and the CLI's MIO-2270 check
-			// requires a hub-relative menu href to stay within this hub. The
-			// scaffold knows the slug (from create or the resume GET), so rewrite
-			// the template's hub-relative hrefs to "/{slug}/…" before applying.
-			scopeNavHrefs(nav, sc.hubSlug)
+		nav, err := prepareTemplateNav(sc, t)
+		if err != nil {
+			return err
 		}
 		// Branding is the template's block with the operator's override layer
 		// merged on top (MIO-2604): --branding-json first, then the scalar palette
@@ -410,7 +415,7 @@ func stepBlobs(sc *scaffoldContext, t *catalog.HubTemplate) error {
 		// not name survives; applyHubBlobs then deep-merges the whole thing onto
 		// the hub's CURRENT branding and applies Favicon/Logo last (disjoint keys,
 		// so those land exactly where they always did).
-		_, err := applyHubBlobs(sc.ctx, sc.cl, sc.teamID, sc.hubID, sc.hubSlug, blobPatches{
+		_, err = applyHubBlobs(sc.ctx, sc.cl, sc.teamID, sc.hubID, sc.hubSlug, blobPatches{
 			Branding:     sc.branding.applyTo(t.Branding),
 			Settings:     t.Settings,
 			Navigation:   nav,
@@ -429,6 +434,43 @@ func stepBlobs(sc *scaffoldContext, t *catalog.HubTemplate) error {
 		// PATCH's own failures, which keep their text AND their exit code.
 		return scaffoldStrictKeyErr(err, scaffoldTemplateStrictKeyHint)
 	})
+}
+
+// prepareTemplateNav returns the template's navigation ready to send: a deep
+// CLONE, interpolated, shape-checked and hub-scoped. nil when the template
+// declares none. Shared by the template-wins and the fill-gaps blobs paths.
+func prepareTemplateNav(sc *scaffoldContext, t *catalog.HubTemplate) (map[string]any, error) {
+	// Navigation is location (c) of the {{hub_name}}/{{hub_slug}} token
+	// contract (MIO-2573 §4.3: header/footer item LABELS), interpolated at
+	// APPLY time with the FINAL hub name/slug — stepBlobs runs after stepHub,
+	// so both values are the server-observed ones. Work on a deep CLONE
+	// (CloneNode(nil) is nil-safe): the template is preflight-resolved shared
+	// state, and neither interpolation nor scopeNavHrefs may mutate it.
+	nav := catalog.CloneNode(t.Navigation)
+	// applyHubBlobs runs the hub-scoped href check but, by design, leaves the
+	// navigation SHAPE check to the CALLER (see blobPatches' doc comment): both
+	// existing callers (hubs create/update) call validateNavigationBlob first,
+	// and the scaffold must too. Without it a malformed template menu — a
+	// non-array header/footer bucket, or items missing "type" — is neither
+	// shape- nor href-validated (validateNavigationHrefs silently skips a
+	// non-array bucket), gets PATCHed, and is then silently dropped by the hub
+	// renderer: exactly the silent-drop trap this feature exists to eliminate.
+	if nav == nil {
+		return nil, nil
+	}
+	if err := catalog.InterpolateNavigation(nav, sc.hubName, sc.hubSlug); err != nil {
+		return nil, errs.Wrap(errs.ExitUsage, err)
+	}
+	if err := validateNavigationBlob(nav); err != nil {
+		return nil, err
+	}
+	// A template is authored slug-agnostically (e.g. href "/content"), but
+	// mio-hub mounts each hub under "/{slug}" and the CLI's MIO-2270 check
+	// requires a hub-relative menu href to stay within this hub. The
+	// scaffold knows the slug (from create or the resume GET), so rewrite
+	// the template's hub-relative hrefs to "/{slug}/…" before applying.
+	scopeNavHrefs(nav, sc.hubSlug)
+	return nav, nil
 }
 
 // stepSpaces creates the template's discussion spaces, skipping any whose slug
@@ -612,8 +654,10 @@ func templateSpaceInput(s catalog.TemplateSpace) SpaceInput {
 //   - The hub-config CREATE is a backend UPSERT (mio-backend
 //     contact_attributes.service.upsert_hub_config → hub_config_repo.upsert), so
 //     POSTing the same (hub, definition) again just re-applies the config — no 409,
-//     no duplicate. That is why the step can always POST the config without a
-//     pre-check and stay idempotent on resume.
+//     no duplicate. On a create that is all it needs. On a --hub run it is
+//     not enough (MIO-4166): an upsert overwrites every field it is sent, so it
+//     would reset a config the owner changed. There the step lists the hub's
+//     configs first and POSTs only for a definition the hub has none for.
 //
 // The hub-config POST goes to the COLLECTION path (empty def segment) with
 // definition_id IN THE BODY — the MIO-2502 fix; the /{definition_id}-suffixed path
@@ -632,10 +676,26 @@ func stepOnboarding(sc *scaffoldContext, t *catalog.HubTemplate) error {
 		contactAttributesDefsPath(sc.teamID, ""),
 		contactAttributesHubConfigPath(sc.teamID, sc.hubIDOrPlaceholder(), ""),
 		strings.Join(slugs, ", "))
+	if sc.fillGaps() {
+		// A --hub run keeps a (hub, definition) config the hub already has
+		// (MIO-4166): the POST below is a backend UPSERT that overwrites every
+		// field it is sent, and every field of an existing row is set.
+		suffix, serr := onboardingFillPlanDetail(sc, t)
+		if serr != nil {
+			return serr
+		}
+		detail += suffix
+	}
 	return sc.step("onboarding", detail, func() error {
 		existing, err := sc.existingContactAttrDefs()
 		if err != nil {
 			return err
+		}
+		var configs map[string]map[string]any // nil unless filling gaps: nothing is kept
+		if sc.fillGaps() {
+			if configs, err = sc.existingHubConfigs(); err != nil {
+				return err
+			}
 		}
 		for _, d := range t.Onboarding {
 			defID := existing[d.Slug]
@@ -651,6 +711,13 @@ func stepOnboarding(sc *scaffoldContext, t *catalog.HubTemplate) error {
 				defID = res.ID
 			}
 			sc.defIDsBySlug[d.Slug] = defID
+
+			if cfg, has := configs[defID]; has {
+				if kept := keptHubConfig(d, cfg); kept != "" {
+					sc.notef("onboarding: kept the hub's existing %s — a --hub run fills gaps only; --reapply-template overwrites it.", kept)
+				}
+				continue
+			}
 
 			// Enable on the hub via the COLLECTION path with the def id in the body
 			// (MIO-2502). The backend upserts, so re-running is idempotent.
@@ -791,16 +858,19 @@ func resolveTemplatePolicies(t *catalog.HubTemplate) (templatePolicies, error) {
 // briefly require members to accept the default document the template is about
 // to replace.
 //
-// RESUME CAVEAT (MIO-2567 review, and read the CONTENT SEMANTICS note on
+// --hub RUNS FILL GAPS (MIO-2818, read the CONTENT SEMANTICS note on
 // templateHubPolicy): applyHubPolicies always sends `content`, so a template
-// that omits it RESETS that policy to the backend default on every apply — and
-// for a TOS with require_acceptance that also normalizes the version, which
-// RE-PROMPTS every member who had already accepted. The shipped community
-// template omits content, so a resume onto a hub whose ToS an operator edited
-// by hand reverts the text and re-prompts. That reset predates this change; what
-// this change does is make it MEMBER-VISIBLE, because the gate it now flips is
-// what turns re-prompting on. It is called out on every operator-facing surface
-// rather than only here.
+// that omits it RESETS that policy to the backend default — and when the
+// template's TOS declares require_acceptance true, that also normalizes the version to
+// "default-v1", which RE-PROMPTS every member who had accepted whenever the hub's
+// TOS carried another version (update_policy moves it only on a write that
+// carries require_acceptance=true, and only when the effective version changes).
+// That is harmless on a create (the default reverts to the default) and was
+// destructive on a resume onto a hub whose ToS an operator had edited. So a --hub run writes a policy only when the template
+// has text for it AND the hub has none of its own, never sends content:null,
+// and leaves a gate the hub has already set alone (planPolicyFill,
+// hubs_scaffold_resume.go). Only a create, or --reapply-template, takes the
+// template-wins path below.
 func stepPolicies(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	if len(t.Policies) == 0 {
 		return sc.step("policies", "no policies in template", func() error { return nil })
@@ -813,17 +883,48 @@ func stepPolicies(sc *scaffoldContext, t *catalog.HubTemplate) error {
 		return err
 	}
 
-	detail := fmt.Sprintf("PATCH %s — set policy(ies) [%s]",
-		hubsPoliciesPath(sc.teamID, sc.hubIDOrPlaceholder()), strings.Join(res.keys, ", "))
-	if serr := sc.step("policies", detail, func() error {
-		for _, pol := range res.policies {
-			if _, aerr := applyHubPolicies(sc.ctx, sc.cl, sc.teamID, sc.hubID, pol); aerr != nil {
-				return aerr
+	// fill is non-nil on a --hub run (MIO-2818): policy text and the gate are
+	// then written only where the hub has none of its own, and content:null is
+	// never sent — that write is what reset a hand-edited ToS to the platform
+	// default and re-prompted every member. The plan reads the resume GET; the
+	// real run re-reads the hub right before it writes (planPolicyFill).
+	var fill *policyFill
+	if sc.fillGaps() {
+		f := planPolicyFill(res, storedPolicies(sc.resumeHub))
+		fill = &f
+		detail := fmt.Sprintf("PATCH %s — fill gaps only (--hub: never resets a policy to the platform default, never replaces text the hub has): %s",
+			hubsPoliciesPath(sc.teamID, sc.hubIDOrPlaceholder()), fill.describe())
+		if serr := sc.step("policies", detail, func() error {
+			cur, rerr := sc.cl.Retrieve(sc.ctx, hubsPath(sc.teamID, sc.hubID))
+			if rerr != nil {
+				return rerr
 			}
+			*fill = planPolicyFill(res, storedPolicies(cur.Attributes))
+			for _, d := range fill.docs {
+				if d.write() {
+					if _, aerr := applyHubPolicies(sc.ctx, sc.cl, sc.teamID, sc.hubID, d.pol); aerr != nil {
+						return aerr
+					}
+				}
+				sc.notef("%s", d.note())
+			}
+			return nil
+		}); serr != nil {
+			return serr
 		}
-		return nil
-	}); serr != nil {
-		return serr
+	} else {
+		detail := fmt.Sprintf("PATCH %s — set policy(ies) [%s]",
+			hubsPoliciesPath(sc.teamID, sc.hubIDOrPlaceholder()), strings.Join(res.keys, ", "))
+		if serr := sc.step("policies", detail, func() error {
+			for _, pol := range res.policies {
+				if _, aerr := applyHubPolicies(sc.ctx, sc.cl, sc.teamID, sc.hubID, pol); aerr != nil {
+					return aerr
+				}
+			}
+			return nil
+		}); serr != nil {
+			return serr
+		}
 	}
 
 	// ENABLE-ONLY (see scaffoldPolicyGate). Nothing declared, or a declaration
@@ -838,6 +939,23 @@ func stepPolicies(sc *scaffoldContext, t *catalog.HubTemplate) error {
 			func() error {
 				sc.notef("policies: %s — enforcement gate NOT written; the hub's current setting stands (check or set it with `mio hubs policies gate %s --enabled`).",
 					reason, sc.hubID)
+				return nil
+			})
+	}
+
+	// A --hub run does not flip a gate the hub already has set (MIO-2818): an
+	// owner who turned enforcement off keeps it off. An UNSET gate is a gap and
+	// falls through to the write below.
+	if fill != nil && fill.gateSet {
+		return sc.step("policies",
+			fmt.Sprintf("skipped — the hub's enforcement gate is already set (enabled=%t) and a --hub run keeps it; gate not written", fill.gateValue),
+			func() error {
+				if fill.gateValue {
+					sc.notef("policies: enforcement gate already enabled on the hub — not rewritten.")
+					return nil
+				}
+				sc.notef("policies: kept the hub's enforcement gate (enabled=false) — the template declares enabled, but a --hub run does not flip a gate the hub already has; turn it on with `mio hubs policies gate %s --enabled`, or pass --reapply-template.",
+					sc.hubID)
 				return nil
 			})
 	}
@@ -954,10 +1072,10 @@ func scaffoldPolicyGate(policies map[string]any, keys []string) (*bool, error) {
 // "content" does NOT mean "leave the existing policy content unchanged" — it maps
 // to a nil hubPolicy.Content, and applyHubPolicies ALWAYS sends content (nil →
 // JSON null), so an omitted content RESETS the policy to the backend default on
-// every apply. This is correct-by-contract for the declarative scaffold (the
-// template is the source of truth), but it means a template that only wants to
-// flip require_acceptance still reverts custom content to default. To keep custom
-// content, put it in the template. "require_acceptance" (or its friendly alias
+// every template-wins apply — a create, or --hub with --reapply-template. A
+// plain --hub run never sends it (MIO-2818): it writes template text only to a
+// policy the hub has none of its own for, and skips a policy the template
+// declares no text for. "require_acceptance" (or its friendly alias
 // "required") sets require_acceptance; nil omits it (partial update).
 func templateHubPolicy(key string, raw any) (hubPolicy, error) {
 	policyType, ok := policyTypeAliases[key]
@@ -1743,6 +1861,16 @@ Create mode (default) uses --name/--slug to create a new hub. Resume/target mode
 uses --hub <id> to apply onto an existing hub (also how you resume after a
 mid-pipeline failure). --dry-run prints the ordered plan and makes no changes.
 
+A --hub run FILLS GAPS: it adds what the hub is missing and keeps what it
+already has — branding keys, navigation buckets, settings (registration
+included), policy text, the policy gate and onboarding config — reporting each
+kept value on stderr and in the --dry-run plan. Flags on the command still win.
+It never resets a policy to the platform default. --reapply-template lets the
+template's values win instead (the policy gate is only ever turned on, never
+off); it is destructive (prompts, or needs --yes off a TTY). Pages are never overwritten: on every --hub run,
+--reapply-template and --dry-run included, a page conflict stops the run before
+anything is written.
+
 Brand the hub in the SAME command: --primary-color/--secondary-color/
 --text-color/--background-color/--header-color/--header-accent, plus
 --logo-url/--favicon-url/--social-image-url, each merge over the template's
@@ -1759,6 +1887,7 @@ stderr, so a json stdout stays parseable.`,
   mio hubs scaffold --template community --name Acme --slug acme --primary-color '#B91C1C' --secondary-color '#F59E0B'
   mio hubs scaffold --template community --name Acme --slug acme --branding-json '{"primary":"#B91C1C","font_body":"Inter"}'
   mio hubs scaffold --template community --hub hub_abc123
+  mio hubs scaffold --template community --hub hub_abc123 --reapply-template --yes
   HUB_ID=$(mio hubs scaffold --template community --name "My Community" --slug my-community -o plain --jq .hub_id)`,
 	Args: cobra.NoArgs,
 	RunE: runHubsScaffold,
@@ -1790,6 +1919,13 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 	// PATCH costs an orphaned half-built hub with no rollback.
 	if uerr := validateScaffoldBrandingURLs(branding, changedString(cmd, "logo-url"), changedString(cmd, "favicon-url")); uerr != nil {
 		return uerr
+	}
+	// --reapply-template (MIO-4166): a usage error without --hub, and a
+	// destructive op that needs a confirmation or --yes — both refused here,
+	// before any request.
+	reapply, rerr := checkReapplyTemplate(cmd, templateID)
+	if rerr != nil {
+		return rerr
 	}
 
 	// 2. Resolve auth + team ONCE (shared by every step). With an id-shaped
@@ -1834,6 +1970,8 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 		dryRun:               dryRun,
 		plan:                 &plan,
 		noteW:                cmd.ErrOrStderr(),
+		resume:               flags.hub != "",
+		reapplyTemplate:      reapply,
 	}
 
 	// 3. Resume/target mode: an EXPLICIT --hub applies onto an existing hub. The
@@ -1855,6 +1993,7 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 			return rerr
 		}
 		sc.hubID = hubID
+		sc.resumeHub = res.Attributes // what the --dry-run plan reports kept values against
 		sc.hubSlug, _ = res.Attributes["slug"].(string)
 		sc.hubName, _ = res.Attributes["title"].(string)
 		if p, ok := res.Attributes["is_private"].(bool); ok {
@@ -2002,6 +2141,13 @@ func printScaffoldRecovery(w io.Writer, sc *scaffoldContext, templateID string) 
 	}
 	if sc.registrationOverride != nil {
 		parts = append(parts, fmt.Sprintf("--registration-enabled=%t", *sc.registrationOverride))
+	}
+	// A --reapply-template run must resume AS one: without the flag the resume
+	// would switch to fill-gaps half way through and keep whatever the steps that
+	// had not yet run found on the hub (MIO-4166). --yes is deliberately NOT
+	// echoed — the resume asks for its own confirmation.
+	if sc.reapplyTemplate {
+		parts = append(parts, "--reapply-template")
 	}
 	// The branding override layer (MIO-2604) is part of that intent too: resuming
 	// without it would rebuild the hub in the TEMPLATE's palette, silently undoing
@@ -2401,6 +2547,12 @@ func init() {
 	hubsScaffoldCmd.Flags().String("favicon-url", "", "Override the template's branding.favicon_url.")
 	hubsScaffoldCmd.Flags().String("logo-url", "", "Override the template's branding.logo_url.")
 	hubsScaffoldCmd.Flags().Bool("registration-enabled", false, "Override the template's settings.registration.enabled.")
+
+	// MIO-4166 / MIO-2818: a --hub run fills gaps and keeps what the hub already
+	// has; this is the explicit opt-in to the template-wins apply. Destructive
+	// (confirmDestructive: prompts, or needs --yes off a TTY) and --hub only.
+	hubsScaffoldCmd.Flags().Bool("reapply-template", false,
+		"With --hub: overwrite the hub's branding, navigation, settings (registration included), policy text and onboarding config with the template's values, and turn the policy gate on when the template enables it (never off), instead of only filling what is missing. Destructive: prompts, or needs --yes off a TTY. A usage error without --hub.")
 
 	// MIO-2604: the PALETTE overrides (+ --branding-json), so a branded hub is one
 	// command rather than a scaffold followed by a hand-authored
