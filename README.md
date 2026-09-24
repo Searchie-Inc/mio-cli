@@ -328,9 +328,9 @@ mio hubs templates --catalog ./catalog.json
 mio hubs scaffold --template starter --name "Acme" --slug acme --catalog ./catalog.json --dry-run
 # Re-run onto an existing hub (or resume a failed run): --hub FILLS GAPS and keeps what the
 # hub already has — palette keys, menu buckets, registration, policy text, the policy gate —
-# naming each kept value on stderr and in --dry-run. --reapply-template overwrites those
-# with the template's instead (destructive: needs --yes off a TTY); it never overwrites a
-# page — a page conflict exits 2 before any write on every --hub run, this one included.
+# naming each kept value on stderr and in --dry-run. --reapply-template lets the template's
+# values win instead — the policy gate is only ever turned ON (destructive: needs --yes
+# off a TTY); it never overwrites a page — a page conflict exits 2 before any write on every --hub run, this one included.
 # VERSION GATE: on v0.23.0 and earlier --hub overwrites all of that, and
 # --reapply-template exits 2 (unknown flag).
 mio hubs scaffold --template community --hub <hub-id> --dry-run
@@ -457,7 +457,7 @@ Scripts and agents can branch on these stable codes.
 | `teams` | `create`, `list`, `retrieve`, `update`, `delete`, `switch` (server-side switch + updates local context); `members list/add/remove` |
 | `users` | `me`, `list`, `retrieve`, `update` |
 | `roles` | `create`, `list`, `retrieve`, `update`, `delete`; `permissions list` |
-| `hubs` | `create`, `list`, `retrieve`, `update`, `delete`; `navigation list/add/remove/reorder` (edit the menu item-by-item); `policies get` (read both documents + the gate AS STORED — always two items; note `version` does NOT distinguish custom text from the platform default, so compare the `content`), `policies update` (the document) and `policies gate` (the hub-level enforcement switch — a policy written without the gate is never presented); `scaffold` (one-command full-experience hub from a template live-fetched from the backend catalog; `--hub` re-runs fill gaps and keep what the hub already has — palette, menu buckets, registration, policy text and gate — with pages provenance-guarded (`--reapply-template` overwrites those kept values instead — never a page — and needs `--yes` off a TTY); writes the template's policies AND flips the gate they declare), `templates` (list the backend catalog's hub templates); `branding attach` (attach an uploaded raster image file as a managed branding asset — role `logo`/`favicon`/`social_image`/`auth_logo` — replacing any prior asset for that role and reporting the resolved public CDN URL as `resolved_public_url`) |
+| `hubs` | `create`, `list`, `retrieve`, `update`, `delete`; `navigation list/add/remove/reorder` (edit the menu item-by-item); `policies get` (read both documents + the gate AS STORED — always two items; note `version` does NOT distinguish custom text from the platform default, so compare the `content`), `policies update` (the document) and `policies gate` (the hub-level enforcement switch — a policy written without the gate is never presented); `scaffold` (one-command full-experience hub from a template live-fetched from the backend catalog; `--hub` re-runs fill gaps and keep what the hub already has — palette, menu buckets, registration, policy text and gate — with pages provenance-guarded (`--reapply-template` lets the template's values win instead — never over a page, and it only ever turns the gate on — and needs `--yes` off a TTY); writes the template's policies AND flips the gate they declare), `templates` (list the backend catalog's hub templates); `branding attach` (attach an uploaded raster image file as a managed branding asset — role `logo`/`favicon`/`social_image`/`auth_logo` — replacing any prior asset for that role and reporting the resolved public CDN URL as `resolved_public_url`) |
 | `contacts` | `create`, `list`, `retrieve`, `update`, `delete`, `restore` |
 | `contact-attributes` | `create/list/retrieve/update/delete` defs; `options` sub-group; `hub-config` sub-group; `values get/set` |
 | `tags` | `create`, `list`, `retrieve`, `update`, `delete`, `assign`, `assign-bulk`, `remove` |

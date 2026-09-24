@@ -68,10 +68,14 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   Every kept value is named on stderr and in `--dry-run`. A page you edited, or a foreign
   page at a template slug, exits `2` **before anything is written** and is **never**
   overwritten. Spaces, onboarding attributes and playlists skip if they already exist.
-  To overwrite the kept values with the template's instead — branding, settings,
-  navigation, policy text and gate, onboarding configs — add `--reapply-template`. It is
-  destructive, so it needs `--yes` off a TTY (exit `5` otherwise, nothing sent), and it is
-  a usage error without `--hub`. It does **not** touch pages: the page check runs on a
+  To let the template win instead, add `--reapply-template`: every branding and settings
+  key the template sets replaces the hub's (keys it does not set survive, and
+  `settings.policies` is dropped by the hub PATCH), its navigation replaces the whole menu
+  (a bucket it lacks, like `mobile`, is dropped), its policies are written (reset to the
+  default where it has no text), its onboarding configs are overwritten, and the policy
+  gate is turned on if it declares `enabled: true` — never off. It is destructive, so it
+  needs `--yes` off a TTY (exit `5` otherwise, nothing sent), and it is a usage error
+  without `--hub`. It does **not** touch pages: the page check runs on a
   `--reapply-template` run (and a `--dry-run`) too, so a conflicting page still exits `2`
   before anything is written — no flag overwrites a page. **Not in `v0.23.0` or
   earlier**: there a `--hub` run overwrites the palette, menu, registration and policy

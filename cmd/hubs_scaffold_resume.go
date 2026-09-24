@@ -62,13 +62,13 @@ func checkReapplyTemplate(cmd *cobra.Command, templateID string) (bool, error) {
 	}
 	if flags.hub == "" {
 		return false, errs.New(errs.ExitUsage,
-			"--reapply-template needs --hub <id>: it overwrites an EXISTING hub's branding, navigation, settings, policy text, policy gate and onboarding config with the template's values, and a create has nothing to overwrite")
+			"--reapply-template needs --hub <id>: it overwrites an EXISTING hub's branding, navigation, settings, policy text and onboarding config with the template's values (and turns its policy gate on when the template enables it), and a create has nothing to overwrite")
 	}
 	if dryRun, _ := cmd.Flags().GetBool("dry-run"); dryRun {
 		return true, nil
 	}
 	if err := confirmDestructive(cmd, fmt.Sprintf(
-		"Overwrite hub %s's branding, navigation, settings (registration included), policy text, policy gate and onboarding config with template %q?",
+		"Overwrite hub %s's branding, navigation, settings (registration included), policy text and onboarding config with template %q, and turn its policy gate on if the template enables it?",
 		flags.hub, templateID)); err != nil {
 		return false, err
 	}

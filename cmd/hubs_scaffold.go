@@ -839,10 +839,10 @@ func resolveTemplatePolicies(t *catalog.HubTemplate) (templatePolicies, error) {
 // --hub RUNS FILL GAPS (MIO-2818, read the CONTENT SEMANTICS note on
 // templateHubPolicy): applyHubPolicies always sends `content`, so a template
 // that omits it RESETS that policy to the backend default — and when the
-// template's TOS declares require_acceptance, that also normalizes the version to
+// template's TOS declares require_acceptance true, that also normalizes the version to
 // "default-v1", which RE-PROMPTS every member who had accepted whenever the hub's
 // TOS carried another version (update_policy moves it only on a write that
-// carries require_acceptance, and only when the effective version changes).
+// carries require_acceptance=true, and only when the effective version changes).
 // That is harmless on a create (the default reverts to the default) and was
 // destructive on a resume onto a hub whose ToS an operator had edited. So a --hub run writes a policy only when the template
 // has text for it AND the hub has none of its own, never sends content:null,
@@ -1833,9 +1833,9 @@ A --hub run FILLS GAPS: it adds what the hub is missing and keeps what it
 already has — branding keys, navigation buckets, settings (registration
 included), policy text, the policy gate and onboarding config — reporting each
 kept value on stderr and in the --dry-run plan. Flags on the command still win.
-It never resets a policy to the platform default. --reapply-template overwrites
-those kept values with the template's instead; it is destructive (prompts, or
-needs --yes off a TTY). Pages are never overwritten: on every --hub run,
+It never resets a policy to the platform default. --reapply-template lets the
+template's values win instead (the policy gate is only ever turned on, never
+off); it is destructive (prompts, or needs --yes off a TTY). Pages are never overwritten: on every --hub run,
 --reapply-template and --dry-run included, a page conflict stops the run before
 anything is written.
 
@@ -2513,7 +2513,7 @@ func init() {
 	// has; this is the explicit opt-in to the template-wins apply. Destructive
 	// (confirmDestructive: prompts, or needs --yes off a TTY) and --hub only.
 	hubsScaffoldCmd.Flags().Bool("reapply-template", false,
-		"With --hub: overwrite the hub's branding, navigation, settings (registration included), policy text, policy gate and onboarding config with the template's values, instead of only filling what is missing. Destructive: prompts, or needs --yes off a TTY. A usage error without --hub.")
+		"With --hub: overwrite the hub's branding, navigation, settings (registration included), policy text and onboarding config with the template's values, and turn the policy gate on when the template enables it (never off), instead of only filling what is missing. Destructive: prompts, or needs --yes off a TTY. A usage error without --hub.")
 
 	// MIO-2604: the PALETTE overrides (+ --branding-json), so a branded hub is one
 	// command rather than a scaffold followed by a hand-authored
