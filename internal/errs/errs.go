@@ -144,6 +144,38 @@ func HTTPStatusOf(err error) int {
 	return 0
 }
 
+// APIErrorDocumentCarrier is implemented by an error built from a JSON:API
+// error document the API answered with. APIErrorDocument returns that document
+// exactly as it arrived — the whole response body, every member of every error
+// object included.
+//
+// Why it exists (MIO-3912): main.go's stderr envelope used to be rebuilt from
+// CLI-side state — status, detail and meta.exit_code — so every other member
+// the API sent was dropped: `code` (the stable machine token agents branch on),
+// `title`, `source`, and `meta.request_id` (the correlation id for the matching
+// backend log line, which the CLI overwrote with its own meta.exit_code).
+// Carrying the document on the error lets the envelope keep them all.
+type APIErrorDocumentCarrier interface {
+	APIErrorDocument() []byte
+}
+
+// APIErrorDocumentOf returns the JSON:API error document carried anywhere in
+// err's chain, or nil when there is none: a failure that never reached the
+// network, or an API answer whose body was not a JSON:API error document (a
+// proxy's HTML page, an empty body).
+//
+// Like HTTPStatusOf it walks the WHOLE chain, so a command that wraps a client
+// error with context (`fmt.Errorf("page %q: %w", …)`) or appends a hint keeps
+// the API's document — as long as it wraps with %w rather than re-formatting
+// the message into a new string, which cuts the chain.
+func APIErrorDocumentOf(err error) []byte {
+	var c APIErrorDocumentCarrier
+	if errors.As(err, &c) {
+		return c.APIErrorDocument()
+	}
+	return nil
+}
+
 // CodeOf extracts the exit code carried by err. A nil error is ExitOK; any error
 // that is not (and does not wrap) a *CLIError is treated as ExitGeneric.
 func CodeOf(err error) int {

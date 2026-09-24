@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 
@@ -26,7 +27,7 @@ func main() {
 	}
 
 	code := exitCodeFor(err)
-	writeErrorEnvelope(err, code)
+	writeErrorEnvelope(err, code, cmd.RawRequested())
 	os.Exit(code)
 }
 
@@ -56,12 +57,16 @@ func exitCodeFor(err error) int {
 //   - When stderr is NOT a terminal (piped to a file, another process, or an
 //     agent), it emits the EXACT JSON:API error envelope. This shape is a
 //     machine contract that agents and CI parse — it must never change.
-func writeErrorEnvelope(err error, code int) {
+//
+// raw is the invocation's --raw: for a failure that carries the API's error
+// document it selects that document over the CLI's envelope (MIO-3912). It
+// does not affect the terminal rendering.
+func writeErrorEnvelope(err error, code int, raw bool) {
 	if term.IsTerminal(int(os.Stderr.Fd())) {
 		writeFriendlyError(err, code)
 		return
 	}
-	writeJSONErrorEnvelope(err, code)
+	writeJSONErrorEnvelope(os.Stderr, err, code, raw)
 }
 
 // writeFriendlyError prints a human-readable, single-line error for interactive
@@ -75,11 +80,24 @@ func writeFriendlyError(err error, code int) {
 	fmt.Fprintf(os.Stderr, "%s(exit code %d)%s\n", dim, code, reset)
 }
 
-// writeJSONErrorEnvelope prints the error to stderr as a JSON:API-style error
+// writeJSONErrorEnvelope prints the error to w (stderr) as a JSON:API-style error
 // document so agents can parse failures uniformly. This is the non-TTY contract
 // path: the KEYS (`errors[].status`, `errors[].detail`, `errors[].meta.exit_code`)
 // must never change.
-func writeJSONErrorEnvelope(err error, code int) {
+//
+// A failure that carries the API's JSON:API error document is rendered by
+// apiErrorEnvelope, which keeps every member the API sent (code, title, source,
+// meta.request_id, …) alongside those keys — see its comment for the default
+// and --raw shapes (MIO-3912). Every other failure — one that never reached the
+// network, or an API answer whose body was not a JSON:API error document — gets
+// the CLI-built envelope below, exactly as before, with or without --raw.
+func writeJSONErrorEnvelope(w io.Writer, err error, code int, raw bool) {
+	if apiDoc := errs.APIErrorDocumentOf(err); apiDoc != nil {
+		if out, ok := apiErrorEnvelope(apiDoc, statusForEnvelope(err, code), err.Error(), code, raw); ok {
+			_, _ = w.Write(out)
+			return
+		}
+	}
 	doc := map[string]any{
 		"errors": []map[string]any{
 			{
@@ -89,12 +107,12 @@ func writeJSONErrorEnvelope(err error, code int) {
 			},
 		},
 	}
-	enc := json.NewEncoder(os.Stderr)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	if encErr := enc.Encode(doc); encErr != nil {
 		// Last-resort fallback if JSON encoding itself fails.
-		fmt.Fprintln(os.Stderr, err.Error())
+		fmt.Fprintln(w, err.Error())
 	}
 }
 
