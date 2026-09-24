@@ -554,8 +554,12 @@ the hub. A hub built any other way has none — by hand, or by a client-side
 scaffold (--hub resume, a palette or --branding-json flag, --catalog, a missing
 --name or --slug, or a backend with the op off) — so pass --playlist-id there.
 'mio hubs scaffold -o json' reports each playlist's id as
-.playlists[].playlist_id, and 'mio media hub-playlists list --hub <hub>' lists
-them after the fact. --playlist-id also reconciles a chosen subset.
+.playlists[].playlist_id. After the fact, list the team's playlists and keep the
+ones scoped to the hub (the first limit below):
+  mio media playlists list --limit 100 -o json --jq '.[] | select(.hub_id == "<hub>") | {id, title}'
+'mio media hub-playlists list' is not a substitute: its .id is the publication
+row, and it also lists team-library playlists this command rejects.
+--playlist-id also reconciles a chosen subset.
 
 Three limits worth knowing before you run it:
 

@@ -132,6 +132,15 @@ type scaffoldContext struct {
 	contentNodes      []scaffoldContentNode
 	contentNodesKnown bool
 
+	// playlistsNotInHub holds the playlist ids a resume RECOVERED whose own
+	// hub_id is not this hub: a team-library playlist (hub_id null) or another
+	// hub's, published into this one. A page binding may use one; the content
+	// reconcile may not (it 422s playlist_not_in_hub and rejects the whole
+	// request), so stepContentNodes leaves these out and names them. Ids the
+	// playlists step created are scoped to the hub by construction and never
+	// land here.
+	playlistsNotInHub map[string]bool
+
 	// publish is the --publish intent (Task 21 registers the flag; read
 	// existence-guarded in runHubsScaffold, so it defaults false until then). When
 	// false the publish step is a skip-with-note and the hub stays private.
@@ -1201,8 +1210,11 @@ func recoverPlaylistIDsForBindings(sc *scaffoldContext, t *catalog.HubTemplate) 
 		keyForTitle[p.Title] = p.Key
 	}
 
-	// Hub side: walk the publication rows, read each playlist's title back.
+	// Hub side: walk the publication rows, read each playlist's title back, and
+	// its own hub_id: a publication row says the playlist is published INTO the
+	// hub, not that it belongs to it (MIO-4167, see playlistsNotInHub).
 	idsForTitle := map[string][]string{}
+	scopeOf := map[string]string{}
 	query := url.Values{}
 	seen := map[string]bool{}
 	const maxPages = 1000
@@ -1222,6 +1234,7 @@ func recoverPlaylistIDsForBindings(sc *scaffoldContext, t *catalog.HubTemplate) 
 			}
 			title, _ := res.Attributes["title"].(string)
 			idsForTitle[title] = append(idsForTitle[title], playlistID)
+			scopeOf[playlistID], _ = res.Attributes["hub_id"].(string)
 		}
 		next := nextPageCursor(col)
 		if next == "" || seen[next] {
@@ -1241,6 +1254,12 @@ func recoverPlaylistIDsForBindings(sc *scaffoldContext, t *catalog.HubTemplate) 
 			continue // absent, or ambiguous on the hub — stepPages reports it
 		}
 		sc.playlistIDsByKey[key] = ids[0]
+		if scopeOf[ids[0]] != sc.hubID {
+			if sc.playlistsNotInHub == nil {
+				sc.playlistsNotInHub = map[string]bool{}
+			}
+			sc.playlistsNotInHub[ids[0]] = true
+		}
 		sc.notef("playlist %q recovered from the hub as %s (the playlists step skipped — this hub already has published playlists)", key, ids[0])
 	}
 	return nil

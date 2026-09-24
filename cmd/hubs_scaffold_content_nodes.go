@@ -23,6 +23,10 @@ package cmd
 // never records and 422 no_playlist_provenance) and never a title guess: the
 // starter template ships two playlists titled "Add another playlist", so a title
 // cannot say which row is which. A key with no id is NAMED on stderr instead.
+// So is a recovered id whose playlist is not scoped to the hub (a team-library
+// playlist merely published into it): the route rejects the WHOLE request with
+// 422 playlist_not_in_hub if any id is not the hub's own, so sending one would
+// fail the step, and with it every page after it, on every re-run.
 //
 // WHERE IT RUNS. Between playlists and pages, the position the op gives it:
 // after the playlists and their items are published (a lesson is created
@@ -71,6 +75,9 @@ func contentReconcilePath(teamID, hubID string) string {
 //   - a key with no id (a resume whose playlists step skipped and could not
 //     recover it unambiguously): named on stderr with the command that fixes
 //     it, never guessed;
+//   - a recovered id whose playlist is not scoped to the hub
+//     (sc.playlistsNotInHub): left out of the request and named on stderr,
+//     because the route rejects the whole request for it;
 //   - a backend without the route (405 from the /content/{node_id} route the
 //     path falls onto, or a bare 404): a stderr note, not a failure — the rest
 //     of the hub is still worth building;
@@ -91,10 +98,14 @@ func stepContentNodes(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	detail := fmt.Sprintf("POST %s — create content items (a container per playlist, a lesson per item) for playlist(s) [%s], naming the ids the playlists step created or recovered (playlist_ids, template order); a backend without the route is noted, not failed",
 		contentReconcilePath(sc.teamID, sc.hubIDOrPlaceholder()), strings.Join(keys, ", "))
 	return sc.step("content-nodes", detail, func() error {
-		ids, missing := scaffoldReconcileIDs(sc, t)
+		ids, missing, notInHub := scaffoldReconcileIDs(sc, t)
 		if len(missing) > 0 {
-			sc.notef("content-nodes: no playlist id for key(s) %s — the playlists step skipped (this hub already has playlists) and they cannot be matched to a hub playlist without guessing, so their content items were NOT created. Find their ids with `mio media hub-playlists list --hub %s` and run %s",
-				strings.Join(missing, ", "), sc.hubID, reconcileCommand(sc, []string{"<id>"}))
+			sc.notef("content-nodes: no playlist id for key(s) %s — the playlists step skipped (this hub already has playlists) and they cannot be matched to a hub playlist without guessing, so their content items were NOT created. Find the ids of the playlists scoped to this hub with %s and run %s",
+				strings.Join(missing, ", "), hubScopedPlaylistsCommand(sc), reconcileCommand(sc, []string{"<id>"}))
+		}
+		if len(notInHub) > 0 {
+			sc.notef("content-nodes: playlist(s) %s are published into this hub but not scoped to this hub (their own hub_id is not %s), so their content items were NOT created: reconcile accepts only the hub's own playlists and would reject the whole request (422 playlist_not_in_hub). A page binding still uses them.",
+				strings.Join(notInHub, ", "), sc.hubID)
 		}
 		if len(ids) == 0 {
 			return nil
@@ -108,9 +119,14 @@ func stepContentNodes(sc *scaffoldContext, t *catalog.HubTemplate) error {
 					errs.HTTPStatusOf(err), reconcileCommand(sc, ids))
 				return nil
 			}
+			// The API's own detail usually ends in a period already.
+			sep := ". "
+			if strings.HasSuffix(err.Error(), ".") {
+				sep = " "
+			}
 			return errs.Wrap(errs.CodeOf(err), fmt.Errorf(
-				"content reconcile: %w. The playlists exist: create their content items with %s — a resume skips the playlists step, so it can reconcile only the ids a page binding lets it recover",
-				err, reconcileCommand(sc, ids)))
+				"content reconcile: %w%sThe playlists exist: create their content items with %s — a resume skips the playlists step, so it can reconcile only the ids a page binding lets it recover",
+				err, sep, reconcileCommand(sc, ids)))
 		}
 
 		nodes, ok := reconcileResultNodes(res)
@@ -126,18 +142,37 @@ func stepContentNodes(sc *scaffoldContext, t *catalog.HubTemplate) error {
 }
 
 // scaffoldReconcileIDs returns, in TEMPLATE order, the playlist ids this run
-// holds — created by stepPlaylists, or recovered by it — and the keys it holds
-// none for. It reads sc.playlistIDsByKey and nothing else: the playlists step
-// owns creating and recovering ids, and this step only reconciles what it has.
-func scaffoldReconcileIDs(sc *scaffoldContext, t *catalog.HubTemplate) (ids, missing []string) {
+// holds that reconcile accepts — created by stepPlaylists, or recovered by it
+// and scoped to the hub — plus the keys it holds no id for, and the recovered
+// ones ("key (id)") whose playlist is not scoped to the hub. It reads what the
+// playlists step recorded and nothing else: that step owns creating and
+// recovering ids, and this step only reconciles what it has.
+func scaffoldReconcileIDs(sc *scaffoldContext, t *catalog.HubTemplate) (ids, missing, notInHub []string) {
 	for _, p := range t.Playlists {
-		if id := sc.playlistIDsByKey[p.Key]; id != "" {
-			ids = append(ids, id)
-		} else {
+		id := sc.playlistIDsByKey[p.Key]
+		switch {
+		case id == "":
 			missing = append(missing, p.Key)
+		case sc.playlistsNotInHub[id]:
+			notInHub = append(notInHub, fmt.Sprintf("%s (%s)", p.Key, id))
+		default:
+			ids = append(ids, id)
 		}
 	}
-	return ids, missing
+	return ids, missing, notInHub
+}
+
+// hubScopedPlaylistsCommand is the command that lists the playlists reconcile
+// accepts for this hub: the team's playlists whose own hub_id is the hub. Not
+// `media hub-playlists list`, whose .id is the publication row and which also
+// lists team-library playlists published into the hub.
+func hubScopedPlaylistsCommand(sc *scaffoldContext) string {
+	parts := []string{"mio media playlists list"}
+	if sc.teamID != "" {
+		parts = append(parts, "--team "+sc.teamID)
+	}
+	parts = append(parts, "--limit 100 -o json", fmt.Sprintf(`--jq '.[] | select(.hub_id == "%s") | {id, title}'`, sc.hubID))
+	return "`" + strings.Join(parts, " ") + "`"
 }
 
 // reconcileCommand is the exact `mio content reconcile` invocation for ids on
@@ -260,7 +295,7 @@ func recordHubOpContentNodes(sc *scaffoldContext, res client.HubFromTemplateResu
 	}
 	if len(nodes) == 0 && createdPlaylists > 0 {
 		cmd := reconcileCommand(sc, []string{"<id>"})
-		if ids, missing := scaffoldReconcileIDs(sc, &sc.hubTmpl); len(missing) == 0 && len(ids) > 0 {
+		if ids, missing, notInHub := scaffoldReconcileIDs(sc, &sc.hubTmpl); len(missing) == 0 && len(notInHub) == 0 && len(ids) > 0 {
 			cmd = reconcileCommand(sc, ids)
 		}
 		sc.notef("content-nodes: the backend op created %d playlist(s) but reported no content items for them (it predates mio-backend MIO-3258) — create them with %s",

@@ -12,17 +12,20 @@ package cmd
 // scaffold never has, and 422s no_playlist_provenance), and never a guess.
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 	"github.com/Searchie-Inc/mio-cli/internal/client"
+	"github.com/Searchie-Inc/mio-cli/internal/docexamples"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -44,6 +47,10 @@ const reconcileOKBody = `{"data":{"id":"hub_new","type":"content_node_reconcilia
     {"legacy_hash":"h_l1","node_type":"lesson","outcome":"adopted","node_id":"cn_2","member_visible":true,"reason":null},
     {"legacy_hash":"h_c2","node_type":"container","outcome":"skipped_slug_conflict","node_id":null,"member_visible":null,"reason":"slug taken"}
   ]}}}`
+
+// mintedPlaylistIDs are the ids contentNodesServer gives its first playlist
+// creates, in creation order: deliberately neither sorted nor reverse-sorted.
+var mintedPlaylistIDs = []string{"pl_c", "pl_a", "pl_b"}
 
 func reconcileOK(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
@@ -67,9 +74,12 @@ func playlistsCatalogBody(t *testing.T) []byte {
 
 // contentNodesServer serves a full CREATE-mode scaffold. The whole-hub op
 // answers opStatus/opBody (405 = absent, so the client-side pipeline runs);
-// every team playlist create mints a DISTINCT id (pl_1, pl_2, …) so a dropped
-// or reordered id is visible in the reconcile body; reconcile answers via the
-// given handler.
+// every team playlist create mints a DISTINCT id so a dropped or reordered id
+// is visible in the reconcile body; reconcile answers via the given handler.
+//
+// The ids are minted OUT of lexical order (mintedPlaylistIDs): creation order
+// is template order, so ids that also sorted into that order could not tell
+// "template order" from "sorted", and a sort.Strings on the ids would pass.
 func contentNodesServer(t *testing.T, catBody []byte, opStatus int, opBody string, reconcile func(w http.ResponseWriter)) (*httptest.Server, *contentNodesWire) {
 	t.Helper()
 	rec := &contentNodesWire{}
@@ -102,6 +112,9 @@ func contentNodesServer(t *testing.T, catBody []byte, opStatus int, opBody strin
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/teams/t_team1/playlists"):
 			playlists++
 			id := fmt.Sprintf("pl_%d", playlists)
+			if playlists <= len(mintedPlaylistIDs) {
+				id = mintedPlaylistIDs[playlists-1]
+			}
 			rec.events = append(rec.events, "playlist-create:"+id)
 			w.WriteHeader(http.StatusCreated)
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"playlists","attributes":{}}}`, id)
@@ -182,11 +195,13 @@ func TestScaffoldContentNodes_ReconcilesExactlyThePlaylistsItCreated(t *testing.
 	}
 	// EXPLICIT ids, in template order. A bodyless POST would ask the backend for
 	// HubTemplateApplication provenance this path never records (422
-	// no_playlist_provenance); a missing or reordered id reconciles the wrong set.
+	// no_playlist_provenance); a missing or reordered id reconciles the wrong set
+	// (the backend positions each container by its index in this list). The
+	// stub mints pl_c, pl_a, pl_b in that order, so sorted order would differ.
 	assertExactBody(t, rec.reconcileBodies[0], `{
 		"data": {
 			"type": "content_node_reconciliations",
-			"attributes": { "playlist_ids": ["pl_1", "pl_2", "pl_3"] }
+			"attributes": { "playlist_ids": ["pl_c", "pl_a", "pl_b"] }
 		}
 	}`)
 
@@ -302,15 +317,25 @@ func TestScaffoldContentNodes_OtherFailuresStopTheRunAndNameTheRecovery(t *testi
 	}
 
 	// The error text is what main.go renders into the stderr envelope. A fresh
-	// server, so the minted playlist ids start again at pl_1.
+	// server, so the minted playlist ids start again from the first.
 	srv2, _ := clientPathContentNodesServer(t, playlistsCatalogBody(t), boom)
 	err := executeCLI(t, scaffoldEnv(t, srv2.URL), scaffoldArgs()...)
 	if err == nil {
 		t.Fatal("a failed reconcile must return an error")
 	}
-	want := "mio content reconcile --hub hub_new --team t_team1 --playlist-id pl_1 --playlist-id pl_2 --playlist-id pl_3"
+	want := "mio content reconcile --hub hub_new --team t_team1 --playlist-id pl_c --playlist-id pl_a --playlist-id pl_b"
 	if !strings.Contains(err.Error(), want) {
 		t.Errorf("the failure must name the recovery command with every id (%q); err=%v", want, err)
+	}
+
+	// An API detail that already ends in a period is not given a second one.
+	srv3, _ := clientPathContentNodesServer(t, playlistsCatalogBody(t), func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"errors":[{"status":"422","detail":"Rejected by the route."}]}`))
+	})
+	err = executeCLI(t, scaffoldEnv(t, srv3.URL), scaffoldArgs()...)
+	if err == nil || !strings.Contains(err.Error(), "Rejected by the route. The playlists exist") {
+		t.Errorf("want the detail, one period, then the recovery text; err=%v", err)
 	}
 	if !strings.Contains(err.Error(), `step "content-nodes" failed`) {
 		t.Errorf("the failure must name its step; err=%v", err)
@@ -386,9 +411,10 @@ func resumeReconcileServer(t *testing.T, titlesByID map[string]string) (*httptes
 			return
 		}
 		if strings.Contains(path, "/playlists/") && !strings.Contains(path, "/hubs/") {
+			// Scoped to hub_1: the playlists a first run created carry its hub_id.
 			id := path[strings.LastIndex(path, "/")+1:]
 			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"playlists","attributes":{"title":%q}}}`, id, titlesByID[id])
+			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"playlists","attributes":{"title":%q,"hub_id":"hub_1"}}}`, id, titlesByID[id])
 			return
 		}
 		rows := make([]string, 0, len(titlesByID))
@@ -563,6 +589,31 @@ func TestScaffoldHubOp_ReportsTheOpsContentNodes(t *testing.T) {
 			t.Errorf("content_nodes = %v (present=%t), want null", v, present)
 		}
 	})
+
+	t.Run("the op's content step skipped wholesale is null and not called pre-T3", func(t *testing.T) {
+		// The op reports one `content_nodes` row, skipped, when its content step
+		// could not run at all (service.py _step_content_nodes, content_service
+		// not wired). That is not a backend that predates MIO-3258 T3, so the
+		// run must not say it is: the generic skipped-row note already says why.
+		body := strings.Replace(hubOpContentNodesBody(`[]`), `{"resource":"content_node:h_c1","action":"created"},
+    {"resource":"content_node:h_l1","action":"skipped","reason":"adopted"},
+    {"resource":"content_node:h_c2","action":"created"},`,
+			`{"resource":"content_nodes","action":"skipped","reason":"content_service was not wired onto this HubScaffoldService — no content_nodes were materialized"},`, 1)
+		srv, _ := contentNodesServer(t, playlistsCatalogBody(t), http.StatusCreated, body, reconcileOK)
+		res := runContract(t, scaffoldEnv(t, srv.URL), scaffoldArgs()...)
+		if res.Code != errs.ExitOK {
+			t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+		}
+		if v, present := decodeScaffoldJSON(t, res.Stdout)["content_nodes"]; !present || v != nil {
+			t.Errorf("content_nodes = %v (present=%t), want null", v, present)
+		}
+		if !strings.Contains(res.Stderr, "content_service was not wired") {
+			t.Errorf("the op's own skip reason must reach stderr; stderr=%q", res.Stderr)
+		}
+		if strings.Contains(res.Stderr, "predates") {
+			t.Errorf("a skipped content step is not a backend that predates MIO-3258; stderr=%q", res.Stderr)
+		}
+	})
 }
 
 // TestScaffoldContentNodes_KeyIsOnBothPaths: the parity gate for this key
@@ -607,5 +658,324 @@ func playlistsTemplate() *catalog.HubTemplate {
 			{Title: "Add another playlist", Key: "placeholder-2", Visibility: "public"},
 			{Title: "Add another playlist", Key: "placeholder-3", Visibility: "public"},
 		},
+	}
+}
+
+// ─── resume: a playlist the hub merely publishes is not the hub's ─────────────
+
+// scopedPlaylist is one playlist a resume stub serves: its title (what recovery
+// joins on) and its hub_id (what the reconcile route checks). An empty hubID is
+// a team-library playlist, hub_id null, that was published into the hub.
+type scopedPlaylist struct{ title, hubID string }
+
+// reconcileLikeTheBackend answers POST …/hubs/{hub}/content/reconcile with the
+// backend's rule (reconcile_service.py _validated_explicit_playlist_ids): if ANY
+// id does not resolve to a playlist whose hub_id is this hub, the WHOLE request
+// is 422 playlist_not_in_hub; otherwise one container result per id. A stub
+// that accepted any id would confirm a reconcile the real route refuses.
+func reconcileLikeTheBackend(w http.ResponseWriter, hubID string, body []byte, playlists map[string]scopedPlaylist) {
+	var doc struct {
+		Data struct {
+			Attributes struct {
+				PlaylistIDs []string `json:"playlist_ids"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(body, &doc)
+	var invalid, results []string
+	for _, id := range doc.Data.Attributes.PlaylistIDs {
+		if p, ok := playlists[id]; !ok || p.hubID != hubID {
+			invalid = append(invalid, id)
+			continue
+		}
+		results = append(results, fmt.Sprintf(`{"legacy_hash":"h_%s","node_type":"container","outcome":"created","node_id":"cn_%s"}`, id, id))
+	}
+	if len(invalid) > 0 {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = fmt.Fprintf(w, `{"errors":[{"status":"422","code":"playlist_not_in_hub","detail":"playlist_ids contains %d id(s) that do not belong to hub '%s'."}]}`, len(invalid), hubID)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"content_node_reconciliations","attributes":{"hub_id":%q,"results":[%s]}}}`,
+		hubID, hubID, strings.Join(results, ","))
+}
+
+// bindingPlaylistsCatalogBody is playlistsCatalogBody plus a homepage whose
+// root binds the getting-started playlist by key (the starter homepage's band),
+// which is what makes a resume RECOVER that playlist's id.
+func bindingPlaylistsCatalogBody(t *testing.T) []byte {
+	t.Helper()
+	return vocabCatalogBody(t, func(ht map[string]any, cat map[string]any) {
+		ht["playlists"] = []any{
+			map[string]any{"key": "getting-started", "title": "Getting Started", "visibility": "public"},
+			map[string]any{"key": "placeholder-2", "title": "Add another playlist", "visibility": "public"},
+			map[string]any{"key": "placeholder-3", "title": "Add another playlist", "visibility": "public"},
+		}
+		pts, _ := cat["pageTemplates"].([]any)
+		for _, raw := range pts {
+			pt, _ := raw.(map[string]any)
+			if pt["id"] != "page-homepage-community" {
+				continue
+			}
+			starter, _ := pt["starter"].(map[string]any)
+			starter["dataSource"] = map[string]any{"type": "playlist", "id": "", "key": "getting-started"}
+		}
+	})
+}
+
+// scopedResumeServer serves a full `hubs scaffold --hub hub_x` run onto a hub
+// that already publishes the given playlists (so the playlists step skips and
+// recovers by title), answering reconcile with the backend's hub-scope rule.
+func scopedResumeServer(t *testing.T, catBody []byte, playlists map[string]scopedPlaylist) (*httptest.Server, *contentNodesWire) {
+	t.Helper()
+	const hubID = "hub_x"
+	rec := &contentNodesWire{}
+	titles := make(map[string]string, len(playlists))
+	for id, p := range playlists {
+		titles[id] = p.title
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if catBody != nil && serveCatalogGET(w, r, catBody) {
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		body, _ := io.ReadAll(r.Body)
+		path := r.URL.Path
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/content/reconcile"):
+			rec.events = append(rec.events, "reconcile")
+			rec.reconcilePaths = append(rec.reconcilePaths, path)
+			rec.reconcileBodies = append(rec.reconcileBodies, body)
+			reconcileLikeTheBackend(w, hubID, body, playlists)
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/scaffold-from-template"):
+			w.WriteHeader(http.StatusNotFound) // the pages op is absent here
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/pages"):
+			rec.events = append(rec.events, "page-create")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"pg_new","type":"pages","attributes":{"slug":"homepage","is_homepage":true}}}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/teams/t_team1/playlists"):
+			rec.events = append(rec.events, "playlist-create:unexpected")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"pl_unexpected","type":"playlists","attributes":{}}}`))
+		case r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"id":"res_new","type":"resources","attributes":{}}}`))
+		case r.Method == http.MethodPut:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
+		case strings.HasSuffix(path, "/hubs/"+hubID):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"id":"hub_x","type":"hubs","attributes":{"slug":"acme","title":"Acme","is_private":true}}}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/hubs/"+hubID+"/playlists"):
+			// The hub's publication rows. A row's hub_id is the hub it is
+			// published INTO, never the playlist's own scope.
+			rows := make([]string, 0, len(playlists))
+			for _, id := range sortedKeys(titles) {
+				rows = append(rows, fmt.Sprintf(`{"id":"hm_%s","type":"hub_media","attributes":{"hub_id":%q,"playlist_id":%q}}`, id, hubID, id))
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"data":[%s]}`, strings.Join(rows, ","))
+		case r.Method == http.MethodGet && strings.Contains(path, "/teams/t_team1/playlists/"):
+			// PlaylistResource: hub_id is always serialized, null when unscoped.
+			id := path[strings.LastIndex(path, "/")+1:]
+			p := playlists[id]
+			scope := "null"
+			if p.hubID != "" {
+				scope = fmt.Sprintf("%q", p.hubID)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"playlists","attributes":{"title":%q,"hub_id":%s}}}`, id, p.title, scope)
+		case r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, rec
+}
+
+func scopedResumeArgs() []string {
+	return withTeam("t_team1", "hubs", "scaffold", "--template", "community", "--hub", "hub_x", "--output", "json")
+}
+
+// TestScaffoldContentNodes_ResumeReconcilesOnlyPlaylistsScopedToTheHub: the
+// resume that recovers a playlist for a page binding may recover a TEAM-LIBRARY
+// playlist: one published into the hub whose own hub_id is null (or another
+// hub). The page binding may use it; the reconcile route may not, because it
+// rejects the whole request with 422 playlist_not_in_hub when any id is not
+// scoped to the hub. Sending it anyway failed the content-nodes step, which
+// runs BEFORE pages, so a resume that exited 0 before MIO-4167 wrote no page at
+// all, and every re-run recovered the same id and failed the same way.
+//
+// So the step reconciles only ids scoped to the hub and NAMES the rest. The
+// oracle is the wire: no reconcile carrying the library id, and the pages
+// written. The second subtest is the control: the same run with the playlist
+// scoped to the hub DOES reconcile it, so the first cannot pass by never
+// reconciling at all.
+func TestScaffoldContentNodes_ResumeReconcilesOnlyPlaylistsScopedToTheHub(t *testing.T) {
+	t.Run("a team-library playlist is named, not sent, and the pages still apply", func(t *testing.T) {
+		srv, rec := scopedResumeServer(t, bindingPlaylistsCatalogBody(t), map[string]scopedPlaylist{
+			"pl_team": {title: "Getting Started"}, // hub_id null: the team library
+		})
+		res := runContract(t, scaffoldEnv(t, srv.URL), scopedResumeArgs()...)
+		if res.Code != errs.ExitOK {
+			t.Fatalf("exit = %d, want 0 — a playlist reconcile cannot take must not stop the resume; stderr=%q", res.Code, res.Stderr)
+		}
+		for i, b := range rec.reconcileBodies {
+			if strings.Contains(string(b), "pl_team") {
+				t.Errorf("reconcile #%d sent pl_team, a playlist not scoped to the hub (the route 422s playlist_not_in_hub): %s", i, b)
+			}
+		}
+		if indexOfEvent(rec.events, "page-create", false) < 0 {
+			t.Errorf("the resume must carry on to the pages; events=%v", rec.events)
+		}
+		for _, want := range []string{"getting-started", "pl_team", "not scoped to this hub"} {
+			if !strings.Contains(res.Stderr, want) {
+				t.Errorf("stderr must name %q; stderr=%q", want, res.Stderr)
+			}
+		}
+		if v, present := decodeScaffoldJSON(t, res.Stdout)["content_nodes"]; !present || v != nil {
+			t.Errorf("content_nodes = %v (present=%t), want null — this run reconciled nothing", v, present)
+		}
+	})
+
+	t.Run("control: the same playlist scoped to the hub is reconciled", func(t *testing.T) {
+		srv, rec := scopedResumeServer(t, bindingPlaylistsCatalogBody(t), map[string]scopedPlaylist{
+			"pl_gs": {title: "Getting Started", hubID: "hub_x"},
+		})
+		res := runContract(t, scaffoldEnv(t, srv.URL), scopedResumeArgs()...)
+		if res.Code != errs.ExitOK {
+			t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+		}
+		if len(rec.reconcileBodies) != 1 {
+			t.Fatalf("reconcile POSTs = %d, want 1; events=%v", len(rec.reconcileBodies), rec.events)
+		}
+		assertExactBody(t, rec.reconcileBodies[0], `{"data":{"type":"content_node_reconciliations","attributes":{"playlist_ids":["pl_gs"]}}}`)
+		if indexOfEvent(rec.events, "page-create", false) < 0 {
+			t.Errorf("the resume must carry on to the pages; events=%v", rec.events)
+		}
+	})
+}
+
+// TestScaffoldContentNodes_MissingKeyGuidanceYieldsIDsReconcileAccepts: the
+// note for a key with no id tells the operator how to find the id. An agent
+// runs that command verbatim, so the oracle is RUNNING it: against a team with
+// a playlist scoped to the hub, a team-library one and another hub's (all
+// three published into this hub), the command must print the scoped playlist's
+// id and nothing reconcile would reject. `media hub-playlists list --hub`, the
+// guidance this replaced, prints publication-row ids (hm_…) and every
+// published playlist, the library one included.
+func TestScaffoldContentNodes_MissingKeyGuidanceYieldsIDsReconcileAccepts(t *testing.T) {
+	// 1. A resume that recovers nothing emits the guidance.
+	srv, _, _ := resumeReconcileServer(t, map[string]string{"pl_gs": "Getting Started"})
+	var notes strings.Builder
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
+	sc.noteW = &notes
+	sc.pagePlan = unboundPagePlan()
+	if err := stepPlaylists(sc, playlistsTemplate()); err != nil {
+		t.Fatalf("stepPlaylists: %v", err)
+	}
+	if err := stepContentNodes(sc, playlistsTemplate()); err != nil {
+		t.Fatalf("stepContentNodes: %v", err)
+	}
+	var finder []string
+	for _, m := range regexp.MustCompile("`(mio [^`]+)`").FindAllStringSubmatch(notes.String(), -1) {
+		if !strings.HasPrefix(m[1], "mio content reconcile") {
+			res := docexamples.FromScript("note", 1, m[1])
+			if len(res.Invocations) != 1 {
+				t.Fatalf("could not parse the guidance %q as one invocation: %+v", m[1], res)
+			}
+			finder = res.Invocations[0].Args
+		}
+	}
+	if finder == nil {
+		t.Fatalf("the note must name a command that finds the ids; notes=%q", notes.String())
+	}
+
+	// 2. Run it against a team whose hub publishes three playlists, one its own.
+	team := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		w.WriteHeader(http.StatusOK)
+		switch path := r.URL.Path; {
+		case strings.HasSuffix(path, "/teams/t_team1/playlists"):
+			_, _ = w.Write([]byte(`{"data":[
+				{"id":"pl_mine","type":"playlists","attributes":{"title":"Getting Started","hub_id":"hub_1"}},
+				{"id":"pl_lib","type":"playlists","attributes":{"title":"Library","hub_id":null}},
+				{"id":"pl_theirs","type":"playlists","attributes":{"title":"Theirs","hub_id":"hub_other"}}]}`))
+		case strings.HasSuffix(path, "/teams/t_team1/hubs/hub_1/playlists"):
+			_, _ = w.Write([]byte(`{"data":[
+				{"id":"hm_1","type":"hub_media","attributes":{"hub_id":"hub_1","playlist_id":"pl_mine"}},
+				{"id":"hm_2","type":"hub_media","attributes":{"hub_id":"hub_1","playlist_id":"pl_lib"}},
+				{"id":"hm_3","type":"hub_media","attributes":{"hub_id":"hub_1","playlist_id":"pl_theirs"}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(team.Close)
+	res := runContract(t, baseEnv(team.URL), finder...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("the guidance `mio %s` exited %d; stderr=%q", strings.Join(finder, " "), res.Code, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "pl_mine") {
+		t.Errorf("the guidance must print the id of the playlist scoped to the hub; ran `mio %s`, stdout=%q", strings.Join(finder, " "), res.Stdout)
+	}
+	for _, bad := range []string{"pl_lib", "pl_theirs", "hm_"} {
+		if strings.Contains(res.Stdout, bad) {
+			t.Errorf("the guidance printed %q, which reconcile rejects or which is not a playlist id; stdout=%q", bad, res.Stdout)
+		}
+	}
+}
+
+// twoBindingPagePlan is bandPagePlan binding each of keys, one section each.
+func twoBindingPagePlan(keys ...string) *scaffoldPlan {
+	p := bandPagePlan()
+	kids := make([]any, 0, len(keys))
+	for _, k := range keys {
+		kids = append(kids, map[string]any{
+			"kind":       "section",
+			"dataSource": map[string]any{"type": "playlist", "id": "", "key": k},
+		})
+	}
+	p.pages[0].rawTree["children"] = kids
+	return p
+}
+
+// TestStepContentNodes_FiltersPerPlaylistNotPerRequest: with one recovered
+// playlist scoped to the hub and one scoped elsewhere, the step reconciles the
+// scoped one. Dropping the whole request because one id is foreign would lose
+// content items the route would have made.
+func TestStepContentNodes_FiltersPerPlaylistNotPerRequest(t *testing.T) {
+	srv, rec := scopedResumeServer(t, nil, map[string]scopedPlaylist{
+		"pl_gs":  {title: "Getting Started", hubID: "hub_x"},
+		"pl_lib": {title: "Library", hubID: "hub_other"}, // another hub's playlist, published into this one
+	})
+	tmpl := &catalog.HubTemplate{ID: "starter", Playlists: []catalog.TemplatePlaylist{
+		{Title: "Getting Started", Key: "getting-started", Visibility: "public"},
+		{Title: "Library", Key: "library", Visibility: "public"},
+	}}
+	var notes strings.Builder
+	sc := newStepSC(client.New(srv.URL, "k"), "hub_x", "acme")
+	sc.noteW = &notes
+	sc.pagePlan = twoBindingPagePlan("getting-started", "library")
+	if err := stepPlaylists(sc, tmpl); err != nil {
+		t.Fatalf("stepPlaylists: %v", err)
+	}
+	if sc.playlistIDsByKey["library"] != "pl_lib" {
+		t.Fatalf("precondition: recovery binds library to pl_lib (the page may use it); got %v", sc.playlistIDsByKey)
+	}
+	if err := stepContentNodes(sc, tmpl); err != nil {
+		t.Fatalf("stepContentNodes: %v", err)
+	}
+	if len(rec.reconcileBodies) != 1 {
+		t.Fatalf("reconcile POSTs = %d, want 1 (for the playlist scoped to the hub)", len(rec.reconcileBodies))
+	}
+	assertExactBody(t, rec.reconcileBodies[0], `{"data":{"type":"content_node_reconciliations","attributes":{"playlist_ids":["pl_gs"]}}}`)
+	for _, want := range []string{"library", "pl_lib"} {
+		if !strings.Contains(notes.String(), want) {
+			t.Errorf("the note must name %q; notes=%q", want, notes.String())
+		}
 	}
 }
