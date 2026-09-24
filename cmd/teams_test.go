@@ -8,12 +8,13 @@ package cmd
 //	class TeamCreate(_JsonApiInbound):   extra="forbid"; name: str; slug: str
 //	class TeamUpdate(_JsonApiInbound):   extra="forbid"; name: str | None
 //
-// Up to v0.23.0 both commands sent `subdomain`, a field neither schema has, so
-// `teams create` answered 422 ("Field required (/slug)", "Extra inputs are not
-// permitted (/subdomain)") whatever was passed, and `teams update --subdomain`
-// answered 422 too. The oracle here is the WIRE: each test captures the request
-// the real command tree sends and compares the whole body, so a stale or extra
-// attribute fails by name.
+// Up to v0.23.0 `teams create` had no --slug, so it never sent the required
+// `slug` and answered 422 ("Field required (/slug)") whatever was passed. The
+// --subdomain flag both commands had sent `subdomain`, a field neither schema
+// has ("Extra inputs are not permitted (/subdomain)"), so `teams update
+// --subdomain` answered 422 too. The oracle here is the WIRE: each test
+// captures the request the real command tree sends and compares the whole
+// body, so a stale or extra attribute fails by name.
 
 import (
 	"bytes"
