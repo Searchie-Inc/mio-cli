@@ -11,7 +11,8 @@ package cmd
 //	              detach DELETE /api/teams/{team}/hubs/{hub}/products/{display_id}
 //
 //	hub-prices    hub_price_display rows — auto-created when a product is
-//	              attached; only visibility/position are editable.
+//	              attached; only `visible` (--visible) and `position`
+//	              (--position) are editable.
 //	              list   GET    /api/teams/{team}/hubs/{hub}/prices
 //	              update PATCH  /api/teams/{team}/hubs/{hub}/prices/{display_id}
 //
@@ -102,11 +103,12 @@ All commands require a hub context: pass --hub <id> or run 'mio config set curre
 }
 
 var checkoutHubProductsListCmd = &cobra.Command{
-	Use:     "list",
-	Short:   "List the products offered by a hub.",
-	Long:    "List all hub_product_display rows for the active hub, ordered by position. Requires --hub.",
-	Example: `  mio checkout hub-products list --hub hub_abc123`,
-	Args:    cobra.NoArgs,
+	Use:   "list",
+	Short: "List the products offered by a hub.",
+	Long:  "List all hub_product_display rows for the active hub, ordered by position. Requires --hub.",
+	Example: `  mio checkout hub-products list --hub hub_abc123
+  mio checkout hub-products list --hub hub_abc123 --jq 'map({id, product_id, position, visible, is_free_tier})'`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := checkoutHubContext(cmd)
 		if err != nil {
@@ -164,8 +166,9 @@ Requires --hub. The positional argument is the PRODUCT id (not a display id).`,
 var checkoutHubProductsUpdateCmd = &cobra.Command{
 	Use:   "update <display_id>",
 	Short: "Update a hub product display row.",
-	Long: `Toggle visibility, reposition, or set the free-tier flag on a hub_product_display
-row. Only the flags you supply are changed (PATCH semantics).
+	Long: `Change a hub_product_display row's ` + "`visible`" + ` (--visible), ` + "`position`" + `
+(--position) or ` + "`is_free_tier`" + ` (--free-tier). Only the flags you supply are
+changed (PATCH semantics).
 
 Requires --hub. The positional argument is the DISPLAY id (from
 'mio checkout hub-products list'), not the product id.`,
@@ -242,17 +245,20 @@ var checkoutHubPricesCmd = &cobra.Command{
 
 hub_price_display rows are created automatically when a product is attached to a
 hub ('mio checkout hub-products attach'); they cannot be created or deleted
-directly. Only visibility and position are editable.
+directly. Only two attributes are editable, and each row reports them under
+exactly these names: ` + "`visible`" + ` (a bool, set with --visible) and ` + "`position`" + `
+(set with --position).
 
 All commands require a hub context: pass --hub <id> or run 'mio config set current_hub <id>'.`,
 }
 
 var checkoutHubPricesListCmd = &cobra.Command{
-	Use:     "list",
-	Short:   "List a hub's price display rows.",
-	Long:    "List all hub_price_display rows for the active hub, ordered by position. Requires --hub.",
-	Example: `  mio checkout hub-prices list --hub hub_abc123`,
-	Args:    cobra.NoArgs,
+	Use:   "list",
+	Short: "List a hub's price display rows.",
+	Long:  "List all hub_price_display rows for the active hub, ordered by position. Requires --hub.",
+	Example: `  mio checkout hub-prices list --hub hub_abc123
+  mio checkout hub-prices list --hub hub_abc123 --jq 'map({id, price_id, position, visible})'`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, teamID, hubID, err := checkoutHubContext(cmd)
 		if err != nil {
@@ -273,8 +279,8 @@ var checkoutHubPricesListCmd = &cobra.Command{
 var checkoutHubPricesUpdateCmd = &cobra.Command{
 	Use:   "update <display_id>",
 	Short: "Update a hub price display row.",
-	Long: `Toggle visibility or reposition a single hub_price_display row. Only the flags
-you supply are changed (PATCH semantics).
+	Long: `Change a single hub_price_display row's ` + "`visible`" + ` (--visible) or ` + "`position`" + `
+(--position). Only the flags you supply are changed (PATCH semantics).
 
 Requires --hub. The positional argument is the price DISPLAY id (from
 'mio checkout hub-prices list').`,
