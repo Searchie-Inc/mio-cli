@@ -596,10 +596,10 @@ func init() {
 	// MIO-2808) and tracked as MIO-2816, which also covers the mirror-image gap:
 	// filter[is_broadcast] IS accepted by the endpoint and has no flag here. The
 	// help text says so rather than the flag being removed, since removing it
-	// would break any script that passes it. Filter client-side on
-	// .attributes.status instead.
+	// would break any script that passes it. Filter client-side on .status
+	// (the flattened status attribute; .attributes.status yields null, MIO-3413).
 	communityDiscussionsListCmd.Flags().String("filter-status", "",
-		"IGNORED by the API (it accepts no status filter) — filter client-side on .attributes.status: published, scheduled or draft.")
+		"IGNORED by the API (it accepts no status filter) — filter client-side on .status: published, scheduled or draft.")
 	communityDiscussionsListCmd.Flags().String("filter-space", "", "Filter by space id.")
 
 }
@@ -613,9 +613,10 @@ var communityMembersCmd = &cobra.Command{
 	Short: "Moderate hub members.",
 	Long: `Perform moderation actions on hub members: ban, unban, or warn. Requires team-admin privileges.
 
-The <contact_id> positional on every action below is the GLOBAL contact id — the
-.attributes.contact_id field from 'mio contacts', NOT its .id (that is the
-team-contact id and these verbs will 404 on it).`,
+The <contact_id> positional on every action below is the GLOBAL contact id, NOT
+the .id from 'mio contacts' (that is the team-contact id and these verbs will
+404 on it). Capture it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 }
 
 // memberActionPath returns .../members/{contact_id}/{action}.
@@ -630,8 +631,9 @@ var communityMembersBanCmd = &cobra.Command{
 	Short: "Ban a hub member.",
 	Long: `Issue a hard ban against a hub member. The contact will be blocked from accessing the hub.
 
-<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
-'mio contacts', NOT its .id).`,
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts'. Capture
+it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  mio community members ban contact_xyz --hub hub_abc123 --yes
   mio community members ban contact_xyz --hub hub_abc123 --notes "Spam policy violation" --yes`,
 	Args: cobra.ExactArgs(1),
@@ -668,8 +670,9 @@ var communityMembersUnbanCmd = &cobra.Command{
 	Short: "Unban a hub member.",
 	Long: `Lift a ban against a hub member, restoring their access.
 
-<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
-'mio contacts', NOT its .id).`,
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts'. Capture
+it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  mio community members unban contact_xyz --hub hub_abc123 --yes
   mio community members unban contact_xyz --hub hub_abc123 --notes "Reviewed and cleared" --yes`,
 	Args: cobra.ExactArgs(1),
@@ -706,8 +709,9 @@ var communityMembersWarnCmd = &cobra.Command{
 	Short: "Warn a hub member.",
 	Long: `Issue a formal warning to a hub member without banning them.
 
-<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
-'mio contacts', NOT its .id).`,
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts'. Capture
+it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  mio community members warn contact_xyz --hub hub_abc123 --yes
   mio community members warn contact_xyz --hub hub_abc123 --notes "First offense warning" --yes`,
 	Args: cobra.ExactArgs(1),

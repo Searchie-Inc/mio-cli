@@ -32,9 +32,9 @@ var hubMembershipsAddCmd = &cobra.Command{
 granting an admin or moderator role. Emits MemberAdded, so the contact's
 community profile is created as a side effect.
 
-<contact_id> is the GLOBAL contact id — the .attributes.contact_id field from
-'mio contacts', NOT its .id (that is the team-contact id and this verb will 404
-on it).`,
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts' (that is
+the team-contact id and this verb will 404 on it). Capture it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  # contact_id is the GLOBAL id: read it from 'mio contacts', not the .id
   mio hub-memberships add "$(mio contacts retrieve ctt_abc -o plain --jq '.contact_id')" --hub hub_abc123
   mio hub-memberships add contact_xyz --hub hub_abc123 --role moderator`,
@@ -71,8 +71,9 @@ var hubMembershipsSetRoleCmd = &cobra.Command{
 back to a plain member with --role member. The member must already be active
 (add them with 'hub-memberships add' first).
 
-<contact_id> is the GLOBAL contact id — the .attributes.contact_id field from
-'mio contacts', NOT its .id (the team-contact id).`,
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts' (the
+team-contact id). Capture it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  mio hub-memberships set-role contact_xyz --hub hub_abc123 --role moderator
   mio hub-memberships set-role contact_xyz --hub hub_abc123 --role member    # demote to plain member`,
 	Args: cobra.ExactArgs(1),
