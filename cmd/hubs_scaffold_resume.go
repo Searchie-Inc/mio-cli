@@ -220,7 +220,8 @@ func navBucketEmpty(v any) bool {
 // dropped. It returns the complete navigation to send — the hub's own buckets
 // plus the filled ones, because the backend stores navigation as a
 // full-column overwrite — or nil when no bucket needed filling, in which case
-// no navigation is sent and the hub's menu is not even re-validated.
+// no navigation is sent. Either way the hub's own buckets are never
+// re-validated: stepBlobsFillGaps checks the template's hrefs only.
 //
 // Why whole buckets and not items: the items of one bucket are an ordered
 // menu, and splicing the template's items into a menu someone arranged by
@@ -273,7 +274,7 @@ func (sc *scaffoldContext) planBlobFill(t *catalog.HubTemplate, nav map[string]a
 	var kept []keptValue
 	f := blobFill{
 		branding:   sc.branding.applyTo(fillMissing("branding", t.Branding, attrMap(cur["branding"]), &kept)),
-		settings:   fillMissing("settings", t.Settings, attrMap(cur["settings"]), &kept),
+		settings:   fillMissing("settings", fillableSettings(t.Settings), attrMap(cur["settings"]), &kept),
 		navigation: fillNavigation(nav, attrMap(cur["navigation"]), &kept),
 	}
 	for _, k := range kept {
@@ -290,17 +291,33 @@ func (f blobFill) empty(sc *scaffoldContext) bool {
 		sc.logoOverride == nil && sc.faviconOverride == nil && sc.registrationOverride == nil
 }
 
+// fillableSettings is the template's settings without `policies`. The backend
+// pops settings.policies from every hub PATCH (MIO-497, HubService.update), so
+// this step can neither fill it nor keep it: sending it is a request that
+// changes nothing, and reporting it as "kept" would be false. The shipped
+// templates all declare it, and nothing on the scaffold path ever stores its
+// `show`, so without this every --hub run sent a settings PATCH and none was
+// ever "nothing to fill". The gate is the policies step's — PATCH
+// …/policies/gate is the only writer there is. The strict key check still sees
+// the whole template (validateTemplateBlobKeysStrict).
+func fillableSettings(s map[string]any) map[string]any {
+	if _, ok := s["policies"]; !ok {
+		return s
+	}
+	out := make(map[string]any, len(s))
+	for k, v := range s {
+		if k != "policies" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // overwrittenByInvocation reports whether a flag given on THIS invocation
-// writes path — a value it writes was not kept, whatever the hub held. The
-// template's settings.policies subtree is excluded outright: the backend pops
-// `policies` from every hub PATCH (MIO-497), so the template could never change
-// it through this step and "kept" would be a false statement; the policy gate
-// is reported by the policies step, which is the only writer that exists.
+// writes path — a value it writes was not kept, whatever the hub held.
 func (sc *scaffoldContext) overwrittenByInvocation(path string) bool {
 	segs := strings.Split(path, ".")
 	switch {
-	case len(segs) >= 2 && segs[0] == "settings" && segs[1] == "policies":
-		return true
 	case path == "branding.logo_url" && sc.logoOverride != nil,
 		path == "branding.favicon_url" && sc.faviconOverride != nil,
 		path == "settings.registration.enabled" && sc.registrationOverride != nil:
@@ -357,6 +374,16 @@ func stepBlobsFillGaps(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	if err := validateTemplateBlobKeysStrict(sc, t); err != nil {
 		return err
 	}
+	// The hub-scoped href check (MIO-2270) covers the template's WHOLE
+	// navigation, here, whatever the hub holds — and nothing else. The PATCH
+	// also carries the hub's own kept buckets (navigation is stored whole),
+	// and those are the hub's: the API accepted them, and it accepts
+	// root-relative hrefs this check rejects (a "/content" link, a sibling
+	// hub, a "/old-slug/…" link a slug rename left behind). Re-judging them
+	// failed the run over an item it had just reported as kept.
+	if err := validateNavigationHrefs(nav, sc.hubSlug); err != nil {
+		return err
+	}
 
 	// The PLAN reports against the hub the resume GET read; the real run
 	// re-reads it below and decides against that read.
@@ -396,9 +423,41 @@ func stepBlobsFillGaps(sc *scaffoldContext, t *catalog.HubTemplate) error {
 			// Merge onto the SAME read the fill was computed from: a second GET
 			// could see a key the fill decided was missing.
 			Current: cur,
+			// The template's hrefs were checked above; the rest of the blob is
+			// the hub's own menu, carried back as stored.
+			NavHrefsChecked: true,
 		}, io.Discard)
+		if fill.navigation != nil {
+			perr = explainKeptNavRejection(perr, sc.hubID, attrMap(cur.Attributes["navigation"]))
+		}
 		return scaffoldStrictKeyErr(perr, scaffoldTemplateStrictKeyHint)
 	})
+}
+
+// explainKeptNavRejection adds the way out to a navigation_page_invalid 422 on
+// a fill-gaps PATCH. To fill one navigation bucket the run must send the hub's
+// other buckets back as they are (the API stores navigation whole), and the
+// API refuses EVERY navigation write while a type=page item points at a page
+// that is gone — page deletion does not cascade to the menu. The item it names
+// is then usually the hub's own, and re-running the printed "Resume with:"
+// command would only hit it again. Dropping it here would change a menu the
+// run reports as kept, so the run stops, and says where the item lives.
+func explainKeptNavRejection(err error, hubID string, curNav map[string]any) error {
+	if err == nil || !client.HasAPIErrorCode(err, "navigation_page_invalid") {
+		return err
+	}
+	var kept []string
+	for _, b := range sortedMapKeys(curNav) {
+		if !navBucketEmpty(curNav[b]) {
+			kept = append(kept, b)
+		}
+	}
+	if len(kept) == 0 {
+		return err
+	}
+	return errs.Wrap(errs.CodeOf(err), fmt.Errorf(
+		"%w — this run sent the hub's own navigation bucket(s) [%s] back unchanged alongside the one(s) it filled (the API stores navigation whole), and the API refuses every navigation write while a page item points at a page that no longer exists. If the item it names is in one of those buckets it is already on the hub's menu: remove it (`mio hubs navigation list %s`, then `mio hubs navigation remove %s <bucket> --index <n>`) and re-run",
+		err, strings.Join(kept, ", "), hubID, hubID))
 }
 
 // ---- policies (MIO-2818) -------------------------------------------------------

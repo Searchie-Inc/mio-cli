@@ -41,9 +41,17 @@ type resumeStub struct {
 	hubConfigs string // JSON array: GET …/hubs/{id}/contact-attributes
 	defs       string // JSON array: GET …/teams/{t}/contact-attributes
 	pages      string // JSON array: GET …/pages
+	// hubAttrsLater, when set, is served by every hub GET after the FIRST one
+	// (the resume read the plan is made from): a hub that changed between that
+	// read and the write a step makes.
+	hubAttrsLater string
+	// hubPatchError, when set, is the JSON:API error body every hub PATCH is
+	// answered with, as a 422.
+	hubPatchError string
 
-	mu   sync.Mutex
-	reqs []resumeReq
+	mu      sync.Mutex
+	reqs    []resumeReq
+	hubGETs int
 }
 
 func (s *resumeStub) record(r *http.Request) []byte {
@@ -125,7 +133,17 @@ func (s *resumeStub) serve(t *testing.T) *httptest.Server {
 		p := r.URL.Path
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(p, hubSuffix):
-			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"hubs","attributes":%s}}`, s.hubID, s.hubAttrs)
+			s.mu.Lock()
+			s.hubGETs++
+			attrs := s.hubAttrs
+			if s.hubAttrsLater != "" && s.hubGETs > 1 {
+				attrs = s.hubAttrsLater
+			}
+			s.mu.Unlock()
+			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"hubs","attributes":%s}}`, s.hubID, attrs)
+		case r.Method == http.MethodPatch && strings.HasSuffix(p, hubSuffix) && s.hubPatchError != "":
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(s.hubPatchError))
 		case r.Method == http.MethodPatch && strings.HasSuffix(p, hubSuffix):
 			// Echo what was sent (a real PATCH returns the stored hub).
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"hubs","attributes":%s}}`, s.hubID, s.hubAttrs)
@@ -314,10 +332,15 @@ func TestScaffoldResume_InvocationFlagsStillWin(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_NothingToFillSendsNoBlobsPatch: a hub that already carries
-// every template value (the second resume, typically) gets no blobs write.
-func TestScaffoldResume_NothingToFillSendsNoBlobsPatch(t *testing.T) {
-	stub := &resumeStub{hubAttrs: `{
+// completeHubAttrs is a hub that already has every blob value the community
+// template declares — the second resume, typically — in a state the backend
+// can actually hold. Its settings.policies is {"enabled": true} and nothing
+// else: the gate endpoint writes only `enabled`, the hub PATCH pops `policies`
+// wholesale (MIO-497), and nothing on the scaffold path ever stores the
+// template's settings.policies.show. (The fixture this replaced carried
+// "show": true, which no scaffolded hub can reach, and so hid a settings PATCH
+// sent on every real --hub run.) Its own primary differs from the template's.
+const completeHubAttrs = `{
 	  "slug": "trail", "title": "Trail", "is_private": true,
 	  "branding": {"logo_url": "https://assets.searchie.io/hub-templates/community/logo.png",
 	    "favicon_url": "https://assets.searchie.io/hub-templates/community/favicon.png",
@@ -325,10 +348,15 @@ func TestScaffoldResume_NothingToFillSendsNoBlobsPatch(t *testing.T) {
 	    "primary": "#123456", "secondary": "#15803D", "background": "#FFFFFF", "text": "#111827",
 	    "header_color": "#4F46E5", "header_accent": "#A5B4FC"},
 	  "settings": {"registration": {"enabled": true}, "header": {"visibility": "always", "menuLayout": "tabs"},
-	    "menu": {"layout": "tabs"}, "policies": {"enabled": true, "show": true}},
+	    "menu": {"layout": "tabs"}, "policies": {"enabled": true}},
 	  "navigation": {"header": [{"type": "url", "label": "Mine", "href": "/trail/mine"}],
 	    "footer": [{"type": "url", "label": "Mine", "href": "/trail/mine"}]}
-	}`}
+	}`
+
+// TestScaffoldResume_NothingToFillSendsNoBlobsPatch: a hub that already carries
+// every template value (the second resume, typically) gets no blobs write.
+func TestScaffoldResume_NothingToFillSendsNoBlobsPatch(t *testing.T) {
+	stub := &resumeStub{hubAttrs: completeHubAttrs}
 	srv := stub.serve(t)
 
 	res := runContract(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
@@ -341,8 +369,48 @@ func TestScaffoldResume_NothingToFillSendsNoBlobsPatch(t *testing.T) {
 	if p := stub.bodies(http.MethodPatch, "/hubs/"+stub.hubID); len(p) != 0 {
 		t.Errorf("nothing is missing on the hub, so no hub PATCH may be sent; got %d, first %s", len(p), p[0])
 	}
+	if !strings.Contains(res.Stderr, "nothing to fill") {
+		t.Errorf("stderr must say there was nothing to fill; stderr=%q", res.Stderr)
+	}
 	if !strings.Contains(res.Stderr, "branding.primary") {
 		t.Errorf("the differing primary must still be reported as kept; stderr=%q", res.Stderr)
+	}
+}
+
+// TestScaffoldResume_OverrideFlagAloneStillPatches: on a hub with nothing to
+// fill, each scalar override flag is by itself a reason to PATCH — "nothing to
+// fill" must never swallow a value the operator asked for on this command.
+// One flag per subtest, so each of the three is guarded on its own.
+func TestScaffoldResume_OverrideFlagAloneStillPatches(t *testing.T) {
+	for _, tc := range []struct {
+		flag, blob, key string
+		want            any
+	}{
+		{"--logo-url=https://cdn.example.com/new-logo.png", "branding", "logo_url", "https://cdn.example.com/new-logo.png"},
+		{"--favicon-url=https://cdn.example.com/new-favicon.png", "branding", "favicon_url", "https://cdn.example.com/new-favicon.png"},
+		{"--registration-enabled=false", "settings", "registration.enabled", false},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			stub := &resumeStub{hubAttrs: completeHubAttrs}
+			srv := stub.serve(t)
+
+			res := runContract(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r", tc.flag)...)
+			if res.Code != errs.ExitOK {
+				t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+			}
+			patch := stub.blobsPatch(t)
+			if patch == nil {
+				t.Fatalf("%s was given, so the hub must be PATCHed even though nothing is missing; no blobs PATCH was sent (stderr=%q)", tc.flag, res.Stderr)
+			}
+			got := patch[tc.blob]
+			for _, seg := range strings.Split(tc.key, ".") {
+				m, _ := got.(map[string]any)
+				got = m[seg]
+			}
+			if got != tc.want {
+				t.Errorf("%s.%s = %v, want %v from %s", tc.blob, tc.key, got, tc.want, tc.flag)
+			}
+		})
 	}
 }
 
@@ -365,6 +433,114 @@ func TestScaffoldResume_StrictTemplateKeysStillChecked(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "not_a_real_settings_key") {
 		t.Errorf("the error must name the bad template key; err=%v", err)
+	}
+	if w := stub.writes(); len(w) != 0 {
+		t.Errorf("no write may fire; got %d (first %s %s)", len(w), w[0].method, w[0].path)
+	}
+}
+
+// TestScaffoldResume_KeptNavigationIsNotReScoped: when a --hub run fills one
+// navigation bucket it must send the hub's OTHER buckets back as they are —
+// the API stores navigation whole — and it must not run them through the
+// CLI's hub-scoped href check (MIO-2270). The backend accepts any root-relative
+// href (app/hubs/validation.py _validate_nav_href, form 1): a "/content" link,
+// a same-origin link to a sibling hub, or a "/old-slug/…" link a slug rename
+// left behind. Re-judging those made the run exit 2 at the blobs step, blaming
+// an item it had just reported as kept, on a hub the template-wins apply
+// handled without complaint.
+func TestScaffoldResume_KeptNavigationIsNotReScoped(t *testing.T) {
+	for _, tc := range []struct {
+		name, hubAttrs, keptHref, filledHref string
+	}{
+		{
+			name: "root-relative href outside the hub",
+			hubAttrs: `{"slug":"trail","title":"Trail","is_private":true,
+			  "navigation":{"header":[{"type":"url","label":"Courses","href":"/content"}]}}`,
+			keptHref: "/content", filledHref: "/trail/about",
+		},
+		{
+			name: "href left behind by a slug rename",
+			hubAttrs: `{"slug":"trail-academy","title":"Trail","is_private":true,
+			  "navigation":{"header":[{"type":"url","label":"About","href":"/trail/about"}],"footer":[]}}`,
+			keptHref: "/trail/about", filledHref: "/trail-academy/about",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &resumeStub{hubAttrs: tc.hubAttrs}
+			srv := stub.serve(t)
+
+			res, err := runResume(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
+			if res.Code != errs.ExitOK {
+				t.Fatalf("exit = %d, want 0 — the hub's own menu is not this run's to re-validate; err=%v", res.Code, err)
+			}
+			nav, _ := stub.blobsPatch(t)["navigation"].(map[string]any)
+			header, _ := nav["header"].([]any)
+			if len(header) != 1 || header[0].(map[string]any)["href"] != tc.keptHref {
+				t.Errorf("navigation.header = %v, want the hub's own item with href %q, unchanged", nav["header"], tc.keptHref)
+			}
+			footer, _ := nav["footer"].([]any)
+			if len(footer) == 0 || footer[0].(map[string]any)["href"] != tc.filledHref {
+				t.Errorf("navigation.footer = %v, want the template's footer filled and hub-scoped (%q)", nav["footer"], tc.filledHref)
+			}
+		})
+	}
+}
+
+// TestScaffoldResume_DanglingPageInKeptBucketNamesTheWayOut: the API refuses
+// every navigation write while a type=page item points at a deleted page (page
+// deletion does not cascade to the menu), so filling one bucket on such a hub
+// is a 422 about an item the run is only carrying back. The run must not drop
+// that item to get through; it stops with the API's verdict, and says the item
+// is on the hub's own menu and how to remove it, instead of leaving the
+// printed "Resume with:" command to hit the same wall. (The 422 body is the
+// one mio-backend returned live for this hub state.)
+func TestScaffoldResume_DanglingPageInKeptBucketNamesTheWayOut(t *testing.T) {
+	stub := &resumeStub{
+		hubAttrs: `{"slug":"trail","title":"Trail","is_private":true,
+		  "navigation":{"footer":[{"type":"page","label":"Extra","page_id":"01a0d36a-019d-7f82-9e5d-27c4be96164e","position":0}]}}`,
+		hubPatchError: `{"errors":[{"status":"422","code":"navigation_page_invalid","title":"NavigationPageInvalidError",
+		  "detail":"Page '01a0d36a-019d-7f82-9e5d-27c4be96164e' is not a valid page for this hub's navigation.",
+		  "source":{"pointer":"/data/attributes/navigation/footer/0/page_id"}}]}`,
+	}
+	srv := stub.serve(t)
+
+	res, err := runResume(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
+	if res.Code != errs.ExitUsage {
+		t.Fatalf("exit = %d, want %d (the API's 422); err=%v", res.Code, errs.ExitUsage, err)
+	}
+	for _, want := range []string{
+		"is not a valid page for this hub's navigation", // the API's own words survive
+		"hub's own navigation bucket(s) [footer]",
+		"mio hubs navigation remove hub_r <bucket> --index <n>",
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must say %q; err=%v", want, err)
+		}
+	}
+	if n := len(stub.bodies(http.MethodPatch, "/hubs/hub_r")); n != 1 {
+		t.Errorf("want exactly the one refused blobs PATCH (no retry that drops the item); got %d", n)
+	}
+}
+
+// TestScaffoldResume_TemplateNavHrefsStillChecked: the other half of the rule
+// above. The template's OWN navigation is still hub-scope-checked in full,
+// whatever the hub holds — even when every bucket it declares is kept and so
+// never sent — exactly as StrictTemplateKeysStillChecked does for blob keys.
+func TestScaffoldResume_TemplateNavHrefsStillChecked(t *testing.T) {
+	cat := catalogWithTemplateEdit(t, func(ht map[string]any) {
+		nav, _ := ht["navigation"].(map[string]any)
+		footer, _ := nav["footer"].([]any)
+		footer[0].(map[string]any)["href"] = "/../escape" // scoped to /trail/../escape, which resolves to /escape
+	})
+	stub := &resumeStub{catBody: cat, hubAttrs: completeHubAttrs}
+	srv := stub.serve(t)
+
+	res, err := runResume(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
+	if res.Code != errs.ExitUsage {
+		t.Fatalf("exit = %d, want %d (a template href escaping the hub is caught whatever the hub holds); err=%v", res.Code, errs.ExitUsage, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "navigation.footer[0]") {
+		t.Errorf("the error must name the template's footer item; err=%v", err)
 	}
 	if w := stub.writes(); len(w) != 0 {
 		t.Errorf("no write may fire; got %d (first %s %s)", len(w), w[0].method, w[0].path)
@@ -456,6 +632,57 @@ func TestScaffoldResume_PoliciesFillOnlyUnconfiguredText(t *testing.T) {
 	}
 }
 
+// TestScaffoldResume_PoliciesDecideOnTheReadBeforeTheWrite: the policies step
+// decides against a read it makes right before it writes, not against the
+// resume read the plan was made from. Here the owner writes their own ToS
+// after that read: the template's text must not be written over it.
+func TestScaffoldResume_PoliciesDecideOnTheReadBeforeTheWrite(t *testing.T) {
+	cat := catalogWithPolicies(t, map[string]any{
+		"terms":          map[string]any{"content": "Template terms.", "required": true, "enabled": true},
+		"privacy_policy": map[string]any{"enabled": true},
+	})
+	stub := &resumeStub{catBody: cat,
+		hubAttrs: `{"slug":"trail","title":"Trail","is_private":true,"settings":{"policies":{"enabled":true}}}`,
+		hubAttrsLater: `{"slug":"trail","title":"Trail","is_private":true,
+		  "settings":{"policies":{"enabled":true,"tos":{"content":"Terms the owner wrote meanwhile."}}}}`}
+	srv := stub.serve(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+	}
+	for _, b := range stub.bodies(http.MethodPatch, "/policies") {
+		t.Errorf("the hub had its own ToS by the time the step wrote — nothing may be written over it; sent %s", b)
+	}
+	if !strings.Contains(res.Stderr, "kept the hub's own tos text") {
+		t.Errorf("stderr must report the ToS text as kept; stderr=%q", res.Stderr)
+	}
+}
+
+// TestScaffoldResume_NonBooleanGateIsAGap: only a JSON boolean is a gate the
+// hub has set. `hubs create --settings-json '{"policies":{"enabled":"true"}}'`
+// can store a string there (the create path keeps the gate flags, and the
+// backend's settings validator checks keys, not value types), and the backend
+// reads the gate with `is True` — so that hub's enforcement is OFF, it was
+// never set as a boolean, and a --hub run fills it like any other gap.
+func TestScaffoldResume_NonBooleanGateIsAGap(t *testing.T) {
+	stub := &resumeStub{hubAttrs: `{"slug":"trail","title":"Trail","is_private":true,
+	  "settings":{"policies":{"enabled":"true"}}}`}
+	srv := stub.serve(t)
+
+	res := runContract(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+	}
+	gates := stub.bodies(http.MethodPatch, "/policies/gate")
+	if len(gates) != 1 || decodeHubAttrs(t, gates[0])["enabled"] != true {
+		t.Fatalf("a non-boolean stored gate is unset as far as the backend is concerned; want one gate PATCH enabling it, got %d (stderr=%q)", len(gates), res.Stderr)
+	}
+	if got := decodeSoleJSON(t, res.Stdout)["policy_gate"]; got != true {
+		t.Errorf("result.policy_gate = %v, want true — this run wrote the gate", got)
+	}
+}
+
 // ─── onboarding hub-config ───────────────────────────────────────────────────
 
 // TestScaffoldResume_OnboardingKeepsExistingHubConfig: a (hub, definition)
@@ -508,6 +735,32 @@ func TestScaffoldResume_PageConflictFailsBeforeAnyWrite(t *testing.T) {
 		t.Errorf("a page conflict on --hub must stop the run before ANY write; got %d write(s), first %s %s", len(w), w[0].method, w[0].path)
 	}
 	for _, want := range []string{`"about"`, "page_foreign", "nothing was written"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must name %q; err=%v", want, err)
+		}
+	}
+}
+
+// TestScaffoldResume_HomepageConflictFailsBeforeAnyWrite: the other half of the
+// pages preflight. A hub whose homepage lives at a slug the template does not
+// use has no page at any template slug, so no slug conflict is found; but the
+// template's homepage entry would still clear that homepage server-side. That
+// too must stop a --hub run before its first write.
+func TestScaffoldResume_HomepageConflictFailsBeforeAnyWrite(t *testing.T) {
+	stub := &resumeStub{
+		hubAttrs: qaHubAttrs,
+		pages:    `[{"id":"page_home_own","type":"pages","attributes":{"slug":"welcome","is_homepage":true}}]`,
+	}
+	srv := stub.serve(t)
+
+	res, err := runResume(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
+	if res.Code != errs.ExitUsage {
+		t.Fatalf("exit = %d, want %d; err=%v", res.Code, errs.ExitUsage, err)
+	}
+	if w := stub.writes(); len(w) != 0 {
+		t.Errorf("an existing homepage on --hub must stop the run before ANY write; got %d write(s), first %s %s", len(w), w[0].method, w[0].path)
+	}
+	for _, want := range []string{"existing homepage", "page_home_own", "nothing was written"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("the error must name %q; err=%v", want, err)
 		}

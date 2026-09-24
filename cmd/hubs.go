@@ -854,6 +854,14 @@ type blobPatches struct {
 	// (MIO-4166) decides what is missing from one read and must merge onto that
 	// same read — a second GET could see a key the fill decided was absent.
 	Current *client.Resource
+
+	// NavHrefsChecked says the caller has already run the hub-scoped href check
+	// over every navigation item it CONTRIBUTES, so applyHubBlobs skips it. The
+	// scaffold's fill-gaps path (MIO-4166) sets it: the rest of its Navigation
+	// is the hub's own stored menu, sent back unchanged only because the API
+	// stores navigation whole, and the API already accepted it — including
+	// root-relative hrefs the CLI's stricter check would reject.
+	NavHrefsChecked bool
 }
 
 // applyHubBlobs performs the hub read-modify-write: it validates the incoming
@@ -875,7 +883,7 @@ func applyHubBlobs(ctx context.Context, cl *client.Client, teamID, hubID, hubSlu
 	// Hub-scoped href check for the known-slug case: the final slug is authoritative
 	// (from --slug), so validate now (no retrieve needed for the check, MIO-2270).
 	// The unknown-slug case is validated against the live slug after the retrieve.
-	if navSet && p.SlugKnown {
+	if navSet && p.SlugKnown && !p.NavHrefsChecked {
 		if err := validateNavigationHrefs(p.Navigation, hubSlug); err != nil {
 			return nil, err
 		}
@@ -908,7 +916,7 @@ func applyHubBlobs(ctx context.Context, cl *client.Client, teamID, hubID, hubSlu
 
 	rmw := p.Branding != nil || p.Settings != nil || p.Meta != nil ||
 		p.Logo != nil || p.Favicon != nil || p.Registration != nil || len(p.Unset) > 0
-	navNeedsRetrieve := navSet && !p.SlugKnown
+	navNeedsRetrieve := navSet && !p.SlugKnown && !p.NavHrefsChecked
 
 	// Retrieve the hub when we need its current whole-blob fields (RMW) or its slug
 	// (to validate hub-scoped navigation hrefs when --slug is NOT also changing) —
