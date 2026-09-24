@@ -2,6 +2,12 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -230,6 +236,234 @@ func TestRefreshManagedSkills_ProjectDirThatIsHomeIsHandledOnce(t *testing.T) {
 			all := stdout.String() + stderr.String()
 			if n := strings.Count(all, path); n != 1 {
 				t.Errorf("%s should be named exactly once, got %d:\n%s", path, n, all)
+			}
+		})
+	}
+}
+
+// ./.claude can BE ~/.claude without the two paths being spelled alike: run
+// from a symlink to $HOME (or, on Windows, a differently-cased path). The
+// textual comparison in sameSkillFile misses that and only os.SameFile catches
+// it; without it one file is handed off twice, or reported under two
+// remediation commands, one of them a --project one aimed at the user copy.
+func TestRefreshManagedSkills_HomeReachedThroughASymlinkIsHandledOnce(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on windows, and os.Getwd ignores PWD there")
+	}
+	for _, edited := range []bool{false, true} {
+		name := map[bool]string{false: "managed", true: "edited"}[edited]
+		t.Run(name, func(t *testing.T) {
+			home, _ := isolateSkillSandbox(t)
+			link := filepath.Join(resolvedTempDir(t), "homelink")
+			if err := os.Symlink(home, link); err != nil {
+				t.Skipf("cannot create a symlink here: %v", err)
+			}
+			t.Chdir(link) // sets PWD, which os.Getwd returns unresolved
+			path := claudeSkillPath(home)
+			// Precondition: the project path must be SPELLED through the link,
+			// or this probes the textual comparison instead of the aliasing.
+			if loc, err := skillLocationFor("claude", true); err != nil || loc.path == path {
+				t.Fatalf("precondition: want the project path spelled through %s, got %+v (err %v)", link, loc, err)
+			}
+			seedManagedSkill(t, path, "0.14.0")
+			if edited {
+				seedFile(t, path, readFile(t, path)+"\nedit\n")
+			}
+			calls := stubRefreshExec(t, func(_ string, loc skillLocation) error {
+				return writeSkillFile(loc.path, renderSkill("9.9.9"))
+			})
+
+			var stdout, stderr bytes.Buffer
+			refreshManagedSkills(&stdout, &stderr, "/opt/mio/bin/mio")
+
+			all := stdout.String() + stderr.String()
+			if len(*calls) > 1 {
+				t.Errorf("one file reached through a symlinked cwd got %d handoffs: %+v", len(*calls), *calls)
+			}
+			if n := strings.Count(all, filepath.Join(".claude", "skills", skillDirName, skillFileName)); n != 1 {
+				t.Errorf("the one Claude skill file should be named exactly once, got %d:\n%s", n, all)
+			}
+			if strings.Contains(all, "(project)") || strings.Contains(all, "--project") {
+				t.Errorf("~/.claude reached through %s is the USER copy, not a project one:\n%s", link, all)
+			}
+		})
+	}
+}
+
+// Every line refreshManagedSkills prints goes to ONE stream, chosen by what it
+// says: a skill it refreshed, and the install nudge, are results on out; a
+// skill it did NOT refresh is a warning on errOut. README, llms.txt and
+// `mio update --help` promise the warning half ("a failure or a skipped
+// hand-edited file always prints a line, on stderr"). Each branch is its own
+// Fprintf, so each is probed here, in both scopes, with SEPARATE buffers — the
+// older tests pass one buffer for both writers and cannot tell them apart.
+//
+// Seeded on codex: `--force` alone defaults to claude, so only a codex copy
+// tells a correct `--target <t>` from a hardcoded one.
+func TestRefreshManagedSkills_EveryBranchPrintsOnItsOwnStream(t *testing.T) {
+	const bin = "/opt/mio/bin/mio"
+	type branch struct {
+		name      string
+		needsMode bool                            // relies on mode bits, which root ignores
+		seed      func(t *testing.T, path string) // the one skill file in play
+		newBin    string                          // "" = the updater reported no binary
+		child     func(path string) error         // the stubbed new binary; nil = must not run
+		result    bool                            // a result (stdout), not a warning (stderr)
+		want      []string                        // on the chosen stream
+		notWant   []string                        // on neither stream
+	}
+	managed := func(t *testing.T, path string) { seedManagedSkill(t, path, "0.14.0") }
+	branches := []branch{
+		{name: "unreadable", needsMode: true, newBin: bin,
+			seed: func(t *testing.T, path string) {
+				managed(t, path)
+				if err := os.Chmod(path, 0o000); err != nil {
+					t.Fatalf("chmod: %v", err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+			},
+			want: []string{"Could not read"}},
+		{name: "no new binary", seed: managed, newBin: "",
+			want: []string{"Could not locate the updated mio binary"}},
+		{name: "handoff fails", seed: managed, newBin: bin,
+			child: func(string) error { return errors.New("exec boom") },
+			want:  []string{"Could not refresh", "exec boom"}},
+		{name: "read-back fails", needsMode: true, seed: managed, newBin: bin,
+			child: func(path string) error { return os.Chmod(path, 0o000) },
+			want:  []string{"could not read it back"}},
+		// Following a --force remediation replaces the file, so the line must
+		// say so — and must not call a file mio never wrote "edited locally".
+		{name: "managed but edited", newBin: bin,
+			seed: func(t *testing.T, path string) { seedFile(t, path, seedManagedSkill(t, path, "0.14.0")+"\nedit\n") },
+			want: []string{"edited locally", "overwrites your edits"}},
+		{name: "not written by mio", newBin: bin,
+			seed:    func(t *testing.T, path string) { seedFile(t, path, "# our own mio notes\n") },
+			want:    []string{"was not installed by mio", "replace it with mio's skill", "overwrites it"},
+			notWant: []string{"edited locally"}},
+		{name: "refreshed", seed: managed, newBin: bin, result: true,
+			child: func(path string) error { return writeSkillFile(path, renderSkill("9.9.9")) },
+			want:  []string{"Refreshed mio skill", "(version 9.9.9)"}},
+		{name: "refreshed, no version stamp", seed: managed, newBin: bin, result: true,
+			child: func(path string) error { return writeSkillFile(path, "---\nname: mio\n---\nno stamp\n") },
+			want:  []string{"Refreshed mio skill"}},
+	}
+	for _, scope := range []string{"user", "project"} {
+		for _, b := range branches {
+			t.Run(scope+"/"+b.name, func(t *testing.T) {
+				if b.needsMode && os.Geteuid() == 0 {
+					t.Skip("root ignores mode bits")
+				}
+				home, project := isolateSkillSandbox(t)
+				path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName) // CODEX_HOME
+				label := "Codex"
+				fix := "'mio skills install --force --target codex'"
+				if scope == "project" {
+					path = projectSkillPath(project, "codex")
+					label = "Codex (project)"
+					fix = "'mio skills install --project --force --target codex' in " + project
+				}
+				b.seed(t, path)
+				stubRefreshExec(t, func(_ string, loc skillLocation) error {
+					if b.child == nil {
+						t.Errorf("%s: no handoff expected, got %+v", b.name, loc)
+						return nil
+					}
+					return b.child(loc.path)
+				})
+
+				var stdout, stderr bytes.Buffer
+				refreshManagedSkills(&stdout, &stderr, b.newBin)
+
+				chosen, other, chosenName, otherName := &stderr, &stdout, "stderr", "stdout"
+				// A warning names the file as "<label> skill at <path>" plus the one
+				// command that rewrites THAT file; a result as "for <label> at <path>".
+				must := append([]string{label + " skill at " + path, fix}, b.want...)
+				if b.result {
+					chosen, other, chosenName, otherName = &stdout, &stderr, "stdout", "stderr"
+					must = append([]string{"for " + label + " at " + path}, b.want...)
+				}
+				if other.Len() != 0 {
+					t.Errorf("%s (%s scope): this line belongs on %s alone, but %s got %q", b.name, scope, chosenName, otherName, other.String())
+				}
+				for _, w := range must {
+					if !strings.Contains(chosen.String(), w) {
+						t.Errorf("%s (%s scope): %s must carry %q; %s=%q", b.name, scope, chosenName, w, chosenName, chosen.String())
+					}
+				}
+				for _, nw := range b.notWant {
+					if strings.Contains(stdout.String()+stderr.String(), nw) {
+						t.Errorf("%s (%s scope): must not say %q; stdout=%q stderr=%q", b.name, scope, nw, stdout.String(), stderr.String())
+					}
+				}
+			})
+		}
+	}
+	t.Run("install nudge", func(t *testing.T) {
+		isolateSkillSandbox(t)
+		stubRefreshExec(t, func(string, skillLocation) error { t.Error("nothing to hand off"); return nil })
+		var stdout, stderr bytes.Buffer
+		refreshManagedSkills(&stdout, &stderr, bin)
+		if !strings.Contains(stdout.String(), "A mio CLI agent skill is available") || stderr.Len() != 0 {
+			t.Errorf("the install nudge belongs on stdout alone; stdout=%q stderr=%q", stdout.String(), stderr.String())
+		}
+	})
+}
+
+// The streams above hold only if `mio update` hands refreshManagedSkills its
+// OWN stdout and stderr. Driven through the real command with separate
+// buffers, once where the refresh runs and once where it cannot.
+func TestUpdateCommand_SkillResultsOnStdoutWarningsOnStderr(t *testing.T) {
+	for _, binaryInstalled := range []bool{true, false} {
+		name := map[bool]string{true: "new binary found", false: "new binary missing"}[binaryInstalled]
+		t.Run(name, func(t *testing.T) {
+			home, project := isolateSkillSandbox(t)
+			prefix := resolvedTempDir(t)
+			oldRunner := selfUpdateRunner
+			t.Cleanup(func() { selfUpdateRunner = oldRunner })
+			selfUpdateRunner = func(_ context.Context, opts updateOptions, _, _ io.Writer) error {
+				if !binaryInstalled {
+					return nil // the installer "succeeded" but wrote no binary
+				}
+				bin := filepath.Join(opts.Prefix, "mio")
+				if runtime.GOOS == "windows" {
+					bin += ".exe"
+				}
+				return os.WriteFile(bin, []byte("stand-in"), 0o755)
+			}
+			userClaude := claudeSkillPath(home)
+			seedManagedSkill(t, userClaude, "0.14.0")
+			projCodex := projectSkillPath(project, "codex")
+			seedFile(t, projCodex, seedManagedSkill(t, projCodex, "0.14.0")+"\nedit\n")
+			stubRefreshExec(t, func(_ string, loc skillLocation) error {
+				return writeSkillFile(loc.path, renderSkill("9.9.9"))
+			})
+
+			stdout, stderr, err := runSkills(t, "update", "--prefix", prefix)
+			if err != nil {
+				t.Fatalf("update: %v", err)
+			}
+
+			// The hand-edited project copy is a warning either way.
+			if !strings.Contains(stderr, projCodex) || !strings.Contains(stderr, "edited locally") {
+				t.Errorf("`mio update` must warn about %s on stderr; stderr=%q", projCodex, stderr)
+			}
+			if strings.Contains(stdout, projCodex) {
+				t.Errorf("`mio update` printed the warning about %s on stdout; stdout=%q", projCodex, stdout)
+			}
+			if binaryInstalled {
+				if want := "Refreshed mio skill for Claude Code at " + userClaude; !strings.Contains(stdout, want) {
+					t.Errorf("`mio update` must report the refresh on stdout (%q); stdout=%q", want, stdout)
+				}
+				if strings.Contains(stderr, "Refreshed mio skill") {
+					t.Errorf("a refresh is a result, not a warning; stderr=%q", stderr)
+				}
+				return
+			}
+			if !strings.Contains(stderr, "Could not locate the updated mio binary") || !strings.Contains(stderr, userClaude) {
+				t.Errorf("`mio update` must say on stderr that it could not refresh %s; stderr=%q", userClaude, stderr)
+			}
+			if got, want := strings.TrimSpace(stdout), "Updating mio in "+prefix+"..."; got != want {
+				t.Errorf("a refresh that could not run must leave stdout with only %q; stdout=%q", want, stdout)
 			}
 		})
 	}

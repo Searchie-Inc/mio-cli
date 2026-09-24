@@ -424,9 +424,16 @@ func refreshManagedSkills(out, errOut io.Writer, newBin string) {
 			} else {
 				fmt.Fprintf(out, "Refreshed mio skill for %s at %s\n", loc.label(), path)
 			}
-		case skillManagedModified, skillUnmanaged:
+		// Both remediations carry --force, which REPLACES the file, so each says
+		// so. And a file with no mio stamp is not "edited locally": it may be a
+		// project's own notes that happen to live at ./.claude/skills/mio.
+		case skillManagedModified:
 			installed++
-			fmt.Fprintf(errOut, "Your %s skill at %s was edited locally and was not refreshed — run %s to update it.\n",
+			fmt.Fprintf(errOut, "Your %s skill at %s was edited locally and was not refreshed — run %s to update it, which overwrites your edits.\n",
+				loc.label(), path, loc.installCommand(true))
+		case skillUnmanaged:
+			installed++
+			fmt.Fprintf(errOut, "The %s skill at %s was not installed by mio and was not refreshed — run %s to replace it with mio's skill, which overwrites it.\n",
 				loc.label(), path, loc.installCommand(true))
 		}
 	}
