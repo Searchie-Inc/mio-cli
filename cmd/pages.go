@@ -304,7 +304,7 @@ func init() {
 	for _, cmd := range []*cobra.Command{pagesCreateCmd, pagesUpdateCmd} {
 		cmd.Flags().String("title", "", "Page title.")
 		cmd.Flags().String("slug", "", "URL slug for the page.")
-		cmd.Flags().String("type", "", "Page type (default: generic).")
+		cmd.Flags().String("type", "", "Page type, any string (default: generic). The hub renders a 'sales' page without its header and navigation; pair it with the page-sales catalog template.")
 		cmd.Flags().String("privacy", "", "Page privacy: public, members, or private (default: members).")
 		cmd.Flags().Int("position", 0, "Zero-based display position of the page.")
 		cmd.Flags().Bool("is-home", false, "Whether this page is the hub home page (sends is_homepage).")

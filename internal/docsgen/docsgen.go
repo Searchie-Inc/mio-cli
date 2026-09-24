@@ -51,6 +51,7 @@ var BlockNames = []string{
 	"section-types",
 	"section-templates",
 	"surface-templates",
+	"page-template-kinds",
 	"page-templates",
 	"row-variants",
 	"node-settings",
@@ -99,8 +100,8 @@ var BlockNames = []string{
 //	NOT COVERED — stated so the list above is not read as a blanket guarantee:
 //	  - the catalog outside nodeKinds/settingsSchema: templates[],
 //	    pageTemplates[], sectionTypes[], nestingRules, profiles. Those feed the id
-//	    lists and the surface-declaring set; a new FIELD on them is unused rather
-//	    than mis-documented.
+//	    lists, the surface-declaring set and the page-template outline/complete
+//	    split; a new FIELD on them is unused rather than mis-documented.
 //	  - the VALUES inside a rendered key (an enum member's spelling, a default's
 //	    type). Those flow through to the output, so the byte-comparison catches a
 //	    change; nothing asserts they are sane.
@@ -195,6 +196,8 @@ func Render(cat *catalog.Catalog) (map[string]string, error) {
 		pageTemplates = append(pageTemplates, t.ID)
 	}
 	out["page-templates"] = inlineList(pageTemplates)
+
+	out["page-template-kinds"] = renderPageTemplateKinds(cat.PageTemplates)
 
 	rowTpl, ok := cat.TemplateByID("row")
 	if !ok {
@@ -648,6 +651,54 @@ func valuesCell(spec map[string]any) string {
 		return "—"
 	}
 	return strings.Join(parts, " · ")
+}
+
+// renderPageTemplateKinds splits the page templates into outlines and complete
+// pages by reading each recipe: a template whose tree carries no copy (no node
+// with a non-empty `value`) is an outline — every value is the author's to
+// write, and a templated section may arrive as a bare stub; any other is a
+// complete page whose sections already carry their copy. The skill used to
+// call every page template an outline, which was wrong for page-sales.
+func renderPageTemplateKinds(pages []catalog.Template) string {
+	var outlines, complete []string
+	for _, t := range pages {
+		if nodeCarriesCopy(t.Starter) {
+			complete = append(complete, t.ID)
+		} else {
+			outlines = append(outlines, t.ID)
+		}
+	}
+	return "Outlines — no node carries a `value`; you write every one:\n\n" + inlineList(outlines) +
+		"\nComplete — finished sections with placeholder copy; edit the values in place:\n\n" + inlineList(complete)
+}
+
+// nodeCarriesCopy reports whether node or any descendant has a `value` an
+// author would edit: present and not null, "", {} or [].
+func nodeCarriesCopy(node map[string]any) bool {
+	switch v := node["value"].(type) {
+	case nil:
+	case string:
+		if v != "" {
+			return true
+		}
+	case map[string]any:
+		if len(v) > 0 {
+			return true
+		}
+	case []any:
+		if len(v) > 0 {
+			return true
+		}
+	default:
+		return true
+	}
+	kids, _ := node["children"].([]any)
+	for _, k := range kids {
+		if child, ok := k.(map[string]any); ok && nodeCarriesCopy(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // inlineList renders ids as a wrapped `·`-separated backticked list.

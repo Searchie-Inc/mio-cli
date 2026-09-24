@@ -18,7 +18,11 @@ import (
 // exactly that reason (MIO-4154).
 //
 // A requirement that is CONDITIONAL on another flag's value (--interval when
-// --type=recurring) is not expressible here and stays in RunE.
+// --type=recurring) is not expressible here. The CLI does not check that one
+// at all: `products prices create` sends the price as given, and the API
+// rejects a recurring price without interval and interval_count (422, "recurring
+// prices require both interval and interval_count"; exit 2). The doc-example
+// guard cannot see that requirement either.
 //
 // Older RunE checks still exist: MIO-4154 moved the `missing required flag(s)`
 // ones, except `hubs policies gate --enabled` (kept for its usage hint), and the
