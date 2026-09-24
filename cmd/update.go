@@ -70,7 +70,7 @@ shell and no curl are required.`,
 		// The refresh is delegated to the binary we just installed — this
 		// process still holds the OLD embedded skill body and cannot render the
 		// new one (MIO-2874). Best-effort: never fails the update.
-		refreshManagedSkills(cmd.OutOrStdout(), installedBinaryPath(opts.Prefix))
+		refreshManagedSkills(cmd.OutOrStdout(), cmd.ErrOrStderr(), installedBinaryPath(opts.Prefix))
 		return nil
 	},
 }

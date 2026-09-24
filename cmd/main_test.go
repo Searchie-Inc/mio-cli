@@ -18,6 +18,11 @@ import (
 // store can be derived from must resolve under it; see isolationProblems.
 var isolationRoot string
 
+// moduleRoot is this repo's checkout, recorded before any test runs. No test
+// may resolve an agent skill path inside it: the project scope is relative to
+// the working directory, and `go test` starts in the package dir (MIO-4178).
+var moduleRoot string
+
 // TestMain keeps every test in this package away from the developer's real
 // credential stores and config (MIO-2995):
 //
@@ -30,6 +35,13 @@ var isolationRoot string
 //     TestContract_ExitCodes_NoCredentials then sent that key to the production
 //     default API base, and it and TestWiring_SingleHubAutoDefault failed on any
 //     machine that had run `mio login`.)
+//   - CODEX_HOME points at a third temp dir, so the Codex user-scope skill
+//     can never resolve to the developer's real one (MIO-4178).
+//   - Every agent skill path is checked as it is resolved: one outside the temp
+//     root, or inside this checkout, panics before anything reads or writes it.
+//     A test that forgets to move its working directory with
+//     isolateSkillSandbox would otherwise resolve the project-scope skill in
+//     the repo itself (MIO-4178).
 //   - The keyring is pinned to the encrypted FILE backend, under that config
 //     dir. Otherwise a test that resolves or stores a key without MIO_API_KEY —
 //     the login, register and no-credentials tests among them — reaches the
@@ -56,18 +68,25 @@ func runIsolated(m *testing.M) int {
 		root = resolved
 	}
 	isolationRoot = root
+	if wd, err := os.Getwd(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(wd); err == nil {
+			wd = resolved
+		}
+		moduleRoot = filepath.Dir(wd) // go test runs in <module>/cmd
+	}
 
 	pinGoToolchainDirs()
 
 	home := filepath.Join(root, "home")
 	cfgHome := filepath.Join(root, "config")
-	for _, dir := range []string{home, cfgHome} {
+	codexHomeDir := filepath.Join(root, "codex")
+	for _, dir := range []string{home, cfgHome, codexHomeDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			fmt.Fprintln(os.Stderr, "TestMain: create isolated dirs:", err)
 			return 1
 		}
 	}
-	for k, v := range map[string]string{"HOME": home, "USERPROFILE": home, "XDG_CONFIG_HOME": cfgHome} {
+	for k, v := range map[string]string{"HOME": home, "USERPROFILE": home, "XDG_CONFIG_HOME": cfgHome, "CODEX_HOME": codexHomeDir} {
 		if err := os.Setenv(k, v); err != nil {
 			fmt.Fprintf(os.Stderr, "TestMain: set %s: %v\n", k, err)
 			return 1
@@ -75,6 +94,7 @@ func runIsolated(m *testing.M) int {
 	}
 	restore := config.UseFileBackendOnly()
 	defer restore()
+	skillPathResolved = requireSkillPathInSandbox
 	// Check the isolation BEFORE any test runs: TestMain_IsolatesEveryUserStore
 	// reports the same problems, but only after every test sorted ahead of it
 	// has already had its chance to write a real store.
@@ -110,7 +130,7 @@ func pinGoToolchainDirs() {
 }
 
 // TestMain_IsolatesEveryUserStore pins TestMain's isolation: every location a
-// mio store can be derived from — HOME, USERPROFILE, XDG_CONFIG_HOME, the home
+// mio store can be derived from — HOME, USERPROFILE, XDG_CONFIG_HOME, CODEX_HOME, the home
 // directory os.UserHomeDir derives from them, and the config path they resolve
 // to — must lie inside the temp dir TestMain created, and the keyring must be
 // pinned to the file backend under it. Inside TestMain's own dir, not merely
@@ -134,7 +154,7 @@ func isolationProblems() []string {
 	inRoot := func(p string) bool {
 		return isolationRoot != "" && (p == isolationRoot || strings.HasPrefix(p, isolationRoot+string(filepath.Separator)))
 	}
-	for _, k := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME"} {
+	for _, k := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME", "CODEX_HOME"} {
 		if v := os.Getenv(k); !inRoot(v) {
 			problems = append(problems, fmt.Sprintf("%s = %q, want a dir under TestMain's %q — TestMain must pin it", k, v, isolationRoot))
 		}
@@ -155,4 +175,48 @@ func isolationProblems() []string {
 			"a desktop Secret Service or KWallet)", b, keyring.FileBackend))
 	}
 	return problems
+}
+
+// requireSkillPathInSandbox is skillPathResolved for this whole test binary: it
+// panics — before the caller reads or writes anything — when a test resolves an
+// agent skill path outside the temp root or inside this checkout. That is what
+// a test does when it forgets isolateSkillSandbox: the user scope follows HOME
+// and CODEX_HOME, and the project scope follows the working directory, which
+// `go test` sets to the package dir in the repo (MIO-4178).
+func requireSkillPathInSandbox(path string) {
+	if problem := skillPathProblem(path); problem != "" {
+		panic(problem)
+	}
+}
+
+// skillPathProblem describes why path is not a safe place for a test to put an
+// agent skill, or returns "" when it is.
+func skillPathProblem(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Sprintf("skill test sandbox (MIO-4178): cannot resolve skill path %q: %v", path, err)
+	}
+	within := func(p, dir string) bool {
+		return dir != "" && (p == dir || strings.HasPrefix(p, dir+string(filepath.Separator)))
+	}
+	inTemp := false
+	for _, tmp := range []string{os.TempDir(), resolvedOrSelf(os.TempDir())} {
+		if within(abs, filepath.Clean(tmp)) {
+			inTemp = true
+		}
+	}
+	if inTemp && !within(abs, moduleRoot) {
+		return ""
+	}
+	wd, _ := os.Getwd()
+	return fmt.Sprintf("skill test sandbox violated (MIO-4178): a test resolved the agent skill path %s, which is outside the temp root %s "+
+		"or inside the checkout %s (cwd=%s HOME=%s CODEX_HOME=%s) — call isolateSkillSandbox(t) before anything reads or writes a skill",
+		abs, os.TempDir(), moduleRoot, wd, os.Getenv("HOME"), os.Getenv("CODEX_HOME"))
+}
+
+func resolvedOrSelf(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
 }
