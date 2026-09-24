@@ -115,18 +115,32 @@ running binary cannot do this itself: the skill body is compiled into each
 release, so the old process only holds the old surface and could at best write
 the *previous* content under the *new* version's label.
 
-Three consequences worth knowing:
+Four consequences worth knowing:
 
 - The path is named in the output **when the file changes**. If your skill is
   already current the update says nothing about it — silence there means
   "already current", not "failed"; a failure or a skipped hand-edited file
-  always prints a line.
+  always prints a line, on stderr.
 - The skill lives at `~/.claude/skills/mio/SKILL.md` (or, for Codex,
   `$CODEX_HOME/skills/mio/SKILL.md` — `~/.codex/skills/mio/SKILL.md` when
   `CODEX_HOME` is unset), which is **outside** `--prefix`.
+- A **project** copy (`./.claude/skills/mio/SKILL.md` or
+  `./.codex/skills/mio/SKILL.md`, from `mio skills install --project`) is
+  refreshed the same way, but **only when `mio update` runs from that project's
+  directory** — it checks the current directory and nothing else, no parent
+  directories and no other checkouts. A project you did not update from keeps
+  its old copy: refresh it from that directory with
+  `mio skills install --project --target <claude|codex>`. `mio skills install`
+  also warns on stderr when the other scope holds an older managed copy.
+  **Version gate (MIO-4178):** the refresh is run by the binary doing the
+  updating, so project copies are covered only when you update *from* the
+  release after v0.23.0 or later. The update that brings you onto that release
+  still leaves them alone — refresh each once, from its directory.
 - A skill file you hand-edited, or one that was not installed by `mio`, is never
   touched. The update names that file and gives you the command for **that
-  target** — `mio skills install --force --target <claude|codex>`. Note the
+  target** — `mio skills install --force --target <claude|codex>`, or for a
+  project copy `mio skills install --project --force --target <claude|codex>`
+  run in the directory it names. Note the
   `--target` is load-bearing, and omitting it **can destroy data**. `--force`
   alone defaults to `claude`, so running it for an edited **Codex** skill acts on
   the Claude file instead. Depending on what is there it reports "already up to

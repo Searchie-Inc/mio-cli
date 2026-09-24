@@ -94,7 +94,9 @@ var skillsCmd = &cobra.Command{
 The skill teaches an agent to build a render-faithful Membership.io hub with the
 CLI alone and to avoid the silent render-contract traps. It is embedded in the
 binary, so 'mio update' ships the current skill and can refresh an unmodified
-install automatically.
+install automatically: the user-level copy wherever you run it, and a
+project-level copy (./.claude or ./.codex) ONLY when you run 'mio update' from
+that project's directory.
 
 Targets:
   claude — Claude Code: ~/.claude/skills/mio/SKILL.md (--user) or ./.claude/skills/mio/SKILL.md (--project)
@@ -108,7 +110,12 @@ var skillsInstallCmd = &cobra.Command{
 
 The write is idempotent: re-running with the same CLI version is a no-op, and an
 unmodified managed install is refreshed in place. A hand-edited or pre-existing
-unmanaged file is never overwritten unless you pass --force.`,
+unmanaged file is never overwritten unless you pass --force.
+
+It writes ONE scope. When the other scope holds an older mio-managed copy for the
+same agent (the ./.claude or ./.codex copy for a --user install, the user-level
+one for --project), a warning on stderr names it and the command that refreshes
+it; that copy is not written.`,
 	Example: `  mio skills install
   mio skills install --target codex
   mio skills install --project

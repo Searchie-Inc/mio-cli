@@ -34,6 +34,7 @@ mio config set current_team <team-uuid>   # a UUID (see 'mio teams list'); drop 
 - **Exit codes (stable contract):** `0` ok · `1` error · `2` bad args (400/409/422) · `3` auth (401/403) · `4` not found · `5` needs `--yes` in a non-TTY · `6` rate limited (429) · `7` server (5xx). They are deliberately coarse; when you need the exact status the API returned (403 vs 401, 409 vs 422), read `errors[0].status` from the JSON:API envelope on stderr — it carries the real HTTP status verbatim, while `errors[0].meta.exit_code` echoes the coarse code (MIO-2656).
 - **Destructive ops** (`delete`/`cancel`/`refund`) require `--yes`/`-y` in a non-interactive shell or they exit `5`.
 - Info/hints print to **stderr**, so machine-readable stdout stays clean. `--jq .id` on a create gives you the new id for the next step.
+- **This skill is a snapshot of the binary that wrote it.** Its frontmatter's `x-mio-skill-version` should match `mio version`; when it is older, verbs and templates the binary has are missing from it. `mio update` refreshes the user-level copy and the project copies (`./.claude/skills/mio/SKILL.md`, `./.codex/skills/mio/SKILL.md`) of the directory it runs in, and no others: refresh another project's copy from its directory with `mio skills install --project --target <claude|codex>`.
 
 ## Start here: `mio hubs scaffold` (one command, whole hub)
 
