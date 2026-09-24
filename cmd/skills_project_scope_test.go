@@ -304,7 +304,7 @@ func TestRefreshManagedSkills_EveryBranchPrintsOnItsOwnStream(t *testing.T) {
 	const bin = "/opt/mio/bin/mio"
 	type branch struct {
 		name      string
-		needsMode bool                            // relies on mode bits, which root ignores
+		needsMode bool                            // relies on mode bits, which root and windows ignore
 		seed      func(t *testing.T, path string) // the one skill file in play
 		newBin    string                          // "" = the updater reported no binary
 		child     func(path string) error         // the stubbed new binary; nil = must not run
@@ -350,8 +350,8 @@ func TestRefreshManagedSkills_EveryBranchPrintsOnItsOwnStream(t *testing.T) {
 	for _, scope := range []string{"user", "project"} {
 		for _, b := range branches {
 			t.Run(scope+"/"+b.name, func(t *testing.T) {
-				if b.needsMode && os.Geteuid() == 0 {
-					t.Skip("root ignores mode bits")
+				if b.needsMode && (os.Geteuid() == 0 || runtime.GOOS == "windows") {
+					t.Skip("mode 0o000 does not make a file unreadable for root or on windows")
 				}
 				home, project := isolateSkillSandbox(t)
 				path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName) // CODEX_HOME
