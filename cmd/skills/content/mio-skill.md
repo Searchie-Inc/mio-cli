@@ -413,6 +413,8 @@ edit.** An outline has no `value` on any node. The split below is generated from
 catalog this binary embeds:
 
 <!-- catalog-gen:page-template-kinds -->
+In catalog 0.18.1, the one this binary embeds:
+
 Outlines — no node carries a `value`; you write every one:
 
 `page-homepage` · `page-login` · `page-register` · `page-onboarding` ·
@@ -424,6 +426,15 @@ Complete — finished sections with placeholder copy; edit the values in place:
 `page-file-detail` · `page-homepage-community` · `page-about` · `page-faq` ·
 `page-sales`
 <!-- /catalog-gen -->
+
+`pages catalog scaffold` fetches the backend's live catalog unless you pass
+`--offline`, and that catalog can hold different templates. `mio pages catalog
+templates` lists the ones it serves. To classify one of them, count its nodes that
+carry copy. `0` means an outline:
+
+```bash
+mio pages catalog scaffold --template <id> --jq '[.. | objects | select(has("value") and (.value | . != null and . != "" and . != {} and . != []))] | length'
+```
 
 **An outline is a skeleton.** `page-homepage`'s hero child arrives as
 `{"kind":"row","template":"hero","settings":{}}` — no surface, no values. Scaffold
@@ -456,7 +467,8 @@ mio pages publish "$PAGE_ID" --hub hub_abc123 --if-match 1          # section_co
 `--type sales` makes the hub render the page without its header and navigation,
 because a sales page owns its full-bleed layout. The API takes any string as the
 type (default `generic`), and every other type keeps the hub chrome. Pass
-`--privacy public` because `pages create` defaults to `members`.
+`--privacy public`: the API defaults privacy to `members` for every page type except
+`login`, `register` and `payments`.
 
 `row` is the unified 1–4 column section; pick the layout with `--variant`:
 

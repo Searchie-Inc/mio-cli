@@ -10,8 +10,9 @@ import (
 // pageKindLists splits the rendered page-template-kinds block into its two lists.
 func pageKindLists(t *testing.T, body string) (outlines, complete []string) {
 	t.Helper()
-	parts := strings.SplitN(body, "Complete", 2)
-	if len(parts) != 2 || !strings.HasPrefix(parts[0], "Outlines") {
+	_, rest, ok := strings.Cut(body, "Outlines —")
+	parts := strings.SplitN(rest, "Complete —", 2)
+	if !ok || len(parts) != 2 {
 		t.Fatalf("page-template-kinds block has no Outlines/Complete sections:\n%s", body)
 	}
 	ids := func(s string) []string {

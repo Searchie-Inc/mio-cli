@@ -197,7 +197,7 @@ func Render(cat *catalog.Catalog) (map[string]string, error) {
 	}
 	out["page-templates"] = inlineList(pageTemplates)
 
-	out["page-template-kinds"] = renderPageTemplateKinds(cat.PageTemplates)
+	out["page-template-kinds"] = renderPageTemplateKinds(cat.Meta.CatalogVersion, cat.PageTemplates)
 
 	rowTpl, ok := cat.TemplateByID("row")
 	if !ok {
@@ -658,8 +658,10 @@ func valuesCell(spec map[string]any) string {
 // with a non-empty `value`) is an outline — every value is the author's to
 // write, and a templated section may arrive as a bare stub; any other is a
 // complete page whose sections already carry their copy. The skill used to
-// call every page template an outline, which was wrong for page-sales.
-func renderPageTemplateKinds(pages []catalog.Template) string {
+// call every page template an outline, which was wrong for page-sales. The
+// block names the catalog version, because the backend an agent scaffolds
+// against may serve a different set of templates.
+func renderPageTemplateKinds(version string, pages []catalog.Template) string {
 	var outlines, complete []string
 	for _, t := range pages {
 		if nodeCarriesCopy(t.Starter) {
@@ -668,7 +670,8 @@ func renderPageTemplateKinds(pages []catalog.Template) string {
 			outlines = append(outlines, t.ID)
 		}
 	}
-	return "Outlines — no node carries a `value`; you write every one:\n\n" + inlineList(outlines) +
+	return "In catalog " + version + ", the one this binary embeds:\n\n" +
+		"Outlines — no node carries a `value`; you write every one:\n\n" + inlineList(outlines) +
 		"\nComplete — finished sections with placeholder copy; edit the values in place:\n\n" + inlineList(complete)
 }
 

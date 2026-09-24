@@ -12,12 +12,19 @@ package cmd
 //     template through the real command and requires each to sit in the list
 //     its OUTPUT puts it in: no non-empty `value` anywhere → Outlines,
 //     otherwise → Complete. It also pins the two templates the hand-written
-//     prose (skill and llms.txt) names as examples.
+//     prose (skill and llms.txt) names as examples, and requires the block to
+//     name the catalog version it describes (the backend may serve another).
+//   - TestSkillPageTemplateKinds_ClassifyCommandAgrees: the skill's one-line
+//     command for classifying a template on whatever backend is live is RUN
+//     against every embedded page template and must print 0 for exactly the
+//     outlines.
 //   - TestSkillDataSourceIDs_CoverEveryBoundType: the skill's "Which id each
 //     `dataSource` takes" table must have exactly one row per dataSource type
 //     the scaffolded recipes bind (MIO-4176: a `file` binding given a playlist
-//     id publishes cleanly and 404s on every view). A catalog bump that ships a
-//     new bound type fails here until someone documents its id namespace.
+//     id publishes cleanly and 404s on every view), and each row must name the
+//     namespace mio-hub's renderer resolves (pinned in dataSourceIDNamespace).
+//     A catalog bump that ships a new bound type fails here until someone
+//     documents its id namespace.
 
 import (
 	"encoding/json"
@@ -27,6 +34,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -118,8 +126,18 @@ func skillPageKinds(t *testing.T) (outlines, complete map[string]bool) {
 	if m == nil {
 		t.Fatalf("%s has no catalog-gen:page-template-kinds block", skillDocPath)
 	}
-	parts := strings.SplitN(m[1], "Complete", 2)
-	if len(parts) != 2 || !strings.HasPrefix(parts[0], "Outlines") {
+	// The lists are only true of the catalog this binary embeds; the backend an
+	// agent talks to may serve another (Codex round 1). The block must say which.
+	cat, err := catalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "catalog " + cat.Meta.CatalogVersion; !strings.Contains(m[1], want) {
+		t.Errorf("the page-template-kinds block does not name the catalog it was generated from (%q):\n%s", want, m[1])
+	}
+	_, rest, ok := strings.Cut(m[1], "Outlines —")
+	parts := strings.SplitN(rest, "Complete —", 2)
+	if !ok || len(parts) != 2 {
 		t.Fatalf("page-template-kinds block has no Outlines/Complete sections:\n%s", m[1])
 	}
 	ids := func(s string) map[string]bool {
@@ -173,11 +191,50 @@ func TestSkillPageTemplateKinds_MatchScaffoldOutput(t *testing.T) {
 	}
 }
 
-var dataSourceRowRE = regexp.MustCompile("^\\| `([a-z_-]+)` \\|")
+// classifyCommandRE finds the command the skill gives for classifying a
+// template the backend serves (the lists above only cover the embedded one).
+var classifyCommandRE = regexp.MustCompile(`mio pages catalog scaffold --template <[^>]+> --jq '([^']+)'`)
 
-// skillDataSourceRows returns the dataSource types the skill's id table
-// documents, one per row.
-func skillDataSourceRows(t *testing.T) map[string]int {
+// TestSkillPageTemplateKinds_ClassifyCommandAgrees RUNS the command the skill
+// hands an agent for classifying any template on any backend, against every
+// embedded page template: it must print 0 for exactly the outlines.
+func TestSkillPageTemplateKinds_ClassifyCommandAgrees(t *testing.T) {
+	raw, err := os.ReadFile(skillDocPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := classifyCommandRE.FindStringSubmatch(string(raw))
+	if m == nil {
+		t.Fatalf("%s gives no `mio pages catalog scaffold --template <id> --jq '…'` command for classifying a live template", skillDocPath)
+	}
+	prog := m[1]
+	outlines, complete := skillPageKinds(t)
+	for id := range complete {
+		outlines[id] = false
+	}
+	checked := 0
+	for id, isOutline := range outlines {
+		res := runContract(t, offlineEnv(), "pages", "catalog", "scaffold", "--template", id, "--offline", "--jq", prog)
+		if res.Code != errs.ExitOK {
+			t.Errorf("the skill's classify command on %s exited %d: %s", id, res.Code, res.Stderr)
+			continue
+		}
+		checked++
+		got := strings.TrimSpace(res.Stdout)
+		if (got == "0") != isOutline {
+			t.Errorf("the skill's classify command printed %q for %s, which the skill lists as outline=%v (0 must mean outline)", got, id, isOutline)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no page template was classified")
+	}
+}
+
+var dataSourceRowRE = regexp.MustCompile("^\\| `([a-z_-]+)` \\| ([^|]*) \\|")
+
+// skillDataSourceRows returns, per dataSource type, the "`id` is" cell of each
+// row the skill's id table has for it.
+func skillDataSourceRows(t *testing.T) map[string][]string {
 	t.Helper()
 	raw, err := os.ReadFile(skillDocPath)
 	if err != nil {
@@ -188,17 +245,31 @@ func skillDataSourceRows(t *testing.T) map[string]int {
 	if !ok {
 		t.Fatalf("%s has no %q section", skillDocPath, heading)
 	}
-	rows := map[string]int{}
+	rows := map[string][]string{}
 	for _, line := range strings.Split(section, "\n") {
 		if strings.HasPrefix(line, "#") {
 			break
 		}
 		if m := dataSourceRowRE.FindStringSubmatch(line); m != nil {
-			rows[m[1]]++
+			rows[m[1]] = append(rows[m[1]], m[2])
 		}
 	}
 	return rows
 }
+
+// dataSourceIDNamespace is the id each bound type takes, as mio-hub's renderer
+// resolves it (origin/main 94d28ef8, src/lib/page-tree/data-binding/
+// use-data-source.ts; types.ts documents `file` as "id = content_node UUID").
+// The renderer lives in another repo, so this is a pinned reading of it, not
+// something the test can derive: it exists so the MIO-4176 answer cannot be
+// edited back to "media file id" unnoticed. A newly bound type needs an entry,
+// taken from the renderer, before the test passes.
+var dataSourceIDNamespace = map[string]string{
+	"playlist": "playlist",
+	"file":     "content-node",
+}
+
+var boldRE = regexp.MustCompile(`\*\*([^*]+)\*\*`)
 
 func TestSkillDataSourceIDs_CoverEveryBoundType(t *testing.T) {
 	bound := map[string][]string{} // dataSource.type → where a recipe binds it
@@ -232,13 +303,24 @@ func TestSkillDataSourceIDs_CoverEveryBoundType(t *testing.T) {
 	}
 	sort.Strings(types)
 	for _, typ := range types {
-		switch rows[typ] {
+		switch len(rows[typ]) {
 		case 0:
 			t.Errorf("recipes bind dataSource type %q (%s) but the skill's id table has no row saying which id it takes",
 				typ, strings.Join(bound[typ], ", "))
+			continue
 		case 1:
 		default:
-			t.Errorf("the skill's id table has %d rows for %q", rows[typ], typ)
+			t.Errorf("the skill's id table has %d rows for %q", len(rows[typ]), typ)
+			continue
+		}
+		want, known := dataSourceIDNamespace[typ]
+		if !known {
+			t.Errorf("recipes bind dataSource type %q; read which id mio-hub's useDataSource resolves it as and add it to dataSourceIDNamespace", typ)
+			continue
+		}
+		m := boldRE.FindStringSubmatch(rows[typ][0])
+		if m == nil || m[1] != want {
+			t.Errorf("the skill's id table says a %q binding takes %q; the renderer resolves it as a **%s** id (MIO-4176)", typ, rows[typ][0], want)
 		}
 	}
 	for typ := range rows {
