@@ -2578,10 +2578,10 @@ func TestScaffold_CommunityTemplateEnablesPolicyGate(t *testing.T) {
 }
 
 // TestScaffold_ResumeAppliesGateExactlyOnce: the gate write is part of an
-// idempotent, resumable pipeline — a resume onto an existing hub re-asserts the
-// template's declared enforcement exactly once, with the same value, never a
-// flip-flop or a doubled write. (The backend's update_policy_gate is itself a
-// no-op when the stored state already matches.)
+// idempotent, resumable pipeline — a resume onto a hub whose gate is UNSET (this
+// stub's hub has no settings at all) fills that gap exactly once, with the
+// template's value, never a flip-flop or a doubled write. A gate the hub has
+// already set is kept instead (MIO-2818; TestScaffoldResume_PoliciesNeverRevertCustomText).
 func TestScaffold_ResumeAppliesGateExactlyOnce(t *testing.T) {
 	srv, rec := fullScaffoldServerFor(t, "hub_pub", false)
 

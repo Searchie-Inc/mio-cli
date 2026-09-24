@@ -30,9 +30,12 @@ package cmd
 //	3. the scalar palette flags, written OVER that.
 //
 // The whole three-layer result is then handed to applyHubBlobs as the branding
-// patch, which deep-merges it onto the hub's CURRENT branding (so a resume never
-// clobbers sibling keys) and applies --logo-url/--favicon-url last. The key sets
-// are disjoint, so those two land in the same place they always did.
+// patch, which deep-merges it onto the hub's CURRENT branding (sibling keys the
+// template does not declare survive) and applies --logo-url/--favicon-url last.
+// The key sets are disjoint, so those two land in the same place they always
+// did. That is the create path. On a --hub run the template layer is only a
+// default UNDER the hub's own keys, and layers 2-3 are written over the hub
+// (MIO-4166, stepBlobsFillGaps) — a template key the hub already has is kept.
 //
 // NO CLIENT-SIDE VALUE VALIDATION (deliberate; see registerScaffoldBrandingFlags).
 
