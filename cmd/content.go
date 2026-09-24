@@ -510,7 +510,7 @@ func init() {
 	// Reconcile: repeatable --playlist-id. Omitted entirely means "use this
 	// hub's scaffold provenance" (the backend derives the set); an empty list
 	// is rejected server-side, so the command refuses to send one.
-	contentReconcileCmd.Flags().StringSlice("playlist-id", nil, "Playlist id to reconcile; repeatable. Omit to use the playlists this hub was scaffolded with.")
+	contentReconcileCmd.Flags().StringSlice("playlist-id", nil, "Playlist id to reconcile; repeatable. Omit to use the playlists in the hub's scaffold provenance, which only the server-side hub scaffold op records (a hand-built or client-side-scaffolded hub has none and rejects a bare run).")
 
 	// Pagination for list and children.
 	addPaginationFlags(contentListCmd)
@@ -542,21 +542,31 @@ file that lives only in a playlist has no content item, and everything keyed on
 one is therefore missing for it — progress and completion tracking, "My List"
 saves, comments, and the page builder's single-file feature binding.
 
-This is a HEAL action, not a sync: it is never run for you, so a hub stays
-un-reconciled until you call it. It is also additive — existing content items
-are adopted rather than duplicated.
+This is a HEAL action, not a sync. 'mio hubs scaffold' runs it for the playlists
+it creates; nothing else does, so any other hub stays un-reconciled until you
+call it. It is also additive — existing content items are adopted rather than
+duplicated.
 
-With no --playlist-id it reconciles the playlists this hub was scaffolded with.
-Pass --playlist-id explicitly for a hub that was not built from a template, or
-to reconcile a chosen subset.
+With no --playlist-id it reconciles the playlists recorded in the hub's scaffold
+provenance (HubTemplateApplication), and ONLY the server-side hub scaffold op
+records that: 'mio hubs scaffold' in create mode, when the backend's op built
+the hub. A hub built any other way has none — by hand, or by a client-side
+scaffold (--hub resume, a palette or --branding-json flag, --catalog, a missing
+--name or --slug, or a backend with the op off) — so pass --playlist-id there.
+'mio hubs scaffold -o json' reports each playlist's id as
+.playlists[].playlist_id. After the fact, list the team's playlists and keep the
+ones scoped to the hub (the first limit below):
+  mio media playlists list --limit 100 -o json --jq '.[] | select(.hub_id == "<hub>") | {id, title}'
+'mio media hub-playlists list' is not a substitute: its .id is the publication
+row, and it also lists team-library playlists this command rejects.
+--playlist-id also reconciles a chosen subset.
 
-Two limits worth knowing before you run it:
+Three limits worth knowing before you run it:
 
   - A playlist must belong to this hub. A team-library playlist that was merely
     published into the hub is rejected with 422 playlist_not_in_hub.
-  - A hub that was not built from a template has no scaffold provenance to
-    derive from, so a bare run rejects with 422 no_playlist_provenance — pass
-    --playlist-id explicitly for those.
+  - A hub without scaffold provenance (see above) rejects a bare run with
+    422 no_playlist_provenance rather than reconciling every playlist on it.
   - Lessons are created unpublished unless the file AND its playlist are each
     already published to the hub, so publish first if you want them visible.`,
 	Example: `  mio content reconcile --hub hub_abc
