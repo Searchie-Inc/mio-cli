@@ -838,11 +838,13 @@ func resolveTemplatePolicies(t *catalog.HubTemplate) (templatePolicies, error) {
 //
 // --hub RUNS FILL GAPS (MIO-2818, read the CONTENT SEMANTICS note on
 // templateHubPolicy): applyHubPolicies always sends `content`, so a template
-// that omits it RESETS that policy to the backend default — and for a TOS with
-// require_acceptance that also normalizes the version, which RE-PROMPTS every
-// member who had already accepted. That is harmless on a create (the default
-// reverts to the default) and was destructive on a resume onto a hub whose ToS
-// an operator had edited. So a --hub run writes a policy only when the template
+// that omits it RESETS that policy to the backend default — and when the
+// template's TOS declares require_acceptance, that also normalizes the version to
+// "default-v1", which RE-PROMPTS every member who had accepted whenever the hub's
+// TOS carried another version (update_policy moves it only on a write that
+// carries require_acceptance, and only when the effective version changes).
+// That is harmless on a create (the default reverts to the default) and was
+// destructive on a resume onto a hub whose ToS an operator had edited. So a --hub run writes a policy only when the template
 // has text for it AND the hub has none of its own, never sends content:null,
 // and leaves a gate the hub has already set alone (planPolicyFill,
 // hubs_scaffold_resume.go). Only a create, or --reapply-template, takes the
@@ -1831,9 +1833,11 @@ A --hub run FILLS GAPS: it adds what the hub is missing and keeps what it
 already has — branding keys, navigation buckets, settings (registration
 included), policy text, the policy gate and onboarding config — reporting each
 kept value on stderr and in the --dry-run plan. Flags on the command still win.
-It never resets a policy to the platform default, and a page conflict stops the
-run before anything is written. --reapply-template overwrites the hub with the
-template's values instead; it is destructive (prompts, or needs --yes off a TTY).
+It never resets a policy to the platform default. --reapply-template overwrites
+those kept values with the template's instead; it is destructive (prompts, or
+needs --yes off a TTY). Pages are never overwritten: on every --hub run,
+--reapply-template and --dry-run included, a page conflict stops the run before
+anything is written.
 
 Brand the hub in the SAME command: --primary-color/--secondary-color/
 --text-color/--background-color/--header-color/--header-accent, plus

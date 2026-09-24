@@ -1320,8 +1320,11 @@ In practice: READ THE CONTENT AND LOOK AT IT. (` + "`hubs scaffold --hub`" + ` d
 rely on this read: it reads the RAW stored settings.policies off the hub, where
 an unconfigured document has no content, and keeps any text the hub has
 (MIO-2818). Only ` + "`--reapply-template`" + ` still resets a policy its template
-declares no text for to the platform default — for a tos saved with
---require-acceptance that also bumps the version and re-prompts every member.)
+declares no text for to the platform default. When the template's tos requires
+acceptance, that reset moves the version to "default-v1" and re-prompts every
+member who had accepted ONLY if this read showed another version first — one
+set by saving custom text with --require-acceptance, and kept by any later save
+or reset without the flag. At "default-v1" nobody is asked again.)
 
 The hub identifier may be given positionally; omit it to use the ambient hub
 (--hub, or current_hub in config).
