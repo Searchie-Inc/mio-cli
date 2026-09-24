@@ -71,6 +71,11 @@ type PageInfo struct {
 	// More is true when the API reported more rows past this page: has_more
 	// true, or — on a list that sends no has_more at all — a links.next.
 	More bool
+	// LinkOnly is true when More rests on links.next alone. Such a link is
+	// weaker than has_more: media files and attachments send one on every
+	// FULL page (len == page[size], no over-fetch), so the page it points to
+	// can be empty.
+	LinkOnly bool
 	// Cursor is the page[after] value the API handed out for the next page,
 	// or "" when it handed out none.
 	Cursor string
@@ -97,7 +102,9 @@ type PageInfo struct {
 //     events, discussions, moderation, hub members, activity, media search).
 //   - the media lists (files, attachments, playlists, playlist items, hub
 //     media, hub playlists) send no meta at all: links.next is their only
-//     signal, present exactly when they have a next page.
+//     signal. Playlists, playlist items and the hub lists send it when a
+//     size+1 probe found more; files and attachments send it on every full
+//     page, so it can point at an empty one (LinkOnly).
 //   - the cursor sits at meta.page.next_cursor, at meta.next_cursor, or only as
 //     the page[after] parameter of links.next (products, coupons, tags, the
 //     media lists and every other list that emits no next_cursor). links.next
@@ -126,6 +133,7 @@ func (c *Collection) NextPage() PageInfo {
 		info.More = pageMore || topMore
 	} else {
 		info.More = nextLink != ""
+		info.LinkOnly = info.More
 	}
 	if !info.More {
 		return info

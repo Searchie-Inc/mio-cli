@@ -22,10 +22,31 @@ import (
 
 // usualPageSizeCap is the most rows one page can hold on mio-backend's
 // paginated lists: infrastructure/pagination.py MAX_PAGE_SIZE = 100, and the
-// page[size] bound of every list handler but segments members (le=200). Past
-// it the API rejects the request instead of returning more, so the note offers
-// a larger --limit only below it.
+// page[size] bound of every list handler but the two segments routes, which
+// markPageSizeCap raises. Past the cap the API rejects the request (422)
+// instead of returning more, so the note offers a larger page only below it.
 const usualPageSizeCap = 100
+
+// pageSizeCapAnnotation carries a command's own page-size cap when it is not
+// usualPageSizeCap. See markPageSizeCap.
+const pageSizeCapAnnotation = "mio/page-size-cap"
+
+// markPageSizeCap records that cmd's route accepts pages of up to rows rows.
+func markPageSizeCap(cmd *cobra.Command, rows int) {
+	if cmd.Annotations == nil {
+		cmd.Annotations = map[string]string{}
+	}
+	cmd.Annotations[pageSizeCapAnnotation] = strconv.Itoa(rows)
+}
+
+// pageSizeCap returns cmd's page-size cap: its markPageSizeCap value, else
+// usualPageSizeCap.
+func pageSizeCap(cmd *cobra.Command) int {
+	if n, err := strconv.Atoi(cmd.Annotations[pageSizeCapAnnotation]); err == nil && n > 0 {
+		return n
+	}
+	return usualPageSizeCap
+}
 
 // unsignalledPagingAnnotation marks a list command whose route pages — it
 // honours page[size] and takes page[after] = the last row's id — but whose
@@ -79,8 +100,13 @@ func moreRowsNote(cmd *cobra.Command, col *client.Collection) string {
 		noun = "row"
 	}
 	head := fmt.Sprintf("note: the API returned %d %s and has more", n, noun)
-	if full {
+	switch {
+	case full:
 		head = fmt.Sprintf("note: the API returned %d %s, a full page, and this list does not report whether more exist", n, noun)
+	case p.LinkOnly:
+		// No has_more, only a next link, which media files and attachments
+		// send on any full page: say what the API sent, not more than that.
+		head = fmt.Sprintf("note: the API returned %d %s and a next-page link (the next page may be empty)", n, noun)
 	}
 	// A list with no place for its own cursor still takes page[after], and
 	// the backend's pagination contract defines it as the id of the last row
@@ -96,7 +122,8 @@ func moreRowsNote(cmd *cobra.Command, col *client.Collection) string {
 		cursor = col.Data[n-1].ID
 	}
 	// A larger page helps only below the API's cap.
-	canRaise := limit != "" && max(requested, n) < usualPageSizeCap
+	pageCap := pageSizeCap(cmd)
+	canRaise := limit != "" && max(requested, n) < pageCap
 	switch {
 	case cursor != "" && after != "":
 		s := fmt.Sprintf("%s; fetch the next page with --%s %s", head, after, shellQuote(cursor))
@@ -107,7 +134,7 @@ func moreRowsNote(cmd *cobra.Command, col *client.Collection) string {
 	case canRaise:
 		return fmt.Sprintf("%s; raise --%s to get more in one page", head, limit)
 	case limit != "":
-		return fmt.Sprintf("%s; the API sent no cursor for the next page and --%s is already at its cap (usually %d), so this command cannot fetch the rest", head, limit, usualPageSizeCap)
+		return fmt.Sprintf("%s; the API sent no cursor for the next page and --%s is already at its cap (%d), so this command cannot fetch the rest", head, limit, pageCap)
 	default:
 		return head + "; this command has no paging flag, and --raw shows the API's meta and links"
 	}

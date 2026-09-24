@@ -389,6 +389,12 @@ func init() {
 	// Pagination flags for list and members.
 	addPaginationFlags(segmentsListCmd)
 	addPaginationFlags(segmentsMembersCmd)
+	// Both segments routes take pages of up to 200 rows, not the usual 100
+	// (mio-backend origin/main segments/router.py list_members page[size]
+	// le=200; schemas.py search page.size le=200), so the more-rows note may
+	// suggest a larger page up to there (MIO-4174).
+	markPageSizeCap(segmentsMembersCmd, 200)
+	markPageSizeCap(segmentsSearchCmd, 200)
 
 	// Search flags.
 	segmentsSearchCmd.Flags().String("conditions", "", `Condition tree as JSON: {"version":1,"groups":[...]}. Prefix with @ to read from a file (e.g. @conditions.json).`)

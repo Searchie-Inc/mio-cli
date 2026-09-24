@@ -102,11 +102,13 @@ func TestCollectionNextPage_BackendShapes(t *testing.T) {
 			// media/router.py list_files (also list_attachments, list_playlists,
 			// list_playlist_items and _hub_media_list_response for hub media /
 			// hub playlists): NO meta at all — the only pagination signal is
-			// links.next, whose page[after] is spelled with raw brackets.
+			// links.next, whose page[after] is spelled with raw brackets. Files
+			// and attachments send it on ANY full page, so it is weaker than
+			// has_more: LinkOnly says so.
 			name: "media files: links.next only, no meta",
 			body: `{"data":[{"id":"file1","type":"files","attributes":{}}],
 			        "links":{"next":"/api/teams/t/files?page[after]=file1&page[size]=1"}}`,
-			want: PageInfo{More: true, Cursor: "file1", Signalled: true, APICursors: true},
+			want: PageInfo{More: true, LinkOnly: true, Cursor: "file1", Signalled: true, APICursors: true},
 		},
 		{
 			// The same media lists on their last page: links is null.
@@ -176,6 +178,9 @@ func TestCollectionNextPage_BackendShapes(t *testing.T) {
 			}
 			if got.Signalled != tc.want.Signalled {
 				t.Errorf("NextPage().Signalled = %v, want %v — whether this envelope carries any pagination signal was misread", got.Signalled, tc.want.Signalled)
+			}
+			if got.LinkOnly != tc.want.LinkOnly {
+				t.Errorf("NextPage().LinkOnly = %v, want %v — whether \"more\" rests on links.next alone was misread", got.LinkOnly, tc.want.LinkOnly)
 			}
 			if got.APICursors != tc.want.APICursors {
 				t.Errorf("NextPage().APICursors = %v, want %v — whether this API hands out its own cursors was misread", got.APICursors, tc.want.APICursors)

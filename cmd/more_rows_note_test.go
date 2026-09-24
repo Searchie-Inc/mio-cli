@@ -86,7 +86,7 @@ func envelope(shape string, ids []string, more bool, cursor string) string {
 		return fmt.Sprintf(`{"data":%s,"meta":{"has_more":%v,"next_cursor":%s},"links":{"self":{"href":"/api/x"},"next":%s}}`, d, more, nextCursor, nextObj)
 	case "page_only": // meta.page.has_more, no cursor, no links (achievements/admin_router.py list_hub_achievements)
 		return fmt.Sprintf(`{"data":%s,"meta":{"page":{"size":2,"has_more":%v}}}`, d, more)
-	case "media_links": // NO meta; links.next (raw brackets) only when there is a next page (media/router.py list_files, list_attachments, list_playlists, list_playlist_items, _hub_media_list_response)
+	case "media_links": // NO meta; links.next (raw brackets) is the only signal: list_files / list_attachments send it on ANY full page (len == page[size], no over-fetch), list_playlists / list_playlist_items / _hub_media_list_response after a size+1 probe (media/router.py)
 		if !more {
 			return fmt.Sprintf(`{"data":%s,"links":null}`, d)
 		}
@@ -173,6 +173,7 @@ type moreRowsCase struct {
 	usesCur bool     // whether the note must carry a cursor
 	cursor  string   // the cursor the stub hands out; "" = a plain token
 	forbid  string   // text the note must NOT contain; "" = no check
+	must    string   // text the note must contain; "" = no check
 }
 
 // discussionsCursor is the shape community/routers/discussions_admin.py
@@ -186,39 +187,45 @@ func moreRowsCases() []moreRowsCase {
 	return []moreRowsCase{
 		// The commands QA hit, each in its backend's real shape (mio-backend
 		// origin/main 2dc04aab; see envelope for the handler behind each).
-		{"products list (meta.page.has_more + links.next)", "products", []string{"products", "list"}, "after", true, "", ""},
-		{"coupons list (meta.page.has_more + links.next)", "products", []string{"coupons", "list"}, "after", true, "", ""},
-		{"tags list (top-level has_more + links.next)", "tags", []string{"tags", "list"}, "after", true, "", ""},
+		{"products list (meta.page.has_more + links.next)", "products", []string{"products", "list"}, "after", true, "", "", ""},
+		{"coupons list (meta.page.has_more + links.next)", "products", []string{"coupons", "list"}, "after", true, "", "", ""},
+		{"tags list (top-level has_more + links.next)", "tags", []string{"tags", "list"}, "after", true, "", "", ""},
 		// media/router.py list_files sends NO meta: links.next is its only
 		// signal, so no has_more reader alone can see it.
-		{"media files list (links.next only, no meta)", "media_links", []string{"media", "files", "list"}, "after", true, "", ""},
-		{"media folders list (build_page_meta)", "build_page_meta", []string{"media", "folders", "list"}, "after", true, "", ""},
-		{"community discussions list (meta.next_cursor)", "discussions", []string{"community", "discussions", "list", "--hub", testHub}, "after", true, "", ""},
+		// Files and attachments send that link on ANY full page, so the
+		// note must not claim more rows exist, only that the link came.
+		{"media files list (links.next only, no meta)", "media_links", []string{"media", "files", "list"}, "after", true, "", "has more", "next-page link"},
+		{"media folders list (build_page_meta)", "build_page_meta", []string{"media", "folders", "list"}, "after", true, "", "", ""},
+		{"community discussions list (meta.next_cursor)", "discussions", []string{"community", "discussions", "list", "--hub", testHub}, "after", true, "", "", ""},
 		// The backend's real discussions cursor: the note must survive a shell.
-		{"community discussions list (<iso>|<id> cursor)", "discussions", []string{"community", "discussions", "list", "--hub", testHub}, "after", true, discussionsCursor, ""},
+		{"community discussions list (<iso>|<id> cursor)", "discussions", []string{"community", "discussions", "list", "--hub", testHub}, "after", true, discussionsCursor, "", ""},
 		// When the last row's last_activity_at is NULL the API says has_more
 		// with next_cursor null. It owns this list's cursors (a bare id reads
 		// as none, and serves page 1 again), so the note offers no row id.
-		{"community discussions list (has_more, next_cursor null)", "discussions_null_cursor", []string{"community", "discussions", "list", "--hub", testHub}, "limit", false, "", ""},
+		{"community discussions list (has_more, next_cursor null)", "discussions_null_cursor", []string{"community", "discussions", "list", "--hub", testHub}, "limit", false, "", "", ""},
 		// checkout's admin hub lists report only meta.total (this page's row
 		// count) and page by `id > page[after]`: a FULL page (--limit 2, two
 		// rows) is the only hint, and the last row's id is the cursor.
-		{"checkout payments list (meta.total only: a full page)", "admin_total", []string{"checkout", "payments", "list", "--hub", testHub, "--limit", "2"}, "after", true, "r2", ""},
+		{"checkout payments list (meta.total only: a full page)", "admin_total", []string{"checkout", "payments", "list", "--hub", testHub, "--limit", "2"}, "after", true, "r2", "", ""},
 		// achievements offerings (admin_router.list_hub_achievements) reports
 		// has_more with NO cursor and no links, yet takes page[after] = the
 		// last row's id (repository: id DESC, `AchievementHub.id < after`).
 		// The stub's second page answers only page[after]=r2, the last row.
-		{"achievements offerings list (has_more, no cursor: last row id)", "page_only", []string{"achievements", "offerings", "list", "--hub", testHub}, "after", true, "r2", ""},
+		{"achievements offerings list (has_more, no cursor: last row id)", "page_only", []string{"achievements", "offerings", "list", "--hub", testHub}, "after", true, "r2", "", ""},
 		// activity top-engaged: links.next is a link object.
-		{"activity top-engaged (links.next {href})", "activity", []string{"activity", "top-engaged", "--hub", testHub}, "after", true, "", ""},
+		{"activity top-engaged (links.next {href})", "activity", []string{"activity", "top-engaged", "--hub", testHub}, "after", true, "", "", ""},
 		// segments search pages with --page-after, carried in the POST body.
-		{"segments search (--page-after)", "discussions", []string{"segments", "search", "--conditions", `{"version":1,"groups":[]}`}, "page-after", true, "", ""},
+		{"segments search (--page-after)", "discussions", []string{"segments", "search", "--conditions", `{"version":1,"groups":[]}`}, "page-after", true, "", "", ""},
+		// segments search takes pages of up to 200 (schemas.py page.size
+		// le=200), not the usual 100: 150 can still be raised, 200 cannot.
+		{"segments search at --page-size 150 (cap 200)", "discussions", []string{"segments", "search", "--conditions", `{"version":1,"groups":[]}`, "--page-size", "150"}, "page-after", true, "", "", "(or raise --page-size)"},
+		{"segments search at --page-size 200 (its cap)", "discussions", []string{"segments", "search", "--conditions", `{"version":1,"groups":[]}`, "--page-size", "200"}, "page-after", true, "", "raise --page-size", ""},
 		// media search is top-N: has_more with no cursor, and no --after flag.
-		{"media search (top_n, --limit only)", "top_n", []string{"media", "search", "--query", "x"}, "limit", false, "", ""},
+		{"media search (top_n, --limit only)", "top_n", []string{"media", "search", "--query", "x"}, "limit", false, "", "", ""},
 		// At --limit 100 the API's page-size cap (le=100) is reached: a larger
 		// --limit is a 422, not more rows, so the note must not offer one.
-		{"media search at the page-size cap (--limit 100)", "top_n", []string{"media", "search", "--query", "x", "--limit", "100"}, "limit", false, "", "raise --limit"},
-		{"tags list at the page-size cap (--limit 100)", "tags", []string{"tags", "list", "--limit", "100"}, "after", true, "", "raise --limit"},
+		{"media search at the page-size cap (--limit 100)", "top_n", []string{"media", "search", "--query", "x", "--limit", "100"}, "limit", false, "", "raise --limit", ""},
+		{"tags list at the page-size cap (--limit 100)", "tags", []string{"tags", "list", "--limit", "100"}, "after", true, "", "raise --limit", ""},
 	}
 }
 
@@ -285,6 +292,9 @@ func TestMoreRowsNote_StderrNamesTheFlag_StdoutUnchanged(t *testing.T) {
 				}
 				if tc.forbid != "" && strings.Contains(lines[0], tc.forbid) {
 					t.Errorf("the note must not say %q here; got %q", tc.forbid, lines[0])
+				}
+				if tc.must != "" && !strings.Contains(lines[0], tc.must) {
+					t.Errorf("the note must say %q here; got %q", tc.must, lines[0])
 				}
 				if !tc.usesCur {
 					if strings.Contains(lines[0], cursor) || strings.Contains(lines[0], "fetch the next page") {
@@ -636,6 +646,10 @@ func TestMoreRowsNote_Wording(t *testing.T) {
 		markUnsignalledPaging(c, 20)
 		return c
 	}
+	capped := func(c *cobra.Command, rows int) *cobra.Command {
+		markPageSizeCap(c, rows)
+		return c
+	}
 	cases := []struct {
 		name string
 		cmd  *cobra.Command
@@ -672,7 +686,7 @@ func TestMoreRowsNote_Wording(t *testing.T) {
 			`note: the API returned 20 rows and has more; fetch the next page with --after 'a'\''b c'`},
 		// links.next is the only signal the media lists send.
 		{"links.next only (media lists)", cmdWith("limit", "after"), col(3, linkOnly),
-			"note: the API returned 3 rows and has more; fetch the next page with --after LINKCUR (or raise --limit)"},
+			"note: the API returned 3 rows and a next-page link (the next page may be empty); fetch the next page with --after LINKCUR (or raise --limit)"},
 		// A null next_cursor beside has_more (discussions, when the last row's
 		// last_activity_at is NULL): the API owns this list's cursors and gave
 		// none, so no row id is offered in its place.
@@ -687,10 +701,17 @@ func TestMoreRowsNote_Wording(t *testing.T) {
 			"note: the API returned 40 rows and has more; fetch the next page with --after CUR"},
 		{"--page-size 150 is past the usual cap", set(cmdWith("page-size", "page-after"), "page-size", "150"), col(150, withCursor),
 			"note: the API returned 150 rows and has more; fetch the next page with --page-after CUR"},
+		// A route with its own cap (the segments routes: 200).
+		{"--page-size 150 below a 200 cap", capped(set(cmdWith("page-size", "page-after"), "page-size", "150"), 200), col(150, withCursor),
+			"note: the API returned 150 rows and has more; fetch the next page with --page-after CUR (or raise --page-size)"},
+		{"--limit 200 at a 200 cap", capped(set(cmdWith("limit", "after"), "limit", "200"), 200), col(200, withCursor),
+			"note: the API returned 200 rows and has more; fetch the next page with --after CUR"},
+		{"no cursor at a 200 cap", capped(set(cmdWith("limit"), "limit", "200"), 200), col(200, noCursor),
+			"note: the API returned 200 rows and has more; the API sent no cursor for the next page and --limit is already at its cap (200), so this command cannot fetch the rest"},
 		{"no cursor at the cap (media search --limit 100)", set(cmdWith("limit"), "limit", "100"), col(100, noCursor),
-			"note: the API returned 100 rows and has more; the API sent no cursor for the next page and --limit is already at its cap (usually 100), so this command cannot fetch the rest"},
+			"note: the API returned 100 rows and has more; the API sent no cursor for the next page and --limit is already at its cap (100), so this command cannot fetch the rest"},
 		{"next_cursor null at the cap", set(cmdWith("limit", "after"), "limit", "100"), withIDs(col(3, nullCursor), "a1", "a2", "a3"),
-			"note: the API returned 3 rows and has more; the API sent no cursor for the next page and --limit is already at its cap (usually 100), so this command cannot fetch the rest"},
+			"note: the API returned 3 rows and has more; the API sent no cursor for the next page and --limit is already at its cap (100), so this command cannot fetch the rest"},
 		// A route marked as paging without any signal (checkout's admin hub
 		// lists): only a full page earns a note, and it says what it knows.
 		{"unsignalled: full default page", unsignalled(cmdWith("limit", "after")), withLastID(col(20, totalOnly), "z20"),
