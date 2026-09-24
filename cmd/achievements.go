@@ -65,8 +65,9 @@ package cmd
 //
 //	mio hubs update <hub> --settings-json '{"achievements":{"enabled":true}}'
 //
-// (`achievements` is an allowlisted settings key — see hubs_blob_keys.go; the
-// merge is read-modify-write so sibling settings survive.)
+// (`achievements` is on the API's settings allowlist, and the CLI checks its
+// sub-keys — see hubs_blob_keys.go; the merge is read-modify-write so sibling
+// settings survive.)
 //
 // JSON:API write envelope types (app/achievements/schemas.py Literals):
 // definitions self-derive "achievements" from the path; the hub-offering and

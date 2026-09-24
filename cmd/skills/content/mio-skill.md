@@ -144,8 +144,10 @@ hub-frontend host yourself.
 
 Branding / settings / meta are opaque JSONB blobs. The `--branding-json` /
 `--settings-json` / `--meta-json` flags **merge** (read-modify-write, so a partial
-edit never clobbers siblings) and **validate keys** (unknown key warns and is still
-sent; add `--strict-keys` to make it a hard error instead).
+edit never clobbers siblings) and **validate keys** (an unknown branding or meta key
+warns and is still sent — the API stores it as sent, so a typo does nothing; add
+`--strict-keys` to make it a hard error instead). An unknown top-level settings key
+is the API's to reject: a 422 naming it, exit 2, with or without `--strict-keys`.
 
 ```bash
 mio hubs update hub_abc123 \
@@ -208,12 +210,11 @@ theme key.
   **viewer's** `mio-hub-theme` cookie (default `'system'`) and their OS
   `prefers-color-scheme`. The hub's own mode is consulted for exactly one value:
   `custom`. Writing `light` or `dark` anywhere is a **no-op** — the viewer decides.
-- **There is no `settings.theme` key either.** Writing one is a silent no-op; the
+- **There is no `settings.theme` key either.** The API rejects one (422, exit 2); the
   frontend's parsed `theme.mode` is *derived* from `settings.background.type`, and
   nothing reads a raw `settings.theme`.
 - **`custom` is the one thing a hub can force**, via `settings.background.type`
-  (`background` is already on the CLI's settings-key allowlist, so this needs no
-  warning suppression). It is also the **only** mode in which `branding.background`
+  (`background` is an accepted settings key). It is also the **only** mode in which `branding.background`
   and `branding.text` do anything at all:
 
   ```bash
