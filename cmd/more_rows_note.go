@@ -12,6 +12,7 @@ package cmd
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -19,45 +20,123 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/client"
 )
 
-// moreRowsNote returns the note for a list page the API says is not the last,
-// or "" when none is due. The flag it names is the one this command actually
+// usualPageSizeCap is the most rows one page can hold on mio-backend's
+// paginated lists: infrastructure/pagination.py MAX_PAGE_SIZE = 100, and the
+// page[size] bound of every list handler but segments members (le=200). Past
+// it the API rejects the request instead of returning more, so the note offers
+// a larger --limit only below it.
+const usualPageSizeCap = 100
+
+// unsignalledPagingAnnotation marks a list command whose route pages — it
+// honours page[size] and takes page[after] = the last row's id — but whose
+// envelope says nothing about further pages. Its value is the route's default
+// page[size]. See markUnsignalledPaging.
+const unsignalledPagingAnnotation = "mio/unsignalled-paging-default-size"
+
+// markUnsignalledPaging declares that cmd's route pages without reporting
+// has_more, a cursor or a next link, and serves defaultPageSize rows when no
+// --limit is given. For such a command a FULL page is the only hint that more
+// rows may exist, so the note says so and offers the last row's id. Only mark
+// a route that pages: on a route that ignores page[after], the offered cursor
+// would fetch the same page again.
+func markUnsignalledPaging(cmd *cobra.Command, defaultPageSize int) {
+	if cmd.Annotations == nil {
+		cmd.Annotations = map[string]string{}
+	}
+	cmd.Annotations[unsignalledPagingAnnotation] = strconv.Itoa(defaultPageSize)
+}
+
+// moreRowsNote returns the note for a list page that is not the last, or ""
+// when none is due. The flag it names is the one this command actually
 // registers: --after (the shared pagination flags) or --page-after (segments
 // search) for a cursor, else --limit / --page-size when there is no cursor to
 // offer (media search is top-N and takes no page[after]: more rows come only
-// from a larger page).
+// from a larger page, up to the API's cap).
 func moreRowsNote(cmd *cobra.Command, col *client.Collection) string {
-	more, cursor := col.NextPage()
-	if !more {
+	p := col.NextPage()
+	n := len(col.Data)
+	after := registeredFlag(cmd, "after", "page-after")
+	limit := registeredFlag(cmd, "limit", "page-size")
+	requested := requestedPageSize(cmd, limit)
+
+	// A route marked with markUnsignalledPaging reports nothing either way, so
+	// a full page is the only hint (the checkout admin hub lists).
+	full := false
+	if !p.Signalled {
+		if def, ok := unsignalledDefaultPageSize(cmd); ok && after != "" && n > 0 {
+			size := def
+			if requested > 0 {
+				size = requested
+			}
+			full = n >= size
+		}
+	}
+	if !p.More && !full {
 		return ""
 	}
-	n := len(col.Data)
 	noun := "rows"
 	if n == 1 {
 		noun = "row"
 	}
 	head := fmt.Sprintf("note: the API returned %d %s and has more", n, noun)
-	after := registeredFlag(cmd, "after", "page-after")
-	limit := registeredFlag(cmd, "limit", "page-size")
-	// A list that reports has_more with no cursor at all (achievements
-	// offerings, mio-backend origin/main admin_router.list_hub_offerings) still
-	// takes page[after], and the backend's pagination contract defines it as
-	// the id of the last row of the previous page (infrastructure/pagination.py
-	// get_pagination). Every list that pages any other way sends its cursor.
-	if cursor == "" && after != "" && n > 0 {
+	if full {
+		head = fmt.Sprintf("note: the API returned %d %s, a full page, and this list does not report whether more exist", n, noun)
+	}
+	// A list with no place for its own cursor still takes page[after], and
+	// the backend's pagination contract defines it as the id of the last row
+	// of the previous page (infrastructure/pagination.py get_pagination):
+	// achievements offerings (admin_router.list_hub_achievements) reports
+	// has_more with no cursor, and the checkout admin hub lists page by
+	// `id > page[after]`. A list that DOES have a place for its cursor and
+	// leaves it null (discussions, when the last row's last_activity_at is
+	// NULL) gets no derived one: its own parser reads a bare id as no cursor
+	// and serves the first page again.
+	cursor := p.Cursor
+	if cursor == "" && !p.APICursors && after != "" && n > 0 {
 		cursor = col.Data[n-1].ID
 	}
+	// A larger page helps only below the API's cap.
+	canRaise := limit != "" && max(requested, n) < usualPageSizeCap
 	switch {
 	case cursor != "" && after != "":
 		s := fmt.Sprintf("%s; fetch the next page with --%s %s", head, after, shellQuote(cursor))
-		if limit != "" {
+		if canRaise {
 			s += fmt.Sprintf(" (or raise --%s)", limit)
 		}
 		return s
-	case limit != "":
+	case canRaise:
 		return fmt.Sprintf("%s; raise --%s to get more in one page", head, limit)
+	case limit != "":
+		return fmt.Sprintf("%s; the API sent no cursor for the next page and --%s is already at its cap (usually %d), so this command cannot fetch the rest", head, limit, usualPageSizeCap)
 	default:
 		return head + "; this command has no paging flag, and --raw shows the API's meta and links"
 	}
+}
+
+// requestedPageSize returns the page size the user asked for with the named
+// flag, or 0 when they did not set it.
+func requestedPageSize(cmd *cobra.Command, flag string) int {
+	if flag == "" || !cmd.Flags().Changed(flag) {
+		return 0
+	}
+	v, err := cmd.Flags().GetInt(flag)
+	if err != nil || v < 0 {
+		return 0
+	}
+	return v
+}
+
+// unsignalledDefaultPageSize reads markUnsignalledPaging's annotation.
+func unsignalledDefaultPageSize(cmd *cobra.Command) (int, bool) {
+	v, ok := cmd.Annotations[unsignalledPagingAnnotation]
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // shellQuote returns s as one POSIX shell word, so the note's suggestion can be

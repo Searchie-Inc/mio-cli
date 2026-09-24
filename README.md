@@ -420,7 +420,7 @@ HUB_ID=$(mio hubs list -o plain --jq '.[0].id')
 mio content list --hub "$HUB_ID"
 ```
 
-List commands return one page, usually 20 rows. When the API reports more, a one-line `note:` on stderr names the flag and cursor that fetch the next page (`--after <cursor>`; `--page-after` on `segments search`; `--limit` on `media search`, which returns no cursor); stdout stays the bare array. Both this note and the one-value-per-line `-o plain` shape land in the release after `v0.23.0` (MIO-4174).
+List commands return one page, usually 20 rows. When the API reports more (or, on `checkout orders|subscriptions|payments|webhooks list`, which report nothing, when a page comes back full), a one-line `note:` on stderr names the flag and cursor that fetch the next page (`--after <cursor>`; `--page-after` on `segments search`; `--limit` on `media search`, which returns no cursor); stdout stays the bare array. Both this note and the one-value-per-line `-o plain` shape land in the release after `v0.23.0` (MIO-4174).
 
 ---
 

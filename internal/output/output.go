@@ -253,8 +253,9 @@ func renderTable(w io.Writer, data any) error {
 
 // renderPlain prints key=value lines. For a list of objects, records are
 // separated by a blank line. Scalars are printed as-is, and a list made only of
-// scalars prints one bare value per line — so `-o plain --jq '.[].id'` gives the
-// same shape for one id as for twenty (MIO-4174). A list that mixes scalars
+// scalars prints each value bare, followed by a newline — so `-o plain --jq
+// '.[].id'` gives the same shape for one id as for twenty (MIO-4174). A string
+// is printed verbatim, so one that holds a newline spans lines. A list that mixes scalars
 // with objects or arrays keeps the record format, where a scalar reads
 // value=X.
 func renderPlain(w io.Writer, data any) error {

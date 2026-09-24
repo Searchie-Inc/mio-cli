@@ -66,58 +66,113 @@ type Collection struct {
 	RawBody []byte         `json:"-"`
 }
 
-// NextPage reports whether the API said more rows exist past this page, and
-// the page[after] cursor for the next page when the response carries one
-// (MIO-4174).
+// PageInfo is what a list response says about the rows past it (MIO-4174).
+type PageInfo struct {
+	// More is true when the API reported more rows past this page: has_more
+	// true, or — on a list that sends no has_more at all — a links.next.
+	More bool
+	// Cursor is the page[after] value the API handed out for the next page,
+	// or "" when it handed out none.
+	Cursor string
+	// Signalled is true when the envelope carries any pagination signal at
+	// all: a has_more flag, a next_cursor key or a links.next. A list whose
+	// envelope carries none (checkout's admin hub lists, meta.total only)
+	// cannot say whether a full page is the last one.
+	Signalled bool
+	// APICursors is true when the envelope has a place for the API's own
+	// cursor — a next_cursor key (even a null one) or a links.next — so a
+	// cursor must never be derived from the rows. A null next_cursor beside
+	// has_more:true means the API has more rows it cannot page to.
+	APICursors bool
+}
+
+// NextPage reads PageInfo out of a list response (MIO-4174).
 //
-// mio-backend has no single list envelope (origin/main, 2026-09-24), so this
+// mio-backend has no single list envelope (origin/main 2dc04aab), so this
 // reads every shape it emits:
 //
 //   - has_more sits at meta.page.has_more (build_page_meta, products, coupons,
-//     contacts, content, pages, hubs, checkout) or at top-level meta.has_more
-//     (tags, users, roles, api-keys, automations, segments, events, discussions,
-//     moderation, hub members, activity, media search).
+//     contacts, content, pages, hubs, achievements) or at top-level
+//     meta.has_more (tags, users, roles, api-keys, automations, segments,
+//     events, discussions, moderation, hub members, activity, media search).
+//   - the media lists (files, attachments, playlists, playlist items, hub
+//     media, hub playlists) send no meta at all: links.next is their only
+//     signal, present exactly when they have a next page.
 //   - the cursor sits at meta.page.next_cursor, at meta.next_cursor, or only as
-//     the page[after] parameter of links.next (products, coupons, tags and every
-//     other list that emits no next_cursor).
+//     the page[after] parameter of links.next (products, coupons, tags, the
+//     media lists and every other list that emits no next_cursor). links.next
+//     is a URL string, or a JSON:API link object {"href": …} (activity).
 //
-// A top-N list (media search) reports has_more with no cursor at all: more is
-// true and cursor is empty. links is not modelled on Collection, so it is read
-// from the retained RawBody.
-func (c *Collection) NextPage() (more bool, cursor string) {
+// A present has_more is authoritative; links.next decides only where no
+// has_more is sent. A top-N list (media search) reports has_more with no
+// cursor at all: More is true and Cursor is empty. links is not modelled on
+// Collection, so it is read from the retained RawBody.
+func (c *Collection) NextPage() PageInfo {
 	if c == nil {
-		return false, ""
+		return PageInfo{}
 	}
 	page, _ := c.Meta["page"].(map[string]any)
-	pageMore, _ := page["has_more"].(bool)
-	topMore, _ := c.Meta["has_more"].(bool)
-	if !pageMore && !topMore {
-		return false, ""
+	pageMore, pageHas := page["has_more"].(bool)
+	topMore, topHas := c.Meta["has_more"].(bool)
+	pageCur, pageCurKey := page["next_cursor"]
+	topCur, topCurKey := c.Meta["next_cursor"]
+	nextLink := nextLinkOf(c.RawBody)
+
+	info := PageInfo{
+		Signalled:  pageHas || topHas || pageCurKey || topCurKey || nextLink != "",
+		APICursors: pageCurKey || topCurKey || nextLink != "",
 	}
-	if cur, _ := page["next_cursor"].(string); cur != "" {
-		return true, cur
+	if pageHas || topHas {
+		info.More = pageMore || topMore
+	} else {
+		info.More = nextLink != ""
 	}
-	if cur, _ := c.Meta["next_cursor"].(string); cur != "" {
-		return true, cur
+	if !info.More {
+		return info
 	}
-	return true, afterFromNextLink(c.RawBody)
+	if cur, _ := pageCur.(string); cur != "" {
+		info.Cursor = cur
+	} else if cur, _ := topCur.(string); cur != "" {
+		info.Cursor = cur
+	} else {
+		info.Cursor = afterParam(nextLink)
+	}
+	return info
 }
 
-// afterFromNextLink returns the page[after] parameter of the envelope's
-// links.next URL, or "" when there is no next link or it carries no cursor.
-func afterFromNextLink(raw []byte) string {
+// nextLinkOf returns the envelope's links.next URL — a plain string, or the
+// href of a link object — or "" when there is none.
+func nextLinkOf(raw []byte) string {
 	if len(raw) == 0 {
 		return ""
 	}
 	var doc struct {
 		Links struct {
-			Next string `json:"next"`
+			Next json.RawMessage `json:"next"`
 		} `json:"links"`
 	}
-	if err := json.Unmarshal(raw, &doc); err != nil || doc.Links.Next == "" {
+	if err := json.Unmarshal(raw, &doc); err != nil || len(doc.Links.Next) == 0 {
 		return ""
 	}
-	u, err := url.Parse(doc.Links.Next)
+	var s string
+	if json.Unmarshal(doc.Links.Next, &s) == nil {
+		return s
+	}
+	var obj struct {
+		Href string `json:"href"`
+	}
+	if json.Unmarshal(doc.Links.Next, &obj) == nil {
+		return obj.Href
+	}
+	return ""
+}
+
+// afterParam returns the page[after] parameter of a next-page URL, or "".
+func afterParam(link string) string {
+	if link == "" {
+		return ""
+	}
+	u, err := url.Parse(link)
 	if err != nil {
 		return ""
 	}

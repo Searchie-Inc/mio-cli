@@ -191,7 +191,8 @@ func TestRender_EmptyCollectionTable(t *testing.T) {
 // "value=X" records separated by blank lines, and zero printed a blank line. A
 // capture loop that worked on a team with one row broke on a team with two.
 // The contract now: a stream or array of scalars is one bare value per line,
-// whatever the count; objects and mixed arrays keep their key=value blocks.
+// whatever the count (a value that itself holds a newline spans lines);
+// objects and mixed arrays keep their key=value blocks.
 
 // plainJQ renders the two-row sample collection in plain mode through a jq
 // program. Every case goes through the real Render entry point, so the
@@ -222,8 +223,8 @@ func TestRender_PlainScalarStream_OneBareValuePerLine(t *testing.T) {
 		// gojq emits *big.Int for an integer too large for int.
 		{"stream with a big integer", `1, 100000000000000000000`, "1\n100000000000000000000\n"},
 		// null is a scalar with an empty rendering. It keeps its own line, so a
-		// value's position in the output still matches its position in the
-		// stream (a loop pairing ids with names does not drift).
+		// null does not shift the values after it. (A string that itself holds
+		// a newline does: see TestRender_PlainScalarStream_NewlineInAValue.)
 		{"null keeps its line", `.[].id, null, "z"`, "1\n2\n\nz\n"},
 	}
 	for _, tc := range cases {
@@ -236,6 +237,33 @@ func TestRender_PlainScalarStream_OneBareValuePerLine(t *testing.T) {
 				t.Errorf("-o plain --jq %s printed a value= record for a scalar: %q", tc.jq, got)
 			}
 		})
+	}
+}
+
+// A string is printed bare and VERBATIM, exactly as a single scalar always was
+// (`-o plain --jq .content` must hand back multi-line policy text intact). So a
+// value that holds a newline spans several lines, and in a stream it shifts the
+// values after it: "one value per line" holds only for values without one
+// (ids, slugs, numbers). The docs say so, and point at -o json for the rest.
+func TestRender_PlainScalarStream_NewlineInAValue(t *testing.T) {
+	cases := []struct {
+		name, jq, want string
+	}{
+		{"single multi-line value", `"line1\nline2"`, "line1\nline2\n"},
+		{"stream with a multi-line value", `"line1\nline2", "c"`, "line1\nline2\nc\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := plainJQ(t, tc.jq); got != tc.want {
+				t.Errorf("-o plain --jq %s\n got: %q\nwant: %q (the value printed verbatim, its newline included)", tc.jq, got, tc.want)
+			}
+		})
+	}
+	// -o json is the documented way to keep such values one per line: each
+	// is one JSON string, its newline escaped.
+	got := render(t, sampleCollection(), Options{Format: FormatJSON, JQ: `"line1\nline2", "c"`})
+	if want := "[\n  \"line1\\nline2\",\n  \"c\"\n]\n"; got != want {
+		t.Errorf("-o json --jq stream\n got: %q\nwant: %q", got, want)
 	}
 }
 

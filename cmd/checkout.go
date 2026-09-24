@@ -97,6 +97,17 @@ func init() {
 	addPaginationFlags(checkoutWebhooksListCmd)
 	addPaginationFlags(checkoutAccountsListCmd)
 
+	// These four routes page (page[size] default 20, `id > page[after]`
+	// ordered by id) but answer only {"data", "meta": {"total": <rows on this
+	// page>}}: no has_more, no cursor, no next link (mio-backend origin/main
+	// checkout/router.py list_orders, list_subscriptions, list_payments,
+	// list_webhook_events). A full page is the only hint that more exist
+	// (MIO-4174). accounts list is not paged at all, so it is not marked.
+	markUnsignalledPaging(checkoutOrdersListCmd, 20)
+	markUnsignalledPaging(checkoutSubscriptionsListCmd, 20)
+	markUnsignalledPaging(checkoutPaymentsListCmd, 20)
+	markUnsignalledPaging(checkoutWebhooksListCmd, 20)
+
 	// refund flags
 	checkoutPaymentsRefundCmd.Flags().Int("amount", 0, "Amount to refund in the payment's currency minor unit (e.g. cents). Omit to refund in full.")
 	checkoutPaymentsRefundCmd.Flags().String("reason", "", "Reason for the refund (e.g. duplicate, fraudulent, requested_by_customer). (required)")
