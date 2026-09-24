@@ -149,7 +149,7 @@ Every implemented resource and its verbs.
 | `update` | _(self-update; supports `--version` and `--prefix`. macOS/Linux rerun the official release installer; Windows updates natively — Go-native download + SHA-256 verify + binary swap, no `sh`/`curl` required)_ |
 | `config` | `set` `get` `list` |
 | `api-keys` | `create` `list` `retrieve` `delete` |
-| `teams` | `create` `list` `retrieve` `update` `delete` `switch` |
+| `teams` | `create` `list` `retrieve` `update` `delete` `switch` — **`create` needs `--name` AND `--slug`** (the only two fields the API takes; a taken slug is 409, exit 2) **and a USER access token**: the API answers an API key, including the stored one, with 403 (exit 3), so pass the `access_token` from `POST /api/v1/auth/login` via `--api-key`. `update` renames only (`--name`); a slug is fixed at creation. **Version gate (MIO-3830):** `--slug` lands in the release AFTER `v0.23.0`; on `v0.23.0` and earlier `teams create` sends `subdomain` and always answers 422. `--subdomain` survives as a hidden, deprecated alias of `--slug` |
 | `teams members` | `list` `add` `remove` |
 | `users` | `me` `list` `retrieve` `update` |
 | `roles` | `create` `list` `retrieve` `update` `delete` |
