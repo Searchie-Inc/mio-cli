@@ -63,7 +63,7 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   already exist. **Legal policy CONTENT is the exception — see the next bullet.**
 - **A server-side op may build the hub in one shot (MIO-2976).** In create mode the
   CLI probes `POST …/hubs/from-template` first; if the backend has it enabled, the
-  whole hub is built in ONE transaction and the nine client-side steps never run.
+  whole hub is built in ONE transaction and the ten client-side steps never run.
   It ships **dormant**, so today every run still takes the client-side path and
   nothing above changes. Two things to know when it does turn on: re-running the
   SAME command converges (deterministic idempotency key) instead of creating a
@@ -327,12 +327,17 @@ which is exactly why this is easy to miss. Materialise the content items:
 mio content reconcile --hub hub_abc123 --playlist-id pl_abc
 ```
 
-**Pass `--playlist-id` explicitly for a hub you built by hand.** With no
-`--playlist-id` the backend reconciles the playlists the hub was *scaffolded*
-with, derived from its `HubTemplateApplication` provenance. A hub created with
-`mio hubs create` has no such row, so a bare run is **rejected with `422
-no_playlist_provenance` (exit 2)** — it does not silently do nothing, and it
-never falls back to "every playlist on the hub". Name the playlists. It is additive
+**Pass `--playlist-id` explicitly unless the server-side scaffold op built the
+hub.** With no `--playlist-id` the backend reconciles the playlists in the hub's
+`HubTemplateApplication` provenance, and **only** the server-side whole-hub op
+records that. A hub created with `mio hubs create` has no such row, and neither
+does one `mio hubs scaffold` built client-side (`--hub`, a palette or
+`--branding-json` flag, `--catalog`, a missing `--name`/`--slug`, or the op off),
+so a bare run there is **rejected with `422 no_playlist_provenance` (exit 2)** — it
+does not silently do nothing, and it never falls back to "every playlist on the
+hub". Name the playlists (`hubs scaffold -o json` reports them as
+`.playlists[].playlist_id`). `hubs scaffold` already reconciles the playlists it
+creates, and reports the result as `content_nodes`. It is additive
 and safe to re-run: it creates one container per playlist and one lesson per
 item, and leaves existing items alone. Created lessons land **unpublished**
 unless the file *and* the playlist are each already published to the hub — so run

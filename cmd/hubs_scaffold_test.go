@@ -36,7 +36,7 @@ import (
 // scaffoldStepNames is the ordered pipeline the dry-run plan must name, in order.
 var scaffoldStepNames = []string{
 	"hub", "blobs", "spaces", "onboarding", "policies",
-	"playlists", "pages", "publish", "welcome-post",
+	"playlists", "content-nodes", "pages", "publish", "welcome-post",
 }
 
 // humanScaffold pins a scaffold invocation to the PROSE surface (the plan /

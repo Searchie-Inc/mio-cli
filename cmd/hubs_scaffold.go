@@ -125,6 +125,13 @@ type scaffoldContext struct {
 	// deleted looks identical to one that just posted a fresh welcome.
 	welcomePostID, welcomePostStatus string
 
+	// contentNodes is what the content-nodes step (client path) or the backend
+	// op's own content step (op path) reported, one entry per content item
+	// (MIO-4167). contentNodesKnown is false when the run did not reconcile at
+	// all — the result reports null then, never an empty list.
+	contentNodes      []scaffoldContentNode
+	contentNodesKnown bool
+
 	// publish is the --publish intent (Task 21 registers the flag; read
 	// existence-guarded in runHubsScaffold, so it defaults false until then). When
 	// false the publish step is a skip-with-note and the hub stays private.
@@ -220,6 +227,9 @@ var scaffoldPipeline = []scaffoldStep{
 	{"onboarding", stepOnboarding},
 	{"policies", stepPolicies},
 	{"playlists", stepPlaylists},
+	// MIO-4167: content items for the playlists just built, where the backend
+	// op's own _step_content_nodes runs — after playlists, before pages.
+	{"content-nodes", stepContentNodes},
 	{"pages", stepPages},
 	{"publish", stepPublish},
 	// Renamed from "backend-gated" by MIO-2558: both things that step deferred
@@ -1847,7 +1857,7 @@ func runHubsScaffold(cmd *cobra.Command, _ []string) error {
 	// 4b. PROBE the whole-hub backend op (MIO-2976). In create mode the op builds
 	//     the entire hub in ONE server-side transaction; when it is absent (the
 	//     dormant flag, or a backend that predates it) this falls back to the
-	//     nine-step pipeline below, which stays the legacy path and the path for
+	//     ten-step pipeline below, which stays the legacy path and the path for
 	//     every invocation the op cannot express (--hub, --dry-run, the branding
 	//     overrides, --catalog). It runs AFTER the preflight on purpose: the
 	//     preflight is write-free and resolves the catalog + template both paths
@@ -2117,7 +2127,13 @@ func printScaffoldSummary(w io.Writer, sc *scaffoldContext, t *catalog.HubTempla
 //     --primary-color) without a second GET. It is the override layer, not the
 //     hub's final branding: template defaults the operator never touched are not
 //     in it, and `mio hubs retrieve <id> --jq .branding` remains the way to read
-//     the whole blob back. `{}` when nothing was overridden.
+//     the whole blob back. `{}` when nothing was overridden;
+//   - content_nodes (MIO-4167) is the content items materialised for the
+//     template's playlists, one {legacy_hash, outcome, node_id} per item in the
+//     backend's order — from the reconcile response on the client path and from
+//     the op's `content_node:` summary rows on the op path. `[]` when the template
+//     has no playlists; null when the run did not reconcile (a backend without
+//     the route, or a resume holding no playlist id) — see contentNodesResult.
 func scaffoldResult(sc *scaffoldContext, templateID string) map[string]any {
 	t := &sc.hubTmpl
 
@@ -2179,6 +2195,7 @@ func scaffoldResult(sc *scaffoldContext, templateID string) map[string]any {
 		"playlists":             playlists,
 		"policies":              policies,
 		"policy_gate":           policyGateResult(sc.policyGate),
+		"content_nodes":         contentNodesResult(sc),
 	}
 	// The catalog revision the template was sourced from — the provenance the
 	// stderr "catalog: …" line carries for a human, so a machine run can record
