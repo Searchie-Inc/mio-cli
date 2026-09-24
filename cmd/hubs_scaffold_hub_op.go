@@ -6,7 +6,7 @@ package cmd
 // Same shape as the pages op in hubs_scaffold_op.go, one level up: in CREATE
 // mode the runner PROBES POST /api/teams/{team}/hubs/from-template by simply
 // calling it — the probe IS the real POST, never a separate capability check —
-// and an absent op falls back to the nine-step client-side pipeline. Both paths
+// and an absent op falls back to the ten-step client-side pipeline. Both paths
 // produce a real hub; a missing op is never an error.
 //
 // WHAT MAKES THE ABSENCE SIGNAL DIFFERENT HERE. The pages probe treats 404 and
@@ -42,6 +42,9 @@ var hubOpRowKinds = []struct{ name, prefix, kind string }{
 	{"", "page:", "pages"},
 	{"", "playlist:", "playlists"},
 	{"", "onboarding:", "contact_attribute_definitions"},
+	// MIO-4167: _step_content_nodes' rows. Listed so the count check below
+	// covers them; recordHubOpContentNodes does the recording.
+	{"", "content_node:", "content_nodes"},
 }
 
 // hubOpRowKind returns the created_resource_ids key a row contributes to and the
@@ -313,6 +316,7 @@ func recordHubOpResult(sc *scaffoldContext, res client.HubFromTemplateResult) {
 			sc.welcomePostID, sc.welcomePostStatus = id, "created"
 		}
 	}
+	recordHubOpContentNodes(sc, res, trusted["content_nodes"])
 
 	// The homepage id the summary cannot name: rows are slug-keyed, so resolve
 	// the template's isHomepage entry to its slug and read the id back.
