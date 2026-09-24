@@ -304,7 +304,7 @@ func init() {
 	for _, cmd := range []*cobra.Command{pagesCreateCmd, pagesUpdateCmd} {
 		cmd.Flags().String("title", "", "Page title.")
 		cmd.Flags().String("slug", "", "URL slug for the page.")
-		cmd.Flags().String("type", "", "Page type, any string. The hub renders a 'sales' page without its header and navigation.")
+		cmd.Flags().String("type", "", "Page type. The hub renders a 'sales' page without its header and mobile navigation (the footer stays).")
 		cmd.Flags().String("privacy", "", "Page privacy: public, members, or private (default: members).")
 		cmd.Flags().Int("position", 0, "Zero-based display position of the page.")
 		cmd.Flags().Bool("is-home", false, "Whether this page is the hub home page (sends is_homepage).")
@@ -313,7 +313,7 @@ func init() {
 	}
 	// Only create has a default type (the API's) and a template to start from;
 	// on update an omitted --type leaves the page's type as it is.
-	pagesCreateCmd.Flags().Lookup("type").Usage = "Page type, any string (default: generic). The hub renders a 'sales' page without its header and navigation; scaffold it from the page-sales catalog template."
+	pagesCreateCmd.Flags().Lookup("type").Usage = "Page type (default: generic). The hub renders a 'sales' page without its header and mobile navigation (the footer stays); scaffold it from the page-sales catalog template."
 	addPaginationFlags(pagesListCmd)
 
 	// --if-match is required on publish; cobra enforces the requirement at parse time.

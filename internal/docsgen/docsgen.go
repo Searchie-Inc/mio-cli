@@ -100,8 +100,8 @@ var BlockNames = []string{
 //	NOT COVERED — stated so the list above is not read as a blanket guarantee:
 //	  - the catalog outside nodeKinds/settingsSchema: templates[],
 //	    pageTemplates[], sectionTypes[], nestingRules, profiles. Those feed the id
-//	    lists, the surface-declaring set and the page-template outline/complete
-//	    split; a new FIELD on them is unused rather than mis-documented.
+//	    lists, the surface-declaring set and the page-template outline/complete/
+//	    system split; a new FIELD on them is unused rather than mis-documented.
 //	  - the VALUES inside a rendered key (an enum member's spelling, a default's
 //	    type). Those flow through to the output, so the byte-comparison catches a
 //	    change; nothing asserts they are sane.
@@ -653,26 +653,59 @@ func valuesCell(spec map[string]any) string {
 	return strings.Join(parts, " · ")
 }
 
-// renderPageTemplateKinds splits the page templates into outlines and complete
-// pages by reading each recipe: a template whose tree carries no copy (no node
-// with a non-empty `value`) is an outline — every value is the author's to
-// write, and a templated section may arrive as a bare stub; any other is a
-// complete page whose sections already carry their copy. The skill used to
-// call every page template an outline, which was wrong for page-sales. The
-// block names the catalog version, because the backend an agent scaffolds
-// against may serve a different set of templates.
+// renderPageTemplateKinds splits the page templates three ways by reading each
+// recipe:
+//
+//   - a SYSTEM page has root children and none of them carries a section
+//     `template`. The hub routes these pages in code, and their root children
+//     are fixed regions, not sections: mio-hub's page-tree README ("The section
+//     contract") lists exactly these templates as its code-routed scaffolds.
+//     Copy on a system page is a region placeholder, so this test comes first.
+//   - an OUTLINE carries no copy (no node with a non-empty `value`): every
+//     value is the author's to write, and a templated section may arrive as a
+//     bare stub.
+//   - any other page is COMPLETE: finished sections with placeholder copy.
+//
+// The skill used to call every page template an outline, which was wrong for
+// page-sales. The first fix split them on copy alone, which filed
+// page-file-detail (three slot placeholders around a locked file-player) under
+// "finished sections" (blind review of #137). The block names the catalog
+// version, because the backend an agent scaffolds against may serve a
+// different set of templates.
 func renderPageTemplateKinds(version string, pages []catalog.Template) string {
-	var outlines, complete []string
+	var outlines, complete, system []string
 	for _, t := range pages {
-		if nodeCarriesCopy(t.Starter) {
+		switch {
+		case isSystemPage(t.Starter):
+			system = append(system, t.ID)
+		case nodeCarriesCopy(t.Starter):
 			complete = append(complete, t.ID)
-		} else {
+		default:
 			outlines = append(outlines, t.ID)
 		}
 	}
 	return "In catalog " + version + ", the one this binary embeds:\n\n" +
-		"Outlines — no node carries a `value`; you write every one:\n\n" + inlineList(outlines) +
-		"\nComplete — finished sections with placeholder copy; edit the values in place:\n\n" + inlineList(complete)
+		"Outlines — content pages with no copy on any node; you build and fill the sections:\n\n" + inlineList(outlines) +
+		"\nComplete — finished sections with placeholder copy; edit the values in place:\n\n" + inlineList(complete) +
+		"\nSystem pages — routed by the hub itself, with fixed regions instead of sections; fill in their values and add no sections:\n\n" + inlineList(system)
+}
+
+// isSystemPage reports whether a page starter has root children and none of
+// them carries a section `template` (a non-empty string). A root with no
+// children at all (page-generic) is a blank content page, not a system page.
+func isSystemPage(root map[string]any) bool {
+	kids, _ := root["children"].([]any)
+	if len(kids) == 0 {
+		return false
+	}
+	for _, k := range kids {
+		if child, ok := k.(map[string]any); ok {
+			if tpl, _ := child["template"].(string); tpl != "" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // nodeCarriesCopy reports whether node or any descendant has a `value` an
