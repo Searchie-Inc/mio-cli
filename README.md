@@ -330,8 +330,10 @@ mio products create --name "Pro Plan" --description "Full access"
 mio products prices list <product-id>
 # --amount, --currency and --type are required; --interval AND --interval-count are
 # required when --type=recurring. The label flag is --name (there is no --nickname).
+# --trial-period-days (recurring prices; keep it <=730, Stripe Checkout's maximum, which the
+# API does not check) is fixed after create, like the billing fields.
 mio products prices create <product-id> --amount 4900 --currency usd \
-  --type recurring --interval month --interval-count 1 --name "Monthly"
+  --type recurring --interval month --interval-count 1 --name "Monthly" --trial-period-days 7
 mio products prices create <product-id> --amount 19900 --currency usd --type one_time
 
 # Segments — preview who matches a condition tree (does not save)

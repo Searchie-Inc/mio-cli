@@ -292,9 +292,22 @@ and --interval-count are also required.
 
 Allowed values for --currency: usd, cad, gbp, eur, aud
 Allowed values for --type:     one_time, recurring
-Allowed values for --interval: month, year, week, day (required when --type=recurring)`,
+Allowed values for --interval: month, year, week, day (required when --type=recurring)
+
+--trial-period-days sets a free trial in days (the API accepts 0 to
+2147483647; 0 means no trial). Keep it at 730 or less: Stripe documents a
+730-day maximum for a Checkout free trial, the API does not check it, and
+checkout hands the stored value to Stripe unchanged. Checkout applies it
+only to a recurring price: the API also stores it on a one_time price, where
+it has no effect. Omit the flag for no trial.
+
+FIXED AFTER CREATE: amount, currency, type, interval, interval_count and
+trial_period_days cannot be changed by 'prices update' (the API rejects them).
+To change one, create a new price and deactivate the old one with
+'prices update <product_id> <price_id> --is-active=false'.`,
 	Example: `  mio products prices create prod_abc123 --amount 4999 --currency usd --type one_time
-  mio products prices create prod_abc123 --amount 999 --currency usd --type recurring --interval month --interval-count 1`,
+  mio products prices create prod_abc123 --amount 999 --currency usd --type recurring --interval month --interval-count 1
+  mio products prices create prod_abc123 --amount 2250 --currency usd --type recurring --interval month --interval-count 1 --trial-period-days 7`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, teamID, err := pricesContext(cmd)
@@ -323,6 +336,12 @@ Allowed values for --interval: month, year, week, day (required when --type=recu
 		setStringFlag(cmd, attrs, "type")
 		setStringFlag(cmd, attrs, "interval")
 		setIntFlag(cmd, attrs, "interval-count")
+		// Sent only when given (Changed), so 0 reaches the API as 0 and an
+		// omitted flag leaves the backend default (null, no trial). No bound or
+		// type rule here: the API owns both (ge=0, le=INT32_MAX; no type rule).
+		// Stripe's 730-day Checkout maximum is documented in the help, not
+		// enforced: it is Stripe's rule, not the API's.
+		setIntFlag(cmd, attrs, "trial-period-days")
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
 		setBoolFlag(cmd, attrs, "is-active")
@@ -376,8 +395,10 @@ var productsPricesUpdateCmd = &cobra.Command{
 	Short: "Update a price by id.",
 	Long: `Partially update a price. Only the flags you supply are changed (PATCH semantics).
 
-Billing fields (amount, currency, type, interval, interval_count) are IMMUTABLE
-after creation. To change them, create a new price and deactivate the old one.
+Billing fields (amount, currency, type, interval, interval_count,
+trial_period_days) are IMMUTABLE after creation. To change them, create a new
+price ('prices create', which takes --trial-period-days) and deactivate the old
+one.
 
 Mutable fields: --name, --description, --is-active.`,
 	Example: `  mio products prices update prod_abc123 price_xyz --name "Monthly Plan"
@@ -449,6 +470,7 @@ func init() {
 	productsPricesCreateCmd.Flags().String("type", "", "Price type: one_time or recurring. Required.")
 	productsPricesCreateCmd.Flags().String("interval", "", "Billing interval: month, year, week, or day. Required when --type=recurring.")
 	productsPricesCreateCmd.Flags().Int("interval-count", 0, "Number of intervals between billings (≥1). Required when --type=recurring.")
+	productsPricesCreateCmd.Flags().Int("trial-period-days", 0, "Free-trial length in days (API accepts 0-2147483647, 0 = no trial; keep it <=730, Stripe Checkout's maximum, which the API does not check). Applied at checkout to recurring prices only. Omit for no trial. Fixed after create.")
 	productsPricesCreateCmd.Flags().String("name", "", "Human-readable price label (max 100 chars).")
 	productsPricesCreateCmd.Flags().String("description", "", "Price description (max 500 chars).")
 	productsPricesCreateCmd.Flags().Bool("is-active", true, "Whether the price is active.")
