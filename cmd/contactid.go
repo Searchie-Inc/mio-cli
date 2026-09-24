@@ -7,8 +7,9 @@ package cmd
 //   - the TEAM-contact id: routes bind {team_contact_id} (contacts,
 //     contact-attributes, tags). `mio contacts` surfaces it as .id.
 //   - the GLOBAL contact id: routes bind {contact_id} (hub-memberships,
-//     activity, community members, email enrollments). `mio contacts`
-//     surfaces it as .attributes.contact_id.
+//     activity, community members, email enrollments). The API sends it as
+//     the contact_id attribute, which `mio contacts` flattens to a top-level
+//     .contact_id (.data.attributes.contact_id only under --raw).
 //
 // Piping the .id from `mio contacts` into a member-shaped verb 404s for a
 // perfectly live contact, because the verb looked up a GLOBAL contact id and
@@ -17,9 +18,11 @@ package cmd
 import "github.com/Searchie-Inc/mio-cli/internal/errs"
 
 // globalContactIDHint is the actionable redirect appended to a not-found error
-// from a member-shaped verb. It is deliberately worded to name both the field
-// to use (.attributes.contact_id) and the field NOT to use (.id).
-const globalContactIDHint = "this verb needs the GLOBAL contact id: use the .attributes.contact_id from `mio contacts` (NOT its .id, which is the team-contact id)"
+// from a member-shaped verb. It names the field NOT to use (.id) and hands over
+// a capture that works as written (MIO-3413: it used to name
+// .attributes.contact_id, which yields null in every output mode, and a bare
+// --jq JSON-quotes the string, so -o plain is part of the capture).
+const globalContactIDHint = "this verb needs the GLOBAL contact id, NOT the .id from `mio contacts` (that is the team-contact id): capture it with `mio contacts retrieve <team-contact-id> -o plain --jq .contact_id`"
 
 // hintGlobalContactID appends globalContactIDHint to a not-found (exit 4) error
 // so the user is redirected to the correct id namespace. It keys off the exit

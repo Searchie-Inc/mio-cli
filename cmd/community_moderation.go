@@ -651,8 +651,9 @@ var communityMembersSoftBanCmd = &cobra.Command{
 8601) to set the expiry; the backend defaults to now + 7 days when omitted.
 --reason is a canonical ban-reason code; --notes records an admin note.
 
-<contact_id> is the GLOBAL contact id (the .attributes.contact_id from
-'mio contacts', NOT its .id).`,
+<contact_id> is the GLOBAL contact id, NOT the .id from 'mio contacts'. Capture
+it with:
+  CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 	Example: `  mio community members soft-ban contact_xyz --hub hub_abc123 --yes
   mio community members soft-ban contact_xyz --hub hub_abc123 --reason spamming --until 2026-08-01T00:00:00Z --yes`,
 	Args: cobra.ExactArgs(1),
