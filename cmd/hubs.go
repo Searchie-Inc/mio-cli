@@ -851,6 +851,20 @@ type blobPatches struct {
 	// Strict selects strict blob-key validation (an unknown key errors instead of
 	// warning). Only the INCOMING patch keys are inspected, never the merged blob.
 	Strict bool
+
+	// Current, when set, is the hub as the caller ALREADY read it: the merge is
+	// done onto it and no retrieve is issued. The scaffold's fill-gaps path
+	// (MIO-4166) decides what is missing from one read and must merge onto that
+	// same read — a second GET could see a key the fill decided was absent.
+	Current *client.Resource
+
+	// NavHrefsChecked says the caller has already run the hub-scoped href check
+	// over every navigation item it CONTRIBUTES, so applyHubBlobs skips it. The
+	// scaffold's fill-gaps path (MIO-4166) sets it: the rest of its Navigation
+	// is the hub's own stored menu, sent back unchanged only because the API
+	// stores navigation whole, and the API already accepted it — including
+	// root-relative hrefs the CLI's stricter check would reject.
+	NavHrefsChecked bool
 }
 
 // applyHubBlobs performs the hub read-modify-write: it validates the incoming
@@ -872,7 +886,7 @@ func applyHubBlobs(ctx context.Context, cl *client.Client, teamID, hubID, hubSlu
 	// Hub-scoped href check for the known-slug case: the final slug is authoritative
 	// (from --slug), so validate now (no retrieve needed for the check, MIO-2270).
 	// The unknown-slug case is validated against the live slug after the retrieve.
-	if navSet && p.SlugKnown {
+	if navSet && p.SlugKnown && !p.NavHrefsChecked {
 		if err := validateNavigationHrefs(p.Navigation, hubSlug); err != nil {
 			return nil, err
 		}
@@ -906,15 +920,18 @@ func applyHubBlobs(ctx context.Context, cl *client.Client, teamID, hubID, hubSlu
 
 	rmw := p.Branding != nil || p.Settings != nil || p.Meta != nil ||
 		p.Logo != nil || p.Favicon != nil || p.Registration != nil || len(p.Unset) > 0
-	navNeedsRetrieve := navSet && !p.SlugKnown
+	navNeedsRetrieve := navSet && !p.SlugKnown && !p.NavHrefsChecked
 
 	// Retrieve the hub when we need its current whole-blob fields (RMW) or its slug
 	// (to validate hub-scoped navigation hrefs when --slug is NOT also changing) —
 	// one GET serves both.
 	if rmw || navNeedsRetrieve {
-		cur, err := cl.Retrieve(ctx, hubsPath(teamID, hubID))
-		if err != nil {
-			return nil, err
+		cur := p.Current
+		if cur == nil {
+			var err error
+			if cur, err = cl.Retrieve(ctx, hubsPath(teamID, hubID)); err != nil {
+				return nil, err
+			}
 		}
 		// Validate hub-relative navigation hrefs against the hub's current slug
 		// before the PATCH, so a bad link fails with ExitUsage and no write happens
@@ -1314,13 +1331,17 @@ the fields mislead in ways worth knowing before you rely on them:
             persisted (MIO-2523). So non-null proves an edit happened; null
             does not prove one did not.
 
-In practice: READ THE CONTENT AND LOOK AT IT. That is the only reliable check
-before ` + "`hubs scaffold --hub`" + ` (resume), which sends content:null for any policy
-its template declares no text for and reverts that document to the platform
-default (MIO-2818). For a tos that was saved with --require-acceptance, the
-revert also bumps the version and re-prompts every member who had accepted;
-for anything else the text is replaced silently, with no version change to
-notice afterwards.
+In practice: READ THE CONTENT AND LOOK AT IT. (` + "`hubs scaffold --hub`" + ` does not
+rely on this read: it reads the RAW stored settings.policies off the hub, where
+an unconfigured document has no content, and keeps any text the hub has
+(MIO-2818). Only ` + "`--reapply-template`" + ` still resets a policy its template
+declares no text for to the platform default. When the template's tos requires
+acceptance, that reset moves the version to "default-v1" and re-prompts every
+member who had accepted ONLY if this read showed another version first — one
+set by saving custom text with --require-acceptance, and kept by any later save
+or reset without the flag. At "default-v1" nobody who had accepted is asked
+again — but a member who never accepted is prompted whenever the gate is on,
+whatever the version.)
 
 The hub identifier may be given positionally; omit it to use the ambient hub
 (--hub, or current_hub in config).

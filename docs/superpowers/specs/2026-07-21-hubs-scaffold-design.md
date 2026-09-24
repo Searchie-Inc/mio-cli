@@ -47,10 +47,10 @@ Each step declares a **lookup key** and does *pre-check → skip-or-create*, but
 | Step | Idempotency key | Re-run behavior |
 |---|---|---|
 | Hub (1) | none on create; `--hub` in resume mode | Create mode re-run **would 422 on the duplicate slug** → so on any failure we print the created hub id + the exact `--hub <id>` resume command, and resume mode skips creation. |
-| Blobs (2) | whole-hub PATCH (naturally idempotent) | Safe to re-apply. |
+| Blobs (2) | whole-hub PATCH (naturally idempotent) | Safe to re-apply. **Superseded by MIO-4166:** re-applying overwrote the hub's own palette/menu/settings, so a `--hub` run now fills gaps only (`--reapply-template` opts back in). |
 | Spaces (3) | `slug` (list spaces, skip if slug exists) | Skip-if-exists. |
 | Onboarding defs (4) | attribute `slug` (list defs, skip if exists); hub-config by def id | Skip-if-exists. |
-| Policies (5) | whole-hub policies (idempotent) | Safe to re-apply. |
+| Policies (5) | whole-hub policies (idempotent) | Safe to re-apply. **Superseded by MIO-2818:** re-applying reset hand-written text to the platform default, so a `--hub` run writes only policies the hub has no text for and keeps a set gate (`--reapply-template` opts back in). |
 | Playlists (6) | **template playlist key stored in the playlist's `meta`/title convention** — pre-list hub playlists and match; if unmatched, create | Documented: playlists have no server slug, so we match by a scaffold-written marker (see Open question O1). |
 | Homepage (7) | page `slug`; tree via `draft_version` | If the page exists, reuse its id + current `draft_version` for `tree set` (not a blind `--if-match 0`). |
 
