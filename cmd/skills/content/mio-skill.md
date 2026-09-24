@@ -118,8 +118,10 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   the hub has already set — on or off — alone (an unset gate is filled).
   **`--reapply-template` is the exception:** its policy write always sends `content`, and
   the `community` template carries none — so it **reverts that hub's ToS and Privacy text
-  to the backend default**, and because the ToS is acceptance-gated it also bumps the
-  version, **re-prompting every member who had already accepted**. Check BEFORE a re-apply with
+  to the backend default**. For a ToS saved WITH `--require-acceptance` that also moves the
+  version back to `default-v1`, **re-prompting every member who had accepted it** (the
+  re-apply turns the gate on, so the prompt shows); anything else is replaced silently, with
+  no version change to notice. Check BEFORE a re-apply with
   `mio hubs policies get "$HUB_ID"` — but read the **content**, not the version:
   the backend versions only a ToS saved WITH `--require-acceptance` and projects
   everything else as `default-v1`, so custom text routinely reads as the default.
