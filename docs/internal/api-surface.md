@@ -83,10 +83,10 @@ plain JSON.
 - `delete` → DELETE `/api/teams/{team_id}/api-keys/{id}`  (revoke)
 
 ## teams  (`cmd/teams.go`)
-- `create`   POST `/api/teams`
+- `create`   POST `/api/teams` {name, slug} — both required; USER (JWT) session only, an API key is 403
 - `list`     GET `/api/teams`
 - `retrieve` GET `/api/teams/{id}`
-- `update`   PATCH `/api/teams/{id}`
+- `update`   PATCH `/api/teams/{id}` {name} — the only updatable field
 - `delete`   DELETE `/api/teams/{id}`
 - `switch`   POST `/api/teams/{id}/switch`
 - `members list`   GET `/api/teams/{id}/members`
