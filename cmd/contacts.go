@@ -44,8 +44,9 @@ TWO ID NAMESPACES — this matters when piping ids between commands:
   .id                     the TEAM-contact id. Use it with 'contacts',
                           'contact-attributes' and 'tags' verbs.
   .contact_id             the GLOBAL contact id (the API's contact_id
-                          attribute, flattened to the top level; each
-                          verb's --help gives its --raw path). Use it
+                          attribute, flattened to the top level; the
+                          list, create and retrieve pages give its
+                          --raw path). Use it
                           with 'hub-memberships', 'activity', 'community members',
                           'email enrollments' and 'access-rules overrides' verbs.
 

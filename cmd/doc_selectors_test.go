@@ -342,14 +342,14 @@ func attributesSelectorProblem(t *testing.T, sel docexamples.Selector, about sel
 		sel.Path, modes, on, leaf, leaf, leaf)
 }
 
-// commandHelpTexts returns each command's own help text — Long, Example and
+// commandHelpTexts returns each command's own help text — Short, Long, Example and
 // the usage of every flag it defines — with the commands that text is about:
 // the command itself, or for a group every runnable command beneath it.
 func commandHelpTexts(root *cobra.Command) map[*cobra.Command][]string {
 	out := map[*cobra.Command][]string{}
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
-		texts := []string{c.Long, c.Example}
+		texts := []string{c.Short, c.Long, c.Example}
 		c.NonInheritedFlags().VisitAll(func(f *pflag.Flag) { texts = append(texts, f.Usage) })
 		out[c] = texts
 		for _, sub := range c.Commands() {
@@ -519,21 +519,21 @@ func TestDocSelectors_ProbeTellsBrokenFromWorking(t *testing.T) {
 
 	// The per-page pass, on a tree built here: a group whose page gives a
 	// one-resource --raw path, over a paged list verb and a retrieve verb. The
-	// path is wrong for the group's page and for a flag of the list verb, and
-	// right on the retrieve verb's page.
+	// path is wrong for the group's page and for the list verb's Short and flag,
+	// and right on the retrieve verb's page.
 	const onePath = "The id is .data.attributes.thing_id under --raw."
 	noop := func(*cobra.Command, []string) error { return nil }
 	fakeRoot := &cobra.Command{Use: "mio"}
 	group := &cobra.Command{Use: "things", Long: onePath}
-	list := &cobra.Command{Use: "list", RunE: noop}
+	list := &cobra.Command{Use: "list", Short: onePath, RunE: noop}
 	addPaginationFlags(list)
 	list.Flags().String("probe", "", onePath)
 	get := &cobra.Command{Use: "retrieve", RunE: noop, Long: onePath}
 	group.AddCommand(list, get)
 	fakeRoot.AddCommand(group)
 	problems, probed := helpPageProblems(t, fakeRoot)
-	if probed != 3 {
-		t.Errorf("the per-page pass read %d paths in the probe tree, want 3 (group page, list flag, retrieve page)", probed)
+	if probed != 4 {
+		t.Errorf("the per-page pass read %d paths in the probe tree, want 4 (group page, list Short and flag, retrieve page)", probed)
 	}
 	var onGroup, onList, onGet bool
 	for _, p := range problems {
