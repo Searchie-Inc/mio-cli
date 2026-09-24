@@ -43,24 +43,63 @@ func claudeSkillPath(home string) string {
 	return filepath.Join(home, ".claude", "skills", skillDirName, skillFileName)
 }
 
-// isolateSkillHome points both targets at a temp dir so nothing touches the
-// developer's real ~/.claude or $CODEX_HOME.
+// isolateSkillHome sandboxes a skill test and returns its HOME. See
+// isolateSkillSandbox.
 func isolateSkillHome(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	home, _ := isolateSkillSandbox(t)
 	return home
 }
 
-func stubRefreshExec(t *testing.T, fn func(bin, target string) error) *[][2]string {
+// isolateSkillSandbox moves EVERY location a skill can be read from or written
+// to into temp dirs: HOME and USERPROFILE (the user scope, and where
+// os.UserHomeDir looks on each OS), CODEX_HOME (the Codex user scope), and
+// XDG_CONFIG_HOME, and it changes the working directory to an empty temp
+// project dir — the project scope is ./.claude and ./.codex relative to it
+// (MIO-4178). It returns the home and the project dir, symlinks resolved so a
+// path a test builds compares equal to one the code under test reports.
+// TestMain's skillPathResolved hook panics on any skill path outside the temp
+// root, so a test that skips this fails instead of touching a real skill.
+func isolateSkillSandbox(t *testing.T) (home, project string) {
 	t.Helper()
-	calls := &[][2]string{}
+	home = resolvedTempDir(t)
+	project = resolvedTempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("XDG_CONFIG_HOME", resolvedTempDir(t))
+	t.Chdir(project)
+	return home, project
+}
+
+func resolvedTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = r
+	}
+	return dir
+}
+
+// projectSkillPath is where `mio skills install --project --target <target>`
+// writes, for a project rooted at dir.
+func projectSkillPath(dir, target string) string {
+	return filepath.Join(dir, "."+target, "skills", skillDirName, skillFileName)
+}
+
+type refreshCall struct {
+	bin string
+	loc skillLocation
+}
+
+func stubRefreshExec(t *testing.T, fn func(bin string, loc skillLocation) error) *[]refreshCall {
+	t.Helper()
+	calls := &[]refreshCall{}
 	old := skillRefreshExec
 	t.Cleanup(func() { skillRefreshExec = old })
-	skillRefreshExec = func(bin, target string) error {
-		*calls = append(*calls, [2]string{bin, target})
-		return fn(bin, target)
+	skillRefreshExec = func(bin string, loc skillLocation) error {
+		*calls = append(*calls, refreshCall{bin, loc})
+		return fn(bin, loc)
 	}
 	return calls
 }
@@ -73,8 +112,8 @@ func TestRefreshManagedSkills_DelegatesToTheNewBinary(t *testing.T) {
 	before := seedManagedSkill(t, path, "0.12.1")
 
 	const newBin = "/opt/mio/bin/mio"
-	calls := stubRefreshExec(t, func(_, target string) error {
-		if target != "claude" {
+	calls := stubRefreshExec(t, func(_ string, loc skillLocation) error {
+		if loc.target != "claude" || loc.project {
 			return nil
 		}
 		// Stand in for the new binary writing its own content.
@@ -83,11 +122,11 @@ func TestRefreshManagedSkills_DelegatesToTheNewBinary(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	refreshManagedSkills(&out, newBin)
+	refreshManagedSkills(&out, &out, newBin)
 
 	found := false
 	for _, c := range *calls {
-		if c[0] == newBin && c[1] == "claude" {
+		if c.bin == newBin && c.loc.target == "claude" && !c.loc.project {
 			found = true
 		}
 	}
@@ -149,13 +188,13 @@ func TestRefreshManagedSkills_NeverTouchesAUserOwnedFile(t *testing.T) {
 			path := claudeSkillPath(home)
 			before := tc.seed(t, path)
 
-			calls := stubRefreshExec(t, func(_, _ string) error {
+			calls := stubRefreshExec(t, func(_ string, _ skillLocation) error {
 				t.Errorf("the new binary must NOT be invoked for a user-owned file (MIO-2875)")
 				return nil
 			})
 
 			var out bytes.Buffer
-			refreshManagedSkills(&out, "/opt/mio/bin/mio")
+			refreshManagedSkills(&out, &out, "/opt/mio/bin/mio")
 
 			after, err := os.ReadFile(path)
 			if err != nil {
@@ -181,15 +220,15 @@ func TestRefreshManagedSkills_AnnouncesThePathOutsidePrefix(t *testing.T) {
 	path := claudeSkillPath(home)
 	seedManagedSkill(t, path, "0.12.1")
 
-	stubRefreshExec(t, func(_, target string) error {
-		if target == "claude" {
+	stubRefreshExec(t, func(_ string, loc skillLocation) error {
+		if loc.target == "claude" && !loc.project {
 			return writeSkillFile(path, renderSkill("9.9.9"))
 		}
 		return nil
 	})
 
 	var out bytes.Buffer
-	refreshManagedSkills(&out, "/opt/mio/bin/mio")
+	refreshManagedSkills(&out, &out, "/opt/mio/bin/mio")
 
 	if !strings.Contains(out.String(), path) {
 		t.Errorf("update must name the skill path it wrote — it is outside --prefix (MIO-2875); got: %q", out.String())
@@ -209,7 +248,7 @@ func TestRefreshManagedSkills_ReportsWhenItCannotRefresh(t *testing.T) {
 		before := seedManagedSkill(t, path, "0.12.1")
 
 		var out bytes.Buffer
-		refreshManagedSkills(&out, "") // updater could not report a binary
+		refreshManagedSkills(&out, &out, "") // updater could not report a binary
 
 		after, _ := os.ReadFile(path)
 		if string(after) != before {
@@ -226,10 +265,10 @@ func TestRefreshManagedSkills_ReportsWhenItCannotRefresh(t *testing.T) {
 		home := isolateSkillHome(t)
 		path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
 		seedManagedSkill(t, path, "0.12.1")
-		stubRefreshExec(t, func(_, _ string) error { return errors.New("exec boom") })
+		stubRefreshExec(t, func(_ string, _ skillLocation) error { return errors.New("exec boom") })
 
 		var out bytes.Buffer
-		refreshManagedSkills(&out, "/opt/mio/bin/mio")
+		refreshManagedSkills(&out, &out, "/opt/mio/bin/mio")
 
 		if !strings.Contains(out.String(), "Could not refresh") {
 			t.Errorf("a failed handoff must be reported; got: %q", out.String())
@@ -269,28 +308,55 @@ func TestSkillRefreshExec_RealBinaryArgv(t *testing.T) {
 	}
 	requireChildOnFileKeyring(t, bin)
 
-	home := isolateSkillHome(t)
+	// Both scopes (MIO-4178): the project handoff must carry --project, or the
+	// child rewrites the user copy (already fresh) and this one stays at 0.0.1.
+	home, project := isolateSkillSandbox(t)
 	claude := claudeSkillPath(home)
 	codex := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
-	seedManagedSkill(t, claude, "0.0.1")
-	seedManagedSkill(t, codex, "0.0.1")
+	projClaude := projectSkillPath(project, "claude")
+	projCodex := projectSkillPath(project, "codex")
+	for _, p := range []string{claude, codex, projClaude, projCodex} {
+		seedManagedSkill(t, p, "0.0.1")
+	}
 
 	var out bytes.Buffer
-	refreshManagedSkills(&out, bin) // real exec, no stub
+	refreshManagedSkills(&out, &out, bin) // real exec, no stub
 
-	for label, p := range map[string]string{"claude": claude, "codex": codex} {
+	all := map[string]string{"claude": claude, "codex": codex, "claude (project)": projClaude, "codex (project)": projCodex}
+	for label, p := range all {
 		data, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatalf("read %s skill: %v", label, err)
 		}
 		got, ok := skillFileVersion(string(data))
 		if !ok || got != "9.9.9" {
-			t.Errorf("%s skill should have been rewritten by the new binary to 9.9.9, got %q (ok=%v) — the handoff argv is wrong",
-				label, got, ok)
+			t.Errorf("%s skill at %s should have been rewritten by the new binary to 9.9.9, got %q (ok=%v) — the handoff argv is wrong",
+				label, p, got, ok)
+		}
+		if !strings.Contains(out.String(), p) {
+			t.Errorf("the refreshed %s path %s should be named; got: %q", label, p, out.String())
 		}
 	}
-	if !strings.Contains(out.String(), claude) || !strings.Contains(out.String(), codex) {
-		t.Errorf("both refreshed paths should be named; got: %q", out.String())
+
+	// The project handoff must also run IN the project root it classified, not
+	// wherever the child happens to inherit a cwd from: resolve in the project,
+	// move the cwd away, then hand off.
+	for _, p := range []string{projClaude, projCodex} {
+		seedManagedSkill(t, p, "0.0.1")
+	}
+	locs := refreshLocations()
+	t.Chdir(resolvedTempDir(t))
+	for _, loc := range locs {
+		if !loc.project {
+			continue
+		}
+		if err := skillRefreshExec(bin, loc); err != nil {
+			t.Errorf("handoff for %+v: %v", loc, err)
+		}
+		if got, _ := skillFileVersion(readFile(t, loc.path)); got != "9.9.9" {
+			t.Errorf("the %s project handoff did not rewrite %s (still %q) — the child was not started in the project root %s",
+				loc.target, loc.path, got, loc.root)
+		}
 	}
 }
 
@@ -372,10 +438,10 @@ func TestRefreshManagedSkills_AlreadyCurrentIsQuietButNotAlarming(t *testing.T) 
 	seedManagedSkill(t, path, "0.12.1")
 
 	// Child succeeds and changes nothing.
-	stubRefreshExec(t, func(_, _ string) error { return nil })
+	stubRefreshExec(t, func(_ string, _ skillLocation) error { return nil })
 
 	var out bytes.Buffer
-	refreshManagedSkills(&out, "/opt/mio/bin/mio")
+	refreshManagedSkills(&out, &out, "/opt/mio/bin/mio")
 
 	if strings.Contains(out.String(), "Refreshed") {
 		t.Errorf("must not claim a refresh when the file did not change; got: %q", out.String())
@@ -397,10 +463,10 @@ func TestRefreshManagedSkills_ReportsHandEditedAlongsideAHealthyTarget(t *testin
 		t.Fatalf("seed edited: %v", err)
 	}
 
-	stubRefreshExec(t, func(_, _ string) error { return nil })
+	stubRefreshExec(t, func(_ string, _ skillLocation) error { return nil })
 
 	var out bytes.Buffer
-	refreshManagedSkills(&out, "/opt/mio/bin/mio")
+	refreshManagedSkills(&out, &out, "/opt/mio/bin/mio")
 
 	// Presence is not enough — the remediation must be USABLE. `mio skills
 	// install --force` defaults to --target claude, so a bare suggestion printed
@@ -441,7 +507,7 @@ func TestRefreshManagedSkills_ReportsAnUnreadableSkill(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
 
 	var out bytes.Buffer
-	refreshManagedSkills(&out, "/opt/mio/bin/mio")
+	refreshManagedSkills(&out, &out, "/opt/mio/bin/mio")
 
 	if !strings.Contains(out.String(), "Could not read") {
 		t.Errorf("an unreadable skill must be reported, not silently skipped; got: %q", out.String())
@@ -478,11 +544,11 @@ func TestRefreshManagedSkills_ReportsAFailedReadBack(t *testing.T) {
 	// Codex, so a hardcoded --target claude cannot satisfy the assertion.
 	path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
 	seedManagedSkill(t, path, "0.12.1")
-	stubRefreshExec(t, func(_, _ string) error { return os.Chmod(path, 0o000) })
+	stubRefreshExec(t, func(_ string, _ skillLocation) error { return os.Chmod(path, 0o000) })
 	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
 
 	var out bytes.Buffer
-	refreshManagedSkills(&out, "/opt/mio/bin/mio")
+	refreshManagedSkills(&out, &out, "/opt/mio/bin/mio")
 
 	if strings.TrimSpace(out.String()) == "" {
 		t.Fatal("a failed read-back printed nothing — README and llms.txt promise a failure always prints")
