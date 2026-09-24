@@ -47,10 +47,10 @@ mio api-keys list — list API keys for the current team
 mio api-keys retrieve — retrieve a single API key by id
 mio api-keys delete — revoke an API key by id
 
-mio teams create — create a new team
+mio teams create — create a new team: --name and --slug are BOTH required (the only two fields the API takes; slug unique, a taken one is 409/exit 2). The API creates a team only for a USER access token and answers an API key (the stored one included) with 403/exit 3 — pass the access_token from POST /api/v1/auth/login via --api-key. --subdomain is a hidden, deprecated alias of --slug (MIO-3830; v0.23.0 and earlier sent no `slug`, plus `subdomain` when --subdomain was passed, so they always 422'd)
 mio teams list — list teams the authenticated user belongs to
 mio teams retrieve — retrieve a team by id
-mio teams update — update team attributes
+mio teams update — rename a team (--name is the only field; a slug is fixed at creation)
 mio teams delete — delete a team
 mio teams switch — server-side team switch AND updates local CLI context (writes team to config, clears hub)
 mio teams members list — list members of a team
