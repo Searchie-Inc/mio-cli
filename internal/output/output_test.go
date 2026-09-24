@@ -183,3 +183,120 @@ func TestRender_EmptyCollectionTable(t *testing.T) {
 		t.Errorf("empty table = %q, want a no-results notice", got)
 	}
 }
+
+// ---- MIO-4174: -o plain over a --jq stream ----------------------------------
+//
+// Before MIO-4174 the SHAPE of plain output depended on how many values the
+// filter produced: one scalar printed bare, two or more printed as
+// "value=X" records separated by blank lines, and zero printed a blank line. A
+// capture loop that worked on a team with one row broke on a team with two.
+// The contract now: a stream or array of scalars is one bare value per line,
+// whatever the count; objects and mixed arrays keep their key=value blocks.
+
+// plainJQ renders the two-row sample collection in plain mode through a jq
+// program. Every case goes through the real Render entry point, so the
+// stream-collapsing in the jq step and the plain formatter are both exercised.
+func plainJQ(t *testing.T, program string) string {
+	t.Helper()
+	return render(t, sampleCollection(), Options{Format: FormatPlain, JQ: program})
+}
+
+func TestRender_PlainScalarStream_OneBareValuePerLine(t *testing.T) {
+	cases := []struct {
+		name, jq, want string
+	}{
+		// The reported case: a stream of 2+ strings.
+		{"stream of two strings", `.[].name`, "A\nB\n"},
+		// Same values as an explicit array: identical output, because a jq
+		// stream of 2+ and a single array result reach the formatter as the
+		// same []any.
+		{"explicit array of two strings", `[.[].name]`, "A\nB\n"},
+		// One value, as a stream and as an array: the array used to print
+		// "value=A".
+		{"stream of one string", `.[0].name`, "A\n"},
+		{"array of one string", `[.[0].name]`, "A\n"},
+		// Numbers and booleans are scalars too; integers print without a
+		// decimal exactly as a single scalar always did.
+		{"stream of numbers", `.[] | .id | tonumber`, "1\n2\n"},
+		{"stream of mixed scalars", `"x", 3, true, 1.5`, "x\n3\ntrue\n1.5\n"},
+		// gojq emits *big.Int for an integer too large for int.
+		{"stream with a big integer", `1, 100000000000000000000`, "1\n100000000000000000000\n"},
+		// null is a scalar with an empty rendering. It keeps its own line, so a
+		// value's position in the output still matches its position in the
+		// stream (a loop pairing ids with names does not drift).
+		{"null keeps its line", `.[].id, null, "z"`, "1\n2\n\nz\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := plainJQ(t, tc.jq)
+			if got != tc.want {
+				t.Errorf("-o plain --jq %s\n got: %q\nwant: %q (one bare value per line, no value= prefix, no blank separators)", tc.jq, got, tc.want)
+			}
+			if strings.Contains(got, "value=") {
+				t.Errorf("-o plain --jq %s printed a value= record for a scalar: %q", tc.jq, got)
+			}
+		})
+	}
+}
+
+// Zero results print NOTHING in plain mode. Before MIO-4174 they printed one
+// empty line, which `while read` turns into one empty iteration.
+func TestRender_PlainZeroResults_PrintsNothing(t *testing.T) {
+	for _, jq := range []string{`.[] | select(.name == "nope") | .name`, `empty`, `.[] | select(false)`} {
+		if got := plainJQ(t, jq); got != "" {
+			t.Errorf("-o plain --jq %s = %q, want empty output for a filter that yields no values", jq, got)
+		}
+	}
+	// An explicit empty array was already silent; it stays that way.
+	if got := plainJQ(t, `[]`); got != "" {
+		t.Errorf("-o plain --jq [] = %q, want empty output", got)
+	}
+}
+
+// Objects and mixed arrays keep the key=value record format, byte for byte.
+func TestRender_PlainObjectsAndMixedArrays_KeepKeyValueBlocks(t *testing.T) {
+	cases := []struct {
+		name, jq, want string
+	}{
+		{"stream of objects", `.[]`, "id=1\nname=A\ntype=products\n\nid=2\nname=B\ntype=products\n"},
+		{"single object", `.[0]`, "id=1\nname=A\ntype=products\n"},
+		// A mixed array is not a scalar list: its scalars stay value= records so
+		// they cannot be mistaken for the objects' key=value lines.
+		{"mixed object and scalar", `[.[0] | {name}, "x"]`, "name=A\n\nvalue=x\n"},
+		// Nested arrays are not scalars either.
+		{"array of arrays", `[[1, 2], [3]]`, "value=[1,2]\n\nvalue=[3]\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := plainJQ(t, tc.jq); got != tc.want {
+				t.Errorf("-o plain --jq %s\n got: %q\nwant: %q", tc.jq, got, tc.want)
+			}
+		})
+	}
+}
+
+// JSON and table output are NOT part of MIO-4174: a stream of 2+ still renders
+// as one pretty-printed JSON array, one value bare, and zero values as null.
+// Pinned here so the plain-mode change cannot leak into the other formats.
+func TestRender_JSONAndTable_UnchangedForStreams(t *testing.T) {
+	cases := []struct {
+		name   string
+		format Format
+		jq     string
+		want   string
+	}{
+		{"json stream", FormatJSON, `.[].name`, "[\n  \"A\",\n  \"B\"\n]\n"},
+		{"json one", FormatJSON, `.[0].name`, "\"A\"\n"},
+		{"json zero", FormatJSON, `empty`, "null\n"},
+		{"table stream", FormatTable, `.[].name`, "VALUE\nA\nB\n"},
+		{"table zero", FormatTable, `empty`, "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := render(t, sampleCollection(), Options{Format: tc.format, JQ: tc.jq})
+			if got != tc.want {
+				t.Errorf("%s --jq %s\n got: %q\nwant: %q", tc.format, tc.jq, got, tc.want)
+			}
+		})
+	}
+}
