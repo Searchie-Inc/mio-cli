@@ -168,6 +168,29 @@ var envelopeFamilyCases = []struct {
 		wantDetail: "interval_count=4 exceeds the maximum for interval='year' (3). (/data/attributes/interval_count); Unknown node kind. (/data/attributes/definition/nodes/0)",
 	},
 	{
+		// A LATER error object with its own, different status. The default
+		// envelope overrides only errors[0].status with the transport status;
+		// every later object keeps the status the API gave it. A fixture whose
+		// later status equalled the transport status could not tell "kept" from
+		// "overwritten" (blind review of #131).
+		name:       "multi-error, a later object's own status differs",
+		httpStatus: 422,
+		body:       `{"errors":[{"status":"422","code":"invalid_price_config","title":"Invalid price config","detail":"interval_count=4 exceeds the maximum.","source":{"pointer":"/data/attributes/interval_count"},"meta":{"request_id":"rid-422a"}},{"status":"409","code":"price_conflict","title":"Conflict","detail":"A price with this lookup key exists.","meta":{"request_id":"rid-422a"}}]}`,
+		wantExit:   errs.ExitUsage, // 2
+		wantDetail: "interval_count=4 exceeds the maximum. (/data/attributes/interval_count); A price with this lookup key exists.",
+	},
+	{
+		// A LATER error object that arrived without status gets the transport
+		// status in the default envelope, and the API's top-level members
+		// (jsonapi, meta) are --raw only: the default envelope is
+		// {"errors":[…]} and nothing else.
+		name:       "multi-error, a later object without status; top-level members",
+		httpStatus: 422,
+		body:       `{"jsonapi":{"version":"1.1"},"errors":[{"status":"422","code":"invalid_price_config","title":"Invalid price config","detail":"interval_count=4 exceeds the maximum.","meta":{"request_id":"rid-422b"}},{"code":"graph_validation_error","title":"Unprocessable Entity","detail":"Unknown node kind.","source":{"pointer":"/data/attributes/definition/nodes/0"},"meta":{"request_id":"rid-422b"}}],"meta":{"request_id":"top-level"}}`,
+		wantExit:   errs.ExitUsage, // 2
+		wantDetail: "interval_count=4 exceeds the maximum.; Unknown node kind. (/data/attributes/definition/nodes/0)",
+	},
+	{
 		// The body's status disagrees with the response line. The default
 		// envelope's errors[0].status stays the TRANSPORT status (MIO-2656: it
 		// is what the exit code derives from, so the two cannot contradict each
@@ -198,8 +221,10 @@ var envelopeFamilyCases = []struct {
 // nothing an agent reads today moves.
 //
 // CONTRACT: errors[i].<member> == the API's errors[i].<member> for every
-// member; errors[i].meta.exit_code == the process exit code == the pre-fix
-// exit code.
+// member (errors[0].status and errors[0].detail excepted, above); a later
+// errors[i] that arrived without status carries the transport status; the
+// envelope's only top-level member is `errors`; errors[i].meta.exit_code ==
+// the process exit code == the pre-fix exit code.
 func TestContract_ErrorEnvelope_KeepsEveryAPIMember(t *testing.T) {
 	bin := buildBinary(t)
 
@@ -217,7 +242,12 @@ func TestContract_ErrorEnvelope_KeepsEveryAPIMember(t *testing.T) {
 			}
 
 			apiObjs := apiErrorObjects(t, "api body", decodeExact(t, "api body", tc.body))
-			gotObjs := apiErrorObjects(t, "stderr envelope", decodeExact(t, "stderr envelope", stderr))
+			emitted := decodeExact(t, "stderr envelope", stderr)
+			gotObjs := apiErrorObjects(t, "stderr envelope", emitted)
+			if top, _ := emitted.(map[string]any); strings.Join(sortedKeys(top), ",") != "errors" {
+				t.Errorf("CONTRACT: default envelope top-level members = %s, want errors only (the API's top-level members are --raw only); stderr=%q",
+					strings.Join(sortedKeys(top), ","), stderr)
+			}
 			if len(gotObjs) != len(apiObjs) {
 				t.Fatalf("CONTRACT: envelope has %d error object(s), the API sent %d — one per API error object; stderr=%q",
 					len(gotObjs), len(apiObjs), stderr)
@@ -242,8 +272,8 @@ func TestContract_ErrorEnvelope_KeepsEveryAPIMember(t *testing.T) {
 							}
 						}
 					case i == 0 && k == "status":
-						// Checked below: the transport status, which these
-						// fixtures keep equal to the body's.
+						// Checked below: always the transport status, even
+						// where the body's disagrees.
 					case i == 0 && k == "detail":
 						// Checked below: the CLI's own message.
 					default:
@@ -252,6 +282,10 @@ func TestContract_ErrorEnvelope_KeepsEveryAPIMember(t *testing.T) {
 								i, k, got[k], apiObj[k], stderr)
 						}
 					}
+				}
+				if _, sent := apiObj["status"]; i > 0 && !sent && got["status"] != strconv.Itoa(tc.httpStatus) {
+					t.Errorf("CONTRACT: errors[%d] arrived without status; it carries %#v, want the transport status %q; stderr=%q",
+						i, got["status"], strconv.Itoa(tc.httpStatus), stderr)
 				}
 				gotMeta, _ := got["meta"].(map[string]any)
 				if gotMeta["exit_code"] != wantExitNum {
@@ -445,6 +479,9 @@ func TestContract_ErrorEnvelope_HintedErrorsKeepAPIMembers(t *testing.T) {
 		args       []string
 		wantExit   int
 		wantHint   string
+		// scaffold serves the body as the whole-hub op's answer from a stub
+		// backend that also serves the catalog, instead of on every request.
+		scaffold bool
 	}{
 		{
 			name:       "achievements grant 422 (hintAchievementsEarnErr)",
@@ -470,6 +507,18 @@ func TestContract_ErrorEnvelope_HintedErrorsKeepAPIMembers(t *testing.T) {
 			wantExit:   errs.ExitNotFound,
 			wantHint:   "GLOBAL contact id",
 		},
+		{
+			// The docs tell agents to branch on errors[0].code here, which
+			// every mode carries; the bracketed token is the CLI's prose, so
+			// it is in the default envelope's detail and not under --raw.
+			name:       "hubs scaffold 409 idempotency_fingerprint_mismatch (hubOpError)",
+			httpStatus: 409,
+			body:       `{"errors":[{"status":"409","code":"idempotency_fingerprint_mismatch","title":"Conflict","detail":"Idempotency-Key reused with a different request.","meta":{"request_id":"rid-scaffold"}}]}`,
+			args:       scaffoldArgs(),
+			wantExit:   errs.ExitUsage,
+			wantHint:   "[idempotency_fingerprint_mismatch]",
+			scaffold:   true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -481,17 +530,30 @@ func TestContract_ErrorEnvelope_HintedErrorsKeepAPIMembers(t *testing.T) {
 				args = append([]string{"--raw"}, tc.args...)
 			}
 			t.Run(name, func(t *testing.T) {
-				srv := newMockServer(t, []mockHandler{{Status: tc.httpStatus, Body: tc.body}})
-				_, stderr, exitCode := runBinary(t, bin, []string{
-					"MIO_API_KEY=test-key",
-					"MIO_API_BASE_URL=" + srv.URL,
-				}, args...)
+				var env []string
+				if tc.scaffold {
+					srv, _ := hubOpScaffoldServer(t, tc.httpStatus, tc.body)
+					env = scaffoldEnv(t, srv.URL)
+				} else {
+					srv := newMockServer(t, []mockHandler{{Status: tc.httpStatus, Body: tc.body}})
+					env = []string{"MIO_API_KEY=test-key", "MIO_API_BASE_URL=" + srv.URL}
+				}
+				_, stderr, exitCode := runBinary(t, bin, env, args...)
 				if exitCode != tc.wantExit {
 					t.Errorf("CONTRACT: exit code = %d, want %d; stderr=%q", exitCode, tc.wantExit, stderr)
 				}
 				api := decodeExact(t, "api body", tc.body)
 				apiObj := apiErrorObjects(t, "api body", api)[0]
-				emitted := decodeExact(t, "stderr envelope", stderr)
+				envelope := stderr
+				if tc.scaffold {
+					// A scaffold narrates progress on stderr ("catalog: live
+					// …") before it fails; the envelope is the document that
+					// ends stderr, starting at its last line that is "{".
+					if at := strings.LastIndex("\n"+stderr, "\n{\n"); at >= 0 {
+						envelope = stderr[at:]
+					}
+				}
+				emitted := decodeExact(t, "stderr envelope", envelope)
 				got := apiErrorObjects(t, "stderr envelope", emitted)[0]
 
 				for _, k := range []string{"code", "title"} {

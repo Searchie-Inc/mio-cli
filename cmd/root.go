@@ -161,7 +161,7 @@ func init() {
 	pf.StringVar(&flags.hub, "hub", "", "Hub id context for hub-scoped resources. Overrides config.")
 	pf.BoolVarP(&flags.yes, "yes", "y", false, "Skip the confirmation prompt on destructive operations.")
 	pf.StringVar(&flags.jq, "jq", "", "Filter JSON output through this gojq expression.")
-	pf.BoolVar(&flags.raw, "raw", false, "Emit the raw JSON:API envelope instead of the flattened resource. On an API error, stderr is the API's own error document plus meta.exit_code.")
+	pf.BoolVar(&flags.raw, "raw", false, "Emit the raw JSON:API envelope instead of the flattened resource. On an API error, when stderr is not a terminal, stderr is the API's own error document plus meta.exit_code (and status on an error object that has none).")
 	pf.StringVar(&flags.profile, "profile", "", "Named config profile to use.")
 	pf.BoolVar(&flags.debug, "debug", false, "Enable verbose request/response logging to stderr.")
 	_ = pf.MarkHidden("debug")
