@@ -133,7 +133,9 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   so the prompt shows). Check BEFORE a re-apply with `mio hubs policies get "$HUB_ID"`:
   a ToS `version` other than `default-v1` (a `v_…` token, set by saving custom text WITH
   `--require-acceptance` and kept by later saves or resets without it) means the reset
-  re-prompts; `default-v1` means it is replaced silently, with no version change to notice.
+  re-prompts; `default-v1` means nobody who had accepted is asked again, and there is no
+  version change to notice (a gate the re-apply turns on still asks every member who never
+  accepted, whatever the version).
   To know whether your text is custom, read the **content**, not the version: the backend
   versions only a ToS saved WITH `--require-acceptance` and projects everything else as
   `default-v1`, so custom text routinely reads as the default.
