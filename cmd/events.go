@@ -388,17 +388,8 @@ Requires hub owner/admin/moderator permissions.`,
 		}
 
 		// --title, --starts-at, --ends-at, --timezone, and --location-type are
-		// required by the backend HubEventCreateAttributes schema; validate
-		// client-side so a partial-required body never reaches the API.
-		var missing []string
-		for _, f := range []string{"title", "starts-at", "ends-at", "timezone", "location-type"} {
-			if !cmd.Flags().Changed(f) {
-				missing = append(missing, "--"+f)
-			}
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
-		}
+		// required by the backend HubEventCreateAttributes schema; cobra
+		// enforces them before RunE (markFlagsRequired in init).
 
 		res, err := c.client.Create(c.ctx, eventsPath(hubID, ""), attrs)
 		if err != nil {
@@ -608,9 +599,7 @@ hub owner/admin/moderator permissions.`,
 			return err
 		}
 
-		if !cmd.Flags().Changed("status") {
-			return errs.New(errs.ExitUsage, "missing required flag: --status")
-		}
+		// --status is required; cobra enforces it before RunE.
 		status, ferr := cmd.Flags().GetString("status")
 		if ferr != nil {
 			return errs.Wrap(errs.ExitGeneric, ferr)
@@ -756,6 +745,7 @@ func init() {
 				eventsMaxHosts))
 		cmd.MarkFlagsMutuallyExclusive("host-contact-id", "host-contact-ids")
 	}
+	markFlagsRequired(eventsCreateCmd, "title", "starts-at", "ends-at", "timezone", "location-type")
 
 	// Pagination + filter/sort on list.
 	addPaginationFlags(eventsListCmd)
@@ -764,6 +754,7 @@ func init() {
 
 	// rsvp set flags.
 	eventsRSVPSetCmd.Flags().String("status", "", "RSVP status: going, not_going, or maybe. Required.")
+	markFlagsRequired(eventsRSVPSetCmd, "status")
 
 	// Pagination on rsvps list.
 	addPaginationFlags(eventsRSVPsListCmd)

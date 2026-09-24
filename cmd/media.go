@@ -81,6 +81,8 @@ func init() {
 
 	mediaFilesCardsSetCmd.Flags().String("cards", "", "JSON array of cards (or @file.json). Each: {label,start,url?,description?,id?}. Required.")
 	mediaFilesChaptersSetCmd.Flags().String("chapters", "", "JSON array of chapters (or @file.json). Each: {title,start,id?}. Required.")
+	markFlagsRequired(mediaFilesCardsSetCmd, "cards")
+	markFlagsRequired(mediaFilesChaptersSetCmd, "chapters")
 
 	mediaFilesDurableURLCmd.Flags().String("preset", "", "Image variant preset to emit (e.g. thumbnail-160, medium-720, large-1440, webp-medium). Omit to print every preset.")
 	mediaFilesDurableURLCmd.Flags().Bool("publish", false, "Also publish the file to the --hub (visibility public, published now) so the URL resolves for anonymous visitors.")
@@ -103,6 +105,7 @@ func init() {
 	// media search
 	mediaCmd.AddCommand(mediaSearchCmd)
 	mediaSearchCmd.Flags().String("query", "", "Search query string. Required.")
+	markFlagsRequired(mediaSearchCmd, "query")
 	mediaSearchCmd.Flags().String("hub-id", "", "Optional hub id to scope the search.")
 	mediaSearchCmd.Flags().Int("limit", 0, "Max results (page[size], 1-100).")
 
@@ -115,6 +118,7 @@ func init() {
 	mediaCmd.AddCommand(mediaHubMediaCmd)
 
 	mediaHubMediaPublishCmd.Flags().String("file-id", "", "File id to publish to the hub. Required.")
+	markFlagsRequired(mediaHubMediaPublishCmd, "file-id")
 	mediaHubMediaPublishCmd.Flags().String("visibility", "", "Per-hub visibility: members (default), private, or public.")
 	mediaHubMediaPublishCmd.Flags().String("published-at", "", "RFC3339 publish timestamp (default: now).")
 	mediaHubMediaPublishCmd.Flags().Int("position", 0, "Manual ordering within the hub (>= 0).")
@@ -139,6 +143,7 @@ func init() {
 	mediaCmd.AddCommand(mediaHubPlaylistsCmd)
 
 	mediaHubPlaylistsPublishCmd.Flags().String("playlist-id", "", "Playlist id to publish to the hub. Required.")
+	markFlagsRequired(mediaHubPlaylistsPublishCmd, "playlist-id")
 	mediaHubPlaylistsPublishCmd.Flags().String("visibility", "", "Per-hub visibility: members (default), private, or public.")
 	mediaHubPlaylistsPublishCmd.Flags().String("published-at", "", "RFC3339 publish timestamp (default: now).")
 	mediaHubPlaylistsPublishCmd.Flags().Int("position", 0, "Manual ordering within the hub (>= 0).")
@@ -306,11 +311,12 @@ var mediaHubPlaylistsPublishCmd = &cobra.Command{
   mio media hub-playlists publish --hub hub_123 --playlist-id pl_abc --visibility public --position 0`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate before resolving auth/team/hub so a bad flag fires no request.
-		// flagValue trims, so --playlist-id "" / --playlist-id=" " are rejected too.
+		// --playlist-id is required (cobra enforces its presence before RunE).
+		// Validate its value before resolving auth/team/hub so a bad flag fires
+		// no request; flagValue trims, so --playlist-id "" / " " are rejected.
 		pid := flagValue(cmd, "playlist-id")
 		if pid == "" {
-			return errs.New(errs.ExitUsage, "missing required flag: --playlist-id")
+			return errs.New(errs.ExitUsage, "--playlist-id must not be empty")
 		}
 		attrs := map[string]any{"playlist_id": pid}
 		if err := applyHubMediaOptions(cmd, attrs); err != nil {
@@ -1122,13 +1128,12 @@ func fileChaptersPath(teamID, fileID string) string {
 }
 
 // parseJSONArrayFlag parses a REQUIRED string flag whose value is a JSON array
-// (or @file.json). It validates client-side — an unset/empty flag, malformed
-// JSON, or a non-array value is a usage error that fires no HTTP request. The
-// per-item shape is validated server-side (the backend forbids unknown keys).
+// (or @file.json). Every caller declares the flag with markFlagsRequired, so
+// cobra rejects an absent one before RunE; this validates the value client-side
+// — an empty value, malformed JSON, or a non-array is a usage error that fires
+// no HTTP request. The per-item shape is validated server-side (the backend
+// forbids unknown keys).
 func parseJSONArrayFlag(cmd *cobra.Command, name string) ([]any, error) {
-	if !cmd.Flags().Changed(name) {
-		return nil, errs.New(errs.ExitUsage, "missing required flag: --%s", name)
-	}
 	raw, err := cmd.Flags().GetString(name)
 	if err != nil {
 		return nil, errs.New(errs.ExitUsage, "--%s: %s", name, err)
@@ -1342,10 +1347,12 @@ Returns ranked snippets with timestamps and share URLs. Team-admin scope. Pass
   mio media search --query pricing --hub-id hub_123 --limit 50`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate flags before resolving auth so a bad flag fires no request.
+		// --query is required (cobra enforces its presence before RunE).
+		// Validate flag values before resolving auth so a bad flag fires no
+		// request.
 		q := flagValue(cmd, "query")
 		if q == "" {
-			return errs.New(errs.ExitUsage, "missing required flag: --query")
+			return errs.New(errs.ExitUsage, "--query must not be empty")
 		}
 		pageSize := 0
 		if cmd.Flags().Changed("limit") {
@@ -1422,10 +1429,12 @@ var mediaHubMediaPublishCmd = &cobra.Command{
   mio media hub-media publish --hub hub_123 --file-id file_abc --visibility public --position 0`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate before resolving auth/team/hub so a bad flag fires no request.
+		// --file-id is required (cobra enforces its presence before RunE).
+		// Validate its value before resolving auth/team/hub so a bad flag
+		// fires no request.
 		fid := flagValue(cmd, "file-id")
 		if fid == "" {
-			return errs.New(errs.ExitUsage, "missing required flag: --file-id")
+			return errs.New(errs.ExitUsage, "--file-id must not be empty")
 		}
 		attrs := map[string]any{"file_id": fid}
 		if err := applyHubMediaOptions(cmd, attrs); err != nil {

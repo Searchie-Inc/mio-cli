@@ -86,17 +86,6 @@ var tagsCreateCmd = &cobra.Command{
 			return err
 		}
 
-		var missing []string
-		if !cmd.Flags().Changed("name") {
-			missing = append(missing, "--name")
-		}
-		if !cmd.Flags().Changed("slug") {
-			missing = append(missing, "--slug")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flags: %s", strings.Join(missing, ", "))
-		}
-
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "slug")
@@ -452,6 +441,7 @@ func init() {
 		cmd.Flags().String("color", "", "Tag color as a hex code, e.g. #FF0000.")
 		cmd.Flags().String("description", "", "Tag description.")
 	}
+	markFlagsRequired(tagsCreateCmd, "name", "slug")
 	addPaginationFlags(tagsListCmd)
 
 	// assign flags. --tag accepts a tag name/slug OR id (resolved); --tag-id is

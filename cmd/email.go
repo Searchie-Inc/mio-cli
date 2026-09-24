@@ -1055,13 +1055,10 @@ is lifted. The scope is always the hub and the reason is always admin_block.`,
 	Example: `  mio email suppressions create --email blocked@example.com`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate the required flag BEFORE resolving auth so a usage error
-		// fires no HTTP request. An explicit empty/whitespace --email is a usage
-		// error too (the backend rejects it as EmailStr) — catch it here rather
+		// --email is required (cobra enforces its presence before RunE). An
+		// explicit empty/whitespace --email is a usage error too (the backend
+		// rejects it as EmailStr) — catch it here, before resolving auth, rather
 		// than round-tripping to a 422.
-		if !cmd.Flags().Changed("email") {
-			return errs.New(errs.ExitUsage, "missing required flag: --email")
-		}
 		email := flagValue(cmd, "email")
 		if email == "" {
 			return errs.New(errs.ExitUsage, "--email must not be empty")
@@ -1114,4 +1111,5 @@ to a bad recipient, so this requires --yes in non-interactive shells.`,
 func init() {
 	addPaginationFlags(emailSuppressionsListCmd)
 	emailSuppressionsCreateCmd.Flags().String("email", "", "Email address to suppress (admin_block). Required.")
+	markFlagsRequired(emailSuppressionsCreateCmd, "email")
 }

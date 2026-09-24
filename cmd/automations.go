@@ -113,17 +113,6 @@ var automationsCreateCmd = &cobra.Command{
 			return err
 		}
 
-		var missing []string
-		if !cmd.Flags().Changed("name") {
-			missing = append(missing, "--name")
-		}
-		if !cmd.Flags().Changed("definition") {
-			missing = append(missing, "--definition")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flags: %s", strings.Join(missing, ", "))
-		}
-
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "re-entry-mode")
@@ -550,6 +539,7 @@ func init() {
 		cmd.Flags().String("definition", "", "Automation definition as JSON (inline or @file).")
 		cmd.Flags().String("settings", "", "Automation settings as JSON (inline or @file).")
 	}
+	markFlagsRequired(automationsCreateCmd, "name", "definition")
 
 	// Pagination on list commands.
 	addPaginationFlags(automationsListCmd)

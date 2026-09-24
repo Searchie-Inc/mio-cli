@@ -27,7 +27,6 @@ package cmd
 import (
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -98,20 +97,8 @@ var productsCreateCmd = &cobra.Command{
 			return err
 		}
 
-		// Both --name and --type are required by the backend
-		// ProductCreateAttributes schema; validate client-side so a
-		// partial-required body never reaches the API.
-		var missing []string
-		if !cmd.Flags().Changed("name") {
-			missing = append(missing, "--name")
-		}
-		if !cmd.Flags().Changed("type") {
-			missing = append(missing, "--type")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
-		}
-
+		// --name and --type are required by the backend ProductCreateAttributes
+		// schema; cobra enforces both before RunE (markFlagsRequired in init).
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "type")
@@ -262,6 +249,7 @@ func init() {
 		cmd.Flags().String("description", "", "Product description.")
 		cmd.Flags().Bool("is-active", false, "Whether the product is active.")
 	}
+	markFlagsRequired(productsCreateCmd, "name", "type")
 	addPaginationFlags(productsListCmd)
 }
 
@@ -315,21 +303,8 @@ To change one, create a new price and deactivate the old one with
 			return err
 		}
 
-		// --amount, --currency, and --type are required by PriceCreateAttributes.
-		var missing []string
-		if !cmd.Flags().Changed("amount") {
-			missing = append(missing, "--amount")
-		}
-		if !cmd.Flags().Changed("currency") {
-			missing = append(missing, "--currency")
-		}
-		if !cmd.Flags().Changed("type") {
-			missing = append(missing, "--type")
-		}
-		if len(missing) > 0 {
-			return errs.New(errs.ExitUsage, "missing required flag(s): %s", strings.Join(missing, ", "))
-		}
-
+		// --amount, --currency, and --type are required by PriceCreateAttributes;
+		// cobra enforces them before RunE (markFlagsRequired in init).
 		attrs := map[string]any{}
 		setIntFlag(cmd, attrs, "amount")
 		setStringFlag(cmd, attrs, "currency")
@@ -474,6 +449,8 @@ func init() {
 	productsPricesCreateCmd.Flags().String("name", "", "Human-readable price label (max 100 chars).")
 	productsPricesCreateCmd.Flags().String("description", "", "Price description (max 500 chars).")
 	productsPricesCreateCmd.Flags().Bool("is-active", true, "Whether the price is active.")
+
+	markFlagsRequired(productsPricesCreateCmd, "amount", "currency", "type")
 
 	// Update flags: only mutable fields (billing fields are immutable after creation).
 	productsPricesUpdateCmd.Flags().String("name", "", "Human-readable price label (max 100 chars).")
