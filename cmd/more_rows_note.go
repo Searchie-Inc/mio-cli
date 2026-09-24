@@ -22,8 +22,9 @@ import (
 // moreRowsNote returns the note for a list page the API says is not the last,
 // or "" when none is due. The flag it names is the one this command actually
 // registers: --after (the shared pagination flags) or --page-after (segments
-// search) for a cursor, else --limit / --page-size when the API gave no cursor
-// (media search is top-N: more rows come only from a larger page).
+// search) for a cursor, else --limit / --page-size when there is no cursor to
+// offer (media search is top-N and takes no page[after]: more rows come only
+// from a larger page).
 func moreRowsNote(cmd *cobra.Command, col *client.Collection) string {
 	more, cursor := col.NextPage()
 	if !more {
@@ -37,6 +38,14 @@ func moreRowsNote(cmd *cobra.Command, col *client.Collection) string {
 	head := fmt.Sprintf("note: the API returned %d %s and has more", n, noun)
 	after := registeredFlag(cmd, "after", "page-after")
 	limit := registeredFlag(cmd, "limit", "page-size")
+	// A list that reports has_more with no cursor at all (achievements
+	// offerings, mio-backend origin/main admin_router.list_hub_offerings) still
+	// takes page[after], and the backend's pagination contract defines it as
+	// the id of the last row of the previous page (infrastructure/pagination.py
+	// get_pagination). Every list that pages any other way sends its cursor.
+	if cursor == "" && after != "" && n > 0 {
+		cursor = col.Data[n-1].ID
+	}
 	switch {
 	case cursor != "" && after != "":
 		s := fmt.Sprintf("%s; fetch the next page with --%s %s", head, after, shellQuote(cursor))

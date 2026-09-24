@@ -72,6 +72,8 @@ func envelope(shape string, ids []string, more bool, cursor string) string {
 		return fmt.Sprintf(`{"data":%s,"meta":{"total":9,"page":{"size":2,"has_more":%v,"next_cursor":%s}}}`, d, more, nextCursor)
 	case "discussions": // top-level meta.{has_more,next_cursor}, no links
 		return fmt.Sprintf(`{"data":%s,"meta":{"has_more":%v,"next_cursor":%s}}`, d, more, nextCursor)
+	case "page_only": // achievements offerings: meta.page.has_more, no cursor, no links
+		return fmt.Sprintf(`{"data":%s,"meta":{"page":{"size":2,"has_more":%v}}}`, d, more)
 	case "top_n": // media search: has_more, no cursor anywhere
 		return fmt.Sprintf(`{"data":%s,"meta":{"total":9,"has_more":%v,"is_capped":false,"cap":100,"pagination":"top_n"}}`, d, more)
 	}
@@ -144,6 +146,11 @@ func moreRowsCases() []moreRowsCase {
 		// The backend's real discussions cursor: the note must survive a shell.
 		{"community discussions list (<iso>|<id> cursor)", "discussions", []string{"community", "discussions", "list", "--hub", "019f0000-0000-7000-8000-0000000000a1"}, "after", true, discussionsCursor},
 		{"checkout payments list (meta.page.next_cursor, no links)", "checkout", []string{"checkout", "payments", "list", "--hub", "019f0000-0000-7000-8000-0000000000a1"}, "after", true, ""},
+		// achievements offerings (admin_router.list_hub_offerings) reports
+		// has_more with NO cursor and no links, yet takes page[after] = the
+		// last row's id (repository: id DESC, `AchievementHub.id < after`).
+		// The stub's second page answers only page[after]=r2, the last row.
+		{"achievements offerings list (has_more, no cursor: last row id)", "page_only", []string{"achievements", "offerings", "list", "--hub", "019f0000-0000-7000-8000-0000000000a1"}, "after", true, "r2"},
 		// segments search pages with --page-after, carried in the POST body.
 		{"segments search (--page-after)", "discussions", []string{"segments", "search", "--conditions", `{"version":1,"groups":[]}`}, "page-after", true, ""},
 		// media search is top-N: has_more with no cursor, and no --after flag.
@@ -332,6 +339,12 @@ func TestMoreRowsNote_Wording(t *testing.T) {
 		c.Data = make([]client.Resource, n)
 		return c
 	}
+	withIDs := func(c *client.Collection, ids ...string) *client.Collection {
+		for i, id := range ids {
+			c.Data[i].ID = id
+		}
+		return c
+	}
 	withCursor := `{"data":[],"meta":{"has_more":true,"next_cursor":"CUR"}}`
 	noCursor := `{"data":[],"meta":{"has_more":true}}`
 	last := `{"data":[],"meta":{"has_more":false,"next_cursor":null}}`
@@ -356,8 +369,15 @@ func TestMoreRowsNote_Wording(t *testing.T) {
 			"note: the API returned 50 rows and has more; fetch the next page with --page-after CUR (or raise --page-size)"},
 		{"one row is singular", cmdWith("after"), col(1, withCursor),
 			"note: the API returned 1 row and has more; fetch the next page with --after CUR"},
-		{"no cursor, --limit", cmdWith("limit", "after"), col(20, noCursor),
+		{"no cursor, --limit only (media search)", cmdWith("limit"), col(20, noCursor),
 			"note: the API returned 20 rows and has more; raise --limit to get more in one page"},
+		// No cursor from the API but the command takes --after: the backend's
+		// page[after] is the last row's id (infrastructure/pagination.py
+		// get_pagination), so that is the cursor offered.
+		{"no cursor, --after: last row id", cmdWith("limit", "after"), withIDs(col(3, noCursor), "a1", "a2", "a3"),
+			"note: the API returned 3 rows and has more; fetch the next page with --after a3 (or raise --limit)"},
+		{"no cursor, --after, no rows", cmdWith("limit", "after"), col(0, noCursor),
+			"note: the API returned 0 rows and has more; raise --limit to get more in one page"},
 		{"cursor but no after flag", cmdWith("limit"), col(20, withCursor),
 			"note: the API returned 20 rows and has more; raise --limit to get more in one page"},
 		{"no paging flag at all", cmdWith(), col(20, withCursor),
