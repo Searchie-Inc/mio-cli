@@ -37,18 +37,40 @@ func TestContract_MemberVerb404_HintsGlobalContactID(t *testing.T) {
 	})
 	bin := buildBinary(t)
 
-	cases := []struct {
+	// The rest of each invocation, keyed by the verb. Every verb in
+	// memberVerbHelpPages must have one, so the 404 check cannot cover fewer
+	// verbs than the help check does (it covered 8 of the 13 before MIO-3413).
+	rest := map[string][]string{
+		"hub-memberships add":               {"contact_x"},
+		"hub-memberships set-role":          {"contact_x", "--role", "admin"},
+		"hub-memberships ban":               {"contact_x", "--yes"},
+		"hub-memberships unban":             {"contact_x", "--yes"},
+		"hub-memberships warn":              {"contact_x", "--yes"},
+		"activity contact":                  {"contact_x"},
+		"community members ban":             {"contact_x", "--yes"},
+		"community members unban":           {"contact_x", "--yes"},
+		"community members warn":            {"contact_x", "--yes"},
+		"community members soft-ban":        {"contact_x", "--yes"},
+		"email enrollments create":          {"dc_1", "--contact-id", "contact_x"},
+		"email enrollments list-by-contact": {"contact_x"},
+		"access-rules overrides create":     {"--contact-id", "contact_x", "--scope", "full"},
+	}
+	type memberVerbCase struct {
 		name string
 		args []string
-	}{
-		{"hub-memberships add", []string{"--team", "t_team1", "--hub", "hub_1", "hub-memberships", "add", "contact_x"}},
-		{"hub-memberships set-role", []string{"--team", "t_team1", "--hub", "hub_1", "hub-memberships", "set-role", "contact_x", "--role", "admin"}},
-		{"hub-memberships ban", []string{"--team", "t_team1", "--hub", "hub_1", "hub-memberships", "ban", "contact_x", "--yes"}},
-		{"activity contact", []string{"--team", "t_team1", "--hub", "hub_1", "activity", "contact", "contact_x"}},
-		{"community members ban", []string{"--team", "t_team1", "--hub", "hub_1", "community", "members", "ban", "contact_x", "--yes"}},
-		{"email enrollments create", []string{"--team", "t_team1", "--hub", "hub_1", "email", "enrollments", "create", "dc_1", "--contact-id", "contact_x"}},
-		{"email enrollments list-by-contact", []string{"--team", "t_team1", "--hub", "hub_1", "email", "enrollments", "list-by-contact", "contact_x"}},
-		{"access-rules overrides create", []string{"--team", "t_team1", "--hub", "hub_1", "access-rules", "overrides", "create", "--contact-id", "contact_x", "--scope", "full"}},
+	}
+	var cases []memberVerbCase
+	for _, page := range memberVerbHelpPages {
+		name := strings.Join(page, " ")
+		r, ok := rest[name]
+		if !ok {
+			t.Fatalf("member verb %q has no 404 invocation here; add one", name)
+		}
+		args := append([]string{"--team", "t_team1", "--hub", "hub_1"}, page...)
+		cases = append(cases, memberVerbCase{name, append(args, r...)})
+	}
+	if len(rest) != len(cases) {
+		t.Fatalf("%d 404 invocations for %d member verbs; keep them in step with memberVerbHelpPages", len(rest), len(cases))
 	}
 	// NOTE (MIO-3412): the achievements earn verbs are deliberately NOT in
 	// this list. A wrong contact id never produces a 404 on them (grant 422s,
