@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -57,11 +58,18 @@ func Render(w io.Writer, v any, opts Options) error {
 	data := normalize(v, opts.Raw)
 
 	if opts.JQ != "" {
-		filtered, err := applyJQ(data, opts.JQ)
+		results, err := applyJQ(data, opts.JQ)
 		if err != nil {
 			return err
 		}
-		data = filtered
+		// A filter that yields no values prints nothing in plain mode, so a
+		// `while read` loop runs zero times rather than once on an empty line
+		// (MIO-4174). json and table keep their historical output (null / an
+		// empty line) byte for byte.
+		if len(results) == 0 && opts.Format == FormatPlain {
+			return nil
+		}
+		data = collapseJQ(results)
 	}
 
 	switch opts.Format {
@@ -162,9 +170,10 @@ func toAnySlice(rows []map[string]any) []any {
 	return out
 }
 
-// applyJQ runs a gojq program over data and returns the (possibly multiple)
-// outputs. A single output is returned bare; multiple outputs become a slice.
-func applyJQ(data any, program string) (any, error) {
+// applyJQ runs a gojq program over data and returns every value it emits, in
+// order. The count matters to the caller (zero values render differently in
+// plain mode), so collapsing to one value is left to collapseJQ.
+func applyJQ(data any, program string) ([]any, error) {
 	query, err := gojq.Parse(program)
 	if err != nil {
 		return nil, fmt.Errorf("invalid --jq expression: %w", err)
@@ -181,13 +190,21 @@ func applyJQ(data any, program string) (any, error) {
 		}
 		results = append(results, val)
 	}
+	return results, nil
+}
+
+// collapseJQ turns jq's output values into the one value the formatters take:
+// nil for none, the value itself for one, and a slice for two or more. A stream
+// of 2+ therefore reaches the formatter exactly like a filter that returned one
+// array, which is why renderPlain treats both the same way.
+func collapseJQ(results []any) any {
 	switch len(results) {
 	case 0:
-		return nil, nil
+		return nil
 	case 1:
-		return results[0], nil
+		return results[0]
 	default:
-		return results, nil
+		return results
 	}
 }
 
@@ -234,11 +251,22 @@ func renderTable(w io.Writer, data any) error {
 	return nil
 }
 
-// renderPlain prints key=value lines. For a list, records are separated by a
-// blank line. Scalars are printed as-is.
+// renderPlain prints key=value lines. For a list of objects, records are
+// separated by a blank line. Scalars are printed as-is, and a list made only of
+// scalars prints each value bare, followed by a newline — so `-o plain --jq
+// '.[].id'` gives the same shape for one id as for twenty (MIO-4174). A string
+// is printed verbatim, so one that holds a newline spans lines. A list that mixes scalars
+// with objects or arrays keeps the record format, where a scalar reads
+// value=X.
 func renderPlain(w io.Writer, data any) error {
 	switch t := data.(type) {
 	case []any:
+		if allScalars(t) {
+			for _, it := range t {
+				fmt.Fprintln(w, scalar(it))
+			}
+			return nil
+		}
 		rows := asMapRows(t)
 		for i, row := range rows {
 			if i > 0 {
@@ -259,6 +287,23 @@ func renderPlain(w io.Writer, data any) error {
 }
 
 // ---- helpers ----------------------------------------------------------------
+
+// allScalars reports whether every item is a JSON scalar (string, number,
+// boolean or null). The number types are the ones that reach the renderer:
+// float64 from encoding/json, and int, float64 and *big.Int from gojq (which
+// emits *big.Int for an integer too large for int). An object, an array or any
+// other Go type makes the list a record list. An empty list counts as
+// all-scalar, and prints nothing either way.
+func allScalars(items []any) bool {
+	for _, it := range items {
+		switch it.(type) {
+		case nil, string, bool, float64, int, *big.Int:
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 func asMapRows(items []any) []map[string]any {
 	rows := make([]map[string]any, 0, len(items))

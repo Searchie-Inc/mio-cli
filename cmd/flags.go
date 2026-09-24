@@ -251,8 +251,8 @@ func setMappedJSONObjectFlag(cmd *cobra.Command, attrs map[string]any, name, key
 
 // addPaginationFlags registers the JSON:API pagination flags on a list command.
 func addPaginationFlags(cmd *cobra.Command) {
-	cmd.Flags().Int("limit", 0, "Page size (page[size]).")
-	cmd.Flags().String("after", "", "Pagination cursor for the next page (page[after]).")
+	cmd.Flags().Int("limit", 0, "Page size (page[size]). Omit for the API's default, usually 20; the API caps it, usually at 100.")
+	cmd.Flags().String("after", "", "Pagination cursor for the next page (page[after]). When more rows exist, a note on stderr prints it.")
 }
 
 // addPageFlags translates the pagination flags into JSON:API query params.
