@@ -325,7 +325,8 @@ mio media hub-playlists publish --hub hub_abc123 --playlist-id pl_abc \
 are two separate surfaces: a file that lives only in a playlist has **no content
 item**, so everything keyed on one is missing for it — progress and completion
 tracking, "My List" saves, comments, and the page builder's single-file
-`dataSource: {"type":"file"}` binding. The card appears on `/content` and plays,
+`dataSource: {"type":"file"}` binding, whose `id` is that content item's id (see
+*Which id each `dataSource` takes*). The card appears on `/content` and plays,
 which is exactly why this is easy to miss. Materialise the content items:
 
 ```bash
@@ -412,11 +413,44 @@ digest-pinned copy; `--catalog <file>` overrides both).
 A `page-*` template emits a complete `{"root": …}` tree ready for `tree set`. A
 **section** template emits a bare node to splice into a root's `children`.
 
-**The page templates are outlines, not finished sections.** `page-homepage`'s hero
-child arrives as `{"kind":"row","template":"hero","settings":{}}` — no surface, no
-values. Scaffold the page for the skeleton, then scaffold each section on its own
-for the real, DS-conformed recipe (correct `kind`, `settings.surface`, column
-widths) and swap it in:
+**Page templates come in three kinds; check which before you edit.** An outline has
+no copy on any node, a complete page is finished sections with placeholder copy, and
+a system page is one the hub routes itself, built from fixed regions rather than
+sections. The split below is generated from the catalog this binary embeds:
+
+<!-- catalog-gen:page-template-kinds -->
+In catalog 0.18.1, the one this binary embeds:
+
+Outlines — content pages with no copy on any node; you build and fill the sections:
+
+`page-homepage` · `page-generic`
+
+Complete — finished sections with placeholder copy; edit the values in place:
+
+`page-homepage-community` · `page-about` · `page-faq` · `page-sales`
+
+System pages — routed by the hub itself, with fixed regions instead of sections; fill in their values and add no sections:
+
+`page-login` · `page-register` · `page-onboarding` · `page-account-activity` ·
+`page-account-profile` · `page-members` · `page-file-detail` ·
+`page-discussions-index`
+<!-- /catalog-gen -->
+
+`pages catalog scaffold` fetches the backend's live catalog unless you pass
+`--offline`, and that catalog can hold different templates. `mio pages catalog
+templates` lists the ones it serves. To classify one of them, run this; it prints
+`"outline"`, `"complete"` or `"system"` (scaffold output is always JSON, so the word
+keeps its quotes even with `-o plain`):
+
+```bash
+mio pages catalog scaffold --template <id> --jq 'if (.root.children | length) > 0 and all(.root.children[]; (.template // "") == "") then "system" elif any(.. | objects; has("value") and (.value | . != null and . != "" and . != {} and . != [])) then "complete" else "outline" end'
+```
+
+**An outline is a skeleton.** `page-homepage`'s hero child arrives as
+`{"kind":"row","template":"hero","settings":{}}` — no surface, no values. Scaffold
+the page for the skeleton, then scaffold each section on its own for the real,
+DS-conformed recipe (correct `kind`, `settings.surface`, column widths) and swap it
+in:
 
 ```bash
 mio pages catalog scaffold --template page-homepage > tree.json
@@ -425,6 +459,37 @@ mio pages catalog scaffold --template row --variant 3eq > cols.json   # 3 equal 
 mio pages catalog scaffold --template grid            > grid.json
 # splice: tree.json .root.children = [hero.json, cols.json, grid.json], then fill values
 ```
+
+**A system page is not built from sections.** The hub routes it itself, and its root
+children are fixed regions (mio-hub's page-tree README calls these templates
+code-routed scaffolds). `page-login` arrives as an image, a headline and a button
+with no values; `page-file-detail` as a locked `file-player` plus title, meta and
+description placeholders. Fill in the values in place and do not splice section
+scaffolds into it.
+
+**A complete page is finished.** Its sections already have their surfaces and
+placeholder copy. Scaffold it and edit the `value`s in place. Do **not** splice
+section scaffolds into it. `page-sales` is a complete page. Here is the whole sales-page
+recipe:
+
+```bash
+PAGE_ID=$(mio pages create --hub hub_abc123 --type sales --privacy public \
+  --title "Join Pro" --slug pro -o plain --jq .id)
+mio pages catalog scaffold --template page-sales > sales.json
+# ...edit sales.json: replace the placeholder headline/text/button values, prices, FAQ answers...
+mio pages tree set "$PAGE_ID" --hub hub_abc123 --file sales.json   # first tree: --if-match defaults to 0
+mio pages publish "$PAGE_ID" --hub hub_abc123 --if-match 1          # section_count = len(root.children)
+```
+
+`--type sales` makes the hub render the page without its header and mobile
+navigation, because a sales page owns its full-bleed layout; the footer, with its
+footer menu, still renders. The default type is `generic`, and every type but `sales`
+keeps the full hub chrome. A few types are refused (exit 2): `content` needs the slug
+`content` (422), a hub has at most one `login`, `register` and `payments` page each
+(a second is 409), and `pages update --type` cannot change a page to or from those
+three (422). Pass
+`--privacy public`: the API defaults privacy to `members` for every page type except
+`login`, `register` and `payments`.
 
 `row` is the unified 1–4 column section; pick the layout with `--variant`:
 
@@ -442,6 +507,41 @@ of `text` items keyed by `settings.tab_label`), and `bound-cards` (two
 the binding — fill in every `dataSource.id`).
 `hero`, `grid` and `compact` carry variants too; `mio pages catalog templates`
 prints them all.
+
+#### Which id each `dataSource` takes
+
+`pages tree set` checks only that `dataSource` is an object, and `publish` accepts
+any `dataSource.id` it cannot resolve, so an id from the wrong namespace publishes
+cleanly and then renders an empty section. The one id `publish` does check is a real
+content node's: bind a `members` or paid content node with no gate on the node or an
+ancestor and it fails with 422, exit 2 (`R3 invariant violation: … Add a gate to this
+node or an ancestor.`). A lesson that `content reconcile` makes is `members` unless the
+file and the playlist are public and each was published to the hub with
+`--visibility public` before the lesson was made. The namespace depends on
+`dataSource.type`:
+
+| `dataSource.type` | `id` is | where to get it |
+|---|---|---|
+| `playlist` | a media **playlist** id | `mio media playlists create … -o plain --jq .id`, or the `id` from `mio media playlists list` |
+| `file` | a **content-node** id: the hub's content item for the file. It is *not* the media file id and *not* a playlist id | the lesson that `mio content reconcile` makes for the file (below) |
+
+```bash
+CONTAINER=$(mio content reconcile --hub hub_abc123 --playlist-id pl_abc -o plain \
+  --jq '.results[] | select(.node_type == "container") | .node_id')
+NODE_ID=$(mio content children "$CONTAINER" --hub hub_abc123 --limit 100 -o plain \
+  --jq '.[] | select(.file_id == "file_intro") | .id')     # the `file` binding's id
+: "${NODE_ID:?file_intro is not in the first 100 lessons: page on with --after <the last lesson id>}"
+```
+
+`content children` returns one page: 20 rows unless you pass `--limit`, and at most
+100. A lesson past that page leaves `NODE_ID` empty with exit 0, and an empty
+`dataSource.id` publishes an empty section, so the last line stops there instead.
+
+Suppose a `file` binding holds a playlist id or a media file id. On every view the
+renderer requests `GET /hub/{hub}/content/<that id>`, the API answers `404 Content
+node '…' not found in hub`, and the section renders as an empty shell (MIO-4176).
+A `playlist` binding with `"resume": true` (the "Continue watching" hero) still
+takes the playlist id; the renderer picks the item itself.
 
 #### The tree envelope: `get` returns one shape, `set` wants another
 
