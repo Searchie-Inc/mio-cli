@@ -479,9 +479,10 @@ mio pages publish "$PAGE_ID" --hub hub_abc123 --if-match 1          # section_co
 `--type sales` makes the hub render the page without its header and mobile
 navigation, because a sales page owns its full-bleed layout; the footer, with its
 footer menu, still renders. The default type is `generic`, and every type but `sales`
-keeps the full hub chrome. The API rejects a few types with 422: `content` needs the
-slug `content`, a hub has at most one `login`, `register` and `payments` page each,
-and `pages update --type` cannot change a page to or from those three. Pass
+keeps the full hub chrome. A few types are refused (exit 2): `content` needs the slug
+`content` (422), a hub has at most one `login`, `register` and `payments` page each
+(a second is 409), and `pages update --type` cannot change a page to or from those
+three (422). Pass
 `--privacy public`: the API defaults privacy to `members` for every page type except
 `login`, `register` and `payments`.
 
@@ -508,7 +509,10 @@ prints them all.
 any `dataSource.id` it cannot resolve, so an id from the wrong namespace publishes
 cleanly and then renders an empty section. The one id `publish` does check is a real
 content node's: bind a `members` or paid content node with no gate on the node or an
-ancestor and it answers 422 `compiler_invariant`. The namespace depends on
+ancestor and it fails with 422, exit 2 (`R3 invariant violation: … Add a gate to this
+node or an ancestor.`). A lesson that `content reconcile` makes is `members` unless the
+file and the playlist are public and each was published to the hub with
+`--visibility public` before the lesson was made. The namespace depends on
 `dataSource.type`:
 
 | `dataSource.type` | `id` is | where to get it |
