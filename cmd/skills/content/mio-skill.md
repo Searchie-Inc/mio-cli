@@ -64,8 +64,9 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
 - **A server-side op may build the hub in one shot (MIO-2976).** In create mode the
   CLI probes `POST …/hubs/from-template` first; if the backend has it enabled, the
   whole hub is built in ONE transaction and the nine client-side steps never run.
-  It ships **dormant**, so today every run still takes the client-side path and
-  nothing above changes. Two things to know when it does turn on: re-running the
+  Its flag defaults **off** and is set per deployment, so whether a run takes it
+  depends on the backend; a run that falls back says so on stderr. Two things to
+  know when it is on: re-running the
   SAME command converges (deterministic idempotency key) instead of creating a
   second hub — but re-running the same `--name`/`--slug` after the backend's catalog
   pin moved, or with different override flags, exits `2` having applied **nothing**
@@ -78,11 +79,11 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   branding `*_url` on create *and* update, so neither path can honour it; clear a
   key with `mio hubs update <hub_id> --unset branding.logo_url` instead).
   The run names the flag on stderr; `--dry-run` is silent, being structural. `-o json` is identical either way.
-  A **template** can force the client path too: one declaring `spaces[].icon`,
+  A **template** no longer forces it: one declaring `spaces[].icon`,
   `playlists[].documents`, or a page node binding a playlist `dataSource` by `key`
-  is applied client-side, because the op models none of those and would build a
-  hub that looks finished and is not (MIO-3065; backend parity is MIO-3073). The
-  skip is announced and names what would have been dropped.
+  (`starter` declares all three) takes the op, which has applied all of them since
+  MIO-3073 (MIO-4167). A binary before that change still skips the op for them and
+  says `(mio-backend parity: MIO-3073)` on stderr.
 - **A template's playlists arrive hub-scoped, filled, and bound (MIO-3065).** Each
   playlist is created with `hub_id` — without it its detail page 404s for everyone —
   and its per-hub publication row is `visibility: public`. A `playlists[].documents[]`

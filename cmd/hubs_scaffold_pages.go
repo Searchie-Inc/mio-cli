@@ -149,15 +149,15 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	}
 
 	//   - MIO-3065: a template whose pages bind a playlist dataSource by key
-	//     skips the probe too. The op writes the tree the CATALOG ships, so the
-	//     binding would keep the catalog's empty id and the section would compile
-	//     bound to nothing; only this side knows the ids stepPlaylists just
-	//     created. Unlike the whole-hub op's gate, icons and documents are NOT a
-	//     reason here — the client-side spaces and playlists steps have already
-	//     applied them by the time this step runs.
+	//     skips the probe too. Since MIO-3073 the op does fill a binding, but
+	//     only by matching the playlist TITLE among the hub's playlists: a title
+	//     another template playlist or hub playlist shares resolves to nothing,
+	//     and the op then writes the blank band and marks it applied. This side
+	//     holds the exact ids stepPlaylists created or recovered, and refuses
+	//     (above) to write a binding it cannot fill. See hubs_scaffold_op.go.
 	if !sc.dryRun && sc.catalogOverride == "" && sc.cat != nil {
 		if keys := playlistBindingKeys(sc); len(keys) > 0 {
-			sc.notef("not using the scaffold-from-template op: the pages bind playlist dataSource key(s) %s, which the op does not fill (mio-backend parity: MIO-3073) — applying client-side",
+			sc.notef("not using the scaffold-from-template op: the pages bind playlist dataSource key(s) %s, which the op could only match by playlist title — applying client-side with the ids this run holds",
 				strings.Join(keys, ", "))
 		} else {
 			done, err := applyViaServerOp(sc)
