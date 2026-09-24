@@ -527,8 +527,9 @@ func buildHubCreateAttrs(p hubCreateParams, warnW io.Writer) (map[string]any, er
 
 	// Best-effort key validation, only where the API would store a typo and
 	// silently do nothing with it: branding and meta keys, and settings.
-	// achievements sub-keys. Every other settings key is checked by the API
-	// itself (422), so it is left to the API (MIO-4171). Warn by default (to
+	// achievements sub-keys. Every other settings key is left to the API, which
+	// rejects an unknown top-level key or policies/registration/email/auth
+	// sub-key with a 422 (MIO-4171). Warn by default (to
 	// warnW, so --output json/yaml on stdout is never corrupted); Strict turns
 	// it into a usage error. (MIO-2515)
 	if b, ok := attrs["branding"].(map[string]any); ok {
@@ -1052,9 +1053,11 @@ func init() {
 		// accepted set; --strict-keys makes it a usage error. The allowlist is
 		// best-effort — the hub frontend is the authoritative render schema (see
 		// the flag help of each *-json flag and docs/internal/api-surface.md for
-		// the accepted keys). Every other --settings-json key is validated by the
-		// API itself (MIO-3334), so --strict-keys leaves those to it (MIO-4171).
-		cmd.Flags().Bool("strict-keys", false, "Reject unknown keys with an error instead of a warning, where the API would store them as sent: --branding-json and --meta-json keys, and settings.achievements sub-keys. Other --settings-json keys are validated by the API itself (a 422, exit 2) with or without this flag. Best-effort allowlist; accepted keys are listed in each *-json flag's help and docs/internal/api-surface.md.")
+		// the accepted keys). Every other --settings-json key is left to the API
+		// (MIO-4171): it rejects an unknown top-level key, or an unknown sub-key of
+		// policies/registration/email/auth (MIO-3334), and stores the sub-keys of
+		// its other sections as sent (MIO-4020) — the CLI never checked those.
+		cmd.Flags().Bool("strict-keys", false, "Reject unknown keys with an error instead of a warning, where the API would store them as sent: --branding-json and --meta-json keys, and settings.achievements sub-keys. It checks no other --settings-json key: the API rejects an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, with a 422 (exit 2) either way. Best-effort allowlist; accepted keys are listed in each *-json flag's help and docs/internal/api-surface.md.")
 	}
 
 	// Presentation-blob flags, all authorable on create. The accepted keys are

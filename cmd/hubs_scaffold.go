@@ -296,7 +296,8 @@ func stepHub(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 // It runs in STRICT key mode (a bad template branding key, or settings.
 // achievements sub-key, ERRORS, not warns — the whole point of the feature is
 // that a malformed template is caught, not silently dropped; every other
-// settings key is the API's to reject, with a 422, MIO-4171) and passes
+// settings key is left to the API, which 422s an unknown top-level key or
+// policies/registration/email/auth sub-key, MIO-4171) and passes
 // SlugKnown:true with the hub's own slug so the
 // navigation href validator scopes links to THIS hub. Navigation is carried ONLY
 // via blobPatches.Navigation (the seam's single nav source); applyHubBlobs

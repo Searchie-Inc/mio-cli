@@ -120,7 +120,7 @@ var (
 
 // settingsKeysHelpText is the --settings-json help clause on create and update:
 // who checks which settings keys, now that the API has an allowlist of its own.
-const settingsKeysHelpText = "The API validates settings keys itself: an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, is rejected with a 422 (exit 2) that names it. " +
+const settingsKeysHelpText = "Settings keys are left to the API, which rejects an unknown top-level key, or an unknown sub-key of policies/registration/email/auth, with a 422 (exit 2) that names it. " +
 	"The CLI checks only the sub-keys of settings.achievements, which the API stores as sent (unknown ones warn; error with --strict-keys)."
 
 // blobKeyCheck is one presentation blob's best-effort key check: the keys the
