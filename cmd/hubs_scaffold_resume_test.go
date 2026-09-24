@@ -417,25 +417,83 @@ func TestScaffoldResume_OverrideFlagAloneStillPatches(t *testing.T) {
 // TestScaffoldResume_StrictTemplateKeysStillChecked: fill-gaps must not make the
 // strict template-key check depend on what the hub already has — a template
 // key outside the allowlist fails even when the hub carries that key already
-// (so the fill would never have sent it).
+// (so the fill would never have sent it). Since MIO-4171 the keys the CLI
+// checks at all are branding keys and settings.achievements sub-keys — the
+// ones the API stores as sent — so each is pinned here; every other settings
+// key is the API's to judge (TestScaffoldResume_TemplateSettingsKeysAreTheAPIsToCheck).
 func TestScaffoldResume_StrictTemplateKeysStillChecked(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, hubAttrs string
+		edit                func(ht map[string]any)
+	}{
+		{
+			name: "branding key",
+			key:  "branding.not_a_real_branding_key",
+			edit: func(ht map[string]any) {
+				b, _ := ht["branding"].(map[string]any)
+				b["not_a_real_branding_key"] = "x"
+			},
+			hubAttrs: `{"slug":"trail","title":"T","is_private":true,
+			  "branding":{"not_a_real_branding_key":"x"}}`,
+		},
+		{
+			name: "settings.achievements sub-key",
+			key:  "settings.achievements.not_a_real_achievements_key",
+			edit: func(ht map[string]any) {
+				s, _ := ht["settings"].(map[string]any)
+				s["achievements"] = map[string]any{"not_a_real_achievements_key": true}
+			},
+			hubAttrs: `{"slug":"trail","title":"T","is_private":true,
+			  "settings":{"achievements":{"not_a_real_achievements_key":true}}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &resumeStub{catBody: catalogWithTemplateEdit(t, tc.edit), hubAttrs: tc.hubAttrs}
+			srv := stub.serve(t)
+
+			res, err := runResume(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
+			if res.Code != errs.ExitUsage {
+				t.Fatalf("exit = %d, want %d (a malformed template is caught whatever the hub holds); err=%v", res.Code, errs.ExitUsage, err)
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.key) {
+				t.Errorf("the error must name the bad template key %s; err=%v", tc.key, err)
+			}
+			if w := stub.writes(); len(w) != 0 {
+				t.Errorf("no write may fire; got %d (first %s %s)", len(w), w[0].method, w[0].path)
+			}
+		})
+	}
+}
+
+// TestScaffoldResume_TemplateSettingsKeysAreTheAPIsToCheck (MIO-4171 on the
+// --hub path): the fill-gaps key check must make the settings checks the
+// template-wins apply makes, and no more. A template settings key the API
+// accepts but the CLI's retired allowlist never listed (`language`,
+// `email.from_localpart`) must reach the fill PATCH, not fail the run with a
+// usage error on a hub the operator is trying to repair.
+func TestScaffoldResume_TemplateSettingsKeysAreTheAPIsToCheck(t *testing.T) {
 	cat := catalogWithTemplateEdit(t, func(ht map[string]any) {
 		s, _ := ht["settings"].(map[string]any)
-		s["not_a_real_settings_key"] = true
+		s["language"] = "de"
+		s["email"] = map[string]any{"from_localpart": "news"}
 	})
-	stub := &resumeStub{catBody: cat, hubAttrs: `{"slug":"trail","title":"T","is_private":true,
-	  "settings":{"not_a_real_settings_key":true}}`}
+	stub := &resumeStub{catBody: cat, hubAttrs: `{"slug":"trail","title":"T","is_private":true}`}
 	srv := stub.serve(t)
 
 	res, err := runResume(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
-	if res.Code != errs.ExitUsage {
-		t.Fatalf("exit = %d, want %d (a malformed template is caught whatever the hub holds); err=%v", res.Code, errs.ExitUsage, err)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0 — settings keys are the API's to judge; err=%v stderr=%q", res.Code, err, res.Stderr)
 	}
-	if err == nil || !strings.Contains(err.Error(), "not_a_real_settings_key") {
-		t.Errorf("the error must name the bad template key; err=%v", err)
+	patch := stub.blobsPatch(t)
+	if patch == nil {
+		t.Fatal("the hub lacks the template's settings, so the run must PATCH them; it sent no blobs PATCH")
 	}
-	if w := stub.writes(); len(w) != 0 {
-		t.Errorf("no write may fire; got %d (first %s %s)", len(w), w[0].method, w[0].path)
+	settings, _ := patch["settings"].(map[string]any)
+	if settings["language"] != "de" {
+		t.Errorf("settings.language = %v, want de; settings=%v", settings["language"], settings)
+	}
+	if e, _ := settings["email"].(map[string]any); e["from_localpart"] != "news" {
+		t.Errorf("settings.email.from_localpart = %v, want news; settings=%v", settings["email"], settings)
 	}
 }
 

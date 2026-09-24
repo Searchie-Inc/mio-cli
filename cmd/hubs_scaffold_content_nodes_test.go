@@ -418,7 +418,7 @@ func resumeReconcileServer(t *testing.T, titlesByID map[string]string) (*httptes
 			return
 		}
 		rows := make([]string, 0, len(titlesByID))
-		for _, id := range sortedKeys(titlesByID) {
+		for _, id := range sortedStringKeys(titlesByID) {
 			rows = append(rows, fmt.Sprintf(`{"id":"hm_%s","type":"hub_media","attributes":{"playlist_id":%q}}`, id, id))
 		}
 		w.WriteHeader(http.StatusOK)
@@ -428,7 +428,7 @@ func resumeReconcileServer(t *testing.T, titlesByID map[string]string) (*httptes
 	return srv, &bodies, &otherPosts
 }
 
-func sortedKeys(m map[string]string) []string {
+func sortedStringKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -635,7 +635,7 @@ func TestScaffoldContentNodes_KeyIsOnBothPaths(t *testing.T) {
 		for k := range nodes[0].(map[string]any) {
 			keys = append(keys, k)
 		}
-		if got := strings.Join(sortedKeys(toSet(keys)), ","); got != "legacy_hash,node_id,outcome" {
+		if got := strings.Join(sortedStringKeys(toSet(keys)), ","); got != "legacy_hash,node_id,outcome" {
 			t.Errorf("%s path: content_nodes entry keys = %s, want legacy_hash,node_id,outcome", name, got)
 		}
 	}
@@ -770,7 +770,7 @@ func scopedResumeServer(t *testing.T, catBody []byte, playlists map[string]scope
 			// The hub's publication rows. A row's hub_id is the hub it is
 			// published INTO, never the playlist's own scope.
 			rows := make([]string, 0, len(playlists))
-			for _, id := range sortedKeys(titles) {
+			for _, id := range sortedStringKeys(titles) {
 				rows = append(rows, fmt.Sprintf(`{"id":"hm_%s","type":"hub_media","attributes":{"hub_id":%q,"playlist_id":%q}}`, id, hubID, id))
 			}
 			w.WriteHeader(http.StatusOK)

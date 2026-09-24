@@ -353,12 +353,15 @@ func pathSetIn(m map[string]any, segs []string) bool {
 // WHOLE template branding (with the override layer) and settings. Fill mode
 // sends only the keys the hub lacks, and applyHubBlobs checks only the keys it
 // is sent — so without this a malformed template key would pass or fail
-// depending on what the hub happens to hold.
+// depending on what the hub happens to hold. It makes exactly the checks the
+// template-wins apply makes (brandingKeyCheck, settingsKeyCheck): for settings
+// that is only the settings.achievements sub-keys, every other settings key
+// being the API's to judge (MIO-4171).
 func validateTemplateBlobKeysStrict(sc *scaffoldContext, t *catalog.HubTemplate) error {
-	if err := validateBlobKeys(io.Discard, "branding", sc.branding.applyTo(t.Branding), brandingKeys, nil, true); err != nil {
+	if err := validateBlobKeys(io.Discard, brandingKeyCheck, sc.branding.applyTo(t.Branding), true); err != nil {
 		return scaffoldStrictKeyErr(err, scaffoldTemplateStrictKeyHint)
 	}
-	if err := validateBlobKeys(io.Discard, "settings", t.Settings, settingsKeys, settingsNestedKeys, true); err != nil {
+	if err := validateBlobKeys(io.Discard, settingsKeyCheck, t.Settings, true); err != nil {
 		return scaffoldStrictKeyErr(err, scaffoldTemplateStrictKeyHint)
 	}
 	return nil
