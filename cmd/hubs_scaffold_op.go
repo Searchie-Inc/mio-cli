@@ -23,35 +23,35 @@ import (
 // 404/405 and the freak retry miss (op disappeared between the two POSTs).
 const opAbsentNote = "scaffold-from-template op not available — applying client-side"
 
-// ---- what the server ops do not apply (MIO-3065) ------------------------------
+// ---- playlist bindings and the server ops (MIO-3065, MIO-3073) ----------------
 //
-// The ops are a SECOND implementation of this pipeline, in another repo, and
-// they were written against the vocabulary that existed then. Three
-// hubTemplates[] declarations are ignored by them today (verified on mio-backend
-// origin/main, 2026-08-10):
+// The ops are a SECOND implementation of this pipeline, in another repo.
+// MIO-3065 found three hubTemplates[] declarations they ignored —
+// spaces[].icon, playlists[].documents and a page's playlist dataSource `key` —
+// and kept any template declaring one off BOTH ops.
 //
-//   - spaces[].icon           — app/hub_scaffold/service.py `_TemplateSpace`
-//                               models name/slug/description/access_level/
-//                               posting_permission and no icon;
-//   - playlists[].documents   — its `_TemplatePlaylist` models key/title/
-//                               visibility/file_ids and no documents;
-//   - a playlist dataSource   — `dataSource` appears nowhere in app/ outside the
-//     `key`                     vendored catalog itself, on either op path.
+// The WHOLE-HUB op has applied all three since mio-backend #680 (MIO-3073,
+// 54679a96, 2026-08-11): `_step_spaces` sends the icon, `_step_playlists`
+// registers each document as a synthetic file, publishes it to the hub and
+// attaches it in file_ids-then-documents order, and `_step_pages` fills every
+// binding from the ids its own playlists step created
+// (app/page_catalog/datasource.py, a port of internal/catalog/datasource.go).
+// So nothing about the template keeps a create off that op any more (MIO-4167).
 //
-// Taking an op that drops what the template asked for produces a hub that looks
-// built and is not — the one outcome hubOpUnsupportedFlags already calls worse
-// than not using the op. So a template declaring any of them takes the
-// client-side path, ANNOUNCED, until mio-backend reaches parity (MIO-3073).
-//
-// Both functions are deliberately data-driven off the resolved template rather
-// than keyed on a template id: when a template stops declaring these, or the ops
-// start applying them and these checks are deleted, nothing about `starter` is
-// special-cased anywhere.
+// The PAGES-only op is different, and the gate on it stays. It fills a binding
+// by TITLE, from the playlists already on the hub
+// (app/pages/scaffold_service.py `_resolve_hub_playlist_ids`), and resolves a
+// title that two template playlists — or two hub playlists — share to nothing.
+// An unresolved key is LOGGED, not refused: the page is written with the
+// catalog's empty id, a blank band, and marked applied. This run already holds
+// the exact ids its playlists step created or recovered, and stepPages refuses
+// to write a binding it cannot fill, so a page that binds a playlist is still
+// applied client-side.
 
 // playlistBindingKeys returns the playlist dataSource keys the planned pages
 // declare — the fill contract the CLIENT resolves after stepPlaylists. Any at
-// all means a server-applied page would be written with the catalog's empty id
-// and compile to a section bound to nothing.
+// all keeps the pages step off the pages-only op, which could only match them
+// by title (see above).
 func playlistBindingKeys(sc *scaffoldContext) []string {
 	if sc.pagePlan == nil {
 		return nil
@@ -67,32 +67,6 @@ func playlistBindingKeys(sc *scaffoldContext) []string {
 		}
 	}
 	return keys
-}
-
-// hubOpUnappliedVocabulary lists, in template order, every declaration the
-// WHOLE-HUB op would drop. Empty means the op can express this template.
-//
-// The pages op gets its own, narrower check (see stepPages): by the time it is
-// probed the client-side spaces and playlists steps have already run, so the
-// only thing still at stake there is the fill contract.
-func hubOpUnappliedVocabulary(sc *scaffoldContext) []string {
-	var out []string
-	for _, s := range sc.hubTmpl.Spaces {
-		if s.Icon != "" {
-			out = append(out, "spaces[].icon")
-			break
-		}
-	}
-	for _, p := range sc.hubTmpl.Playlists {
-		if len(p.Documents) > 0 {
-			out = append(out, "playlists[].documents")
-			break
-		}
-	}
-	if len(playlistBindingKeys(sc)) > 0 {
-		out = append(out, "a playlist dataSource key")
-	}
-	return out
 }
 
 // applyViaServerOp tries the backend op for the WHOLE pages[] plan. Returns
@@ -176,13 +150,13 @@ func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTempl
 
 	// MIO-3065: the plan just changed under us, so the op gate has to be asked
 	// again. stepPages decided to probe against the OLD plan; if the fresh
-	// catalog's template binds a playlist by key, retrying the op would apply
-	// pages the op cannot fill — the exact silent breakage the gate exists to
-	// prevent, arriving through the one path that rebuilds the plan after the
-	// gate ran. Falling back client-side is always safe here: the op has not
-	// applied anything (it rejected the request).
+	// catalog's template binds a playlist by key, retrying the op would hand
+	// those bindings to a fill that can only match by title — the case the
+	// gate exists to keep client-side, arriving through the one path that
+	// rebuilds the plan after the gate ran. Falling back client-side is always
+	// safe here: the op has not applied anything (it rejected the request).
 	if keys := playlistBindingKeys(sc); len(keys) > 0 {
-		sc.notef("the refetched catalog's template binds playlist dataSource key(s) %s, which the op does not fill (mio-backend parity: MIO-3073) — applying the new plan client-side instead of retrying",
+		sc.notef("the refetched catalog's template binds playlist dataSource key(s) %s, which the op could only match by playlist title — applying the new plan client-side instead of retrying",
 			strings.Join(keys, ", "))
 		return false, nil
 	}

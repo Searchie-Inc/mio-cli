@@ -3,7 +3,8 @@ package cmd
 // hubs_scaffold_starter_test.go — MIO-3065: the hubTemplate vocabulary the
 // starter template is the first to exercise (spaces[].icon, playlists[].
 // documents, the playlist dataSource fill contract), the hub-scoped playlist
-// create, and the gate that keeps a server op from silently dropping any of it.
+// create, and which server op may apply it: the whole-hub op since MIO-3073
+// (MIO-4167), the pages-only op still not for a playlist binding.
 //
 // THE ORACLE IS THE WIRE, everywhere in this file. Each of these defects was
 // invisible precisely because the CLI's own state looked right: a space was
@@ -429,14 +430,21 @@ func vocabCatalogBody(t *testing.T, mutate func(ht map[string]any, cat map[strin
 	return out
 }
 
-// TestScaffoldOps_SkipWhenTheTemplateDeclaresVocabularyTheyDrop: the whole-hub
-// op is not even PROBED for a template declaring something it does not apply,
-// and the client-side pipeline builds the hub instead.
+// TestScaffoldOps_WholeHubOpTakesTheStarterVocabulary: a template declaring
+// spaces[].icon, playlists[].documents or a playlist dataSource key TAKES the
+// whole-hub op.
 //
-// The oracle is the wire on both sides: zero op POSTs AND a client-side hub
-// create. Asserting only the note would pass over a run that printed the note
-// and then called the op anyway.
-func TestScaffoldOps_SkipWhenTheTemplateDeclaresVocabularyTheyDrop(t *testing.T) {
+// Until MIO-3073 the op modelled none of the three, so MIO-3065 kept such a
+// template off it. mio-backend #680 (54679a96, 2026-08-11) made the op apply
+// all three — the icon on the space create, each document as a synthetic file
+// published to the hub and attached in order, and the dataSource fill from the
+// ids its own playlists step created — and the CLI's gate outlived the reason
+// for it, pushing every `starter` scaffold onto the slower client-side path.
+//
+// The oracle is the wire on both sides: exactly one op POST AND no client-side
+// hub create, with no skip note. Asserting only the note would pass over a run
+// that stayed quiet and still built the hub client-side.
+func TestScaffoldOps_WholeHubOpTakesTheStarterVocabulary(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		want   string
@@ -479,6 +487,29 @@ func TestScaffoldOps_SkipWhenTheTemplateDeclaresVocabularyTheyDrop(t *testing.T)
 				}
 			},
 		},
+		{
+			// The shipped `starter` template declares all three at once.
+			name: "all three together",
+			want: "icons, documents and a dataSource key",
+			mutate: func(ht map[string]any, cat map[string]any) {
+				spaces, _ := ht["spaces"].([]any)
+				sp, _ := spaces[0].(map[string]any)
+				sp["icon"] = "megaphone"
+				ht["playlists"] = []any{map[string]any{
+					"title": "Getting Started", "key": "getting-started", "visibility": "public",
+					"documents": []any{map[string]any{"title": "Add your first lesson"}},
+				}}
+				pts, _ := cat["pageTemplates"].([]any)
+				for _, raw := range pts {
+					pt, _ := raw.(map[string]any)
+					if pt["id"] != "page-homepage-community" {
+						continue
+					}
+					starter, _ := pt["starter"].(map[string]any)
+					starter["dataSource"] = map[string]any{"type": "playlist", "id": "", "key": "getting-started"}
+				}
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := vocabCatalogBody(t, tc.mutate)
@@ -488,14 +519,15 @@ func TestScaffoldOps_SkipWhenTheTemplateDeclaresVocabularyTheyDrop(t *testing.T)
 			if res.Code != errs.ExitOK {
 				t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
 			}
-			if len(rec.opPosts) != 0 {
-				t.Errorf("the whole-hub op must NOT be probed for a template it cannot fully apply; got %d POST(s)", len(rec.opPosts))
+			if len(rec.opPosts) != 1 {
+				t.Errorf("a template declaring %s must take the whole-hub op, which applies it since mio-backend #680; got %d op POST(s)",
+					tc.want, len(rec.opPosts))
 			}
-			if rec.hubCreates != 1 {
-				t.Errorf("client-side hub creates = %d, want 1 — the run must fall to the pipeline", rec.hubCreates)
+			if rec.hubCreates != 0 {
+				t.Errorf("client-side hub creates = %d, want 0 — the op built the hub", rec.hubCreates)
 			}
-			if !strings.Contains(res.Stderr, tc.want) {
-				t.Errorf("the skip must NAME what the op would drop (%q); stderr=%q", tc.want, res.Stderr)
+			if strings.Contains(res.Stderr, "not using the server-side hub scaffold op") {
+				t.Errorf("no skip may be announced for %s; stderr=%q", tc.want, res.Stderr)
 			}
 		})
 	}
@@ -504,6 +536,10 @@ func TestScaffoldOps_SkipWhenTheTemplateDeclaresVocabularyTheyDrop(t *testing.T)
 // The control: the SAME harness, the unmutated fixture. A template declaring
 // none of that vocabulary must still take the op — otherwise the gate above
 // proves nothing (a CLI that never probed would pass every case).
+//
+// (Since MIO-3073's gate came out this is the baseline the cases above are
+// compared against: the same harness, a template declaring none of that
+// vocabulary.)
 func TestScaffoldOps_PlainTemplateStillTakesTheOp(t *testing.T) {
 	srv, rec := hubOpScaffoldServerWithCatalog(t, http.StatusCreated, hubOpLiveBody, catalog21Body(t))
 
