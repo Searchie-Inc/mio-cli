@@ -59,7 +59,7 @@ const authForgotPasswordNotConfiguredHint = "on this route a 500 is the API sayi
 // which the API answers alike for an unknown, expired (one hour) or
 // already-used token, so the user is told all three and the way out.
 const authResetPasswordExpiredHint = "the reset link expired (they last one hour), was already used, or is not one this API issued: " +
-	"request a fresh one with `mio auth forgot-password --email <addr>` and use the token from the NEWEST email"
+	"request a fresh one with `mio auth forgot-password --email <addr>` (redeeming a link expires every other one)"
 
 // authResetPasswordRejectedHint explains the 422: the API's own detail names
 // the field (`/password`: under 8 characters), the hint says what to do.
@@ -85,7 +85,8 @@ if the email was sent, whether or not the address has an account, and this
 command reports the same — it never reveals whether an account exists.
 
 The email carries a link ending in '#<token>'. The token is single-use and
-valid for ONE HOUR; only the newest email's token works. Hand it to
+valid for ONE HOUR; asking again does not cancel an earlier link, but
+redeeming any one of them expires the rest. Hand it to
 'mio auth reset-password --token', then run 'mio login' with the new
 password. The reset signs the account out of every existing session; an API
 key already stored by 'mio login' keeps working.
@@ -128,9 +129,10 @@ and NOTHING is minted or stored: run 'mio login' next. An API key already
 stored by 'mio login' is not a session and keeps working.
 
 Failures, in the API's words plus a hint:
-  410  the token expired (one hour), was already used, or is unknown — the API
-       does not say which; run 'mio auth forgot-password' again and use the
-       NEWEST email. Its envelope carries code 'password_reset_expired'.
+  410  the token expired (one hour), was already used, was expired by another
+       link being redeemed, or is unknown — the API does not say which; run
+       'mio auth forgot-password' again. Its envelope carries code
+       'password_reset_expired'.
   422  the password is under 8 characters (exit 2).
   404  the API has no password-reset route yet (mio-backend MIO-3571).`,
 	Example: `  # Paste the whole link from the email (quoted: it contains #)
@@ -147,21 +149,26 @@ Failures, in the API's words plus a hint:
 
 // authPasswordClient builds the unauthenticated client both commands use:
 // the resolved API base, and deliberately NO key (see the file comment).
+//
+// It resolves Anonymous so the credential store is NEVER READ, not merely
+// ignored: a locked-out session may hold a blob mio cannot read at all
+// (permission denied, an I/O error), which every ordinary command reports as
+// exit 1 before any request — and these two commands are the way out of
+// exactly that state (TestAuthPassword_NeverReadsTheCredentialStore).
+// --api-key is left out of the overrides for the same reason: nothing the
+// caller holds is sent.
 func authPasswordClient() (*client.Client, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, errs.Wrap(errs.ExitGeneric, err)
 	}
 	resolved, err := cfg.Resolve(config.Overrides{
-		APIKey:  flags.apiKey,
-		APIBase: flags.apiBase,
-		TeamID:  flags.team,
-		Profile: flags.profile,
+		Anonymous: true,
+		APIBase:   flags.apiBase,
+		TeamID:    flags.team,
+		Profile:   flags.profile,
 	})
-	// A stored key that cannot be read is exactly the state a locked-out user
-	// may be in; it is irrelevant here because no key is sent. Only a failure
-	// to resolve the API base itself is fatal.
-	if err != nil && !config.StoredKeyUnusable(err) {
+	if err != nil {
 		return nil, errs.Wrap(errs.ExitGeneric, err)
 	}
 	return client.New(resolved.APIBase, "", client.WithDebug(flags.debug)), nil

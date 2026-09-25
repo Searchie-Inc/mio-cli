@@ -11,11 +11,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/config"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -62,6 +65,13 @@ func authPasswordServer(t *testing.T, status int, body string) (*httptest.Server
 func runAuthPassword(t *testing.T, srvURL string, extraEnv []string, args ...string) (contractResult, error) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	return runAuthPasswordInStore(t, srvURL, extraEnv, args...)
+}
+
+// runAuthPasswordInStore is runAuthPassword against whatever store
+// XDG_CONFIG_HOME already points at (a test that seeds one sets it first).
+func runAuthPasswordInStore(t *testing.T, srvURL string, extraEnv []string, args ...string) (contractResult, error) {
+	t.Helper()
 	env := append([]string{
 		"MIO_API_BASE_URL=" + srvURL,
 		"MIO_API_KEY=mio_sk_stale_revoked_key",
@@ -415,4 +425,51 @@ func mapsEqualJSON(got, want map[string]any) bool {
 	g, _ := json.Marshal(got)
 	w, _ := json.Marshal(want)
 	return bytes.Equal(g, w)
+}
+
+// TestAuthPassword_NeverReadsTheCredentialStore pins the promise both
+// commands make — they work from the very session that is locked out — at
+// its hardest case: a stored blob the filesystem will not let mio read
+// (permission denied), which every ordinary command reports as exit 1 before
+// any request, and no MIO_API_KEY to shadow it. Neither command may touch the
+// store: the request must go out, keyless, and succeed. (Codex review round 1
+// of MIO-4286: the client was resolved without Anonymous, so the store was
+// read and this state exited 1 with no request.)
+func TestAuthPassword_NeverReadsTheCredentialStore(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX file modes that bind the current user")
+	}
+	for _, tc := range []struct {
+		name   string
+		status int
+		env    []string
+		args   []string
+	}{
+		{"forgot-password", http.StatusAccepted, nil, []string{"auth", "forgot-password", "--email", "lost@test.member.dev"}},
+		{"reset-password", http.StatusNoContent, []string{"MIO_PASSWORD=a-new-password"}, []string{"auth", "reset-password", "--token", "tok"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, blob := isolatedStore(t)
+			if err := config.SetAPIKey("mio_sk_live_locked_out"); err != nil {
+				t.Fatalf("SetAPIKey: %v", err)
+			}
+			if err := os.Chmod(blob, 0); err != nil {
+				t.Fatalf("chmod the blob: %v", err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(blob, 0o600) })
+			if _, err := config.GetAPIKey(); err == nil || config.StoredKeyUnusable(err) {
+				t.Fatalf("precondition: reading a mode-000 blob = %v, want a filesystem error rather than a credential verdict", err)
+			}
+
+			srv, cap := authPasswordServer(t, tc.status, "")
+			env := append([]string{"MIO_API_KEY="}, tc.env...) // nothing shadows the store
+			res, err := runAuthPasswordInStore(t, srv.URL, env, tc.args...)
+			if res.Code != errs.ExitOK {
+				t.Fatalf("exit code = %d, want 0 from a locked-out session; err=%v", res.Code, err)
+			}
+			if cap.Count != 1 || cap.Authorization != "" {
+				t.Errorf("requests = %d (Authorization %q), want exactly one keyless request", cap.Count, cap.Authorization)
+			}
+		})
+	}
 }
