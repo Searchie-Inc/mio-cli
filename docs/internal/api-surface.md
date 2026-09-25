@@ -72,6 +72,20 @@ plain JSON.
   MintAPIKey → credential store), so it REPLACES any stored key. Names sent only when
   non-empty. Backend auto-provisions a personal team, so the JWT team_id claim
   resolves the mint target with no `GET /api/teams` round-trip.
+- `POST /api/auth/forgot` {email} → 202 empty, whatever the address (MIO-3571;
+  `cmd/auth_password.go`, MIO-4286). Surfaced as `mio auth forgot-password`,
+  sent WITHOUT a key on purpose (the caller may hold the revoked one). 429 →
+  exit 6; the route's by-design 500 (no reset landing page configured) and a
+  404 from a backend without the route each get a hint.
+- `POST /api/auth/reset` {token,password} → 204, revokes every refresh session,
+  mints nothing. Surfaced as `mio auth reset-password --token <token|link>`:
+  the token is the emailed link's URL FRAGMENT (`…/reset-password#<token>`),
+  extracted client-side; the password comes from a twice-prompt or
+  `MIO_PASSWORD`, never argv. 410 `password_reset_expired` (unknown / expired
+  after 1 h / used — one answer for all three) → exit 1 + hint; 422 → exit 2.
+- `POST /api/auth/me/password/change` {current_password,new_password} → fresh
+  token pair (Bearer user session; API keys 403). NOT surfaced: the CLI holds
+  no user session after `mio login` (it keeps only the minted key).
 - `POST /api/auth/refresh` (Bearer refresh)
 - `POST /api/auth/logout`
 - `GET /api/auth/me` → current user

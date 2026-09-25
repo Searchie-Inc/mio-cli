@@ -226,6 +226,23 @@ MIO_EMAIL=you@example.com MIO_PASSWORD='s3cr3tpass' mio register
 
 Your password is never echoed or saved. `--first-name`/`--last-name` are optional; email-format and password rules (min 8 characters) are enforced by the API.
 
+### Forgot your password?
+
+A platform user (the account `mio login` signs in) who lost their password recovers it from the CLI alone, with no browser:
+
+```sh
+mio auth forgot-password --email you@example.com   # emails a reset link; always answers as if it did
+mio auth reset-password --token 'https://admin.example.com/reset-password#<token>'   # the whole link, quoted (it contains #), or just the token
+mio login                                          # the reset mints nothing: sign in with the new password
+```
+
+- The link's token is **single-use and valid for one hour**; asking again does not cancel an earlier link, but redeeming any one expires the rest. It is the part after `#` in the link (the URL fragment), so quote the link. A link whose fragment a mail client or browser stripped exits `2` before any request: copy it from the email itself.
+- The new password is **never taken on the command line** (there is no `--password` flag). On a terminal it is prompted for twice, unechoed; headless, set `MIO_PASSWORD`, the same variable `mio login` reads: `MIO_PASSWORD='a-new-password' mio auth reset-password --token '<token>'`. With neither, exit `2` and no request.
+- Both commands **send no API key**, so they work from the very session whose stored key is stale or revoked. The reset signs the account out of every session; an API key already stored by `mio login` keeps working.
+- Failures, in the API's words plus a hint: `410` is an expired, already-used or unknown token (the API does not say which) — run `forgot-password` again; its envelope carries `errors[0].code` `password_reset_expired` (exit `1`). `422` is a password under 8 characters (exit `2`). `429` is the API's rate limit, 5 `forgot` and 10 `reset` requests an hour per IP (exit `6`). `404` means the API you are pointed at has no password-reset route yet.
+
+Both commands land in the release after `v0.24.0` and need an API with mio-backend MIO-3571.
+
 ### API key (CI / scripts / agents)
 
 Skip `mio login` entirely — just set the environment variable:
@@ -470,7 +487,7 @@ Scripts and agents can branch on these stable codes.
 | `login` / `logout` | Interactive auth |
 | `register` | Create a new account (email + password, optional first/last name) and auto-login — interactive, or headless via `--email`/`--password` (or `MIO_EMAIL`/`MIO_PASSWORD`). Replaces any stored key. |
 | `whoami` | Print resolved identity — user, team, hub, api-base, profile, key source |
-| `auth` | `token` — print the stored API key to stdout (`MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY`); exit 3 with empty stdout when none is stored |
+| `auth` | `token` — print the stored API key to stdout (`MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY`); exit 3 with empty stdout when none is stored. `forgot-password --email <addr>` / `reset-password --token <token\|link>` — recover a lost platform-user password from the CLI alone (unauthenticated; the new password is prompted for or read from `MIO_PASSWORD`, never on argv; then `mio login`). Release after `v0.24.0` |
 | `config` | `set`, `get`, `list` |
 | `api-keys` | `create`, `list`, `retrieve`, `delete` |
 | `teams` | `create` (`--name` and `--slug`, both required; needs a user access token, since the API refuses an API key here with 403), `list`, `retrieve`, `update` (`--name` only; the slug is fixed at creation), `delete` and `switch` (server-side switch + updates local context), which refuse an API key with 403 too; `members list/add/remove` |
