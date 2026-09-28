@@ -34,6 +34,10 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Release exactly the tag that triggered this run. Without it GoReleaser
+          # resolves the tag with `git describe`, which picks the rc tag when a final
+          # and its rc point at the same commit (v0.25.0 failed that way).
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
           # Required to push formula to the Homebrew tap repo.
           # Create a PAT with `public_repo` scope (or repo scope for private tap)
           # and add it as repository secret HOMEBREW_TAP_TOKEN.
