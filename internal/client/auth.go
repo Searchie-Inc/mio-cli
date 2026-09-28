@@ -240,3 +240,39 @@ func (c *Client) ListTeams(ctx context.Context, accessToken string) ([]TeamInfo,
 	}
 	return teams, nil
 }
+
+// ForgotPassword asks the API to email a password reset link to email via the
+// plain-JSON, unauthenticated POST /api/auth/forgot (MIO-3571, surfaced as
+// `mio auth forgot-password`). The route answers 202 with an empty body
+// whether or not the address belongs to an account — enumeration safety is
+// the API's contract, and this method preserves it by reporting nothing about
+// the address either way.
+//
+// Failures are returned unchanged so the API's own error document survives
+// on the error (errs.APIErrorDocumentOf): a 429 (5 requests an hour per IP)
+// maps to ExitRateLimited, a 422 (not an email address) to ExitUsage, and the
+// 500 the route answers when the deployment has no reset page configured to
+// ExitServer. The command layer adds the plain-words hints.
+func (c *Client) ForgotPassword(ctx context.Context, email string) error {
+	payload := map[string]string{"email": email}
+	_, err := c.do(ctx, http.MethodPost, "/api/auth/forgot", nil, payload, contentTypeJSON)
+	return err
+}
+
+// ResetPassword sets a new password with a token from a password reset email
+// via the plain-JSON, unauthenticated POST /api/auth/reset (MIO-3571,
+// surfaced as `mio auth reset-password`). token is the bare value the emailed
+// link carries after `#` — extracting it from a pasted link is the command's
+// job, not the client's. The route answers 204 on success and revokes every
+// existing refresh session for the account; it mints nothing, so the caller
+// logs in afterwards.
+//
+// Failures are returned unchanged: a 410 carries code `password_reset_expired`
+// for an unknown, expired or already-used token (the API deliberately does not
+// distinguish the three), and a 422 is the API's own detail for a password
+// under 8 characters or a missing token. The command layer explains both.
+func (c *Client) ResetPassword(ctx context.Context, token, password string) error {
+	payload := map[string]string{"token": token, "password": password}
+	_, err := c.do(ctx, http.MethodPost, "/api/auth/reset", nil, payload, contentTypeJSON)
+	return err
+}

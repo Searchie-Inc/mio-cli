@@ -54,7 +54,7 @@ func init() {
 
 var authCmd = &cobra.Command{
 	Use:   "auth",
-	Short: "Work with the credential `mio login` stored.",
+	Short: "Credentials: export the stored key, or recover a lost password.",
 }
 
 var authTokenCmd = &cobra.Command{
