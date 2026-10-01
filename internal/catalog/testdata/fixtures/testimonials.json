@@ -23,7 +23,8 @@
           "kind": "headline",
           "settings": {
             "align": "center"
-          }
+          },
+          "value": "What members say"
         }
       ]
     },
@@ -39,17 +40,22 @@
         {
           "id": "#4",
           "kind": "quote",
-          "settings": {}
+          "settings": {},
+          "value": {
+            "quote": "Rewrite this with a member's own words.",
+            "name": "Member name",
+            "profession": "What they do"
+          }
         },
         {
           "id": "#5",
           "kind": "quote",
-          "settings": {}
-        },
-        {
-          "id": "#6",
-          "kind": "quote",
-          "settings": {}
+          "settings": {},
+          "value": {
+            "quote": "A second voice makes the first believable.",
+            "name": "Another member",
+            "profession": "What they do"
+          }
         }
       ]
     }

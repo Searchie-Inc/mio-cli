@@ -23,6 +23,10 @@
             "split": true,
             "gap": "section"
           },
+          "dataSource": {
+            "type": "file",
+            "id": ""
+          },
           "children": [
             {
               "id": "#3",
@@ -72,7 +76,8 @@
                         "ring": {
                           "value": 100,
                           "size": 16
-                        }
+                        },
+                        "optional": true
                       }
                     },
                     {
@@ -81,7 +86,8 @@
                       "settings": {
                         "name": "duration",
                         "role": "meta",
-                        "icon": "clock"
+                        "icon": "clock",
+                        "optional": true
                       }
                     },
                     {
@@ -90,7 +96,8 @@
                       "settings": {
                         "name": "plays",
                         "role": "meta",
-                        "icon": "eye"
+                        "icon": "eye",
+                        "optional": true
                       }
                     }
                   ]
@@ -100,11 +107,125 @@
                   "kind": "field",
                   "settings": {
                     "name": "description",
-                    "role": "body"
+                    "role": "body",
+                    "clamp": 5,
+                    "marginBottom": 4,
+                    "optional": true
                   }
                 },
                 {
                   "id": "#11",
+                  "kind": "button",
+                  "settings": {
+                    "icon": "play-filled",
+                    "actionFromScope": "action"
+                  },
+                  "value": "Play"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "#12",
+          "kind": "row",
+          "settings": {
+            "responsive": true,
+            "split": true,
+            "gap": "section"
+          },
+          "dataSource": {
+            "type": "file",
+            "id": ""
+          },
+          "children": [
+            {
+              "id": "#13",
+              "kind": "media-slot",
+              "settings": {
+                "name": "cover",
+                "preset": "medium-720",
+                "aspectRatio": "16:9",
+                "radius": "m",
+                "outline": true,
+                "progressBar": true
+              }
+            },
+            {
+              "id": "#14",
+              "kind": "stack",
+              "settings": {
+                "gap": 2,
+                "align": "start"
+              },
+              "children": [
+                {
+                  "id": "#15",
+                  "kind": "field",
+                  "settings": {
+                    "name": "title",
+                    "role": "title",
+                    "size": "title",
+                    "weight": 700
+                  }
+                },
+                {
+                  "id": "#16",
+                  "kind": "row",
+                  "settings": {
+                    "gap": 2.5,
+                    "align": "center"
+                  },
+                  "children": [
+                    {
+                      "id": "#17",
+                      "kind": "field",
+                      "settings": {
+                        "name": "status",
+                        "role": "meta",
+                        "tone": "primary",
+                        "ring": {
+                          "value": 100,
+                          "size": 16
+                        },
+                        "optional": true
+                      }
+                    },
+                    {
+                      "id": "#18",
+                      "kind": "field",
+                      "settings": {
+                        "name": "duration",
+                        "role": "meta",
+                        "icon": "clock",
+                        "optional": true
+                      }
+                    },
+                    {
+                      "id": "#19",
+                      "kind": "field",
+                      "settings": {
+                        "name": "plays",
+                        "role": "meta",
+                        "icon": "eye",
+                        "optional": true
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "#20",
+                  "kind": "field",
+                  "settings": {
+                    "name": "description",
+                    "role": "body",
+                    "clamp": 5,
+                    "marginBottom": 4,
+                    "optional": true
+                  }
+                },
+                {
+                  "id": "#21",
                   "kind": "button",
                   "settings": {
                     "icon": "play-filled",

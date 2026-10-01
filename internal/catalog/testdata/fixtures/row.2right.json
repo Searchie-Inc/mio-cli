@@ -12,32 +12,86 @@
   "children": [
     {
       "id": "#1",
-      "kind": "row",
+      "kind": "stack",
       "settings": {
-        "responsive": true,
-        "wrap": true,
-        "gap": 6,
-        "mobileGap": 3,
-        "align": "stretch"
+        "gap": 8,
+        "mobileGap": 6
       },
       "children": [
         {
           "id": "#2",
-          "kind": "stack",
+          "kind": "headline",
           "settings": {
-            "width": "1/3",
-            "gap": 4
+            "weight": 700
           },
-          "children": []
+          "value": "Sidebar section"
         },
         {
           "id": "#3",
-          "kind": "stack",
+          "kind": "row",
           "settings": {
-            "width": "2/3",
-            "gap": 4
+            "responsive": true,
+            "wrap": true,
+            "gap": 6,
+            "mobileGap": 3,
+            "align": "stretch"
           },
-          "children": []
+          "children": [
+            {
+              "id": "#4",
+              "kind": "stack",
+              "settings": {
+                "width": "1/3",
+                "gap": 2.5
+              },
+              "children": [
+                {
+                  "id": "#5",
+                  "kind": "headline",
+                  "settings": {
+                    "level": 5,
+                    "weight": 700
+                  },
+                  "value": "Sidebar"
+                },
+                {
+                  "id": "#6",
+                  "kind": "text",
+                  "settings": {
+                    "marginBottom": 0
+                  },
+                  "value": "Short notes, links or a next step."
+                }
+              ]
+            },
+            {
+              "id": "#7",
+              "kind": "stack",
+              "settings": {
+                "width": "2/3",
+                "gap": 2.5
+              },
+              "children": [
+                {
+                  "id": "#8",
+                  "kind": "headline",
+                  "settings": {
+                    "level": 5,
+                    "weight": 700
+                  },
+                  "value": "Main content"
+                },
+                {
+                  "id": "#9",
+                  "kind": "text",
+                  "settings": {
+                    "marginBottom": 0
+                  },
+                  "value": "The wide column holds the story. Rewrite any of this on the page."
+                }
+              ]
+            }
+          ]
         }
       ]
     }

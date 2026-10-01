@@ -1,0 +1,89 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "auth-brand-panel",
+  "settings": {
+    "gap": 6,
+    "slot": "brand-panel",
+    "side": "right"
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "headline",
+      "settings": {
+        "align": "center"
+      },
+      "value": "You'll learn how to:"
+    },
+    {
+      "id": "#2",
+      "kind": "stack",
+      "settings": {
+        "gap": 0
+      },
+      "children": [
+        {
+          "id": "#3",
+          "kind": "text",
+          "settings": {
+            "variant": "bullet",
+            "marginBottom": 0
+          },
+          "value": "Build a signature offer members say yes to"
+        },
+        {
+          "id": "#4",
+          "kind": "text",
+          "settings": {
+            "variant": "bullet",
+            "marginBottom": 0
+          },
+          "value": "Price your programs with confidence"
+        },
+        {
+          "id": "#5",
+          "kind": "text",
+          "settings": {
+            "variant": "bullet",
+            "marginBottom": 0
+          },
+          "value": "Turn casual viewers into paying members"
+        },
+        {
+          "id": "#6",
+          "kind": "text",
+          "settings": {
+            "variant": "bullet",
+            "marginBottom": 0
+          },
+          "value": "Automate onboarding so you're not doing it by hand"
+        },
+        {
+          "id": "#7",
+          "kind": "text",
+          "settings": {
+            "variant": "bullet",
+            "marginBottom": 0
+          },
+          "value": "Grow a community that keeps people coming back"
+        },
+        {
+          "id": "#8",
+          "kind": "divider",
+          "settings": {
+            "spacing": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "#9",
+      "kind": "text",
+      "settings": {
+        "weight": 700
+      },
+      "value": "No credit card required to get started."
+    }
+  ]
+}

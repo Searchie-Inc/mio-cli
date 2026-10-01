@@ -1,0 +1,691 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "page-homepage-starter",
+  "settings": {
+    "gap": 0
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "container",
+      "template": "hero",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section",
+          "background": {
+            "type": "tint"
+          }
+        }
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "row",
+          "settings": {
+            "responsive": true,
+            "split": true,
+            "gap": "section"
+          },
+          "children": [
+            {
+              "id": "#3",
+              "kind": "image",
+              "settings": {
+                "radius": "m"
+              }
+            },
+            {
+              "id": "#4",
+              "kind": "stack",
+              "settings": {
+                "gap": 2,
+                "align": "start"
+              },
+              "children": [
+                {
+                  "id": "#5",
+                  "kind": "headline",
+                  "settings": {
+                    "level": 1,
+                    "size": "title",
+                    "weight": 700
+                  },
+                  "value": "Welcome to your new hub"
+                },
+                {
+                  "id": "#6",
+                  "kind": "text",
+                  "settings": {
+                    "clamp": 5,
+                    "marginBottom": 4
+                  },
+                  "value": "This is your hub's home page — the first thing your members see. Everything here is a starting point: edit the copy, add a welcome video, or remove sections entirely from the editor. Nothing is locked, and nothing here is permanent."
+                },
+                {
+                  "id": "#7",
+                  "kind": "button",
+                  "settings": {
+                    "compactMobile": true,
+                    "icon": "play-filled",
+                    "action": {
+                      "type": "page",
+                      "value": "register"
+                    }
+                  },
+                  "value": "Start watching"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#8",
+      "kind": "container",
+      "template": "compact",
+      "dataSource": {
+        "type": "playlist",
+        "id": "",
+        "key": "getting-started"
+      },
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section"
+        }
+      },
+      "children": [
+        {
+          "id": "#9",
+          "kind": "stack",
+          "settings": {
+            "gap": 8,
+            "mobileGap": 6
+          },
+          "children": [
+            {
+              "id": "#10",
+              "kind": "row",
+              "settings": {
+                "align": "start",
+                "gap": 5,
+                "mobileGap": 3,
+                "maxWidth": 800
+              },
+              "children": [
+                {
+                  "id": "#11",
+                  "kind": "progress-ring",
+                  "settings": {
+                    "valueFrom": "progressPercent",
+                    "size": 76,
+                    "mobileSize": 60
+                  }
+                },
+                {
+                  "id": "#12",
+                  "kind": "stack",
+                  "settings": {
+                    "gap": 2.5,
+                    "mobileGap": 1.5,
+                    "align": "start",
+                    "grow": true,
+                    "px": 0.5
+                  },
+                  "children": [
+                    {
+                      "id": "#13",
+                      "kind": "field",
+                      "settings": {
+                        "name": "title",
+                        "role": "title",
+                        "size": "title",
+                        "weight": 700,
+                        "actionFromScope": "action"
+                      }
+                    },
+                    {
+                      "id": "#14",
+                      "kind": "row",
+                      "settings": {
+                        "gap": 2.5,
+                        "align": "center"
+                      },
+                      "children": [
+                        {
+                          "id": "#15",
+                          "kind": "field",
+                          "settings": {
+                            "name": "scheduledDate",
+                            "role": "meta",
+                            "icon": "calendar",
+                            "optional": true
+                          }
+                        },
+                        {
+                          "id": "#16",
+                          "kind": "field",
+                          "settings": {
+                            "name": "contentCountLabel",
+                            "role": "meta",
+                            "icon": "content",
+                            "optional": true
+                          }
+                        },
+                        {
+                          "id": "#17",
+                          "kind": "field",
+                          "settings": {
+                            "name": "duration",
+                            "role": "meta",
+                            "icon": "clock",
+                            "optional": true
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "#18",
+                      "kind": "field",
+                      "settings": {
+                        "name": "description",
+                        "role": "body",
+                        "size": "body-small",
+                        "clamp": 3,
+                        "optional": true
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#19",
+              "kind": "horizontal-scroll",
+              "settings": {
+                "itemWidth": "card"
+              },
+              "dataSource": {
+                "type": "playlist",
+                "id": "",
+                "key": "getting-started"
+              },
+              "repeat": {
+                "over": "dataSource"
+              },
+              "children": [
+                {
+                  "id": "#20",
+                  "kind": "content-card",
+                  "template": "content-card",
+                  "settings": {
+                    "actionFromScope": "action"
+                  },
+                  "children": [
+                    {
+                      "id": "#21",
+                      "kind": "media-slot",
+                      "settings": {
+                        "name": "cover",
+                        "aspectRatio": "16:9",
+                        "radius": "m",
+                        "outline": true
+                      }
+                    },
+                    {
+                      "id": "#22",
+                      "kind": "stack",
+                      "settings": {
+                        "gap": 0.5
+                      },
+                      "children": [
+                        {
+                          "id": "#23",
+                          "kind": "field",
+                          "settings": {
+                            "name": "title",
+                            "role": "title",
+                            "size": "body",
+                            "weight": 700
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#24",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section",
+          "background": {
+            "type": "tint",
+            "tone": "primary"
+          }
+        }
+      },
+      "children": [
+        {
+          "id": "#25",
+          "kind": "stack",
+          "settings": {
+            "gap": 8
+          },
+          "children": [
+            {
+              "id": "#26",
+              "kind": "headline",
+              "settings": {
+                "weight": 700
+              },
+              "value": "Grow your hub"
+            },
+            {
+              "id": "#27",
+              "kind": "row",
+              "settings": {
+                "responsive": true,
+                "wrap": true,
+                "gap": 3,
+                "mobileGap": 1.5,
+                "align": "stretch"
+              },
+              "children": [
+                {
+                  "id": "#28",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3",
+                    "align": "start",
+                    "gap": 2,
+                    "surface": {
+                      "background": {
+                        "type": "tint",
+                        "tone": "primary"
+                      },
+                      "borderRadius": "hub-m",
+                      "padding": "card"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#29",
+                      "kind": "text",
+                      "settings": {
+                        "size": "body-big",
+                        "weight": 700,
+                        "marginBottom": 0
+                      },
+                      "value": "Add your content"
+                    },
+                    {
+                      "id": "#30",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true,
+                        "marginBottom": 0
+                      },
+                      "value": "Upload your first videos, audio, or docs to start filling your hub."
+                    },
+                    {
+                      "id": "#31",
+                      "kind": "button",
+                      "settings": {
+                        "compactMobile": true,
+                        "iconRight": "arrow-right"
+                      },
+                      "value": "Add content"
+                    }
+                  ]
+                },
+                {
+                  "id": "#32",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3",
+                    "align": "start",
+                    "gap": 2,
+                    "surface": {
+                      "background": {
+                        "type": "tint",
+                        "tone": "primary"
+                      },
+                      "borderRadius": "hub-m",
+                      "padding": "card"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#33",
+                      "kind": "text",
+                      "settings": {
+                        "size": "body-big",
+                        "weight": 700,
+                        "marginBottom": 0
+                      },
+                      "value": "Introduce yourself"
+                    },
+                    {
+                      "id": "#34",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true,
+                        "marginBottom": 0
+                      },
+                      "value": "Head to Discussions and write your first welcome post."
+                    },
+                    {
+                      "id": "#35",
+                      "kind": "button",
+                      "settings": {
+                        "compactMobile": true,
+                        "iconRight": "arrow-right"
+                      },
+                      "value": "Write a post"
+                    }
+                  ]
+                },
+                {
+                  "id": "#36",
+                  "kind": "stack",
+                  "settings": {
+                    "width": "1/3",
+                    "align": "start",
+                    "gap": 2,
+                    "surface": {
+                      "background": {
+                        "type": "tint",
+                        "tone": "primary"
+                      },
+                      "borderRadius": "hub-m",
+                      "padding": "card"
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": "#37",
+                      "kind": "text",
+                      "settings": {
+                        "size": "body-big",
+                        "weight": 700,
+                        "marginBottom": 0
+                      },
+                      "value": "Invite your first members"
+                    },
+                    {
+                      "id": "#38",
+                      "kind": "text",
+                      "settings": {
+                        "muted": true,
+                        "marginBottom": 0
+                      },
+                      "value": "Share your hub link and bring the people you want in the room."
+                    },
+                    {
+                      "id": "#39",
+                      "kind": "button",
+                      "settings": {
+                        "compactMobile": true,
+                        "iconRight": "arrow-right"
+                      },
+                      "value": "Invite people"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#40",
+      "kind": "container",
+      "template": "search-bar",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section"
+        }
+      },
+      "children": [
+        {
+          "id": "#41",
+          "kind": "stack",
+          "settings": {
+            "gap": 8,
+            "align": "center"
+          },
+          "children": [
+            {
+              "id": "#42",
+              "kind": "stack",
+              "settings": {
+                "gap": 1.5,
+                "align": "center"
+              },
+              "children": [
+                {
+                  "id": "#43",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700,
+                    "align": "center"
+                  },
+                  "value": "Looking for something?"
+                },
+                {
+                  "id": "#44",
+                  "kind": "text",
+                  "settings": {
+                    "size": "body",
+                    "align": "center",
+                    "marginBottom": 0
+                  },
+                  "value": "Search across everything in this hub."
+                }
+              ]
+            },
+            {
+              "id": "#45",
+              "kind": "container",
+              "settings": {
+                "maxWidth": "search",
+                "padding": 0
+              },
+              "children": [
+                {
+                  "id": "#46",
+                  "kind": "search-bar",
+                  "system": true,
+                  "settings": {
+                    "placeholder": "Search your hub"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#47",
+      "kind": "stack",
+      "template": "testimonials",
+      "settings": {
+        "gap": 8,
+        "surface": {
+          "padding": "section"
+        }
+      },
+      "children": [
+        {
+          "id": "#48",
+          "kind": "container",
+          "settings": {
+            "maxWidth": "content",
+            "padding": 0
+          },
+          "children": [
+            {
+              "id": "#49",
+              "kind": "headline",
+              "settings": {
+                "weight": 700
+              },
+              "value": "What members say"
+            }
+          ]
+        },
+        {
+          "id": "#50",
+          "kind": "carousel",
+          "settings": {
+            "effect": "marquee"
+          },
+          "children": [
+            {
+              "id": "#51",
+              "kind": "quote",
+              "settings": {},
+              "value": {
+                "quote": "I've joined a lot of these and dropped off every time. This is the first one I actually keep coming back to.",
+                "name": "Maya Chen",
+                "profession": "Member",
+                "avatarFallback": "MC"
+              }
+            },
+            {
+              "id": "#52",
+              "kind": "quote",
+              "settings": {},
+              "value": {
+                "quote": "The community alone is worth it. Getting straight answers from people a step ahead of me changed how fast I move.",
+                "name": "Devon Parke",
+                "profession": "Member",
+                "avatarFallback": "DP"
+              }
+            },
+            {
+              "id": "#53",
+              "kind": "quote",
+              "settings": {},
+              "value": {
+                "quote": "Everything's finally in one place, and it's easy to pick up right where I left off. No more digging through links.",
+                "name": "Sam Okafor",
+                "profession": "Member",
+                "avatarFallback": "SO"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "#54",
+      "kind": "container",
+      "template": "row",
+      "settings": {
+        "maxWidth": "content",
+        "padding": 0,
+        "surface": {
+          "padding": "section"
+        }
+      },
+      "children": [
+        {
+          "id": "#55",
+          "kind": "row",
+          "settings": {
+            "responsive": true,
+            "wrap": true,
+            "gap": 6,
+            "mobileGap": 3,
+            "align": "stretch"
+          },
+          "children": [
+            {
+              "id": "#56",
+              "kind": "stack",
+              "settings": {
+                "width": "full",
+                "gap": 4
+              },
+              "children": [
+                {
+                  "id": "#57",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700
+                  },
+                  "value": "Frequently asked questions"
+                },
+                {
+                  "id": "#58",
+                  "kind": "accordion",
+                  "settings": {
+                    "expansion": "single"
+                  },
+                  "children": [
+                    {
+                      "id": "#59",
+                      "kind": "text",
+                      "settings": {
+                        "tab_label": "What's inside this hub?",
+                        "muted": true
+                      },
+                      "value": "Give members the quick version — what they'll find here, and what they'll get out of it. Keep it to a sentence or two."
+                    },
+                    {
+                      "id": "#60",
+                      "kind": "text",
+                      "settings": {
+                        "tab_label": "How do I get started?",
+                        "muted": true
+                      },
+                      "value": "Point new members at the first thing they should watch, read, or join. A clear first step beats a long tour."
+                    },
+                    {
+                      "id": "#61",
+                      "kind": "text",
+                      "settings": {
+                        "tab_label": "Can I access this on my phone?",
+                        "muted": true
+                      },
+                      "value": "Yes — your hub works in any browser, and members can add it to their home screen for a full-screen, app-like experience."
+                    },
+                    {
+                      "id": "#62",
+                      "kind": "text",
+                      "settings": {
+                        "tab_label": "How do I get help?",
+                        "muted": true
+                      },
+                      "value": "Tell members where to reach you — the Discussions space, a support email, or wherever you'd like questions to land."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

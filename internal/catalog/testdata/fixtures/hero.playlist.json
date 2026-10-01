@@ -106,7 +106,8 @@
                     "ring": {
                       "value": 100,
                       "size": 16
-                    }
+                    },
+                    "optional": true
                   }
                 },
                 {
@@ -115,7 +116,8 @@
                   "settings": {
                     "name": "duration",
                     "role": "meta",
-                    "icon": "clock"
+                    "icon": "clock",
+                    "optional": true
                   }
                 },
                 {
@@ -124,26 +126,17 @@
                   "settings": {
                     "name": "plays",
                     "role": "meta",
-                    "icon": "eye"
+                    "icon": "eye",
+                    "optional": true
                   }
                 }
               ]
             },
             {
               "id": "#12",
-              "kind": "field",
-              "settings": {
-                "name": "description",
-                "role": "body",
-                "clamp": 5,
-                "marginBottom": 4
-              }
-            },
-            {
-              "id": "#13",
               "kind": "button",
               "settings": {
-                "size": "lg",
+                "compactMobile": true,
                 "icon": "play-filled",
                 "actionFromScope": "action"
               },
