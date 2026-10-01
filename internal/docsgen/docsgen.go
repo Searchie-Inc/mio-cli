@@ -55,9 +55,12 @@ var BlockNames = []string{
 	"page-templates",
 	"row-variants",
 	"node-settings",
+	"node-action",
+	"node-text-theme",
 	"surface-properties",
 	"surface-background",
 	"surface-gradient",
+	"surface-visibility",
 }
 
 // The vocabulary this renderer knows how to read.
@@ -124,14 +127,22 @@ var (
 	//
 	// documentedShapes: shared:* entries this generator documents SOMEWHERE, so a
 	// brand-new shape nobody references is not dropped in silence. `structural` is
-	// here because it is rendered inside surface-properties.
+	// here because it is rendered inside surface-properties. `action` and
+	// `textTheme` (catalog 0.19.0-0.23.0 range: MIO-3926 button/content-card/image
+	// action, then the shared text-theme ink control for text/headline/button/
+	// divider) and `visibility` (MIO-4182: promoted out of shared:surface.visibility's
+	// inline properties into its own referenceable shape, now reachable both nested
+	// under shared:surface.visibility — back-compat — and as the new unconditional
+	// top-level shared:structural.visibility) each get their own block below.
 	documentedShapes = map[string]bool{
 		"surface": true, "background": true, "gradient": true, "structural": true,
+		"action": true, "textTheme": true, "visibility": true,
 	}
 	// shapeRefTargets: shapes a `shape:` reference may point AT, i.e. those with a
 	// section a reader can actually follow. `structural` has none of its own.
 	shapeRefTargets = map[string]bool{
 		"surface": true, "background": true, "gradient": true,
+		"action": true, "textTheme": true, "visibility": true,
 	}
 
 	// knownNodeKindKeys are the nodeKinds entry fields this generator understands.
@@ -207,6 +218,18 @@ func Render(cat *catalog.Catalog) (map[string]string, error) {
 
 	out["node-settings"] = renderNodeSettings(kinds, schema)
 
+	action, err := renderSharedShape(schema, "shared:action")
+	if err != nil {
+		return nil, err
+	}
+	out["node-action"] = action
+
+	textTheme, err := renderSharedShape(schema, "shared:textTheme")
+	if err != nil {
+		return nil, err
+	}
+	out["node-text-theme"] = textTheme
+
 	surfaceBlock, err := renderSurfaceProperties(schema)
 	if err != nil {
 		return nil, err
@@ -224,6 +247,12 @@ func Render(cat *catalog.Catalog) (map[string]string, error) {
 		return nil, err
 	}
 	out["surface-gradient"] = grad
+
+	vis, err := renderSharedShape(schema, "shared:visibility")
+	if err != nil {
+		return nil, err
+	}
+	out["surface-visibility"] = vis
 
 	for _, name := range BlockNames {
 		if _, present := out[name]; !present {

@@ -26,8 +26,7 @@
           "id": "#2",
           "kind": "image",
           "settings": {
-            "radius": "m",
-            "outline": true
+            "radius": "m"
           }
         },
         {
@@ -43,7 +42,8 @@
               "kind": "headline",
               "settings": {
                 "weight": 700
-              }
+              },
+              "value": "Page or link title"
             },
             {
               "id": "#5",
@@ -51,15 +51,16 @@
               "settings": {
                 "clamp": 5,
                 "marginBottom": 4
-              }
+              },
+              "value": "Say where this takes a member."
             },
             {
               "id": "#6",
               "kind": "button",
               "settings": {
-                "size": "lg",
-                "icon": "play-filled"
-              }
+                "compactMobile": true
+              },
+              "value": "Open"
             }
           ]
         }

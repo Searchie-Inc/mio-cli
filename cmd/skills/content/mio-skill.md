@@ -457,7 +457,7 @@ a system page is one the hub routes itself, built from fixed regions rather than
 sections. The split below is generated from the catalog this binary embeds:
 
 <!-- catalog-gen:page-template-kinds -->
-In catalog 0.18.1, the one this binary embeds:
+In catalog 0.23.31, the one this binary embeds:
 
 Outlines — content pages with no copy on any node; you build and fill the sections:
 
@@ -465,7 +465,7 @@ Outlines — content pages with no copy on any node; you build and fill the sect
 
 Complete — finished sections with placeholder copy; edit the values in place:
 
-`page-homepage-community` · `page-about` · `page-faq` · `page-sales`
+`page-sales` · `page-homepage-starter`
 
 System pages — routed by the hub itself, with fixed regions instead of sections; fill in their values and add no sections:
 
@@ -735,7 +735,9 @@ authoring one gets you a blank node. Use `headline` with `level: 3` instead of
 `subheadline`, `text` instead of `paragraph`, and a container `gap` instead of
 `spacer`.
 
-**Button `action` is `{"type": …, "value": …}`**, and its `value` is always
+**`action` is the one shared navigation-target shape**, `{"type": …, "value": …}`,
+used by `kind:button.core.action`, `kind:content-card.core.action` and
+`kind:image.core.action` — same shape, three consumers. Its `value` is always
 canonical for its `type` — no `mailto:`, no leading `#`:
 
 ```json
@@ -750,6 +752,31 @@ a non-navigating button; `email` takes a bare address (the renderer adds `mailto
 UUID, or a `/`-prefixed hub path; `playlist` a playlist id. Optional
 `action.params` is a string map merged onto the resolved href. A malformed or missing
 action renders a non-navigating button. `settings.href` is a deprecated alias.
+
+<!-- catalog-gen:node-action -->
+| property | type | values / default |
+|---|---|---|
+| `params` | *object* | — |
+| `type` | *string* | `page\|url\|email\|scroll\|playlist` |
+| `value` | *string* | — |
+<!-- /catalog-gen -->
+
+### `textTheme` — the one shared ink control
+
+`textTheme` paints the ink of a whole node — `kind:text.presentational.textTheme`,
+`kind:headline`, `kind:button` (label + icon ink) and `kind:divider` (line colour)
+all reference the same `shared:textTheme` shape, nested under that settings key
+(`settings.textTheme.tone`, `settings.textTheme.color`). Unset — the key absent, or
+an object with no `tone` — is Auto: each consumer's own default decides (text/
+headline: the surrounding surface's ink; button: derived from its fill; divider:
+the current colour).
+
+<!-- catalog-gen:node-text-theme -->
+| property | type | values / default |
+|---|---|---|
+| `color` | *string* | — |
+| `tone` | *string* | `primary\|secondary\|white\|custom` |
+<!-- /catalog-gen -->
 
 ### Every kind's settings — generated from the catalog
 
@@ -770,8 +797,8 @@ looks. An unlisted property is not read by the renderer. Properties are alphabet
 - presentational: `appearance` *string* `tint|solid|page` default `tint` · `contentWidth` *string* `full|content` default `full` · `justify` *string* `center|between` default `center` · `reveal` *string* `always|after-scroll` default `always` · `sticky` *boolean* default `false` · `tone` *string* `warning|info` default `info`
 
 **`button`** — no children
-- core: `action` *object* {params, type, value} · `actionFromScope` *string* · `href` *string* · `labelFrom` *string*
-- presentational: `compactMobile` *boolean* default `false` · `disabled` *boolean* · `fullWidthMobile` *boolean* default `false` · `icon` *string* · `iconRight` *string* · `newTab` *boolean* default `false` · `size` *string* `sm|md|lg` default `md` · `variant` *string* `primary|secondary|ghost-light|overlay-light|destructive|link|muted|ghost-dark|overlay-dark|ghost-primary` default `primary`
+- core: `action` *object → shared:action* · `actionFromScope` *string* · `href` *string* · `labelFrom` *string* · `planGroupId` *string*
+- presentational: `background` *object → shared:background* · `border` *object* {color, style, width} · `borderRadius` *string* `none|sm|md|lg|full|hub-s|hub-m` *(freeform — any other string is legal too)* · `compactMobile` *boolean* default `false` · `disabled` *boolean* · `fullWidthMobile` *boolean* default `false` · `gradient` *object → shared:gradient* · `icon` *string* · `iconRight` *string* · `newTab` *boolean* default `false` · `shadow` *string* `none|sm|md|lg|xl` · `size` *string* `sm|md|lg` default `md` · `style` *string* `fill|outline` · `textTheme` *object → shared:textTheme* · `variant` *string* `primary|secondary|ghost-light|overlay-light|destructive|link|muted|ghost-dark|overlay-dark|ghost-primary` default `primary`
 
 **`carousel`** — accepts children
 - core: `loop` *boolean* default `true` · `slidesPerView` *number* default `1`
@@ -781,8 +808,8 @@ looks. An unlisted property is not read by the renderer. Properties are alphabet
 - presentational: `background` *string* `default|muted|accent` · `maxWidth` *string* `content|search|4xl|6xl|7xl` · `padding` *number* `0|2|4|6|8|12|16` · `rounded` *boolean*
 
 **`content-card`** — accepts children
-- core: `actionFromScope` *string*
-- presentational: `surface` *object → shared:surface*
+- core: `action` *object → shared:action* · `actionFromScope` *string*
+- presentational: `newTab` *boolean* default `false` · `surface` *object → shared:surface*
 
 **`countdown`** — no children
 - core: `ctaAction` *object* {params, type, value} · `ctaLabel` *string* · `expiredLabel` *string* default `Registration is now closed` · `title` *string*
@@ -793,7 +820,7 @@ looks. An unlisted property is not read by the renderer. Properties are alphabet
 - presentational: `variant` *string* `primary|secondary` default `primary`
 
 **`divider`** — no children
-- presentational: `inset` *number* default `0` · `opacity` *number* default `15` · `orientation` *string* `horizontal|vertical` default `horizontal` · `size` *string* `small|normal|large` default `normal` · `spacing` *number* `0|2|4|6|8` default `4` · `variant` *string* `line|wave` default `line` · `weight` *number*
+- presentational: `dashed` *boolean* default `false` · `inset` *number* default `0` · `opacity` *number* default `15` · `orientation` *string* `horizontal|vertical` default `horizontal` · `size` *string* `small|normal|large` default `normal` · `spacing` *number* `0|2|4|6|8` default `4` · `textTheme` *object → shared:textTheme* · `variant` *string* `line|wave` default `line` · `weight` *number*
 
 **`doodle`** — no children
 - presentational: `align` *string* `start|center|end` · `draw` *boolean* default `false` · `drawDelay` *number* default `0` · `flip` *boolean* default `false` · `hideOnMobile` *boolean* default `false` · `rotate` *number* `90|180|270` *(freeform — any other string is legal too)* · `size` *string* `sm|md|lg|xl` default `md` · `strokeWidth` *number* default `2` · `variant` *string* `arrow-plain|arrow-straight|underline|knot-curl` default `arrow-plain`
@@ -802,7 +829,7 @@ looks. An unlisted property is not read by the renderer. Properties are alphabet
 - presentational: `draw` *boolean* default `false` · `icon` *string* · `label` *string* · `size` *string* `small|normal|large` default `normal` · `tone` *string* `accent|destructive|neutral` default `accent` · `variant` *string* `solid|accent-overlay|outline` default `solid`
 
 **`field`** — no children
-- core: `actionFromScope` *string* · `name` *string* · `role` *string* `title|subtitle|meta|body`
+- core: `actionFromScope` *string* · `name` *string* · `role` *string* `title|subtitle|meta|body` · `text` *string*
 - presentational: `align` *string* `left|center|right` · `clamp` *number* · `fade` *boolean* · `icon` *string* · `marginBottom` *number* `0|1|2|3|4|6|8` · `muted` *boolean* · `optional` *boolean* · `ring` *object* {size, value} · `size` *string* `title|subtitle|body-big|body|body-small` · `tone` *string* `default|primary` · `weight` *number* `400|500|600|700`
 
 **`file-attachments`** — no children
@@ -816,24 +843,24 @@ looks. An unlisted property is not read by the renderer. Properties are alphabet
 
 **`headline`** — no children
 - core: `level` *number* `1|2|3|4|5|6` default `2`
-- presentational: `align` *string* `left|center|right` default `left` · `highlight` *untyped* of *string* · `highlightStyle` *string* `accent|wash` default `accent` · `highlightUnderline` *boolean* · `size` *string* `title|large-title|xl-title` · `weight` *number* `400|500|600|700` default `400`
+- presentational: `align` *string* `left|center|right` default `left` · `alignMobile` *string* `left|center|right` · `format` *string* `plain|markdown` default `plain` · `highlight` *untyped* of *string* · `highlightStyle` *string* `accent|wash` default `accent` · `highlightUnderline` *boolean* · `size` *string* `title|large-title|xl-title` · `textTheme` *object → shared:textTheme* · `weight` *number* `400|500|600|700` default `400`
 
 **`horizontal-scroll`** — accepts children
 - presentational: `gap` *number* `2|4|6|8` · `itemWidth` *string* `auto|card` · `snap` *string* `none|start|center` default `start`
 
 **`icon`** — no children
-- presentational: `color` *string* `default|primary|muted` default `default` · `size` *number* `16|20|24|32|48` default `24` · `strokeWidth` *number*
+- presentational: `color` *string* `default|primary|muted` default `default` · `size` *number* `16|20|24|32|48` default `24` · `sizePx` *number* · `strokeWidth` *number* · `textTheme` *object → shared:textTheme*
 
 **`image`** — no children
-- core: `alt` *string*
-- presentational: `alignX` *string* `center|start` default `center` · `aspectRatio` *string* `16:9|4:3|1:1|auto` default `16:9` · `lightbox` *boolean* · `maxWidth` *number* `352|128` · `objectFit` *string* `cover|contain` default `cover` · `outline` *boolean* · `radius` *string* `control|control-l|m`
+- core: `action` *object → shared:action* · `alt` *string*
+- presentational: `alignX` *string* `center|start` default `center` · `aspectRatio` *string* `16:9|4:3|1:1|auto` default `16:9` · `backdrop` *boolean* default `false` · `lightbox` *boolean* · `maxWidth` *number* `352|128` *(freeform — any other string is legal too)* · `newTab` *boolean* default `false` · `objectFit` *string* `cover|contain` default `cover` · `objectPosition` *string* `center|top|bottom|left|right|top-left|top-right|bottom-left|bottom-right` default `center` · `radius` *untyped* `control|control-l|m` *(freeform — any other string is legal too)*
 
 **`logo`** — no children
-- presentational: `height` *string* `normal|hero` default `normal`
+- presentational: `height` *untyped* `normal|lg|hero` default `normal` *(freeform — any other string is legal too)* · `src` *string*
 
 **`media-slot`** — no children
 - core: `alt` *string* · `name` *string* · `preset` *string* `thumbnail-160|medium-720|large-1440|webp-medium`
-- presentational: `aspectRatio` *string* `16:9|4:3|1:1|auto` · `objectFit` *string* `cover|contain` · `outline` *boolean* · `progressBar` *boolean* · `radius` *string* `control|control-l|m` · `width` *number*
+- presentational: `aspectRatio` *string* `16:9|4:3|1:1|auto` · `objectFit` *string* `cover|contain` · `outline` *boolean* · `progressBar` *boolean* · `radius` *untyped* `control|control-l|m` *(freeform — any other string is legal too)* · `width` *number*
 
 **`plan-card`** — no children
 - presentational: `defaultSelected` *boolean*
@@ -850,29 +877,29 @@ looks. An unlisted property is not read by the renderer. Properties are alphabet
 - presentational: `disabled` *boolean* · `mobileSize` *number* · `size` *number* default `64` · `variant` *string* `default|white`
 
 **`quote`** — no children
-- presentational: `showAvatar` *boolean* default `true`
+- presentational: `showAvatar` *boolean* default `true` · `textTheme` *object → shared:textTheme*
 
 **`row`** — accepts children
-- presentational: `align` *string* `start|center|end|stretch` · `fullWidth` *boolean* · `gap` *number* `1|1.5|2|2.5|3|4|5|6|8|12|section` · `justify` *string* `start|center|end|between|around` · `maxWidth` *number* `800` · `mobileGap` *number* `1.5|3|6` · `responsive` *boolean* · `reverse` *boolean* · `split` *boolean* · `wrap` *boolean*
+- presentational: `align` *string* `start|center|end|stretch` · `alignMobile` *string* `start|center|end` · `fullWidth` *boolean* · `gap` *number* `1|1.5|2|2.5|3|4|5|6|8|12|section` · `justify` *string* `start|center|end|between|around` · `maxWidth` *number* `800` · `mobileGap` *number* `1.5|3|6` · `responsive` *boolean* · `reverse` *boolean* · `split` *boolean* · `wrap` *boolean*
 
 **`search-bar`** — no children
 - core: `placeholder` *string*
 
 **`stack`** — accepts children
-- presentational: `align` *string* `start|center|end|stretch` · `fitMobile` *boolean* default `false` · `gap` *number* `0|0.5|1|1.5|2|2.5|3|4|5|6|8|12` · `grow` *boolean* · `justify` *string* `start|center|end|between` · `mobileGap` *number* `1.5|3|4|6` · `px` *number* `0.5` · `surface` *object → shared:surface* · `width` *string* `full|1/2|1/3|1/4|2/3|3/4|fit`
+- presentational: `align` *string* `start|center|end|stretch` · `fitMobile` *boolean* default `false` · `gap` *number* `0|0.5|1|1.5|2|2.5|3|4|5|6|8|12` · `grow` *boolean* · `hideOnMobile` *boolean* default `false` · `justify` *string* `start|center|end|between` · `mobileGap` *number* `1.5|3|4|6` · `px` *number* `0.5` · `surface` *object → shared:surface* · `width` *string* `full|1/2|1/3|1/4|2/3|3/4|fit`
 
 **`tabs`** — accepts children
 - *no settings — presentation is fully derived*
 
 **`text`** — no children
-- presentational: `align` *string* `left|center|right` default `left` · `clamp` *number* · `highlight` *untyped* of *string* · `highlightTone` *string* `wash|strong` default `wash` · `italic` *boolean* · `marginBottom` *number* `0|1|2|3|4|6|8` · `muted` *boolean* · `size` *string* `body|small|body-big` · `tone` *string* `primary` · `variant` *string* `eyebrow` · `weight` *number* `400|500|600|700`
+- presentational: `align` *string* `left|center|right` default `left` · `alignMobile` *string* `left|center|right` · `clamp` *number* · `format` *string* `plain|markdown` default `plain` · `highlight` *untyped* of *string* · `highlightTone` *string* `wash|strong` default `wash` · `italic` *boolean* · `marginBottom` *number* `0|1|2|3|4|6|8` · `muted` *boolean* · `size` *string* `body|small|body-big` · `textTheme` *object → shared:textTheme* · `tone` *string* `primary` · `variant` *string* `eyebrow|bullet` · `weight` *number* `400|500|600|700`
 
 **`theme-toggle`** — no children
 - *no settings — presentation is fully derived*
 
 **`video`** — no children
-- core: `embed_type` *string* `native|iframe` default `native`
-- presentational: `autoplay` *boolean* default `false` · `controls` *boolean* default `true` · `loop` *boolean* default `false` · `muted` *boolean* default `true`
+- core: `embed_type` *string* `native|iframe` default `native` · `fileId` *string*
+- presentational: `autoplay` *boolean* default `false` · `controls` *boolean* default `true` · `loop` *boolean* default `false` · `maxWidth` *number* · `muted` *boolean* default `true` · `poster` *string* · `radius` *untyped* `control|control-l|m` *(freeform — any other string is legal too)*
 
 <!-- /catalog-gen -->
 
@@ -889,7 +916,7 @@ section templates are:
 
 <!-- catalog-gen:section-templates -->
 `hero` · `carousel` · `grid` · `content-grid` · `row` · `search-bar` ·
-`compact` · `content-card` · `testimonials`
+`compact` · `content-card` · `testimonials` · `auth-brand-panel`
 <!-- /catalog-gen -->
 
 Carrying a `template` also decides whether the node gets wrapped in the surface
@@ -922,23 +949,27 @@ front, but an *absent* one just means the node renders without its section surfa
 - `edge` *object* {bottom, top}
 - `elevate` *boolean*
 - `gradient` *object → shared:gradient*
+- `ink` *string* `auto|light|dark` default `auto`
 - `margin` *string* *(freeform — any other string is legal too)*
 - `maxHeight` *number* `800|1000|1200`
 - `minHeight` *number* `500|440`
 - `minScreenHeight` *number* `60|70|80|90`
-- `padding` *string* `none|sm|md|lg|xl|section|gutter|gutter-b-mobile|hero-mobile-insets|card` *(freeform — any other string is legal too)*
+- `padding` *string* `none|sm|md|lg|xl|section|gutter|gutter-b-mobile|hero-mobile-insets|card|band|band-b|band-carousel|band-wave|card-md` *(freeform — any other string is legal too)*
 - `shadow` *string* `none|sm|md|lg|xl`
 - `translate` *string* *(freeform — any other string is legal too)*
-- `visibility` *object* {desktop, mobile}
+- `visibility` *object → shared:visibility*
 
-Plus 6 key(s) the validator unions onto **every** node's settings, whatever its kind:
+Plus 9 key(s) the validator unions onto **every** node's settings, whatever its kind:
 
+- `logoSize` *untyped* `normal|hero` *(freeform — any other string is legal too)*
 - `name` *string*
 - `role` *string* `connect|reveal|prove|close`
 - `salesMeta` *object* {compactGroup, prompt, section, shape}
+- `side` *string* `left|right`
 - `slot` *string*
 - `surface` *object → shared:surface*
 - `tab_label` *string*
+- `visibility` *object → shared:visibility*
 <!-- /catalog-gen -->
 
 ### `surface.background` — the enum, and two traps
@@ -951,7 +982,8 @@ Plus 6 key(s) the validator unions onto **every** node's settings, whatever its 
 | `glowSpread` | *number* | `1\|2` |
 | `glowStrength` | *number* | `1\|2` |
 | `glowTint` | *boolean* | — |
-| `token` | *string* | `primary\|secondary\|muted\|accent\|background` |
+| `scrim` | *boolean* | — |
+| `token` | *string* | `primary\|secondary\|muted\|accent\|background\|white` |
 | `tone` | *string* | `neutral\|primary` · default `neutral` |
 | `type` | *string* | `none\|color\|custom-color\|tint\|image\|gradient\|gradient-glow\|gradient-tint` |
 | `url` | *string* | — |
@@ -998,6 +1030,25 @@ against the hub theme's `primary`. `custom` needs **both** `customStart` and
 `customEnd` as valid hex; a missing or malformed pair falls back to `split`. An
 unrecognized `background.token` renders no background at all.
 
+#### `visibility` — two paths, one shape (MIO-4182)
+
+<!-- catalog-gen:surface-visibility -->
+| property | type | values / default |
+|---|---|---|
+| `desktop` | *boolean* | — |
+| `mobile` | *boolean* | — |
+<!-- /catalog-gen -->
+
+`false` on either key hides at that breakpoint (`mobile` → `max-md:hidden`,
+`desktop` → `md:hidden`); unset or `true` is visible. Reachable two ways onto the
+exact same shape, with no drift between them: nested `settings.surface.visibility`
+(the original path — back-compat, read by `TemplateSurface` for section roots and by
+`kind:stack`'s/the generic `kind:content-card`'s own `surface`) and the generic
+top-level `settings.visibility` (new, unconditional via `shared:structural` — legal
+on every node kind regardless of whether it has a `surface` settings group at all,
+e.g. `headline`/`button`/`image`). Setting both is not arbitrated by the catalog —
+pick one; the consuming renderer decides precedence if both are present.
+
 ### Vocabulary — generated from the catalog
 
 Every node kind the catalog knows, split by whether it accepts children. A kind not
@@ -1043,8 +1094,8 @@ Page templates (`pages catalog scaffold --template …`):
 <!-- catalog-gen:page-templates -->
 `page-homepage` · `page-login` · `page-register` · `page-onboarding` ·
 `page-account-activity` · `page-account-profile` · `page-members` ·
-`page-file-detail` · `page-discussions-index` · `page-generic` ·
-`page-homepage-community` · `page-about` · `page-faq` · `page-sales`
+`page-file-detail` · `page-discussions-index` · `page-generic` · `page-sales` ·
+`page-homepage-starter`
 <!-- /catalog-gen -->
 
 These lists track the catalog version the CLI ships; `mio pages catalog templates` /

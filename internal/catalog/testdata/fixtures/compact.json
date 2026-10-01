@@ -22,7 +22,8 @@
           "kind": "headline",
           "settings": {
             "weight": 700
-          }
+          },
+          "value": "Section Title"
         },
         {
           "id": "#3",
@@ -37,6 +38,10 @@
               "template": "content-card",
               "settings": {
                 "actionFromScope": "action"
+              },
+              "dataSource": {
+                "type": "file",
+                "id": ""
               },
               "children": [
                 {
@@ -58,6 +63,92 @@
                   "children": [
                     {
                       "id": "#7",
+                      "kind": "field",
+                      "settings": {
+                        "name": "title",
+                        "role": "title",
+                        "size": "body",
+                        "weight": 700
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#8",
+              "kind": "content-card",
+              "template": "content-card",
+              "settings": {
+                "actionFromScope": "action"
+              },
+              "dataSource": {
+                "type": "file",
+                "id": ""
+              },
+              "children": [
+                {
+                  "id": "#9",
+                  "kind": "media-slot",
+                  "settings": {
+                    "name": "cover",
+                    "aspectRatio": "16:9",
+                    "radius": "m",
+                    "outline": true
+                  }
+                },
+                {
+                  "id": "#10",
+                  "kind": "stack",
+                  "settings": {
+                    "gap": 0.5
+                  },
+                  "children": [
+                    {
+                      "id": "#11",
+                      "kind": "field",
+                      "settings": {
+                        "name": "title",
+                        "role": "title",
+                        "size": "body",
+                        "weight": 700
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#12",
+              "kind": "content-card",
+              "template": "content-card",
+              "settings": {
+                "actionFromScope": "action"
+              },
+              "dataSource": {
+                "type": "file",
+                "id": ""
+              },
+              "children": [
+                {
+                  "id": "#13",
+                  "kind": "media-slot",
+                  "settings": {
+                    "name": "cover",
+                    "aspectRatio": "16:9",
+                    "radius": "m",
+                    "outline": true
+                  }
+                },
+                {
+                  "id": "#14",
+                  "kind": "stack",
+                  "settings": {
+                    "gap": 0.5
+                  },
+                  "children": [
+                    {
+                      "id": "#15",
                       "kind": "field",
                       "settings": {
                         "name": "title",

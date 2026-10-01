@@ -35,7 +35,7 @@
               "settings": {
                 "weight": 700
               },
-              "value": "FAQ"
+              "value": "Frequently asked questions"
             },
             {
               "id": "#4",
@@ -51,28 +51,28 @@
                   "id": "#5",
                   "kind": "text",
                   "settings": {
-                    "tab_label": "Question one",
+                    "tab_label": "What do I get when I join?",
                     "muted": true
                   },
-                  "value": "Answer to question one."
+                  "value": "Answer it here, in a sentence or two."
                 },
                 {
                   "id": "#6",
                   "kind": "text",
                   "settings": {
-                    "tab_label": "Question two",
+                    "tab_label": "Can I cancel any time?",
                     "muted": true
                   },
-                  "value": "Answer to question two."
+                  "value": "Say how leaving works, plainly."
                 },
                 {
                   "id": "#7",
                   "kind": "text",
                   "settings": {
-                    "tab_label": "Question three",
+                    "tab_label": "Who is this for?",
                     "muted": true
                   },
-                  "value": "Answer to question three."
+                  "value": "Describe the member this is made for."
                 }
               ]
             }

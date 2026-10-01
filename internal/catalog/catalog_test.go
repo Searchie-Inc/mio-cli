@@ -1,7 +1,7 @@
 package catalog
 
 // catalog_test.go — loader + accessor invariants over the vendored catalog
-// (mio-page-catalog@5f35b09, catalogVersion 0.12.0). These accessors are what the CLI commands consume
+// (mio-page-catalog@1157f08, catalogVersion 0.23.31). These accessors are what the CLI commands consume
 // instead of hardcoded lists: the writable section-type allow-list (imperative
 // door), template-id validation (tree door), and recommended templates per page
 // type.
@@ -44,14 +44,18 @@ func TestSectionType_KnownVsUnknown(t *testing.T) {
 
 func TestLoad_Counts(t *testing.T) {
 	c := loadForTest(t)
-	// 9 section templates as of the 0.14.1 pin (testimonials added in 0.13.0).
-	if got := len(c.Templates); got != 9 {
-		t.Errorf("section templates = %d, want 9", got)
+	// 10 section templates as of the 0.23.31 pin (auth-brand-panel added as a new
+	// "slot" template category, MIO-3278).
+	if got := len(c.Templates); got != 10 {
+		t.Errorf("section templates = %d, want 10", got)
 	}
-	// 14 page templates / 13 page types as of the 0.18.1 pin (page-sales
-	// added by the sales-template vocabulary, MIO-2724).
-	if got := len(c.PageTemplates); got != 14 {
-		t.Errorf("page templates = %d, want 14", got)
+	// 12 page templates / 13 page types as of the 0.23.31 pin: page-homepage-community,
+	// page-about and page-faq retired in favour of page-homepage-starter (MIO-3053,
+	// "retire community" — starter hubTemplate sourced from the design SoT instead).
+	// pageTypes stays 13 — it is a separate top-level catalog list, unaffected by the
+	// pageTemplates[] starter-recipe churn.
+	if got := len(c.PageTemplates); got != 12 {
+		t.Errorf("page templates = %d, want 12", got)
 	}
 	if got := len(c.SectionTypes); got != 9 {
 		t.Errorf("section types = %d, want 9", got)
