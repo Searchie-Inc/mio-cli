@@ -305,7 +305,11 @@ plain JSON.
 ## email  (`cmd/email.go`) — base `/v1/hubs/{hub_id}/…`
 - drip-campaigns: `create/list/retrieve/update/delete`; `activate`/`pause` POST `…/{id}/activate|pause`
 - steps:          `list/create/update/delete` `…/drip-campaigns/{id}/steps[/{sid}]`
-- templates:      `create/list/retrieve/update/delete` `…/email-templates[/{id}]`; `preview` POST `…/email-templates/{id}/preview` (no body)
+- templates:      `create/list/retrieve/update/delete` `…/email-templates[/{id}]`; `preview` POST `…/email-templates/{id}/preview` (no body).
+  Write attributes: `name`, `subject`, `description`, `mjml_source` (`--body`), `plain_text`. `from_name`/`from_email`/`reply_to` were
+  never template fields (dropped silently by the lenient read model on main before mio-backend MIO-966; `extra="forbid"` → 422 from
+  MIO-966 on) — the CLI's `--from-name`/`--from-email`/`--reply-to` are retired, hidden, and exit 2 before any request pointing at
+  `email config set` (`rejectTemplateSenderFlags`, MIO-4784)
 - config:         `set` PUT `…/email-config` (JSON:API envelope, `mail_*` attributes); `get` GET; `delete` DELETE; `test` POST `…/email-config/test` (no body — mails the authenticated user)
 - enrollments:    `list` GET `…/drip-campaigns/{id}/enrollments`; `exit` DELETE `…/{id}/enrollments/{eid}`
 - stats:          `get` GET `…/email-stats`
