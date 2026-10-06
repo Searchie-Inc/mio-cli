@@ -17,6 +17,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -493,6 +494,46 @@ var emailTemplatesCmd = &cobra.Command{
 	Long:  "Create, list, retrieve, update, delete, and preview email templates for the active hub.",
 }
 
+// templateSenderFlags are the three flags `email templates create|update`
+// carried until MIO-4784 and SENT as template attributes (`from_name`,
+// `from_email`, `reply_to`). The API's template schema never had those
+// fields: before mio-backend MIO-966 (#1249) it dropped them silently — exit 0
+// and no effect — and from MIO-966 on its write schemas forbid unknown keys,
+// so the same command is a 422. Sender identity lives in two hub-level
+// places the CLI already writes: the display name and reply-to are the
+// per-hub sender overrides (`mio hubs email-settings update --from-name
+// --reply-to`, a PATCH of `hub_email_senders` where both are optional), and
+// the From ADDRESS is part of the hub's SMTP configuration (`mio email config
+// set`, a full-replace PUT whose schema requires mail_host, mail_username,
+// mail_from_email and mail_from_name together — so the hint never presents a
+// partial `config set` as runnable). The flags stay registered, hidden, so a
+// script that still passes one is told where the setting went rather than
+// `unknown flag`; rejectTemplateSenderFlags fires before any request.
+var templateSenderFlags = []string{"from-name", "from-email", "reply-to"}
+
+const templateSenderFlagsHint = "sender identity is not a template field. " +
+	"Display name and reply-to are per-hub: mio hubs email-settings update --from-name <name> --reply-to <addr>. " +
+	"The From address is the hub's SMTP configuration: mio email config set (a full PUT: " +
+	"--mail-host --mail-username --mail-password --from-email --from-name; see --help)"
+
+// rejectTemplateSenderFlags returns a usage error naming every retired sender
+// flag the invocation passed, or nil. Called BEFORE emailContext so the
+// rejection fires no request.
+func rejectTemplateSenderFlags(cmd *cobra.Command) error {
+	var used []string
+	for _, f := range templateSenderFlags {
+		if cmd.Flags().Changed(f) {
+			used = append(used, "--"+f)
+		}
+	}
+	if len(used) == 0 {
+		return nil
+	}
+	return errs.New(errs.ExitUsage,
+		"%s: not a template field (the API ignored it before mio-backend MIO-966 and rejects it with 422 after) — %s",
+		strings.Join(used, ", "), templateSenderFlagsHint)
+}
+
 // templatesPath returns /v1/hubs/{hub_id}/email-templates[/{id}].
 func templatesPath(hubID, id string) string {
 	if id != "" {
@@ -505,9 +546,14 @@ var emailTemplatesCreateCmd = &cobra.Command{
 	Use:     "create",
 	Short:   "Create an email template.",
 	Long:    "Create a new email template for the active hub.",
-	Example: `  mio email templates create --name="Welcome" --subject="Welcome!" --body="<mjml><mj-body><mj-section><mj-column><mj-text>Hello!</mj-text></mj-column></mj-section></mj-body></mjml>" --plain-text="Hello!"`,
+	Example: `  mio email templates create --name="Welcome" --subject="Welcome!" --description="Sent on signup" --body="<mjml><mj-body><mj-section><mj-column><mj-text>Hello!</mj-text></mj-column></mj-section></mj-body></mjml>" --plain-text="Hello!"`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Before context resolution, which may itself call the API: a sender
+		// flag is a usage error that must fire no request (MIO-4784).
+		if err := rejectTemplateSenderFlags(cmd); err != nil {
+			return err
+		}
 		c, hubID, err := emailContext(cmd)
 		if err != nil {
 			return err
@@ -516,15 +562,13 @@ var emailTemplatesCreateCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "subject")
+		setStringFlag(cmd, attrs, "description")
 		// Content fields: the backend email_templates schema is mjml_source +
 		// plain_text (NOT a "body" attribute). --body therefore maps to
 		// mjml_source so it actually sets the rendered content; a bare "body"
 		// attribute is silently dropped by the backend (MIO-1238).
 		setMappedString(cmd, attrs, "body", "mjml_source")
 		setMappedString(cmd, attrs, "plain-text", "plain_text")
-		setStringFlag(cmd, attrs, "from-name")
-		setStringFlag(cmd, attrs, "from-email")
-		setStringFlag(cmd, attrs, "reply-to")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --name and --subject")
@@ -587,6 +631,9 @@ var emailTemplatesUpdateCmd = &cobra.Command{
 	Example: `  mio email templates update tmpl_abc123 --subject="New Subject"`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := rejectTemplateSenderFlags(cmd); err != nil {
+			return err
+		}
 		c, hubID, err := emailContext(cmd)
 		if err != nil {
 			return err
@@ -595,15 +642,13 @@ var emailTemplatesUpdateCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "subject")
+		setStringFlag(cmd, attrs, "description")
 		// Content fields: the backend email_templates schema is mjml_source +
 		// plain_text (NOT a "body" attribute). --body therefore maps to
 		// mjml_source so it actually sets the rendered content; a bare "body"
 		// attribute is silently dropped by the backend (MIO-1238).
 		setMappedString(cmd, attrs, "body", "mjml_source")
 		setMappedString(cmd, attrs, "plain-text", "plain_text")
-		setStringFlag(cmd, attrs, "from-name")
-		setStringFlag(cmd, attrs, "from-email")
-		setStringFlag(cmd, attrs, "reply-to")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
@@ -672,11 +717,16 @@ func init() {
 	for _, cmd := range []*cobra.Command{emailTemplatesCreateCmd, emailTemplatesUpdateCmd} {
 		cmd.Flags().String("name", "", "Template name.")
 		cmd.Flags().String("subject", "", "Email subject line.")
+		cmd.Flags().String("description", "", "Internal description of the template (not sent to recipients).")
 		cmd.Flags().String("body", "", "Email body as MJML source (sets the template's mjml_source).")
 		cmd.Flags().String("plain-text", "", "Plain-text fallback body (sets plain_text).")
-		cmd.Flags().String("from-name", "", "Sender display name.")
-		cmd.Flags().String("from-email", "", "Sender email address.")
-		cmd.Flags().String("reply-to", "", "Reply-to email address.")
+		// Retired sender flags (MIO-4784): registered hidden so a script that
+		// still passes one gets rejectTemplateSenderFlags' pointer to the hub
+		// sender settings instead of cobra's bare `unknown flag`.
+		for _, f := range templateSenderFlags {
+			cmd.Flags().String(f, "", "Retired: "+templateSenderFlagsHint)
+			_ = cmd.Flags().MarkHidden(f)
+		}
 	}
 	addPaginationFlags(emailTemplatesListCmd)
 }
