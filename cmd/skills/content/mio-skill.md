@@ -1115,7 +1115,7 @@ index at `mio gen-docs --dir ./docs`. Core groups:
 - **Community:** `mio community spaces create|list` · `mio community discussions create|list|update` · `mio community moderation ...`
 - **Contacts/members:** `mio contacts list|retrieve` · `mio contact-attributes ...` · `mio tags ...` · `mio hub-memberships add|set-role|ban` · `mio segments ...`
 - **Commerce:** `mio products ...` · `mio coupons ...` · `mio checkout ...`
-- **Automation/email:** `mio automations ...` · `mio email ...` · `mio webhook-endpoints ...`
+- **Automation/email:** `mio automations ...` · `mio email ...` · `mio webhook-endpoints ...` — `email templates create|update` take `--name --subject --description --body --plain-text` only; sender identity is NOT a template field (MIO-4784): name/reply-to are `mio hubs email-settings update --from-name --reply-to`, the From address is `mio email config set` (a full SMTP PUT; see `--help`)
 
 When a member verb returns exit `4`, re-check you passed `.contact_id` (global),
 not `.id` (team-contact). When a page/card doesn't render despite a `200`, re-check

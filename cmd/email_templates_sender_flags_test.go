@@ -19,27 +19,35 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
+// templateRequest is what the mock backend saw on the last request: method,
+// path, the JSON:API resource type and the attributes.
+type templateRequest struct {
+	Method, Path, Type string
+	Attrs              map[string]any
+}
+
 // templateBodyServer answers every request 200 with an empty template and
-// records the request count and the last JSON:API attributes it received.
-func templateBodyServer(t *testing.T) (*httptest.Server, *int, *map[string]any) {
+// records the request count and the last request it received.
+func templateBodyServer(t *testing.T) (*httptest.Server, *int, *templateRequest) {
 	t.Helper()
 	count := 0
-	attrs := map[string]any{}
+	last := &templateRequest{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count++
 		raw, _ := io.ReadAll(r.Body)
 		var doc struct {
 			Data struct {
+				Type       string         `json:"type"`
 				Attributes map[string]any `json:"attributes"`
 			} `json:"data"`
 		}
 		_ = json.Unmarshal(raw, &doc)
-		attrs = doc.Data.Attributes
+		*last = templateRequest{Method: r.Method, Path: r.URL.Path, Type: doc.Data.Type, Attrs: doc.Data.Attributes}
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		_, _ = w.Write([]byte(`{"data":{"type":"email_templates","id":"tmpl_1","attributes":{}}}`))
 	}))
 	t.Cleanup(srv.Close)
-	return srv, &count, &attrs
+	return srv, &count, last
 }
 
 func templatesArgs(verb string, rest ...string) []string {
@@ -68,8 +76,10 @@ func TestEmailTemplates_SenderFlagsExitBeforeAnyRequest(t *testing.T) {
 				if *count != 0 {
 					t.Errorf("%d request(s) fired; a retired sender flag must fire none", *count)
 				}
-				if err == nil || !strings.Contains(err.Error(), "mio email config set") || !strings.Contains(err.Error(), flag) {
-					t.Errorf("error %v must name the flag %s and point at `mio email config set`", err, flag)
+				if err == nil || !strings.Contains(err.Error(), flag) ||
+					!strings.Contains(err.Error(), "mio hubs email-settings update --from-name <name> --reply-to <addr>") ||
+					!strings.Contains(err.Error(), "mio email config set (a full PUT: --mail-host --mail-username --mail-password --from-email --from-name") {
+					t.Errorf("error %v must name the flag %s, the per-hub `hubs email-settings update` command for name/reply-to, and `email config set` as a FULL PUT for the From address", err, flag)
 				}
 			})
 		}
@@ -137,24 +147,29 @@ func TestEmailTemplates_SenderFlagsAreHidden(t *testing.T) {
 // create and on update, --description included.
 func TestEmailTemplates_BodyIsExactlyTheAllowedFields(t *testing.T) {
 	cases := []struct {
-		name string
-		verb string
-		args []string
-		want map[string]any
+		name       string
+		verb       string
+		args       []string
+		wantMethod string
+		wantPath   string
+		want       map[string]any
 	}{
 		{"create all fields", "create",
 			[]string{"--name", "Welcome", "--subject", "S", "--description", "Sent on signup", "--body", "<mjml></mjml>", "--plain-text", "hello"},
+			http.MethodPost, "/v1/hubs/hub_123/email-templates",
 			map[string]any{"name": "Welcome", "subject": "S", "description": "Sent on signup", "mjml_source": "<mjml></mjml>", "plain_text": "hello"}},
 		{"update description only", "update",
 			[]string{"--description", "Sent on signup"},
+			http.MethodPatch, "/v1/hubs/hub_123/email-templates/tmpl_1",
 			map[string]any{"description": "Sent on signup"}},
 		{"update subject only", "update",
 			[]string{"--subject", "S2"},
+			http.MethodPatch, "/v1/hubs/hub_123/email-templates/tmpl_1",
 			map[string]any{"subject": "S2"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, count, attrs := templateBodyServer(t)
+			srv, count, req := templateBodyServer(t)
 			res := runContract(t, baseEnv(srv.URL), templatesArgs(tc.verb, tc.args...)...)
 			if res.Code != errs.ExitOK {
 				t.Fatalf("exit code = %d, want 0; stderr=%q", res.Code, res.Stderr)
@@ -162,7 +177,13 @@ func TestEmailTemplates_BodyIsExactlyTheAllowedFields(t *testing.T) {
 			if *count != 1 {
 				t.Fatalf("requests = %d, want 1", *count)
 			}
-			got, _ := json.Marshal(*attrs)
+			if req.Method != tc.wantMethod || req.Path != tc.wantPath {
+				t.Errorf("request = %s %s, want %s %s", req.Method, req.Path, tc.wantMethod, tc.wantPath)
+			}
+			if req.Type != "email_templates" {
+				t.Errorf("JSON:API type = %q, want email_templates", req.Type)
+			}
+			got, _ := json.Marshal(req.Attrs)
 			want, _ := json.Marshal(tc.want)
 			if string(got) != string(want) {
 				t.Errorf("attributes sent = %s, want exactly %s", got, want)

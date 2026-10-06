@@ -308,8 +308,11 @@ plain JSON.
 - templates:      `create/list/retrieve/update/delete` `…/email-templates[/{id}]`; `preview` POST `…/email-templates/{id}/preview` (no body).
   Write attributes: `name`, `subject`, `description`, `mjml_source` (`--body`), `plain_text`. `from_name`/`from_email`/`reply_to` were
   never template fields (dropped silently by the lenient read model on main before mio-backend MIO-966; `extra="forbid"` → 422 from
-  MIO-966 on) — the CLI's `--from-name`/`--from-email`/`--reply-to` are retired, hidden, and exit 2 before any request pointing at
-  `email config set` (`rejectTemplateSenderFlags`, MIO-4784)
+  MIO-966 on) — the CLI's `--from-name`/`--from-email`/`--reply-to` are retired, hidden, and exit 2 before any request
+  (`rejectTemplateSenderFlags`, MIO-4784), pointing at the two real homes: `hubs email-settings update` (PATCH
+  `hub_email_senders` {from_name?, reply_to?}) for name/reply-to, and `email config set` for the From address —
+  `EmailConfigRequest` is a full PUT that REQUIRES mail_host, mail_username, mail_from_email, mail_from_name
+  (mail_password on first set), so no partial `config set` is runnable
 - config:         `set` PUT `…/email-config` (JSON:API envelope, `mail_*` attributes); `get` GET; `delete` DELETE; `test` POST `…/email-config/test` (no body — mails the authenticated user)
 - enrollments:    `list` GET `…/drip-campaigns/{id}/enrollments`; `exit` DELETE `…/{id}/enrollments/{eid}`
 - stats:          `get` GET `…/email-stats`
