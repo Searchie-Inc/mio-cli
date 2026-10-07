@@ -345,14 +345,14 @@ mio hubs update <hub-id> --navigation-json '{"header":[{"type":"url","label":"Ho
 # The branding flags MERGE over the template's palette — a key you don't name keeps
 # the template's value. --primary-color also fills header_color unless you give a
 # header color yourself (--header-color, or a header_color key in --branding-json).
-mio hubs scaffold --template community --name "Acme" --slug acme \
+mio hubs scaffold --template starter --name "Acme" --slug acme \
   --primary-color '#B91C1C' --secondary-color '#F59E0B' --text-color '#0F172A' \
   --logo-url https://cdn.example.com/logo.png --publish
 # Already have a branding blob? Pass it whole; the scalar flags win over its keys.
-mio hubs scaffold --template community --name "Acme" --slug acme \
+mio hubs scaffold --template starter --name "Acme" --slug acme \
   --branding-json @branding.json --primary-color '#B91C1C'
 # Preview first — the plan names the palette it would apply, and changes nothing.
-mio hubs scaffold --template community --name "Acme" --slug acme --primary-color '#B91C1C' --dry-run
+mio hubs scaffold --template starter --name "Acme" --slug acme --primary-color '#B91C1C' --dry-run
 # Try a catalog that is not deployed yet: list its templates, then scaffold from it.
 # Both are digest-verified and fail closed on a mismatch.
 mio hubs templates --catalog ./catalog.json
@@ -364,12 +364,13 @@ mio hubs scaffold --template starter --name "Acme" --slug acme --catalog ./catal
 # off a TTY); it never overwrites a page — a page conflict exits 2 before any write on every --hub run, this one included.
 # VERSION GATE: on v0.23.0 and earlier --hub overwrites all of that, and
 # --reapply-template exits 2 (unknown flag).
-mio hubs scaffold --template community --hub <hub-id> --dry-run
+mio hubs scaffold --template starter --hub <hub-id> --dry-run
 
 # Pages & page trees
 # --privacy defaults to `members`: omit it and the page is behind the login wall.
-# `home` is a RESERVED slug — use a real one and mark the homepage with --is-home.
-mio pages create --hub <hub-id> --title "Welcome" --slug welcome --privacy public --is-home
+# `home` is a RESERVED slug — use a real one. Designate the homepage LAST (--is-home on `pages update`,
+# after publish): the API answers 409 homepage_page_not_published for a page with no published tree.
+mio pages create --hub <hub-id> --title "Welcome" --slug welcome --privacy public
 # Discover the page-builder catalog. (There is no `pages catalog list`.)
 mio pages catalog templates --page-type homepage
 mio pages catalog section-types --writable-only
@@ -378,6 +379,7 @@ mio pages catalog scaffold --template page-homepage > tree.json
 mio pages catalog scaffold --template row --variant 3eq > cols.json   # a section to splice in
 mio pages tree set <page-id> --hub <hub-id> --file tree.json          # first tree: --if-match defaults to 0
 mio pages publish <page-id> --hub <hub-id> --if-match 1
+mio pages update <page-id> --hub <hub-id> --is-home                    # now it can be the homepage
 # `tree get` hands back the BARE root node; `tree set --file` wants {"root": ...}.
 # The round trip is a RE-wrap, not an unwrap.
 V=$(mio pages tree get <page-id> --hub <hub-id> --jq .draft_version)

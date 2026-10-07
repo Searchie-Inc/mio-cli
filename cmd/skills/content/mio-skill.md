@@ -51,11 +51,11 @@ in (MIO-2543, MIO-2604):
 ```bash
 mio hubs templates                                   # what the target backend offers
 mio hubs templates --catalog ./catalog.json          # ...or a local artifact (digest-verified)
-mio hubs scaffold --template community --name "Acme" --slug acme \
+mio hubs scaffold --template starter --name "Acme" --slug acme \
   --primary-color '#B91C1C' --secondary-color '#0F172A' --text-color '#111827' \
   --logo-url https://cdn.example.com/logo.png \
   --dry-run                                          # prints the ordered plan, changes nothing
-HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
+HUB_ID=$(mio hubs scaffold --template starter --name "Acme" --slug acme \
   --primary-color '#B91C1C' --publish -o plain --jq .hub_id)  # --publish goes live; default is private
 ```
 
@@ -63,7 +63,7 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   the template's value. `--primary-color` also fills `header_color` unless you gave
   one yourself. `--branding-json` takes a whole object; scalar flags win over it.
 - **A `--hub` run fills gaps; it does not overwrite (MIO-4166).**
-  `mio hubs scaffold --template community --hub "$HUB_ID"` resumes a failed run, or applies
+  `mio hubs scaffold --template starter --hub "$HUB_ID"` resumes a failed run, or applies
   a template onto an existing hub, by adding only what the hub is missing. A branding or
   settings key the hub already has keeps its value (so self-signup the owner closed stays
   closed), a navigation bucket it has is kept whole (only an absent or empty one is filled,
@@ -131,7 +131,7 @@ HUB_ID=$(mio hubs scaffold --template community --name "Acme" --slug acme \
   only where the hub has none of its own, never sends `content: null`, and leaves a gate
   the hub has already set — on or off — alone (an unset gate is filled).
   **`--reapply-template` is the exception:** its policy write always sends `content`, and
-  the `community` template carries none — so it **reverts that hub's ToS and Privacy text
+  a template that declares no policy text (the `community` one) carries none — so it **reverts that hub's ToS and Privacy text
   to the backend default**. Whether members are asked to accept the ToS again depends on
   that write, not on how the ToS was last saved: the template's ToS requires acceptance,
   so the reset moves the version to `default-v1`, and that **re-prompts every member who
@@ -411,16 +411,23 @@ Note the asymmetry with branding: a `data:` URI is fine as an image node `value`
 ### 6. Build a page
 
 Create the page, scaffold a node-tree from the page-builder catalog, fill in real
-values, set the draft, then publish.
+values, set the draft, publish, and only then make it the homepage.
 
 ```bash
 PAGE_ID=$(mio pages create --hub hub_abc123 --title "Welcome" --slug welcome \
-  --privacy public --is-home -o plain --jq .id)   # -o plain: a bare id, not "…" (MIO-2792)
+  --privacy public -o plain --jq .id)   # no --is-home yet; -o plain: a bare id, not "…" (MIO-2792)
 mio pages catalog scaffold --template page-homepage > tree.json   # JSON to stdout; catalog note goes to stderr
 # ...edit tree.json: fill headline/text/button VALUES, drop in durable image URLs...
 mio pages tree set "$PAGE_ID" --hub hub_abc123 --file tree.json  # first tree: --if-match defaults to 0
 mio pages publish "$PAGE_ID" --hub hub_abc123 --if-match 1        # --if-match REQUIRED here
+mio pages update "$PAGE_ID" --hub hub_abc123 --is-home            # LAST: designate it the homepage
 ```
+
+**Order matters: `--is-home` comes after `publish`.** The API refuses to make a page
+the homepage until it has a published tree — `pages create --is-home` on a fresh page,
+or `pages update --is-home` before `publish`, answers `409 homepage_page_not_published`
+and the hub is left with no homepage. Create without `--is-home`, set the tree, publish,
+then `pages update --is-home`. (`mio hubs scaffold` follows the same order.)
 
 **`--privacy public` is not optional if you want a public hub.** `pages create`
 defaults to `members`, so a page created without it is login-walled — the builder
@@ -430,7 +437,8 @@ do it for you. Valid values: `public`, `members`, `private`.
 
 **Slugs:** `home` is reserved — `--slug home` is rejected. Omitting `--slug`
 entirely fails with `Field required`. Use a real slug (`welcome`, `start`, `about`)
-and mark the homepage with `--is-home`, which is what actually designates it.
+and designate the homepage with `pages update --is-home` once it is published; that
+flag is what actually designates it.
 
 #### Discovering the catalog
 
@@ -687,7 +695,7 @@ A section node is the same envelope plus a `template` and children:
 - **`value` is a sibling of `settings`.** Putting the text in `settings.value`
   is the single biggest silent-drop trap: the API stores it, the renderer reads
   `node.value`, and you get an empty heading/button/image with a `200` and no error.
-  The catalog's own `page-about` starter shows the shape.
+  The catalog's own `page-homepage` starter shows the shape.
 - **The renderer dispatches on `kind`**, never on `type`. `template` is a *secondary*
   annotation: it marks the node as a section for the publish-time converter and opts
   it into the surface wrapper.

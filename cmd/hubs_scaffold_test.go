@@ -1573,13 +1573,13 @@ func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
 		}
 		muts = append(muts, rq)
 	}
-	if len(lists) != len(plan.pages)+1 {
-		t.Errorf("got %d page-list GETs, want %d (one recovery slug walk per page + the homepage pre-check)",
-			len(lists), len(plan.pages)+1)
+	if len(lists) != len(plan.pages)+2 {
+		t.Errorf("got %d page-list GETs, want %d (one recovery slug walk per page + the homepage pre-check + the set-home recheck)",
+			len(lists), len(plan.pages)+2)
 	}
-	if len(muts) != 4*len(plan.pages) {
-		t.Fatalf("got %d mutating requests, want %d (create+PUT+publish+PATCH per page, in plan order)",
-			len(muts), 4*len(plan.pages))
+	if len(muts) != 4*len(plan.pages)+1 {
+		t.Fatalf("got %d mutating requests, want %d (create+PUT+publish+PATCH per page, in plan order, + one is_homepage update)",
+			len(muts), 4*len(plan.pages)+1)
 	}
 	wantApp := catalog.ApplicationID("hub_1", "community")
 	// Literal title spot-checks (beyond the ref-derived compare below): the
@@ -1588,8 +1588,22 @@ func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
 	for i := range plan.pages {
 		pp := plan.pages[i]
 		pageID := "pg_" + pp.ref.Slug
-		create, put, publish, patch := muts[i*4], muts[i*4+1], muts[i*4+2], muts[i*4+3]
+		// The homepage entry (first in plan) is followed by its is_homepage update.
+		base := i * 4
+		if i > 0 {
+			base++
+		}
+		create, put, publish, patch := muts[base], muts[base+1], muts[base+2], muts[base+3]
 		wantDV := i + 1
+		if pp.ref.IsHomepage {
+			home := muts[base+4]
+			if home.method != http.MethodPatch || !strings.HasSuffix(home.path, "/pages/"+pageID) {
+				t.Fatalf("homepage req 6 = %s %s, want PATCH .../pages/%s (is_homepage)", home.method, home.path, pageID)
+			}
+			if hv := decodeHubAttrs(t, home.body)["is_homepage"]; hv != true {
+				t.Errorf("homepage update must send is_homepage:true, got %v", hv)
+			}
+		}
 
 		// (1) Create: identity from the ref + interpolated title + ONLY the marker in meta.
 		if create.method != http.MethodPost || !strings.HasSuffix(create.path, "/hubs/hub_1/pages") {
@@ -1608,12 +1622,10 @@ func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
 		if attrs["slug"] != pp.ref.Slug || attrs["privacy"] != pp.ref.Privacy {
 			t.Errorf("page %q create attrs = %v, want slug=%q privacy=%q", pp.ref.Slug, attrs, pp.ref.Slug, pp.ref.Privacy)
 		}
-		if isHome, present := attrs["is_homepage"]; pp.ref.IsHomepage {
-			if isHome != true {
-				t.Errorf("homepage create must send is_homepage:true, got %v", isHome)
-			}
-		} else if present {
-			t.Errorf("page %q must NOT send is_homepage (only the homepage entry does), got %v", pp.ref.Slug, isHome)
+		// MIO-4929: NO create carries is_homepage — the backend rejects it on a
+		// page with no published tree; the homepage is flipped after publish.
+		if isHome, present := attrs["is_homepage"]; present {
+			t.Errorf("page %q create must NOT send is_homepage (the homepage is set after publish), got %v", pp.ref.Slug, isHome)
 		}
 		meta, _ := attrs["meta"].(map[string]any)
 		if len(meta) != 1 {
