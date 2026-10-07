@@ -151,8 +151,8 @@ var usersUpdateCmd = &cobra.Command{
 (partial update / PATCH semantics).
 
 Equivalent to PATCH /api/users/{id}.`,
-	Example: `  # Update display name and email
-  mio users update usr_abc123 --first-name Alice --email alice@example.com
+	Example: `  # Update display name
+  mio users update usr_abc123 --first-name Alice --last-name Smith
 
   # Update avatar URL only
   mio users update usr_abc123 --avatar-url https://example.com/avatar.png`,
@@ -169,7 +169,6 @@ Equivalent to PATCH /api/users/{id}.`,
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "first-name")
 		setStringFlag(cmd, attrs, "last-name")
-		setStringFlag(cmd, attrs, "email")
 		setStringFlag(cmd, attrs, "avatar-url")
 
 		if len(attrs) == 0 {
@@ -193,6 +192,5 @@ func init() {
 	// Attribute flags for update.
 	usersUpdateCmd.Flags().String("first-name", "", "User's first name.")
 	usersUpdateCmd.Flags().String("last-name", "", "User's last name.")
-	usersUpdateCmd.Flags().String("email", "", "User's email address.")
 	usersUpdateCmd.Flags().String("avatar-url", "", "URL to the user's avatar image.")
 }
