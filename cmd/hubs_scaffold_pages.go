@@ -37,6 +37,10 @@ const (
 	actionResumeFull                // pending + no draft written: safe to set-tree + publish + marker
 	actionNoop                      // applied + untouched: idempotent re-run
 	actionConflict                  // everything else: never overwrite (§2.2)
+	// actionFinishPublished: pending, a draft is written AND a tree is already
+	// published — the crash fell between our publish and the marker PATCH.
+	// Finish the marker (and the homepage flip) without touching the tree.
+	actionFinishPublished
 )
 
 // recoveredPage is the provenance snapshot read back from an existing page at a
@@ -49,6 +53,10 @@ type recoveredPage struct {
 	draftVersion        int
 	appliedDraftVersion int
 	isHome              bool // the page is currently the hub's homepage
+	// published: a resolved tree is being served for the page. Read only for a
+	// page that carries OUR pending marker with a written draft — the one
+	// verdict that needs it.
+	published bool
 }
 
 // decideRecovery is the PURE §5.1 per-boundary recovery decision (no HTTP, no
@@ -75,7 +83,10 @@ func decideRecovery(ourAppID string, p *recoveredPage) recoveryAction {
 		if p.draftVersion == 0 {
 			return actionResumeFull // our create landed, no draft yet — resume safely
 		}
-		return actionConflict // draft written: crashed write vs user edit — indistinguishable
+		if p.published {
+			return actionFinishPublished // our publish landed; only the marker PATCH is missing
+		}
+		return actionConflict // draft written, never published: crashed write vs user edit — indistinguishable
 	case p.state == "applied":
 		if p.draftVersion == p.appliedDraftVersion {
 			return actionNoop // converged already — idempotent re-run
@@ -225,6 +236,12 @@ func (sc *scaffoldContext) homepageClaimedError(pageID string) error {
 // (409 homepage_page_not_published), so the flag is set by a plain page update
 // only after create → tree PUT → publish have landed.
 func (sc *scaffoldContext) setHomepage(pageID string) error {
+	// Re-check the WHOLE hub immediately before the write: the checks at the
+	// top of the page's apply are minutes of tree PUT / publish old by now, and
+	// is_homepage clears whichever page is home server-side.
+	if cerr := sc.homepageClaimedError(pageID); cerr != nil {
+		return cerr
+	}
 	_, err := sc.cl.Update(sc.ctx, pagesPath(sc.teamID, sc.hubID, pageID),
 		map[string]any{"is_homepage": true})
 	return err
@@ -279,6 +296,10 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 		return rerr
 	}
 	var pageID string
+	// finishOnly: skip the tree PUT and publish (actionFinishPublished); dv is
+	// then the draft version already found on the page.
+	finishOnly := false
+	dv := 0
 	// needHome: the homepage entry still has to be flipped to is_homepage after
 	// its publish. Always true for a fresh create; for a resume only when the
 	// existing page is not already home.
@@ -308,6 +329,22 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 		}
 		sc.notef("page %q already applied (untouched) — skipping", pp.ref.Slug)
 		return nil
+
+	case actionFinishPublished:
+		// Crashed after our publish, before the marker PATCH: the tree is
+		// published, so it is NOT rewritten (it may carry edits). Mark it
+		// applied at the draft version found, then set the homepage.
+		sc.notef("page %q: resuming onto existing page %s (published, marker still pending) — finishing the marker without rewriting the tree",
+			pp.ref.Slug, rp.id)
+		pageID = rp.id
+		finishOnly = true
+		dv = rp.draftVersion
+		needHome = pp.ref.IsHomepage && !rp.isHome
+		if needHome {
+			if cerr := sc.homepageClaimedError(rp.id); cerr != nil {
+				return cerr
+			}
+		}
 
 	case actionResumeFull:
 		// Crashed after our create, before any draft write: reuse the existing
@@ -380,45 +417,47 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 	// leaves the id in the context for the recovery path to surface.
 	sc.recordPageID(pp.ref.Slug, pageID)
 
-	// 4. Set the draft tree with the first-set OCC sentinel If-Match: 0 —
-	// correct for BOTH arms that reach here: a just-created page has never had
-	// a draft, and resumeFull only fires when the read-back draft_version is 0
-	// (no draft ever written), so the old resume flow's tree-GET → If-Match n
-	// dance is unnecessary. Mirrors `pages tree set`.
-	tres, perr := sc.cl.ActionWithHeaders(
-		sc.ctx, client.StyleEnvelope, "PUT",
-		pagesTreePath(sc.teamID, sc.hubID, pageID),
-		map[string]any{"tree": treeObj},
-		map[string]string{"If-Match": "0"},
-	)
-	if perr != nil {
-		return perr
-	}
-	// Capture the new draft_version the PUT returns (the OCC token the publish
-	// below uses); a bodyless response leaves the first-set sentinel 0.
-	dv := 0
-	if tres != nil {
-		if v, ok := attrInt(tres.Attributes["draft_version"]); ok {
-			dv = v
+	if !finishOnly {
+		// 4. Set the draft tree with the first-set OCC sentinel If-Match: 0 —
+		// correct for BOTH arms that reach here: a just-created page has never had
+		// a draft, and resumeFull only fires when the read-back draft_version is 0
+		// (no draft ever written), so the old resume flow's tree-GET → If-Match n
+		// dance is unnecessary. Mirrors `pages tree set`.
+		tres, perr := sc.cl.ActionWithHeaders(
+			sc.ctx, client.StyleEnvelope, "PUT",
+			pagesTreePath(sc.teamID, sc.hubID, pageID),
+			map[string]any{"tree": treeObj},
+			map[string]string{"If-Match": "0"},
+		)
+		if perr != nil {
+			return perr
 		}
-	}
-	if pp.ref.IsHomepage {
-		// Summary + W0 publish-guard compatibility: the homepage entry's id and
-		// draft version live on the context.
-		sc.homePageID, sc.homeDraftVersion = pageID, dv
-	}
+		// Capture the new draft_version the PUT returns (the OCC token the publish
+		// below uses); a bodyless response leaves the first-set sentinel 0.
+		if tres != nil {
+			if v, ok := attrInt(tres.Attributes["draft_version"]); ok {
+				dv = v
+			}
+		}
+		if pp.ref.IsHomepage {
+			// Summary + W0 publish-guard compatibility: the homepage entry's id and
+			// draft version live on the context.
+			sc.homePageID, sc.homeDraftVersion = pageID, dv
+		}
 
-	// 5. Publish the draft (MIO-2636): the backend serves NO resolved tree
-	// until a draft is published, so without this the page renders the
-	// null-tree "No content available" fallback. If-Match = the draft_version
-	// the PUT just returned (mirrors `mio pages publish`); no body.
-	if _, err := sc.cl.ActionWithHeaders(
-		sc.ctx, client.StyleEnvelope, "POST",
-		pagesPath(sc.teamID, sc.hubID, pageID)+"/publish",
-		nil,
-		map[string]string{"If-Match": strconv.Itoa(dv)},
-	); err != nil {
-		return err
+		// 5. Publish the draft (MIO-2636): the backend serves NO resolved tree
+		// until a draft is published, so without this the page renders the
+		// null-tree "No content available" fallback. If-Match = the draft_version
+		// the PUT just returned (mirrors `mio pages publish`); no body.
+		if _, err := sc.cl.ActionWithHeaders(
+			sc.ctx, client.StyleEnvelope, "POST",
+			pagesPath(sc.teamID, sc.hubID, pageID)+"/publish",
+			nil,
+			map[string]string{"If-Match": strconv.Itoa(dv)},
+		); err != nil {
+			return err
+		}
+
 	}
 
 	// 6. Flip the marker to "applied". The digest is computed over the EXACT
@@ -515,6 +554,13 @@ func (sc *scaffoldContext) recoverPageAtSlug(slug, ourAppID string) (*recoveredP
 			return nil, derr
 		}
 		rp.draftVersion = dv
+		if rp.state == "pending" && dv > 0 {
+			pub, perr := sc.pagePublished(res.ID)
+			if perr != nil {
+				return nil, perr
+			}
+			rp.published = pub
+		}
 	}
 	return rp, nil
 }
@@ -573,6 +619,21 @@ func (sc *scaffoldContext) existingPageBySlug(slug string) (*client.Resource, bo
 		s, _ := r.Attributes["slug"].(string)
 		return s == slug
 	})
+}
+
+// pagePublished reports whether the page serves a resolved (published) tree:
+// the tree GET WITHOUT the author audience. A page never published answers 404.
+func (sc *scaffoldContext) pagePublished(pageID string) (bool, error) {
+	q := url.Values{}
+	q.Set("resolve", "true")
+	res, err := sc.cl.RetrieveWithQuery(sc.ctx, pagesTreePath(sc.teamID, sc.hubID, pageID), q)
+	if err != nil {
+		if errs.CodeOf(err) == errs.ExitNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	return res != nil && res.Attributes["tree"] != nil, nil
 }
 
 // pageDraftVersion reads an existing page's current draft_version via a

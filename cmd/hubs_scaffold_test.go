@@ -1573,9 +1573,9 @@ func TestStepPages_AppliesAllPagesWithProvenance(t *testing.T) {
 		}
 		muts = append(muts, rq)
 	}
-	if len(lists) != len(plan.pages)+1 {
-		t.Errorf("got %d page-list GETs, want %d (one recovery slug walk per page + the homepage pre-check)",
-			len(lists), len(plan.pages)+1)
+	if len(lists) != len(plan.pages)+2 {
+		t.Errorf("got %d page-list GETs, want %d (one recovery slug walk per page + the homepage pre-check + the set-home recheck)",
+			len(lists), len(plan.pages)+2)
 	}
 	if len(muts) != 4*len(plan.pages)+1 {
 		t.Fatalf("got %d mutating requests, want %d (create+PUT+publish+PATCH per page, in plan order, + one is_homepage update)",
