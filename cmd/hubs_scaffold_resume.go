@@ -672,7 +672,7 @@ func preflightResumePages(sc *scaffoldContext) error {
 		case actionConflict:
 			conflicts = append(conflicts, fmt.Sprintf("page %q conflicts with existing page %s (%s)",
 				pp.ref.Slug, rp.id, recoveryConflictReason(ourApp, rp)))
-		case actionNoop, actionResumeFull, actionFinishPublished:
+		case actionNoop, actionResumeFull:
 			// Our own homepage, not yet home: the step will finish it with an
 			// is_homepage update, which clears any OTHER homepage server-side.
 			if !pp.ref.IsHomepage || rp.isHome {

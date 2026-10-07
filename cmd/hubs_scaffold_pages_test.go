@@ -131,12 +131,9 @@ type recoveryBackend struct {
 	publishedPages          map[string]bool
 	pageEvents              []string
 
-	// MIO-4929 round 1 failure injection. failMarkerPatchOnce answers the first
-	// marker PATCH (a PATCH carrying meta) with 422; onPublish runs under the
-	// lock after a publish is recorded (a test uses it to make another page
-	// the homepage mid-run).
-	failMarkerPatchOnce bool
-	onPublish           func(be *recoveryBackend)
+	// onPublish runs under the lock after a publish is recorded (a test uses
+	// it to make another page the homepage mid-run).
+	onPublish func(be *recoveryBackend)
 }
 
 const homeNotPublished409 = `{"errors":[{"status":"409","code":"homepage_page_not_published","detail":"homepage must be published"}]}`
@@ -199,14 +196,6 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 			be.listCalls++
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": be.pages})
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/tree") && r.URL.Query().Get("aud"+"ience") != "author": // published-tree read
-			if !be.publishedPages[pathPageID(path)] {
-				w.WriteHeader(http.StatusNotFound)
-				_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"nothing published"}]}`))
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"id":"pt_r","type":"page_trees","attributes":{"tree":{"id":"root","kind":"container"}}}}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/tree"): // recovery draft_version read
 			dv, ok := be.draftVers[pathPageID(path)]
 			if !ok {
@@ -256,12 +245,6 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 			be.mutations++
 			body, _ := io.ReadAll(r.Body)
 			pa := decodeHubAttrs(t, body)
-			if pa["meta"] != nil && be.failMarkerPatchOnce {
-				be.failMarkerPatchOnce = false
-				w.WriteHeader(http.StatusUnprocessableEntity)
-				_, _ = w.Write([]byte(`{"errors":[{"status":"422","detail":"injected marker failure"}]}`))
-				return
-			}
 			if home, _ := pa["is_homepage"].(bool); home {
 				be.pageEvents = append(be.pageEvents, "home:"+pathPageID(path))
 				if be.enforceHomeNeedsPublish && !be.publishedPages[pathPageID(path)] {
@@ -655,63 +638,6 @@ func TestStepPages_ResumeNotHomeRefusesToClobberForeignHomepage(t *testing.T) {
 	}
 	if slices.Contains(be.pageEvents, "home:pg_done") {
 		t.Errorf("must not set is_homepage over a foreign homepage; events=%v", be.pageEvents)
-	}
-}
-
-// ─── MIO-4929 round 1 ────────────────────────────────────────────────────────
-
-// TestStepPages_ResumeFinishesPublishedButPendingHomepage: the publish landed,
-// the marker PATCH failed, so the homepage is pending with a written draft and
-// is not home. The first run exits non-zero; the resume must finish it (marker
-// applied, then set-home) WITHOUT repeating the tree PUT or the publish.
-func TestStepPages_ResumeFinishesPublishedButPendingHomepage(t *testing.T) {
-	srv, be := newRecoveryBackend(t, nil, nil)
-	be.enforceHomeNeedsPublish = true
-	be.failMarkerPatchOnce = true
-
-	if _, err := driveStepPages(t, srv.URL); err == nil {
-		t.Fatal("first run: want the injected marker failure, got nil")
-	}
-	if !be.publishedPages["pg_homepage"] || slices.Contains(be.pageEvents, "home:pg_homepage") {
-		t.Fatalf("first run must stop after publish, before home; events=%v", be.pageEvents)
-	}
-
-	// The hub as the failed run left it: ours, pending, draft v1, published.
-	be.pages = []map[string]any{seededPage("pg_homepage", "homepage", false, ourMarker("pending"))}
-	be.draftVers = map[string]int{"pg_homepage": 1}
-	delete(be.putIfMatch, "pg_homepage")
-	delete(be.pubIfMatch, "pg_homepage")
-
-	if _, err := driveStepPages(t, srv.URL); err != nil {
-		t.Fatalf("resume of a published-but-pending homepage: %v", err)
-	}
-	if !slices.Contains(be.pageEvents, "home:pg_homepage") {
-		t.Errorf("resume must set the homepage; events=%v", be.pageEvents)
-	}
-	if _, put := be.putIfMatch["pg_homepage"]; put {
-		t.Errorf("resume must not repeat the tree PUT")
-	}
-	if _, pub := be.pubIfMatch["pg_homepage"]; pub {
-		t.Errorf("resume must not repeat the publish")
-	}
-	if m, _ := be.patched["pg_homepage"]["meta"].(map[string]any); m == nil {
-		t.Errorf("resume must flip the marker to applied")
-	}
-}
-
-// TestStepPages_PendingWithDraftNotPublishedStaysConflict: pending + a draft
-// that was never published is still indistinguishable from a user edit.
-func TestStepPages_PendingWithDraftNotPublishedStaysConflict(t *testing.T) {
-	srv, be := newRecoveryBackend(t,
-		[]map[string]any{seededPage("pg_homepage", "homepage", false, ourMarker("pending"))},
-		map[string]int{"pg_homepage": 1})
-
-	_, err := driveStepPages(t, srv.URL)
-	if err == nil || errs.CodeOf(err) != errs.ExitUsage {
-		t.Fatalf("want ExitUsage conflict, got %v", err)
-	}
-	if be.mutations != 0 {
-		t.Errorf("conflict must write nothing, got %d mutation(s)", be.mutations)
 	}
 }
 
