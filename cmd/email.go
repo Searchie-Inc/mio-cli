@@ -431,7 +431,7 @@ var emailStepsListCmd = &cobra.Command{
 var emailStepsUpdateCmd = &cobra.Command{
 	Use:     "update <campaign_id> <step_id>",
 	Short:   "Update a drip campaign step.",
-	Long:    "Update a step's attributes within a drip campaign. Only the flags you set are changed. Status is not changed here: use activate or pause.",
+	Long:    "Update a step's attributes within a drip campaign. Only the flags you set are changed.",
 	Example: `  mio email steps update dc_abc123 step_456 --delay-days=5`,
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -590,7 +590,7 @@ var emailTemplatesRetrieveCmd = &cobra.Command{
 var emailTemplatesUpdateCmd = &cobra.Command{
 	Use:     "update <id>",
 	Short:   "Update an email template by id.",
-	Long:    "Update an email template's attributes. Only the flags you set are changed. Status is not changed here: use activate or pause.",
+	Long:    "Update an email template's attributes. Only the flags you set are changed.",
 	Example: `  mio email templates update tmpl_abc123 --subject="New Subject"`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
