@@ -151,11 +151,14 @@ var emailDripCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a drip campaign.",
 	Long:  "Create a new drip campaign for the active hub.",
-	Example: `  mio email drip-campaigns create --name="Welcome Series" --status=draft
+	Example: `  mio email drip-campaigns create --name="Welcome Series"
   mio email drip-campaigns create --name="Onboarding" --description="New member flow"
   mio email drip-campaigns create --name="Segment Drip" --enrollment-mode=segment --segment-id=seg_abc --segment-check-interval-minutes=60`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if cmd.Flags().Changed("status") {
+			return errs.New(errs.ExitUsage, "--status is not set on create: campaigns start as draft; run `mio email drip-campaigns activate <id>` after adding steps")
+		}
 		c, hubID, err := emailContext(cmd)
 		if err != nil {
 			return err
@@ -164,7 +167,6 @@ var emailDripCreateCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "status")
 		// Enrollment-mode flags.
 		setStringFlag(cmd, attrs, "enrollment-mode")
 		setStringFlag(cmd, attrs, "trigger-event-type")
@@ -229,11 +231,15 @@ var emailDripRetrieveCmd = &cobra.Command{
 var emailDripUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update a drip campaign by id.",
-	Long:  "Update a drip campaign's attributes for the active hub. Only the flags you set are changed.",
-	Example: `  mio email drip-campaigns update dc_abc123 --name="New Name" --status=active
+	Long:  "Update a drip campaign's attributes for the active hub. Only the flags you set are changed. Status is not changed here: use activate or pause.",
+	Example: `  mio email drip-campaigns update dc_abc123 --name="New Name"
+  mio email drip-campaigns activate dc_abc123
   mio email drip-campaigns update dc_abc123 --enrollment-mode=segment --segment-id=seg_abc`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed("status") {
+			return errs.New(errs.ExitUsage, "--status is not changed by update; run `mio email drip-campaigns activate <id>` or `mio email drip-campaigns pause <id>`")
+		}
 		c, hubID, err := emailContext(cmd)
 		if err != nil {
 			return err
@@ -242,7 +248,6 @@ var emailDripUpdateCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
-		setStringFlag(cmd, attrs, "status")
 		// Enrollment-mode flags.
 		setStringFlag(cmd, attrs, "enrollment-mode")
 		setStringFlag(cmd, attrs, "trigger-event-type")
@@ -340,7 +345,9 @@ func init() {
 	for _, cmd := range []*cobra.Command{emailDripCreateCmd, emailDripUpdateCmd} {
 		cmd.Flags().String("name", "", "Drip campaign name.")
 		cmd.Flags().String("description", "", "Drip campaign description.")
-		cmd.Flags().String("status", "", "Drip campaign status (e.g. draft, active, paused).")
+		// Hidden: status only changes via activate/pause; kept so old scripts get a clear message.
+		cmd.Flags().String("status", "", "Removed: use activate or pause.")
+		_ = cmd.Flags().MarkHidden("status")
 		// Enrollment-mode flags — control how contacts enter the campaign.
 		cmd.Flags().String("enrollment-mode", "", "Enrollment trigger mode: event, segment, or both.")
 		cmd.Flags().String("trigger-event-type", "", "Event type that triggers enrollment when enrollment-mode is event or both.")
@@ -424,7 +431,7 @@ var emailStepsListCmd = &cobra.Command{
 var emailStepsUpdateCmd = &cobra.Command{
 	Use:     "update <campaign_id> <step_id>",
 	Short:   "Update a drip campaign step.",
-	Long:    "Update a step's attributes within a drip campaign. Only the flags you set are changed.",
+	Long:    "Update a step's attributes within a drip campaign. Only the flags you set are changed. Status is not changed here: use activate or pause.",
 	Example: `  mio email steps update dc_abc123 step_456 --delay-days=5`,
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -583,7 +590,7 @@ var emailTemplatesRetrieveCmd = &cobra.Command{
 var emailTemplatesUpdateCmd = &cobra.Command{
 	Use:     "update <id>",
 	Short:   "Update an email template by id.",
-	Long:    "Update an email template's attributes. Only the flags you set are changed.",
+	Long:    "Update an email template's attributes. Only the flags you set are changed. Status is not changed here: use activate or pause.",
 	Example: `  mio email templates update tmpl_abc123 --subject="New Subject"`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
