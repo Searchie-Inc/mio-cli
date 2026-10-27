@@ -153,6 +153,9 @@ func (s *resumeStub) serve(t *testing.T) *httptest.Server {
 			_, _ = fmt.Fprintf(w, `{"data":%s}`, orEmpty(s.defs))
 		case r.Method == http.MethodGet && strings.HasSuffix(p, "/pages"):
 			_, _ = fmt.Fprintf(w, `{"data":%s}`, orEmpty(s.pages))
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/tree"): // recovery draft_version read: no draft
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"no draft"}]}`))
 		case r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"data":[]}`))
 		case r.Method == http.MethodPatch && strings.HasSuffix(p, "/policies/gate"):
@@ -822,6 +825,34 @@ func TestScaffoldResume_HomepageConflictFailsBeforeAnyWrite(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("the error must name %q; err=%v", want, err)
 		}
+	}
+}
+
+// TestScaffoldResume_UnhomedHomepageWouldClearForeignHomepage (MIO-4929): our
+// own applied homepage exists but is not home, and another page is. Finishing
+// the run sets is_homepage on ours, which clears the other one server-side — so
+// the preflight must stop the run before ANY write, like the create-time hazard.
+func TestScaffoldResume_UnhomedHomepageWouldClearForeignHomepage(t *testing.T) {
+	m := ourMarker("applied")
+	m["applicationId"] = catalog.ApplicationID("hub_r", "community")
+	marker, _ := json.Marshal(m)
+	stub := &resumeStub{
+		hubAttrs: qaHubAttrs,
+		pages: fmt.Sprintf(`[{"id":"page_ours","type":"pages","attributes":{"slug":"homepage","is_homepage":false,"meta":{"template_provenance":%s}}},
+		                     {"id":"page_legacy","type":"pages","attributes":{"slug":"welcome","is_homepage":true}}]`,
+			marker),
+	}
+	srv := stub.serve(t)
+
+	res, err := runResume(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
+	if res.Code != errs.ExitUsage {
+		t.Fatalf("exit = %d, want %d; err=%v", res.Code, errs.ExitUsage, err)
+	}
+	if w := stub.writes(); len(w) != 0 {
+		t.Errorf("must stop before ANY write; got %d write(s), first %s %s", len(w), w[0].method, w[0].path)
+	}
+	if err == nil || !strings.Contains(err.Error(), "page_legacy") {
+		t.Errorf("error must name page_legacy; err=%v", err)
 	}
 }
 

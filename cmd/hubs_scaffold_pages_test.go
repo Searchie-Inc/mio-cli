@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -118,7 +119,24 @@ type recoveryBackend struct {
 	catalogBody []byte           // served on GET …/page-builder/catalog; nil → 404
 	catalogGETs int
 	events      []string // ordered "op" / "catalog" log
+
+	// MIO-4929: model the backend's homepage invariant (MIO-4427). When set, a
+	// page may only become the homepage once published: a create carrying
+	// is_homepage:true, or a PATCH setting it on a page never published, is
+	// answered 409 homepage_page_not_published and counted in homeRejects.
+	// pageEvents is the ordered wire log: "create:<slug>[+home]", "publish:<id>",
+	// "home:<id>" (a PATCH setting is_homepage).
+	enforceHomeNeedsPublish bool
+	homeRejects             int
+	publishedPages          map[string]bool
+	pageEvents              []string
+
+	// onPublish runs under the lock after a publish is recorded (a test uses
+	// it to make another page the homepage mid-run).
+	onPublish func(be *recoveryBackend)
 }
+
+const homeNotPublished409 = `{"errors":[{"status":"409","code":"homepage_page_not_published","detail":"homepage must be published"}]}`
 
 // pathPageID returns the {id} segment of …/pages/{id}[/tree|/publish].
 func pathPageID(path string) string {
@@ -140,6 +158,8 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 		putIfMatch:   map[string]string{},
 		pubIfMatch:   map[string]string{},
 		patched:      map[string]map[string]any{},
+
+		publishedPages: map[string]bool{},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		be.mu.Lock()
@@ -188,6 +208,11 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/publish"):
 			be.mutations++
 			be.pubIfMatch[pathPageID(path)] = r.Header.Get("If-Match")
+			be.publishedPages[pathPageID(path)] = true
+			be.pageEvents = append(be.pageEvents, "publish:"+pathPageID(path))
+			if be.onPublish != nil {
+				be.onPublish(be)
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"pp_1","type":"page-publishes","attributes":{}}}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/pages"): // create — id minted from the slug
@@ -195,6 +220,17 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 			body, _ := io.ReadAll(r.Body)
 			attrs := decodeHubAttrs(t, body)
 			slug, _ := attrs["slug"].(string)
+			if home, _ := attrs["is_homepage"].(bool); home {
+				be.pageEvents = append(be.pageEvents, "create:"+slug+"+home")
+				if be.enforceHomeNeedsPublish {
+					be.homeRejects++
+					w.WriteHeader(http.StatusConflict)
+					_, _ = w.Write([]byte(homeNotPublished409))
+					return
+				}
+			} else {
+				be.pageEvents = append(be.pageEvents, "create:"+slug)
+			}
 			be.createdSlugs = append(be.createdSlugs, slug)
 			be.createdAttrs[slug] = attrs
 			w.WriteHeader(http.StatusCreated)
@@ -208,7 +244,19 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 		case r.Method == http.MethodPatch:
 			be.mutations++
 			body, _ := io.ReadAll(r.Body)
-			be.patched[pathPageID(path)] = decodeHubAttrs(t, body)
+			pa := decodeHubAttrs(t, body)
+			if home, _ := pa["is_homepage"].(bool); home {
+				be.pageEvents = append(be.pageEvents, "home:"+pathPageID(path))
+				if be.enforceHomeNeedsPublish && !be.publishedPages[pathPageID(path)] {
+					be.homeRejects++
+					w.WriteHeader(http.StatusConflict)
+					_, _ = w.Write([]byte(homeNotPublished409))
+					return
+				}
+			}
+			if _, isHomeOnly := pa["is_homepage"]; !isHomeOnly || pa["meta"] != nil {
+				be.patched[pathPageID(path)] = pa // the marker PATCH; the home flip lives in pageEvents
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"pg_x","type":"pages","attributes":{}}}`))
 		default:
@@ -432,13 +480,13 @@ func TestStepPages_ForeignSlugConflict(t *testing.T) {
 	if !reflect.DeepEqual(be.createdSlugs, []string{"homepage"}) {
 		t.Errorf("created slugs = %v, want only [homepage] (fail-fast: nothing for about/faq)", be.createdSlugs)
 	}
-	if be.mutations != 4 {
-		t.Errorf("got %d mutating requests, want 4 (the homepage's create+PUT+publish+PATCH only)", be.mutations)
+	if be.mutations != 5 {
+		t.Errorf("got %d mutating requests, want 5 (the homepage's create+PUT+publish+PATCH+is_homepage update only)", be.mutations)
 	}
-	// Slug walks: homepage + its foreign-homepage pre-check + about; the
-	// conflict aborts before faq is ever listed.
-	if be.listCalls != 3 {
-		t.Errorf("got %d page-list GETs, want 3 (homepage walk + homepage pre-check + about walk)", be.listCalls)
+	// Slug walks: homepage + its foreign-homepage pre-check + the recheck right
+	// before is_homepage + about; the conflict aborts before faq is ever listed.
+	if be.listCalls != 4 {
+		t.Errorf("got %d page-list GETs, want 4 (homepage walk + pre-check + set-home recheck + about walk)", be.listCalls)
 	}
 }
 
@@ -507,5 +555,106 @@ func TestStepPages_TokenedTitleInterpolatedAtCreate(t *testing.T) {
 	got, _ := be.createdAttrs["welcome"]["title"].(string)
 	if got != "Welcome to Acme Community" {
 		t.Errorf("created title = %q, want %q (interpolated with the ACTUAL hub name)", got, "Welcome to Acme Community")
+	}
+}
+
+// ─── MIO-4929: the homepage becomes home only AFTER it is published ──────────
+
+// TestStepPages_HomepageIsSetAfterPublish: against a backend that enforces the
+// MIO-4427 invariant (409 homepage_page_not_published for a not-yet-published
+// homepage), the client-side loop must never carry is_homepage on the create,
+// and must flip is_homepage only after the homepage's publish.
+func TestStepPages_HomepageIsSetAfterPublish(t *testing.T) {
+	srv, be := newRecoveryBackend(t, nil, nil)
+	be.enforceHomeNeedsPublish = true
+
+	sc, err := driveStepPages(t, srv.URL)
+	if err != nil {
+		t.Fatalf("stepPages against a backend enforcing homepage-needs-publish: %v", err)
+	}
+	if be.homeRejects != 0 {
+		t.Fatalf("backend answered %d x 409 homepage_page_not_published — the CLI must not ask before publish", be.homeRejects)
+	}
+	for _, e := range be.pageEvents {
+		if strings.HasSuffix(e, "+home") {
+			t.Errorf("a create carried is_homepage:true (%s); events=%v", e, be.pageEvents)
+		}
+	}
+	pub, home := slices.Index(be.pageEvents, "publish:pg_homepage"), slices.Index(be.pageEvents, "home:pg_homepage")
+	if pub < 0 || home < 0 || pub > home {
+		t.Errorf("want publish:pg_homepage before home:pg_homepage; events=%v", be.pageEvents)
+	}
+	if n := strings.Count(strings.Join(be.pageEvents, ","), "home:"); n != 1 {
+		t.Errorf("exactly one is_homepage update expected (the homepage entry only), got %d; events=%v", n, be.pageEvents)
+	}
+	if sc.homePageID != "pg_homepage" {
+		t.Errorf("homePageID = %q, want pg_homepage", sc.homePageID)
+	}
+}
+
+// TestStepPages_ResumeSetsHomepageOnAppliedButNotHome: a prior run published
+// and marked the homepage applied but died before the is_homepage update. The
+// re-run must finish exactly that step (no create, no tree PUT, no publish).
+func TestStepPages_ResumeSetsHomepageOnAppliedButNotHome(t *testing.T) {
+	marker := ourMarker("applied")
+	marker["appliedDraftVersion"] = 3
+	srv, be := newRecoveryBackend(t,
+		[]map[string]any{seededPage("pg_done", "homepage", false, marker)},
+		map[string]int{"pg_done": 3})
+	be.enforceHomeNeedsPublish = true
+	be.publishedPages["pg_done"] = true
+
+	if _, err := driveStepPages(t, srv.URL); err != nil {
+		t.Fatalf("resume onto applied-but-not-home homepage: %v", err)
+	}
+	if !slices.Contains(be.pageEvents, "home:pg_done") {
+		t.Errorf("resume must set is_homepage on pg_done; events=%v", be.pageEvents)
+	}
+	if _, put := be.putIfMatch["pg_done"]; put {
+		t.Errorf("resume must not re-PUT the tree of pg_done")
+	}
+	if _, pub := be.pubIfMatch["pg_done"]; pub {
+		t.Errorf("resume must not re-publish pg_done")
+	}
+	if be.homeRejects != 0 {
+		t.Errorf("backend rejected %d homepage update(s)", be.homeRejects)
+	}
+}
+
+// TestStepPages_ResumeNotHomeRefusesToClobberForeignHomepage: our applied
+// homepage is not home but ANOTHER page is — setting ours would clear it, so
+// the run refuses without writing (§5.1 hazard semantics preserved).
+func TestStepPages_ResumeNotHomeRefusesToClobberForeignHomepage(t *testing.T) {
+	marker := ourMarker("applied")
+	marker["appliedDraftVersion"] = 3
+	srv, be := newRecoveryBackend(t, []map[string]any{
+		seededPage("pg_done", "homepage", false, marker),
+		seededPage("pg_legacy", "legacy-home", true, nil),
+	}, map[string]int{"pg_done": 3})
+
+	_, err := driveStepPages(t, srv.URL)
+	if err == nil || errs.CodeOf(err) != errs.ExitUsage || !strings.Contains(err.Error(), "pg_legacy") {
+		t.Fatalf("want ExitUsage naming pg_legacy, got %v", err)
+	}
+	if slices.Contains(be.pageEvents, "home:pg_done") {
+		t.Errorf("must not set is_homepage over a foreign homepage; events=%v", be.pageEvents)
+	}
+}
+
+// TestStepPages_HomepageClaimedDuringPublishIsNotClobbered: another page is
+// made the homepage between the up-front check and the final is_homepage
+// update. The run must exit 2 naming it and leave it home.
+func TestStepPages_HomepageClaimedDuringPublishIsNotClobbered(t *testing.T) {
+	srv, be := newRecoveryBackend(t, nil, nil)
+	be.onPublish = func(be *recoveryBackend) {
+		be.pages = append(be.pages, seededPage("pg_other", "other-home", true, nil))
+	}
+
+	_, err := driveStepPages(t, srv.URL)
+	if err == nil || errs.CodeOf(err) != errs.ExitUsage || !strings.Contains(err.Error(), "pg_other") {
+		t.Fatalf("want ExitUsage naming pg_other, got %v", err)
+	}
+	if slices.Contains(be.pageEvents, "home:pg_homepage") {
+		t.Errorf("must not set is_homepage over pg_other; events=%v", be.pageEvents)
 	}
 }

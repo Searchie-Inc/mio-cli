@@ -672,6 +672,20 @@ func preflightResumePages(sc *scaffoldContext) error {
 		case actionConflict:
 			conflicts = append(conflicts, fmt.Sprintf("page %q conflicts with existing page %s (%s)",
 				pp.ref.Slug, rp.id, recoveryConflictReason(ourApp, rp)))
+		case actionNoop, actionResumeFull:
+			// Our own homepage, not yet home: the step will finish it with an
+			// is_homepage update, which clears any OTHER homepage server-side.
+			if !pp.ref.IsHomepage || rp.isHome {
+				continue
+			}
+			hres, found, herr := sc.foreignHomepage(rp.id)
+			if herr != nil {
+				return herr
+			}
+			if found {
+				conflicts = append(conflicts, fmt.Sprintf("page %q would replace the hub's existing homepage %s (making it the homepage clears the current one server-side)",
+					pp.ref.Slug, hres.ID))
+			}
 		case actionCreate:
 			if !pp.ref.IsHomepage {
 				continue

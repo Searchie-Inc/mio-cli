@@ -48,6 +48,7 @@ type recoveredPage struct {
 	state               string
 	draftVersion        int
 	appliedDraftVersion int
+	isHome              bool // the page is currently the hub's homepage
 }
 
 // decideRecovery is the PURE §5.1 per-boundary recovery decision (no HTTP, no
@@ -193,6 +194,48 @@ func stepPages(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 	return nil
 }
 
+// foreignHomepage returns the hub's current homepage when it is a page other
+// than exceptID (empty exceptID: any homepage). Setting is_homepage on a page
+// clears the existing homepage server-side, so every path that is about to
+// make a page the homepage consults this first (§5.1 homepage hazard).
+func (sc *scaffoldContext) foreignHomepage(exceptID string) (*client.Resource, bool, error) {
+	return sc.findHubPage(func(r client.Resource) bool {
+		isHome, _ := r.Attributes["is_homepage"].(bool)
+		return isHome && r.ID != exceptID
+	})
+}
+
+// homepageClaimedError is the conflict raised when making pageID the homepage
+// would clear a different, existing homepage.
+func (sc *scaffoldContext) homepageClaimedError(pageID string) error {
+	hres, found, err := sc.foreignHomepage(pageID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	return errs.New(errs.ExitUsage,
+		"existing homepage %s is not this page; refusing to make %s the homepage (it would clear %s server-side) — inspect it or re-run with --hub %s after resolving",
+		hres.ID, pageID, hres.ID, sc.hubID)
+}
+
+// setHomepage is the LAST write of the homepage entry (MIO-4929): the backend
+// (MIO-4427) rejects is_homepage on a page that has no published tree
+// (409 homepage_page_not_published), so the flag is set by a plain page update
+// only after create → tree PUT → publish have landed.
+func (sc *scaffoldContext) setHomepage(pageID string) error {
+	// Re-check the WHOLE hub immediately before the write: the checks at the
+	// top of the page's apply are minutes of tree PUT / publish old by now, and
+	// is_homepage clears whichever page is home server-side.
+	if cerr := sc.homepageClaimedError(pageID); cerr != nil {
+		return cerr
+	}
+	_, err := sc.cl.Update(sc.ctx, pagesPath(sc.teamID, sc.hubID, pageID),
+		map[string]any{"is_homepage": true})
+	return err
+}
+
 // applyPageClientSide applies ONE planned page: final interpolation → §5.1
 // recovery decision at the manifest slug → create (marker "pending") or
 // resume onto the crashed create → tree PUT → publish → marker PATCH
@@ -242,6 +285,10 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 		return rerr
 	}
 	var pageID string
+	// needHome: the homepage entry still has to be flipped to is_homepage after
+	// its publish. Always true for a fresh create; for a resume only when the
+	// existing page is not already home.
+	needHome := pp.ref.IsHomepage
 	switch decideRecovery(ourApp, rp) {
 	case actionConflict:
 		return errs.New(errs.ExitUsage,
@@ -255,8 +302,17 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 		// Record the id anyway (MIO-2574): a converged page is still a page the
 		// caller asked about, so the machine-readable result reports the REAL id
 		// instead of a null just because this run had nothing left to write.
-		sc.notef("page %q already applied (untouched) — skipping", pp.ref.Slug)
 		sc.recordPageID(pp.ref.Slug, rp.id)
+		if pp.ref.IsHomepage && !rp.isHome {
+			// A prior run published and marked the homepage but died before the
+			// is_homepage update (MIO-4929): finish exactly that step.
+			if cerr := sc.homepageClaimedError(rp.id); cerr != nil {
+				return cerr
+			}
+			sc.notef("page %q already applied (untouched) — setting it as the homepage", pp.ref.Slug)
+			return sc.setHomepage(rp.id)
+		}
+		sc.notef("page %q already applied (untouched) — skipping", pp.ref.Slug)
 		return nil
 
 	case actionResumeFull:
@@ -265,6 +321,14 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 		sc.notef("page %q: resuming onto existing page %s (pending, no draft written) — skipping create",
 			pp.ref.Slug, rp.id)
 		pageID = rp.id
+		needHome = pp.ref.IsHomepage && !rp.isHome
+		if needHome {
+			// Refuse BEFORE any write if the final is_homepage update would
+			// clear a different homepage.
+			if cerr := sc.homepageClaimedError(rp.id); cerr != nil {
+				return cerr
+			}
+		}
 
 	case actionCreate:
 		// §5.1 homepage hazard: create_page(is_homepage=true) CLEARS any
@@ -279,10 +343,7 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 		// it). Creating would clear it and mint a duplicate; the marker is
 		// read only to enrich the reason.
 		if pp.ref.IsHomepage {
-			hres, hfound, herr := sc.findHubPage(func(r client.Resource) bool {
-				isHome, _ := r.Attributes["is_homepage"].(bool)
-				return isHome
-			})
+			hres, hfound, herr := sc.foreignHomepage("")
 			if herr != nil {
 				return herr
 			}
@@ -298,7 +359,7 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 		}
 
 		// 3. Create the page carrying the §5.1 provenance marker in "pending"
-		// state, so a crash between this create and the applied-PATCH below
+		// state (WITHOUT is_homepage — see setHomepage), so a crash between this create and the applied-PATCH below
 		// leaves a detectable half-applied page (the resumeFull arm keys on it).
 		// buildPageAttrs is the shared `pages create` builder, so the scaffold
 		// gets the same privacy-enum validation the command does.
@@ -380,21 +441,25 @@ func applyPageClientSide(sc *scaffoldContext, pp plannedPage) error {
 		map[string]any{"meta": templateMarkerApplied(sc, pp.ref, digest, dv)}); err != nil {
 		return err
 	}
+
+	// 7. The homepage entry becomes the homepage only now, after its tree is
+	// published (MIO-4929). The marker is already "applied", so a crash here
+	// re-enters through the applied+untouched arm, which finishes this step.
+	if needHome {
+		return sc.setHomepage(pageID)
+	}
 	return nil
 }
 
 // pageInputFor maps a catalog PageRef (plus the interpolated title and the
 // provenance marker) onto the shared `pages create` builder input. IsHome is
-// set ONLY for the homepage entry, so no other page ever claims is_homepage;
-// Privacy is passed through only when the ref carries one (buildPageAttrs
+// NEVER set here (MIO-4929): the backend rejects a homepage create whose tree
+// is not yet published, so the homepage entry is flipped by setHomepage after
+// its publish. Privacy is passed through only when the ref carries one (buildPageAttrs
 // validates the enum).
 func pageInputFor(ref catalog.PageRef, title string, marker map[string]any) PageInput {
 	slug := ref.Slug
 	in := PageInput{Title: &title, Slug: &slug, Meta: marker}
-	if ref.IsHomepage {
-		isHome := true
-		in.IsHome = &isHome
-	}
 	if ref.Privacy != "" {
 		priv := ref.Privacy
 		in.Privacy = &priv
@@ -448,6 +513,7 @@ func (sc *scaffoldContext) recoverPageAtSlug(slug, ourAppID string) (*recoveredP
 		return nil, nil
 	}
 	rp := &recoveredPage{id: res.ID}
+	rp.isHome, _ = res.Attributes["is_homepage"].(bool)
 	rp.appID, rp.state, rp.appliedDraftVersion = provenanceMarkerFields(res.Attributes)
 	if rp.appID == ourAppID {
 		dv, derr := sc.pageDraftVersion(res.ID)

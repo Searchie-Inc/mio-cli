@@ -151,11 +151,8 @@ var usersUpdateCmd = &cobra.Command{
 (partial update / PATCH semantics).
 
 Equivalent to PATCH /api/users/{id}.`,
-	Example: `  # Update display name and email
-  mio users update usr_abc123 --first-name Alice --email alice@example.com
-
-  # Update avatar URL only
-  mio users update usr_abc123 --avatar-url https://example.com/avatar.png`,
+	Example: `  # Update display name
+  mio users update usr_abc123 --first-name Alice --last-name Smith`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newContext(cmd)
@@ -169,15 +166,13 @@ Equivalent to PATCH /api/users/{id}.`,
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "first-name")
 		setStringFlag(cmd, attrs, "last-name")
-		setStringFlag(cmd, attrs, "email")
-		setStringFlag(cmd, attrs, "avatar-url")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
-		// Flat body: the backend UserUpdate schema is a plain pydantic model,
-		// not a JSON:API envelope. Sending an envelope here 422s.
+		// Flat body: the route documents a plain UserUpdate model (first_name,
+		// last_name, is_active), not a JSON:API envelope.
 		res, err := c.client.UpdateWith(c.ctx, client.StyleFlat, usersPath(args[0]), attrs)
 		if err != nil {
 			return err
@@ -193,6 +188,4 @@ func init() {
 	// Attribute flags for update.
 	usersUpdateCmd.Flags().String("first-name", "", "User's first name.")
 	usersUpdateCmd.Flags().String("last-name", "", "User's last name.")
-	usersUpdateCmd.Flags().String("email", "", "User's email address.")
-	usersUpdateCmd.Flags().String("avatar-url", "", "URL to the user's avatar image.")
 }

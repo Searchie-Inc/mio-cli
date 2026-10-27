@@ -230,7 +230,6 @@ var contactsUpdateCmd = &cobra.Command{
 		}
 
 		attrs := map[string]any{}
-		setStringFlag(cmd, attrs, "email")
 		setStringFlag(cmd, attrs, "first-name")
 		setStringFlag(cmd, attrs, "last-name")
 		setStringFlag(cmd, attrs, "phone")
@@ -323,8 +322,10 @@ func init() {
 	// other resource; the underscore spellings (--first_name/--last_name) are
 	// kept working as hidden, deprecated aliases via contactsNameFlagAlias so
 	// existing scripts do not break.
+	// --email is create-only (MIO-4930): the team-contacts PATCH contract has no
+	// email field (the API answers 422), so update does not define the flag.
+	contactsCreateCmd.Flags().String("email", "", "Contact email address.")
 	for _, cmd := range []*cobra.Command{contactsCreateCmd, contactsUpdateCmd} {
-		cmd.Flags().String("email", "", "Contact email address.")
 		cmd.Flags().String("first-name", "", "Contact first name.")
 		cmd.Flags().String("last-name", "", "Contact last name.")
 		cmd.Flags().String("phone", "", "Contact phone number.")

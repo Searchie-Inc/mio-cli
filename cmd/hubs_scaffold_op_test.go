@@ -207,8 +207,8 @@ func TestStepPages_Op404FallsBackToClientSide(t *testing.T) {
 	if want := []string{"homepage", "about", "faq"}; !slices.Equal(be.createdSlugs, want) {
 		t.Errorf("created slugs = %v, want %v (full client-side apply)", be.createdSlugs, want)
 	}
-	if be.mutations != 12 {
-		t.Errorf("mutations = %d, want 12 (create+PUT+publish+PATCH × 3 pages)", be.mutations)
+	if be.mutations != 13 {
+		t.Errorf("mutations = %d, want 13 (create+PUT+publish+PATCH × 3 pages, + the homepage's is_homepage update)", be.mutations)
 	}
 	if notes := stepNotes(sc); !strings.Contains(notes, "applying client-side") {
 		t.Errorf("the 404 fallback must emit an operator note; notes=%q", notes)
