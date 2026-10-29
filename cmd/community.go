@@ -280,7 +280,7 @@ func init() {
 		cmd.Flags().String("slug", "", "Space URL slug (unique within the hub).")
 		cmd.Flags().String("description", "", "Short description of the space.")
 		cmd.Flags().String("access-level", "", "Access level: public or restricted (default public).")
-		cmd.Flags().String("posting-permission", "", "Who can post: any_member, admins_only, or segment (default any_member).")
+		cmd.Flags().String("posting-permission", "", "Who can post: any_member, admins_only, admins_and_moderators (owner, admins and moderators), or segment (default any_member).")
 		cmd.Flags().Int("position", 0, "Zero-based display position within the hub.")
 		cmd.Flags().String("segment-id", "", "Segment id gating a restricted space.")
 		cmd.Flags().Bool("is-default", false, "Whether this is a default space.")

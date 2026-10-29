@@ -12,7 +12,7 @@ import (
 
 var (
 	spaceAccessLevels       = map[string]bool{"public": true, "restricted": true}
-	spacePostingPermissions = map[string]bool{"any_member": true, "admins_only": true, "segment": true}
+	spacePostingPermissions = map[string]bool{"any_member": true, "admins_only": true, "admins_and_moderators": true, "segment": true}
 )
 
 // SpaceInput carries the resolved create/update space attributes, decoupled from
@@ -73,7 +73,7 @@ func buildSpaceAttrs(s SpaceInput) (map[string]any, error) {
 	}
 	if s.PostingPermission != nil {
 		if !spacePostingPermissions[*s.PostingPermission] {
-			return nil, errs.New(errs.ExitUsage, "invalid --posting-permission %q: must be any_member, admins_only, or segment", *s.PostingPermission)
+			return nil, errs.New(errs.ExitUsage, "invalid --posting-permission %q: must be any_member, admins_only, admins_and_moderators, or segment", *s.PostingPermission)
 		}
 		attrs["posting_permission"] = *s.PostingPermission
 	}

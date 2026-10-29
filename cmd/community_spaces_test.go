@@ -64,6 +64,33 @@ func TestCommunitySpacesCreate_Fields(t *testing.T) {
 	}
 }
 
+// TestCommunitySpacesCreate_AdminsAndModeratorsPosting verifies the fourth
+// posting option is sent through, and that the usage error lists all four values.
+func TestCommunitySpacesCreate_AdminsAndModeratorsPosting(t *testing.T) {
+	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1", "--hub", "hub_123",
+			"community", "spaces", "create", "--name", "X", "--slug", "x",
+			"--posting-permission", "admins_and_moderators")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want ExitOK; stderr=%q", res.Code, res.Stderr)
+	}
+	if got := decodeHubAttrs(t, *gotBody)["posting_permission"]; got != "admins_and_moderators" {
+		t.Errorf("posting_permission = %v, want admins_and_moderators", got)
+	}
+
+	nobody := "nobody"
+	_, err := buildSpaceAttrs(SpaceInput{PostingPermission: &nobody})
+	if err == nil {
+		t.Fatal("buildSpaceAttrs(nobody) = nil error, want usage error")
+	}
+	for _, v := range []string{"any_member", "admins_only", "admins_and_moderators", "segment"} {
+		if !strings.Contains(err.Error(), v) {
+			t.Errorf("usage error %q does not list %s", err.Error(), v)
+		}
+	}
+}
+
 // TestCommunitySpacesCreate_RejectsInvalidEnums verifies out-of-enum
 // --access-level / --posting-permission are rejected client-side with no request.
 func TestCommunitySpacesCreate_RejectsInvalidEnums(t *testing.T) {
