@@ -115,6 +115,18 @@ func TestHubTemplateByID_Community(t *testing.T) {
 	}
 }
 
+func TestHubTemplateValidate_AcceptsAdminsAndModeratorsPosting(t *testing.T) {
+	c := load21ForTest(t)
+	h, ok := c.HubTemplateByID("community")
+	if !ok {
+		t.Fatal("HubTemplateByID(community) not found")
+	}
+	h.Spaces[0].PostingPermission = "admins_and_moderators"
+	if err := h.Validate(c); err != nil {
+		t.Errorf("Validate with admins_and_moderators = %v, want nil", err)
+	}
+}
+
 func TestHubTemplateValidate_Invariants(t *testing.T) {
 	cases := []struct {
 		name   string

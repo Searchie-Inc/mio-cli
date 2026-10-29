@@ -318,7 +318,8 @@ mio community discussions create --hub hub_abc123 --space-id "$SPACE_ID" \
 ```
 
 `--access-level` is `public` or `restricted`; `--posting-permission` is
-`any_member`, `admins_only`, or `segment` (with `--segment-id`).
+`any_member`, `admins_only`, `admins_and_moderators` (hub owner, admins and
+moderators start posts; members read and reply), or `segment` (with `--segment-id`).
 
 `discussions create` posts as **you** — the author is derived server-side from your
 credentials (a team-owner key posts as the team owner's contact), and there is

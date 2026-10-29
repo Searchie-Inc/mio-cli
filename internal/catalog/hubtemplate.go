@@ -31,7 +31,7 @@ import (
 //   - hubAttrFieldTypes:                                 cmd/contactattributes.go (field-type help)
 var (
 	hubSpaceAccessLevels       = map[string]bool{"public": true, "restricted": true}
-	hubSpacePostingPermissions = map[string]bool{"any_member": true, "admins_only": true, "segment": true}
+	hubSpacePostingPermissions = map[string]bool{"any_member": true, "admins_only": true, "admins_and_moderators": true, "segment": true}
 	hubPagePrivacyValues       = map[string]bool{"public": true, "members": true, "private": true}
 	// hubPlaylistVisibilityValues is the enum the value is actually SENT to:
 	// playlist CREATE (mio-backend PlaylistCreateAttributes.visibility —
