@@ -694,11 +694,20 @@ func renderFileOrFetch(cmd *cobra.Command, c *cmdContext, teamID, fileID string,
 	return c.render(cmd, res)
 }
 
+// pinnedExtensionMime overrides the OS mime table for extensions it gets wrong.
+// macOS maps .m4a to audio/mp4a-latm, which Apple Podcasts refuses (MIO-5931).
+var pinnedExtensionMime = map[string]string{
+	".m4a": "audio/mp4",
+}
+
 // sniffMime resolves a file's content type from its extension, falling back to
 // content sniffing, then application/octet-stream. Any "; charset=…" suffix is
 // stripped so the value fits the backend's mime_type field.
 func sniffMime(path string) string {
 	if ext := filepath.Ext(path); ext != "" {
+		if ct, ok := pinnedExtensionMime[strings.ToLower(ext)]; ok {
+			return ct
+		}
 		if ct := mime.TypeByExtension(ext); ct != "" {
 			return trimMediaType(ct)
 		}
