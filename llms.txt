@@ -289,10 +289,10 @@ mio email steps create — add a step to a drip campaign
 mio email steps list — list steps in a drip campaign
 mio email steps update — update a drip campaign step
 mio email steps delete — delete a step from a drip campaign
-mio email templates create — create an email template
+mio email templates create — create an email template: --name --subject --description --body (sent as mjml_source) --plain-text; only passed flags are sent. --from-name/--from-email/--reply-to are RETIRED (hidden; exit 2 before any request — the API never stored them on a template: dropped silently before mio-backend MIO-966, 422 after). Display name + reply-to are per-hub: `mio hubs email-settings update --from-name <name> --reply-to <addr>` (PATCH, both optional); the From ADDRESS is the hub's SMTP config: `mio email config set`, a FULL PUT requiring --mail-host --mail-username --from-email --from-name together (no from-address-only call). MIO-4784; release after v0.24.0 (earlier: the three flags are sent and --description is unknown)
 mio email templates list — list email templates
 mio email templates retrieve — retrieve a template by id
-mio email templates update — update an email template
+mio email templates update — update an email template (PATCH: --name --subject --description --body --plain-text, only passed flags sent; no flag → exit 2, no request); --from-name/--from-email/--reply-to retired exactly as on create (MIO-4784)
 mio email templates delete — delete an email template
 mio email templates preview — render a preview of an email template
 mio email config set — configure outbound email (SMTP / provider settings)
