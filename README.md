@@ -401,10 +401,17 @@ mio products prices create <product-id> --amount 19900 --currency usd --type one
 mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":"@example.com"}]}]}'
 mio segments members <segment-id>
 
-# Events (hub-scoped) — the one family a normal API key cannot drive.
-# Every `mio events` route needs a member (contact) identity, so a key from
-# `mio login` / MIO_API_KEY 401s and the CLI stops with exit 3 before it sends.
-# Export a member access token instead; CLI member login is still to come.
+# Events (hub-scoped). AUTHORING (create / update / cancel) works with a team API key
+# that carries the can_author_events flag — no member token needed (MIO-3610):
+#   mio api-keys update <key-id> --can-author-events   # team owner; or mint with
+#   mio api-keys create --name bot --can-author-events
+# (key management needs a USER access token via --api-key — the access_token from
+# POST /api/v1/auth/login; a team API key, even the owner's, gets 403)
+# (a cancel through the key route cannot carry --message: that route takes no body).
+# Everything else — list, retrieve, RSVP — still needs a member (contact) identity,
+# so a key alone 401s and the CLI stops with exit 3 before it sends. Export a member
+# access token for those (CLI member login is still to come); with the token set,
+# create/update/cancel also use it (the member route) exactly as before.
 export MIO_CONTACT_TOKEN=<member-access-token>
 mio events create --hub <hub-id> --title "Community Meetup" \
   --starts-at 2026-09-01T18:00:00Z --ends-at 2026-09-01T20:00:00Z \
@@ -516,7 +523,7 @@ Scripts and agents can branch on these stable codes.
 | `whoami` | Print resolved identity — user, team, hub, api-base, profile, key source |
 | `auth` | `token` — print the stored API key to stdout (`MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY`); exit 3 with empty stdout when none is stored. `forgot-password --email <addr>` / `reset-password --token <token\|link>` — recover a lost platform-user password from the CLI alone (unauthenticated; the new password is prompted for or read from `MIO_PASSWORD`, never on argv; then `mio login`). Release after `v0.24.0` |
 | `config` | `set`, `get`, `list` |
-| `api-keys` | `create`, `list`, `retrieve`, `delete` |
+| `api-keys` | `create`, `list`, `retrieve`, `update`, `delete` — `--can-author-events` lets a key create/update/cancel hub events without a member token |
 | `teams` | `create` (`--name` and `--slug`, both required; needs a user access token, since the API refuses an API key here with 403), `list`, `retrieve`, `update` (`--name` only; the slug is fixed at creation), `delete` and `switch` (server-side switch + updates local context), which refuse an API key with 403 too; `members list/add/remove` |
 | `users` | `me`, `list`, `retrieve`, `update` |
 | `roles` | `create`, `list`, `retrieve`, `update`, `delete`; `permissions list` |

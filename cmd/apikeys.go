@@ -15,6 +15,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -27,6 +28,7 @@ func init() {
 		apikeysCreateCmd,
 		apikeysListCmd,
 		apikeysRetrieveCmd,
+		apikeysUpdateCmd,
 		apikeysDeleteCmd,
 	)
 
@@ -61,12 +63,19 @@ var apikeysCreateCmd = &cobra.Command{
 	Long: `Create a new API key for the active team.
 
 The secret is returned exactly once in the response. Store it immediately —
-it cannot be retrieved again after this call.`,
+it cannot be retrieved again after this call.
+
+Managing keys (create, list, retrieve, update, delete) needs a USER access token:
+pass the access_token from POST /api/v1/auth/login with --api-key. A team API key,
+including the stored one, is refused with 403 (exit 3).`,
 	Example: `  # Create a key with a name only (no expiry)
   mio api-keys create --name="CI deploy key"
 
   # Create a key that expires on a specific date
-  mio api-keys create --name="Staging key" --expires-at="2027-01-01T00:00:00Z"`,
+  mio api-keys create --name="Staging key" --expires-at="2027-01-01T00:00:00Z"
+
+  # A key that may author hub events without a member token (MIO-3610)
+  mio api-keys create --name="Events bot" --can-author-events`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := newContext(cmd)
@@ -89,6 +98,11 @@ it cannot be retrieved again after this call.`,
 				attrs["expires_at"] = v
 			}
 		}
+
+		// Permission flags: sent only when the flag was passed (a flag the user
+		// did not set must never reach the body — PATCH/partial semantics).
+		setBoolFlag(cmd, attrs, "can-moderate")
+		setBoolFlag(cmd, attrs, "can-author-events")
 
 		if len(attrs) == 0 {
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
@@ -167,6 +181,56 @@ var apikeysRetrieveCmd = &cobra.Command{
 	},
 }
 
+// ---- update (permission flags) ----------------------------------------------
+
+var apikeysUpdateCmd = &cobra.Command{
+	Use:   "update <id>",
+	Short: "Change an API key's permission flags.",
+	Long: `Change what an existing API key may do. Only the flags you pass are sent; an
+omitted flag is left as it is, and at least one must be given.
+
+  --can-author-events   let the key create/update/cancel hub events (the team-key
+                        route used by 'mio events create|update|cancel' when no
+                        MIO_CONTACT_TOKEN is set — MIO-3610)
+  --can-moderate        let the key use the member-moderation endpoints
+
+Pass =false to revoke a flag (--can-author-events=false). Only the team owner
+may do this, and it needs a USER access token: pass the access_token from
+POST /api/v1/auth/login with --api-key — a team API key, including the stored
+one, is refused with 403 (exit 3). Find a key's id with 'mio api-keys list'.`,
+	Example: `  mio api-keys update apk_abc123 --can-author-events
+  mio api-keys update apk_abc123 --can-moderate=false`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(args[0]) == "" {
+			return errs.New(errs.ExitUsage, "api key id is blank (an unset variable?)")
+		}
+		attrs := map[string]any{}
+		setBoolFlag(cmd, attrs, "can-moderate")
+		setBoolFlag(cmd, attrs, "can-author-events")
+		if len(attrs) == 0 {
+			return errs.New(errs.ExitUsage, "nothing to update: pass --can-author-events and/or --can-moderate")
+		}
+		c, err := newContext(cmd)
+		if err != nil {
+			return err
+		}
+		if err := c.requireAuth(); err != nil {
+			return err
+		}
+		teamID, err := c.requireTeam()
+		if err != nil {
+			return err
+		}
+		// Flat body, like create: the backend accepts a flat object here.
+		res, err := c.client.UpdateWith(c.ctx, client.StyleFlat, apikeysPath(teamID, args[0]), attrs)
+		if err != nil {
+			return err
+		}
+		return c.render(cmd, res)
+	},
+}
+
 // ---- delete (revoke) --------------------------------------------------------
 
 var apikeysDeleteCmd = &cobra.Command{
@@ -212,6 +276,10 @@ func init() {
 	// Attribute flags for create.
 	apikeysCreateCmd.Flags().String("name", "", "Human-readable name for the API key.")
 	apikeysCreateCmd.Flags().String("expires-at", "", "Expiry timestamp in RFC 3339 format (e.g. 2027-01-01T00:00:00Z). Omit for a non-expiring key.")
+	apikeysCreateCmd.Flags().Bool("can-moderate", false, "Let the key use the member-moderation endpoints (default false).")
+	apikeysCreateCmd.Flags().Bool("can-author-events", false, "Let the key create/update/cancel hub events without a member token (default false).")
+	apikeysUpdateCmd.Flags().Bool("can-moderate", false, "Set the can_moderate flag (=false to revoke).")
+	apikeysUpdateCmd.Flags().Bool("can-author-events", false, "Set the can_author_events flag (=false to revoke).")
 
 	// Pagination flags for list.
 	addPaginationFlags(apikeysListCmd)
