@@ -489,3 +489,21 @@ func TestMintAndStore_Guard_RefusalAfterOwnershipRecoveryStopsTheRetry(t *testin
 		t.Errorf("stored key = %q, want the old key kept", got)
 	}
 }
+
+// A network failure while verifying the stored key must be reported without the
+// transport error's text (it can carry URLs and request details).
+func TestLoginGuard_UnreachableAPI_PromptSaysOnlyThatTheRequestFailed(t *testing.T) {
+	seedStoredKey(t, guardOldKey)
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := dead.URL
+	dead.Close() // connection refused from here on
+	resetGlobalFlags()
+	cmd, _ := testCmd("")
+	err := confirmReplaceStoredKey(cmd, url, guardBetaTeam, cmd.InOrStdin(), true)
+	if err == nil || errs.CodeOf(err) != errs.ExitNeedsConfir {
+		t.Fatalf("err = %v, want exit 5", err)
+	}
+	if !strings.Contains(err.Error(), "the request failed") || strings.Contains(err.Error(), "connect: connection refused") {
+		t.Errorf("want the generic 'the request failed' and no transport text, got: %v", err)
+	}
+}
