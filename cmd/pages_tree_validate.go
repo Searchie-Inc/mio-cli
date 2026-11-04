@@ -73,6 +73,74 @@ func validatePageTree(root map[string]any) error {
 	return validatePageNode(node, "root")
 }
 
+type pageTreeRule struct {
+	name  string
+	check func(node map[string]any, where string) error
+}
+
+var pageTreeRules = []pageTreeRule{
+	{name: "weight", check: func(node map[string]any, where string) error {
+		// (1) settings.weight, if present, must be numeric.
+		if settings, ok := node["settings"].(map[string]any); ok {
+			if w, present := settings["weight"]; present && !isJSONNumber(w) {
+				return errs.New(errs.ExitUsage,
+					"%s: settings.weight must be a number like 700, not %s — a non-numeric weight is accepted by the API (200) and then DISCARDED by the renderer, which falls back per kind (headline -> 400/normal, text -> no weight class at all). The node still renders; the weight you authored does not",
+					where, describeJSONValue(w))
+			}
+		}
+
+		return nil
+	}},
+	{name: "template", check: func(node map[string]any, where string) error {
+		// (2) template, if present, must be a non-empty string (the section marker).
+		if tmpl, present := node["template"]; present {
+			s, ok := tmpl.(string)
+			if !ok || strings.TrimSpace(s) == "" {
+				return errs.New(errs.ExitUsage,
+					"%s: template must be a non-empty string like \"hero\", \"carousel\" or \"row\", not %s — a section without a resolvable template is accepted by the API (200) but SILENTLY DROPPED by the renderer",
+					where, describeJSONValue(tmpl))
+			}
+		}
+
+		return nil
+	}},
+	{name: "misplaced-value", check: func(node map[string]any, where string) error {
+		// (3) content `value` under settings instead of the node top level (MIO-2575).
+		// THE most-hit trap: the API 200s and the renderer never reads settings.value,
+		// so the authored value never appears. The VISIBLE result is per-kind and the
+		// message says so. Verified against mio-hub origin/main: headline/text render
+		// empty; image passes "" to Thumbnail, whose `src ? <img> : <fallback>` branch
+		// renders a tinted bg-hub-surface-5 tile carrying the image sprite (its own
+		// test: "does not render an img when src is omitted — shows the fallback
+		// icon"); video renders an empty <video> natively but a VISIBLE red "Video
+		// iframe source not allowed:" box under embed_type "iframe" (isAllowedEmbedUrl
+		// throws on ""); icon falls back to the "star" glyph (resolveIconName: "so the
+		// page-tree never renders nothing"); quote returns null so the node is absent
+		// entirely; button renders with a blank label. Describing any of them as
+		// "renders EMPTY" repeats exactly the mistake MIO-2799 corrects for weight —
+		// it sends the author hunting a blank area while a grey tile or a red error
+		// box is sitting there. Seven leaf kinds read the
+		// TOP-LEVEL value — headline, text, image, video, button, icon, quote — and
+		// exactly one, progress-ring, legitimately reads settings.value (a number),
+		// so it is exempt. Checked only when the top-level value is ABSENT: a node
+		// carrying both is not silently dropping anything, and rejecting it would
+		// break trees the renderer handles fine.
+		if settings, ok := node["settings"].(map[string]any); ok {
+			if _, misplaced := settings["value"]; misplaced && readsTopLevelValue(node) {
+				// A null top-level value is NOT a real value: the renderer computes
+				// String(node.value ?? "") -> "", so it drops just like an absent one.
+				if tv, topLevel := node["value"]; !topLevel || tv == nil {
+					return errs.New(errs.ExitUsage,
+						"%s: content value must be TOP-LEVEL on the node, not settings.value — the API accepts settings.value (200) and the renderer never reads it, so the value you authored never appears. What you see instead depends on the kind: headline/text render empty, image renders the grey fallback TILE (not nothing), video renders an empty player — or, with embed_type \"iframe\", a visible red \"source not allowed\" box — icon falls back to the \"star\" glyph, quote renders NOTHING AT ALL, button renders with a blank label. Move it to the node's \"value\" key. (progress-ring is the sole kind that reads settings.value)",
+						where)
+				}
+			}
+		}
+
+		return nil
+	}},
+}
+
 // validatePageNode checks one node's pinned settings, then recurses into its
 // children in order (pre-order DFS — the first violation wins). path is a
 // dotted/indexed locator (root.children[0]…) used in the error when the node has
@@ -80,54 +148,9 @@ func validatePageTree(root map[string]any) error {
 func validatePageNode(node map[string]any, path string) error {
 	where := nodeLabel(node, path)
 
-	// (1) settings.weight, if present, must be numeric.
-	if settings, ok := node["settings"].(map[string]any); ok {
-		if w, present := settings["weight"]; present && !isJSONNumber(w) {
-			return errs.New(errs.ExitUsage,
-				"%s: settings.weight must be a number like 700, not %s — a non-numeric weight is accepted by the API (200) and then DISCARDED by the renderer, which falls back per kind (headline -> 400/normal, text -> no weight class at all). The node still renders; the weight you authored does not",
-				where, describeJSONValue(w))
-		}
-	}
-
-	// (2) template, if present, must be a non-empty string (the section marker).
-	if tmpl, present := node["template"]; present {
-		s, ok := tmpl.(string)
-		if !ok || strings.TrimSpace(s) == "" {
-			return errs.New(errs.ExitUsage,
-				"%s: template must be a non-empty string like \"hero\", \"carousel\" or \"row\", not %s — a section without a resolvable template is accepted by the API (200) but SILENTLY DROPPED by the renderer",
-				where, describeJSONValue(tmpl))
-		}
-	}
-
-	// (3) content `value` under settings instead of the node top level (MIO-2575).
-	// THE most-hit trap: the API 200s and the renderer never reads settings.value,
-	// so the authored value never appears. The VISIBLE result is per-kind and the
-	// message says so. Verified against mio-hub origin/main: headline/text render
-	// empty; image passes "" to Thumbnail, whose `src ? <img> : <fallback>` branch
-	// renders a tinted bg-hub-surface-5 tile carrying the image sprite (its own
-	// test: "does not render an img when src is omitted — shows the fallback
-	// icon"); video renders an empty <video> natively but a VISIBLE red "Video
-	// iframe source not allowed:" box under embed_type "iframe" (isAllowedEmbedUrl
-	// throws on ""); icon falls back to the "star" glyph (resolveIconName: "so the
-	// page-tree never renders nothing"); quote returns null so the node is absent
-	// entirely; button renders with a blank label. Describing any of them as
-	// "renders EMPTY" repeats exactly the mistake MIO-2799 corrects for weight —
-	// it sends the author hunting a blank area while a grey tile or a red error
-	// box is sitting there. Seven leaf kinds read the
-	// TOP-LEVEL value — headline, text, image, video, button, icon, quote — and
-	// exactly one, progress-ring, legitimately reads settings.value (a number),
-	// so it is exempt. Checked only when the top-level value is ABSENT: a node
-	// carrying both is not silently dropping anything, and rejecting it would
-	// break trees the renderer handles fine.
-	if settings, ok := node["settings"].(map[string]any); ok {
-		if _, misplaced := settings["value"]; misplaced && readsTopLevelValue(node) {
-			// A null top-level value is NOT a real value: the renderer computes
-			// String(node.value ?? "") -> "", so it drops just like an absent one.
-			if tv, topLevel := node["value"]; !topLevel || tv == nil {
-				return errs.New(errs.ExitUsage,
-					"%s: content value must be TOP-LEVEL on the node, not settings.value — the API accepts settings.value (200) and the renderer never reads it, so the value you authored never appears. What you see instead depends on the kind: headline/text render empty, image renders the grey fallback TILE (not nothing), video renders an empty player — or, with embed_type \"iframe\", a visible red \"source not allowed\" box — icon falls back to the \"star\" glyph, quote renders NOTHING AT ALL, button renders with a blank label. Move it to the node's \"value\" key. (progress-ring is the sole kind that reads settings.value)",
-					where)
-			}
+	for _, rule := range pageTreeRules {
+		if err := rule.check(node, where); err != nil {
+			return err
 		}
 	}
 
