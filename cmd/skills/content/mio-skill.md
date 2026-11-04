@@ -131,12 +131,13 @@ HUB_ID=$(mio hubs scaffold --template starter --name "Acme" --slug acme \
   only where the hub has none of its own, never sends `content: null`, and leaves a gate
   the hub has already set — on or off — alone (an unset gate is filled).
   **`--reapply-template` is the exception:** its policy write always sends `content`, and
-  a template that declares no policy text (the `community` one) carries none — so it **reverts that hub's ToS and Privacy text
+  a template that declares no policy text (the live `starter` one) carries none — so it **reverts that hub's ToS and Privacy text
   to the backend default**. Whether members are asked to accept the ToS again depends on
   that write, not on how the ToS was last saved: the template's ToS requires acceptance,
   so the reset moves the version to `default-v1`, and that **re-prompts every member who
-  had accepted** only when the ToS carried another version (the re-apply turns the gate on,
-  so the prompt shows). Check BEFORE a re-apply with `mio hubs policies get "$HUB_ID"`:
+  had accepted** only when the ToS carried another version, and only where the hub's gate
+  is already on (the live `starter` template declares `enabled: false`, so a re-apply does
+  not turn it on). Check BEFORE a re-apply with `mio hubs policies get "$HUB_ID"`:
   a ToS `version` other than `default-v1` (a `v_…` token, set by saving custom text WITH
   `--require-acceptance` and kept by later saves or resets without it) means the reset
   re-prompts; `default-v1` means nobody who had accepted is asked again, and there is no
