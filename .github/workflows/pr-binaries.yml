@@ -54,6 +54,7 @@ jobs:
       - name: Package one archive per platform
         run: |
           set -euo pipefail
+          min_platforms=4
           mkdir -p pr-binaries
           found=0
           for dir in dist/mio_*/; do
@@ -68,7 +69,7 @@ jobs:
             fi
             found=$((found + 1))
           done
-          test "$found" -ge 4 || { echo "::error::expected at least 4 platform binaries, found $found"; ls -R dist | head -50; exit 1; }
+          test "$found" -ge "$min_platforms" || { echo "::error::expected at least $min_platforms platform binaries, found $found"; ls -R dist | head -50; exit 1; }
           (cd pr-binaries && sha256sum * > checksums.txt)
           ls -l pr-binaries
 
