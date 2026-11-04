@@ -34,7 +34,7 @@ func TestFileCaptionsAndChapters_Wire(t *testing.T) {
 		{"remove", []string{"captions", "remove", "f", "--yes"}, "DELETE", "captions", "", nil, 204, "", errs.ExitOK},
 		{"import", []string{"chapters", "import", "f", "--vtt", "@" + file, "--yes"}, "POST", "chapters/import", "file_chapters", map[string]any{"vtt": vtt}, 200, `{"data":[]}`, errs.ExitOK},
 		{"auto", []string{"chapters", "auto", "f", "--yes"}, "POST", "chapters/auto", "", nil, 200, `{"data":[]}`, errs.ExitOK},
-		{"off", []string{"chapters", "auto", "f", "--off"}, "DELETE", "chapters/auto", "", nil, 200, `{"data":[]}`, errs.ExitOK},
+		{"off", []string{"chapters", "auto", "f", "--off", "--yes"}, "DELETE", "chapters/auto", "", nil, 200, `{"data":[]}`, errs.ExitOK},
 		{"rejected", []string{"captions", "set", "f", "--language", "bad", "--vtt", "bad"}, "PUT", "captions", "file_captions", map[string]any{"language": "bad", "vtt": "bad"}, 422, `{"errors":[{"status":"422","detail":"bad caption format"}]}`, errs.ExitUsage},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -89,6 +89,7 @@ func TestFileCaptionsAndChapters_Guards(t *testing.T) {
 		{"remove confirmation", []string{"captions", "remove", "f"}, errs.ExitNeedsConfir},
 		{"import confirmation", []string{"chapters", "import", "f", "--vtt", "text"}, errs.ExitNeedsConfir},
 		{"auto confirmation", []string{"chapters", "auto", "f"}, errs.ExitNeedsConfir},
+		{"auto off confirmation", []string{"chapters", "auto", "f", "--off"}, errs.ExitNeedsConfir},
 		{"missing language", []string{"captions", "set", "f", "--vtt", "text"}, errs.ExitUsage},
 		{"blank language", []string{"captions", "set", "f", "--language", " ", "--vtt", "text"}, errs.ExitUsage},
 		{"missing vtt", []string{"captions", "set", "f", "--language", "en"}, errs.ExitUsage},
