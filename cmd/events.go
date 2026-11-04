@@ -745,7 +745,7 @@ func init() {
 		cmd.Flags().String("timezone", "", "IANA timezone name (e.g. America/New_York).")
 		cmd.Flags().String("location-type", "", "Location type: url or address.")
 		cmd.Flags().String("description", "", "Event description.")
-		cmd.Flags().String("cover-image-url", "", "Cover image URL; an empty value clears the cover URL (on update).")
+		cmd.Flags().String("cover-image-url", "", "Cover image URL; an empty value clears the cover URL.")
 		cmd.Flags().String("cover-media-id", "", "Media id from a hub-scoped attachment upload session; binding is one-shot.")
 		cmd.Flags().String("location-url", "", "Location URL (when --location-type=url).")
 		cmd.Flags().String("location-address", "", "Location address (when --location-type=address).")

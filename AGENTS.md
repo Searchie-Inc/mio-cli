@@ -154,7 +154,7 @@ Every implemented resource and its verbs.
 
 | Resource | Verbs |
 |----------|-------|
-| `events` | `create` `list` `retrieve` `update` `cancel`; `rsvp set` `withdraw`; `rsvps list` — hub-scoped path with no team segment. Authoring requires `MIO_CONTACT_TOKEN`, a member access token, not an API key. |
+| `events` | `create` `list` `retrieve` `update` `cancel`; `rsvp set` `withdraw`; `rsvps list` — hub-scoped path with no team segment. EVERY `mio events` verb (RSVP included) needs `MIO_CONTACT_TOKEN`, a member access token, not an API key. `cancel --message <≤280 chars>` sends an organiser note to going/maybe attendees; `update --cover-media-id` / `--clear-cover-media` (irreversible, `--yes`) manage a media-backed cover. |
 | `login` | _(interactive only — use `MIO_API_KEY` instead)_ |
 | `register` | Create an account + auto-login: `--email`/`--password` (or `MIO_EMAIL`/`MIO_PASSWORD`), optional `--first-name`/`--last-name`. Unauthenticated; stores a freshly minted key, REPLACING any current one. Agents that already have a `MIO_API_KEY` do not need this. |
 | `logout` | _(interactive only)_ |
