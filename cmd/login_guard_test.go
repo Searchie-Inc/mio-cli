@@ -289,7 +289,7 @@ func TestLoginGuard_InteractiveAnswers(t *testing.T) {
 			cmd.SetOut(devnull)
 			// A caller-owned bufio.Reader that already holds the answer: the guard
 			// must read THIS reader (the interactive login wraps stdin in one).
-			err := confirmReplaceStoredKey(cmd, b.srv.URL, guardBetaTeam, "", bufio.NewReader(strings.NewReader(tc.answer)))
+			err := confirmReplaceStoredKey(cmd, b.srv.URL, guardBetaTeam, bufio.NewReader(strings.NewReader(tc.answer)))
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
 			}

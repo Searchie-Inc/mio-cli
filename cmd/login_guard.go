@@ -49,23 +49,18 @@ func noStoredKeyGuard(string) error { return nil }
 // storedKeyGuardFor builds the guard for one login invocation.
 func storedKeyGuardFor(cmd *cobra.Command, apiBase string, in io.Reader) storedKeyGuard {
 	return func(newTeamID string) error {
-		return confirmReplaceStoredKey(cmd, apiBase, newTeamID, "", in)
+		return confirmReplaceStoredKey(cmd, apiBase, newTeamID, in)
 	}
 }
 
-// confirmReplaceStoredKey implements the policy above. newKey, when known, lets
-// "log in again with the key I already have stored" pass silently.
-func confirmReplaceStoredKey(cmd *cobra.Command, apiBase, newTeamID, newKey string, in io.Reader) error {
+// confirmReplaceStoredKey implements the policy above.
+func confirmReplaceStoredKey(cmd *cobra.Command, apiBase, newTeamID string, in io.Reader) error {
 	stored, err := config.GetAPIKey()
 	if err != nil || stored == "" {
 		// Nothing readable to protect. An unreadable blob is replaced by design
 		// (MIO-2995); any other read failure surfaces at the write that follows.
 		return nil
 	}
-	if newKey != "" && stored == newKey {
-		return nil
-	}
-
 	cli := client.New(apiBase, stored, client.WithDebug(flags.debug))
 	var what string
 	me, merr := cli.Me(cmd.Context())
