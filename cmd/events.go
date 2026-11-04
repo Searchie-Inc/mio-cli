@@ -449,7 +449,10 @@ Every named contact must already be a current, active member of this hub; the
 API rejects the WHOLE request otherwise (no partial accept). Being a host is
 attribution, not permission — it grants the contact no extra authority.
 
-Requires hub owner/admin/moderator permissions.`,
+Requires hub owner/admin/moderator permissions. Auth: a team API key that carries
+can_author_events works with no MIO_CONTACT_TOKEN (team-key route; a 403 explains
+the flag — see 'mio api-keys update --help'); with MIO_CONTACT_TOKEN set the member
+route is used as before.`,
 	Example: `  mio events create --hub hub_123 --title "Community Meetup" \
     --starts-at 2026-09-01T18:00:00Z --ends-at 2026-09-01T20:00:00Z \
     --timezone America/New_York --location-type url --location-url https://zoom.us/j/123
@@ -596,7 +599,10 @@ replacement set must hold 1 to 3 distinct contact ids, each a current, active
 member of this hub. There is no way to leave an event with no host: omit both
 flags to leave the existing hosts untouched.
 
-Requires hub owner/admin/moderator permissions.`,
+Requires hub owner/admin/moderator permissions. Auth: a team API key that carries
+can_author_events works with no MIO_CONTACT_TOKEN (team-key route; a 403 explains
+the flag — see 'mio api-keys update --help'); with MIO_CONTACT_TOKEN set the member
+route is used as before.`,
 	Example: `  mio events update evt_abc123 --hub hub_123 --title "New Title"
   mio events update evt_abc123 --hub hub_123 --capacity 100 --visibility all_members
 
@@ -647,7 +653,11 @@ var eventsCancelCmd = &cobra.Command{
 retained with a cancelled status.
 
 Requires hub owner/admin/moderator permissions. Pass --yes to skip the
-confirmation prompt in non-interactive environments (scripts, CI, AI agents).`,
+confirmation prompt in non-interactive environments (scripts, CI, AI agents).
+
+Auth: with a team API key that carries can_author_events (no MIO_CONTACT_TOKEN),
+this goes to the team-key route, which takes no body — so --message is refused
+there; set MIO_CONTACT_TOKEN to cancel with an organiser message.`,
 	Example: `  mio events cancel evt_abc123 --hub hub_123
   mio events cancel evt_abc123 --hub hub_123 --yes`,
 	Args: cobra.ExactArgs(1),
