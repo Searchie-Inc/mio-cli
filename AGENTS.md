@@ -112,7 +112,7 @@ mio contacts retrieve <id> 2>err.json || jq -r '.errors[0].status' err.json
 
 ## Destructive Operations
 
-Any `delete`, `cancel`, `refund`, `events rsvp withdraw`, `events update --clear-cover-media`, achievements `revoke` / `archive` / `offerings detach` / `rule delete`, or `media remote-connections disconnect`, or member-moderation command (`ban` / `unban` / `warn` / `soft-ban`, and `community moderation reports resolve`) in a non-TTY shell will exit **5** unless `--yes` (or `-y`) is passed. (`restore` is the undo of a soft-delete, not destructive, so it does NOT require `--yes`.)
+Any `delete`, `cancel`, `refund`, `events rsvp withdraw`, `events update --clear-cover-media`, `media remote-connections disconnect`, `media files thumbnail remove`, `media files captions remove`, `media files chapters import`, `media files chapters auto` (including `--off`), achievements `revoke` / `archive` / `offerings detach` / `rule delete`, or member-moderation command (`ban` / `unban` / `warn` / `soft-ban`, and `community moderation reports resolve`) in a non-TTY shell will exit **5** unless `--yes` (or `-y`) is passed. (`restore` is the undo of a soft-delete, not destructive, so it does NOT require `--yes`.)
 
 ```sh
 mio contacts delete <id> --yes
@@ -193,7 +193,8 @@ Every implemented resource and its verbs.
 | `media files` | `list` `retrieve` `durable-url` (non-expiring hub-scoped image URL; `--hub` `--preset` `--publish`) `update` `delete` `upload` (create → presigned PUT → finalize; multipart above 100 MB (104857600 bytes) — at or below it is one presigned PUT — or at any size with `--multipart`; `--part-size-mb` sets the part size, default 16, min 5, read only on the multipart path) `replace` (same threshold and flags; `--wait`/`--timeout` as for upload, but the wait first holds until the file points at the REPLACEMENT's `media_id` — the backend commits the relink just after answering, so an immediate read can show the old, already-READY media; release after `v0.23.0`, earlier binaries exit 2 `unknown flag: --wait`) `finalize` `transcode` `register-synthetic` `thumbnail set/remove` (team-scoped MIO-5688 upsert) |
 | `media files thumbnail` | `set` `remove` — team-scoped MIO-5688 thumbnail upsert; `set <file_id>` takes exactly one of `--image-file-id` (preferred, resolved) or `--image-media-id` (Media PK); `remove <file_id> --yes` removes it idempotently |
 | `media files cards` | `get` `set` (`--cards` JSON array/@file) |
-| `media files chapters` | `get` `set` (`--chapters` JSON array/@file) |
+| `media files captions` | `get` `set` (`--language` and `--vtt` text/@file) `remove` (destructive: `--yes`) |
+| `media files chapters` | `get` `set` (`--chapters` JSON array/@file) `import` (`--vtt` text/@file; destructive: `--yes`) `auto` (rebuild: `--yes`; `--off` disables transcript chapters, clearing the stored ones — also `--yes`) |
 | `media folders` | `list` `create` `retrieve` `update` `delete` `move` (`--parent-id`/`--to-root`) |
 | `media search` | hybrid transcript search (`--query` `--hub-id` `--limit`) |
 | `media playlists` | `list` `create` `retrieve` `update` `delete` `set-cover` (`--file-id`). **`list` is TEAM-wide, not hub-scoped (MIO-3100)** — the API's team-playlists route offers no hub filter, so an explicit `--hub` warns on stderr and you still get every playlist on the team (exit 0, stdout unchanged and parseable). Use `media hub-playlists list --hub <id>` for one hub's playlists. On `create`, `--hub-id` is a WRITE ATTRIBUTE (which hub the playlist belongs to), not the `--hub` scope flag |
