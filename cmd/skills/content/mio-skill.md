@@ -436,7 +436,7 @@ ships what looks like a public hub and every anonymous visitor hits the login
 screen. `mio hubs scaffold` gets this right (MIO-2563); this manual path does not
 do it for you. Valid values: `public`, `members`, `private`.
 
-**Slugs:** `home` is reserved — `--slug home` is rejected. Omitting `--slug`
+**Slugs:** the API reserves a set of slugs that collide with built-in hub routes (`home`, `login`, `members`, `search`, `legal`, …) and rejects them with 422 `page_slug_reserved`; `mio pages create --help` lists the current set. Omitting `--slug`
 entirely fails with `Field required`. Use a real slug (`welcome`, `start`, `about`)
 and designate the homepage with `pages update --is-home` once it is published; that
 flag is what actually designates it.

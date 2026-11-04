@@ -303,7 +303,7 @@ func init() {
 	// Attribute flags for pages create/update.
 	for _, cmd := range []*cobra.Command{pagesCreateCmd, pagesUpdateCmd} {
 		cmd.Flags().String("title", "", "Page title.")
-		cmd.Flags().String("slug", "", "URL slug for the page.")
+		cmd.Flags().String("slug", "", "URL slug for the page. Reserved slugs are rejected by the API with 422 page_slug_reserved: "+strings.Join(catalog.ReservedPageSlugs(), ", ")+". The API set is authoritative.")
 		cmd.Flags().String("type", "", "Page type. The hub renders a 'sales' page without its header and mobile navigation (the footer stays).")
 		cmd.Flags().String("privacy", "", "Page privacy: public, members, or private (default: members).")
 		cmd.Flags().Int("position", 0, "Zero-based display position of the page.")

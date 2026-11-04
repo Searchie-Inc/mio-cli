@@ -382,8 +382,8 @@ func (h HubTemplate) Validate(c *Catalog) error {
 		if p.Slug == "" {
 			return fmt.Errorf("hub template %q: pages[%d] missing slug", h.ID, i)
 		}
-		if p.Slug == "home" {
-			return fmt.Errorf("hub template %q: pages[%d] slug \"home\" is backend-reserved", h.ID, i)
+		if IsReservedPageSlug(p.Slug) {
+			return fmt.Errorf("hub template %q: pages[%d] slug %q is backend-reserved", h.ID, i, p.Slug)
 		}
 		if seenPageSlugs[p.Slug] {
 			return fmt.Errorf("hub template %q: pages[%d] duplicate slug %q", h.ID, i, p.Slug)
