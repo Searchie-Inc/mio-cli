@@ -37,6 +37,12 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Test commit guard
+        run: python3 -m unittest discover -s .claude/hooks -p 'test_*.py' -v
+
+      - name: Test PR ticket check
+        run: scripts/test_check_pr_ticket.sh
+
       - name: Test (race detector)
         run: go test ./... -race -timeout 120s
 
