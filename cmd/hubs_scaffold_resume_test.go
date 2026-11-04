@@ -1153,7 +1153,7 @@ func TestScaffoldPagesOpRejectionGuidance(t *testing.T) {
 	for _, tc := range []struct{ name, code, detail, want, absent string }{
 		{"page_conflict", "page_conflict", "page conflict at slug 'about'", "inspect the hub's pages", "digest"},
 		{"reserved_page_conflict", "reserved_page_conflict", "reserved slug 'about'", "inspect the hub's pages", "digest"},
-		{"catalog_digest_mismatch", "catalog_digest_mismatch", "catalog rejected", "automatic retry did not resolve", "inspect the hub's pages"},
+		{"catalog_digest_mismatch", "catalog_digest_mismatch", "catalog rejected", "differs from the one this run sent", "inspect the hub's pages"},
 		{"invalid_scaffold_request", "invalid_scaffold_request", "invalid tree", "template", "digest"},
 		{"template_not_scaffoldable", "template_not_scaffoldable", "template unavailable", "template", "digest"},
 		{"unknown", "some_future_code", "backend specific detail", "backend specific detail", "invented advice"},
@@ -1177,8 +1177,8 @@ func TestScaffoldPagesOpRejectionGuidance(t *testing.T) {
 			if tc.name == "unknown" && !strings.HasSuffix(msg, tc.detail) {
 				t.Errorf("unknown code must end with backend detail, without appended advice: %s", msg)
 			}
-			if tc.name == "catalog_digest_mismatch" && (!strings.Contains(msg, "pin") || !strings.Contains(msg, "re-run")) {
-				t.Errorf("digest guidance must mention pin and re-run: %s", msg)
+			if tc.name == "catalog_digest_mismatch" && !strings.Contains(msg, "re-run") {
+				t.Errorf("digest guidance must say re-run: %s", msg)
 			}
 		})
 	}

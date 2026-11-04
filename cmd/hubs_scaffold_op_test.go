@@ -295,11 +295,36 @@ func TestStepPages_Op409StableDigestSurfaces(t *testing.T) {
 	if be.opPosts != 1 {
 		t.Errorf("op POSTs = %d, want 1 — an unchanged digest must NOT be retried", be.opPosts)
 	}
+	// No retry happened, so the message must not say one did (MIO-3017 review).
+	if strings.Contains(err.Error(), "retry") || !strings.Contains(err.Error(), "re-run") {
+		t.Errorf("an unretried digest rejection must not claim a retry and must say re-run; err=%v", err)
+	}
 	if be.catalogGETs < 1 {
 		t.Errorf("catalog GETs = %d, want ≥1 (the digest comparison needs the refetch)", be.catalogGETs)
 	}
 	if be.mutations != 0 || len(be.createdSlugs) != 0 {
 		t.Errorf("NO client-side fallback may fire; mutations=%d created=%v", be.mutations, be.createdSlugs)
+	}
+}
+
+// TestStepPages_Op409RetryAlsoRejectedSaysSo: the pin DID move, the op is
+// retried once with the fresh digest and rejects again — only this path may
+// say a retry happened.
+func TestStepPages_Op409RetryAlsoRejectedSaysSo(t *testing.T) {
+	t.Setenv("MIO_CATALOG_CACHE_DIR", t.TempDir())
+	srv, be := newRecoveryBackend(t, nil, nil)
+	be.catalogBody = mutatedCatalogBody(t, 8)
+	be.opHandler = func(w http.ResponseWriter, _ int) { opConflict409(w) }
+
+	_, err := driveStepPages(t, srv.URL)
+	if err == nil {
+		t.Fatal("a second rejection must surface an error")
+	}
+	if be.opPosts != 2 {
+		t.Fatalf("op POSTs = %d, want 2", be.opPosts)
+	}
+	if !strings.Contains(err.Error(), "retry with the refetched digest was also rejected") {
+		t.Errorf("a rejected retry must say so; err=%v", err)
 	}
 }
 

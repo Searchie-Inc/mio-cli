@@ -120,11 +120,15 @@ func applyViaServerOp(sc *scaffoldContext) (bool, error) {
 // against); the retry's own 404/405 (freak case: the op disappeared between
 // the two POSTs) falls back client-side like any other probe miss.
 func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTemplateRequest, opErr error) (bool, error) {
-	rejected := func() error {
+	rejected := func(retried bool) error {
 		var advice string
 		switch {
 		case client.HasAPIErrorCode(opErr, "catalog_digest_mismatch"):
-			advice = " (automatic retry did not resolve the mismatch; the backend pin may have moved — re-run)"
+			if retried {
+				advice = " (the retry with the refetched digest was also rejected; the backend pin may have moved again — re-run)"
+			} else {
+				advice = " (the backend's catalog digest differs from the one this run sent — re-run)"
+			}
 		case client.HasAPIErrorCode(opErr, "page_conflict"), client.HasAPIErrorCode(opErr, "reserved_page_conflict"):
 			advice = " (inspect the hub's pages)"
 		case client.HasAPIErrorCode(opErr, "invalid_scaffold_request"), client.HasAPIErrorCode(opErr, "template_not_scaffoldable"):
@@ -136,11 +140,11 @@ func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTempl
 	cat, src, rerr := catalog.Resolve(sc.ctx, scaffoldResolveOptions(sc, sc.notef))
 	if rerr != nil {
 		sc.notef("catalog refetch after the rejection failed: %v", rerr)
-		return false, rejected()
+		return false, rejected(false)
 	}
 	if cat.Meta.Digest == sc.cat.Meta.Digest {
 		// The pin did not move — the rejection was not our staleness. Surface it.
-		return false, rejected()
+		return false, rejected(false)
 	}
 
 	// The pin moved under us: re-run the preflight tail (existence + invariants
@@ -182,7 +186,7 @@ func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTempl
 		// ONE retry ever. A second rejection (any kind) surfaces the ORIGINAL
 		// error with guidance; the retry's own failure is noted, not swallowed.
 		sc.notef("retry with the refetched digest also failed: %v", err)
-		return false, rejected()
+		return false, rejected(true)
 	}
 }
 
