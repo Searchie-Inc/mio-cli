@@ -42,7 +42,7 @@ mio config set current_team <team-uuid>   # a UUID (see 'mio teams list'); drop 
 
 ## Start here: `mio hubs scaffold` (one command, whole hub)
 
-**Do not hand-build a hub unless you have to.** One command (idempotent when you resume with `--hub <id>`; repeating a *create* on the client-side path makes a second hub under a suffixed slug and says so on stderr) applies a
+**Do not hand-build a hub unless you have to.** One command (idempotent when you resume with `--hub <id>`; repeating the identical *create* converges only on the server-side-op path and only within 24 hours — on the client-side path, or later, it makes a second hub under a suffixed slug and says so on stderr) applies a
 template from the backend's live page-builder catalog — branding, favicon, a typed
 navigation menu, registration, discussion spaces, an onboarding contact-attribute
 schema, policies, playlists and pages (homepage included) — with the palette baked

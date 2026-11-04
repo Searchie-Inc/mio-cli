@@ -4102,7 +4102,7 @@ func TestReadBackHubIdentity_SaysWhenTheSlugDiffers(t *testing.T) {
 	sc := newStepSC(client.New(srv.URL, "k"), "", "")
 	sc.noteW = &bytes.Buffer{}
 	sc.hubID, sc.hubSlug = "hub_op", "acme"
-	readBackHubIdentity(sc)
+	readBackHubIdentity(sc, false)
 	notes := stepNotes(sc)
 	for _, want := range []string{`assigned slug "acme-ab12cd"`, `requested "acme"`, "--hub"} {
 		if !strings.Contains(notes, want) {
@@ -4111,5 +4111,30 @@ func TestReadBackHubIdentity_SaysWhenTheSlugDiffers(t *testing.T) {
 	}
 	if sc.hubSlug != "acme-ab12cd" {
 		t.Errorf("hubSlug = %q, want the observed slug", sc.hubSlug)
+	}
+}
+
+// TestReadBackHubIdentity_ReplayDoesNotClaimTheSlugWasTaken: on a replay nothing
+// was created, so "it was taken" / "instead of creating" would be false (the first
+// run may have been suffixed, or the slug edited since) and --hub would change
+// nothing (review of MIO-2565).
+func TestReadBackHubIdentity_ReplayDoesNotClaimTheSlugWasTaken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		_, _ = w.Write([]byte(`{"data":{"id":"hub_op","type":"hubs","attributes":{"slug":"acme-ab12cd","title":"Acme","is_private":true}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	sc := newStepSC(client.New(srv.URL, "k"), "", "")
+	sc.noteW = &bytes.Buffer{}
+	sc.hubID, sc.hubSlug = "hub_op", "acme"
+	readBackHubIdentity(sc, true)
+	notes := stepNotes(sc)
+	if !strings.Contains(notes, `has slug "acme-ab12cd"`) {
+		t.Errorf("a replay with a differing slug must state the stored slug; notes=%q", notes)
+	}
+	for _, bad := range []string{"taken", "creating", "--hub"} {
+		if strings.Contains(notes, bad) {
+			t.Errorf("a replay created nothing — the note must not say %q; notes=%q", bad, notes)
+		}
 	}
 }

@@ -323,7 +323,10 @@ func stepHub(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 // slug than the one requested (MIO-2565). Create mode always POSTs a NEW hub and
 // the backend mints a unique slug when the requested one is taken, so re-running
 // the same create command after a hiccup yields a SECOND hub with a suffixed
-// slug — silently, unless this says it. The suffix behaviour itself is the
+// slug — silently, unless this says it. (The server-side op's idempotency record
+// expires after 24 hours, so even that path can do the same later.) The backend does not normalise slugs
+// (uppercase or spaces 422), so a differing slug is always a collision suffix.
+// The suffix behaviour itself is the
 // backend's and is deliberately unchanged; resuming an existing hub is --hub.
 func noteSlugAssigned(sc *scaffoldContext) {
 	if sc.slugOverride == "" || sc.hubSlug == "" || sc.hubSlug == sc.slugOverride {
