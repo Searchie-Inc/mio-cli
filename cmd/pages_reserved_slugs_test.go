@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"github.com/spf13/cobra"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,19 +37,22 @@ func TestPagesCreate_ReservedSlugConduit(t *testing.T) {
 }
 
 func TestPagesCreate_ReservedSlugHelp(t *testing.T) {
-	for _, verb := range []string{"create", "update"} {
-		t.Run(verb, func(t *testing.T) {
-			res := runContract(t, nil, "pages", verb, "--help")
-			if res.Code != errs.ExitOK {
-				t.Fatalf("help exit = %d: %s", res.Code, res.Stderr)
+	// The --slug flag's own usage line is the oracle: whole-help substring
+	// matching cannot tell "home"/"members" in the list from the same words in
+	// --is-home / --privacy (review of MIO-2869).
+	for _, cmd := range []*cobra.Command{pagesCreateCmd, pagesUpdateCmd} {
+		t.Run(cmd.Name(), func(t *testing.T) {
+			f := cmd.Flags().Lookup("slug")
+			if f == nil {
+				t.Fatal("no --slug flag")
 			}
 			for _, slug := range catalog.ReservedPageSlugs() {
-				if !strings.Contains(res.Stdout, slug) {
-					t.Errorf("help missing reserved slug %q", slug)
+				if !strings.Contains(f.Usage, slug) {
+					t.Errorf("--slug usage missing reserved slug %q: %s", slug, f.Usage)
 				}
 			}
-			if !strings.Contains(res.Stdout, "page_slug_reserved") {
-				t.Error("help missing page_slug_reserved")
+			if !strings.Contains(f.Usage, "page_slug_reserved") {
+				t.Errorf("--slug usage missing page_slug_reserved: %s", f.Usage)
 			}
 		})
 	}

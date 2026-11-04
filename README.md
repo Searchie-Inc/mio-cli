@@ -368,7 +368,7 @@ mio hubs scaffold --template starter --hub <hub-id> --dry-run
 
 # Pages & page trees
 # --privacy defaults to `members`: omit it and the page is behind the login wall.
-# `home` is a RESERVED slug — use a real one. Designate the homepage LAST (--is-home on `pages update`,
+# Reserved slugs (`home`, `login`, `members`, … — see `mio pages create --help`) are rejected with 422 `page_slug_reserved`; use a real one. Designate the homepage LAST (--is-home on `pages update`,
 # after publish): the API answers 409 homepage_page_not_published for a page with no published tree.
 mio pages create --hub <hub-id> --title "Welcome" --slug welcome --privacy public
 # Discover the page-builder catalog. (There is no `pages catalog list`.)
