@@ -110,9 +110,11 @@ func TestFileThumbnailRemove_Wire(t *testing.T) {
 					if r.URL.Query().Get("target_type") != "file" || r.URL.Query().Get("target_id") != "episode" {
 						t.Errorf("filters=%v", r.URL.Query())
 					}
-					data := `{"type":"attachments","id":"other","attributes":{"role":"main"}}`
+					// A thumbnail that belongs to ANOTHER file (a server that ignored the
+					// target_id filter) must never be the one deleted.
+					data := `{"type":"attachments","id":"foreign","attributes":{"role":"thumbnail","target_type":"file","target_id":"other_file"}},{"type":"attachments","id":"other","attributes":{"role":"main","target_type":"file","target_id":"episode"}}`
 					if tc.thumbnail {
-						data += `,{"type":"attachments","id":"thumb","attributes":{"role":"thumbnail"}}`
+						data += `,{"type":"attachments","id":"thumb","attributes":{"role":"thumbnail","target_type":"file","target_id":"episode"}}`
 					}
 					_, _ = w.Write([]byte(`{"data":[` + data + `]}`))
 				case "DELETE /api/v1/teams/t_team1/attachments/thumb":
@@ -166,7 +168,7 @@ func TestFileThumbnailRemove_PagesAttachments(t *testing.T) {
 			if pages == 1 {
 				_, _ = w.Write([]byte(`{"data":[{"type":"attachments","id":"other","attributes":{"role":"main"}}],"links":{"next":"https://example.test/attachments?page%5Bafter%5D=next"}}`))
 			} else if pages == 2 && r.URL.Query().Get("page[after]") == "next" {
-				_, _ = w.Write([]byte(`{"data":[{"type":"attachments","id":"thumb","attributes":{"role":"thumbnail"}}]}`))
+				_, _ = w.Write([]byte(`{"data":[{"type":"attachments","id":"thumb","attributes":{"role":"thumbnail","target_type":"file","target_id":"episode"}}]}`))
 			} else {
 				t.Errorf("unexpected page %d query %v", pages, r.URL.Query())
 				w.WriteHeader(500)
@@ -203,5 +205,20 @@ func TestFileThumbnailRemove_RejectsUnusableCursor(t *testing.T) {
 	res, err := runResume(t, baseEnv(srv.URL), withTeam("t_team1", "media", "files", "thumbnail", "remove", "episode", "--yes")...)
 	if res.Code != errs.ExitGeneric || err == nil || !strings.Contains(err.Error(), "missing or repeated cursor") {
 		t.Errorf("exit=%d err=%v", res.Code, err)
+	}
+}
+
+func TestFileThumbnail_BlankFileIDIsAUsageErrorWithNoRequest(t *testing.T) {
+	for _, args := range [][]string{
+		{"media", "files", "thumbnail", "set", "", "--image-media-id", "m1"},
+		{"media", "files", "thumbnail", "remove", "", "--yes"},
+	} {
+		var n int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { n++; w.WriteHeader(500) }))
+		res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+		srv.Close()
+		if res.Code != errs.ExitUsage || n != 0 {
+			t.Errorf("%v: exit=%d requests=%d, want exit 2 and none", args, res.Code, n)
+		}
 	}
 }

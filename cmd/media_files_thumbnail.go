@@ -30,6 +30,9 @@ var mediaFilesThumbnailSetCmd = &cobra.Command{
 	Use: "set <file_id>", Short: "Set or replace a file's thumbnail.", Args: cobra.ExactArgs(1),
 	Long: "Set episode art using exactly one of --image-file-id (preferred) or --image-media-id. The image must be ready and belong to the team.",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(args[0]) == "" {
+			return errs.New(errs.ExitUsage, "file id is blank (an unset variable?) — pass the id of the file to give a thumbnail")
+		}
 		hasFile, hasMedia := cmd.Flags().Changed("image-file-id"), cmd.Flags().Changed("image-media-id")
 		fileID, mediaID := flagValue(cmd, "image-file-id"), flagValue(cmd, "image-media-id")
 		if hasFile == hasMedia || (hasFile && strings.TrimSpace(fileID) == "") || (hasMedia && strings.TrimSpace(mediaID) == "") {
@@ -56,6 +59,9 @@ var mediaFilesThumbnailSetCmd = &cobra.Command{
 var mediaFilesThumbnailRemoveCmd = &cobra.Command{
 	Use: "remove <file_id>", Short: "Remove a file's thumbnail.", Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(args[0]) == "" {
+			return errs.New(errs.ExitUsage, "file id is blank (an unset variable?) — pass the id of the file whose thumbnail to remove")
+		}
 		if err := confirmDestructive(cmd, fmt.Sprintf("Remove thumbnail from file %s?", args[0])); err != nil {
 			return err
 		}
@@ -73,7 +79,7 @@ var mediaFilesThumbnailRemoveCmd = &cobra.Command{
 				return err
 			}
 			for _, attachment := range col.Data {
-				if attachment.Attributes["role"] == "thumbnail" {
+				if attachment.Attributes["role"] == "thumbnail" && attachment.Attributes["target_id"] == args[0] {
 					if err := c.client.Delete(c.ctx, attachmentsPath(teamID, attachment.ID)); err != nil {
 						return err
 					}
