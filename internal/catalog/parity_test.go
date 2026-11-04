@@ -30,7 +30,7 @@ import (
 // scripts/update_catalog_pin.sh rewrites exactly this line — it is the only Go
 // source a re-pin touches, which is why it is anchored on its own line and kept
 // free of any other pin metadata.
-const pinnedDigest = "sha256:2e60ed405c1ec38d0073ab0163a412d34e285d25708d93ae6f2b5cdf5a11811b"
+const pinnedDigest = "sha256:85e68533e2885642a98c4df272b279f7aea5ead2445b79fb22fe7352dc8d2c88"
 
 func fixtureName(id, variant string) string {
 	if variant != "" {

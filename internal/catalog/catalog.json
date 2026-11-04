@@ -1,9 +1,9 @@
 {
   "meta": {
     "schemaVersion": "2.1.0",
-    "catalogVersion": "0.31.0",
-    "revision": 104,
-    "digest": "sha256:2e60ed405c1ec38d0073ab0163a412d34e285d25708d93ae6f2b5cdf5a11811b",
+    "catalogVersion": "0.32.0",
+    "revision": 106,
+    "digest": "sha256:85e68533e2885642a98c4df272b279f7aea5ead2445b79fb22fe7352dc8d2c88",
     "createdAt": "2026-07-14T00:00:00Z"
   },
   "nodeKinds": {
@@ -115,6 +115,9 @@
       "childRules": "none"
     },
     "pinned-posts": {
+      "childRules": "none"
+    },
+    "embed": {
       "childRules": "none"
     }
   },
@@ -443,6 +446,58 @@
         "desktop": {
           "type": "boolean",
           "description": "false hides at or above the 660px hub breakpoint (the nearest @container hub when one exists, else the window). Unset/true = visible."
+        }
+      }
+    },
+    "shared:animation": {
+      "type": "object",
+      "description": "Entrance animation (MIO-3344). Nested under an animatable container kind's own `animation` settings key. Plays once when the node first enters the viewport (immediately on load when already in view); skipped entirely under prefers-reduced-motion. Defaults are documented, not declared, so complete legacy-shaped objects validate: enabled false, type slide-up, duration 300, delay 0, easing linear.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Off by default. Turning it off keeps the other fields."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "slide-up",
+            "slide-down",
+            "slide-left",
+            "slide-right",
+            "fade-up",
+            "fade-down",
+            "fade-left",
+            "fade-right",
+            "zoom-in",
+            "zoom-out"
+          ],
+          "description": "fade-* = 16px offset + fade, slide-* = 64px offset + fade, zoom-in 0.94→1, zoom-out 1.06→1. Direction names where the content travels to (fade-up rises from below). Default slide-up."
+        },
+        "duration": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3000,
+          "multipleOf": 50,
+          "description": "Milliseconds. Default 300."
+        },
+        "delay": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3000,
+          "multipleOf": 50,
+          "description": "Milliseconds before it starts. Default 0."
+        },
+        "easing": {
+          "type": "string",
+          "enum": [
+            "linear",
+            "ease",
+            "ease-in",
+            "ease-out",
+            "ease-in-out",
+            "ios"
+          ],
+          "description": "ios = cubic-bezier(0.32, 0.72, 0, 1), the hub surface curve. Default linear."
         }
       }
     },
@@ -835,6 +890,11 @@
               }
             }
           }
+        },
+        "animation": {
+          "type": "object",
+          "shape": "animation",
+          "description": "Entrance animation — see shared:animation (MIO-3344)."
         }
       }
     },
@@ -923,6 +983,11 @@
             "end"
           ],
           "description": "Cross-axis alignment override applied only below the hub container's 660px breakpoint."
+        },
+        "animation": {
+          "type": "object",
+          "shape": "animation",
+          "description": "Entrance animation — see shared:animation (MIO-3344)."
         }
       }
     },
@@ -962,6 +1027,11 @@
             "responsive"
           ],
           "description": "Layout variant. 'legacy' = flat grid with configurable cols/gap (default). 'ds-content' = DS-aligned content-page grid with its own section band + containment. 'responsive' = grid-section column progression 2->3@660->4@1024 (2 per row on phones, owner decision MIO-4884; the DS hub-grid-section is 1-up) WITHOUT its own section band — relies on an ancestor's TemplateSurface for the @container/hub context."
+        },
+        "animation": {
+          "type": "object",
+          "shape": "animation",
+          "description": "Entrance animation — see shared:animation (MIO-3344)."
         }
       }
     },
@@ -1011,6 +1081,11 @@
           "type": "number",
           "default": 30,
           "description": "Drift speed in px/s. `effect:\"marquee\"` only."
+        },
+        "animation": {
+          "type": "object",
+          "shape": "animation",
+          "description": "Entrance animation — see shared:animation (MIO-3344)."
         }
       }
     },
@@ -1044,13 +1119,24 @@
             "card"
           ],
           "description": "'card' fixes each item wrapper to a DS card width (~300px, the `compact` scroll recipe). 'auto' (default) leaves sizing to the child's own layout."
+        },
+        "animation": {
+          "type": "object",
+          "shape": "animation",
+          "description": "Entrance animation — see shared:animation (MIO-3344)."
         }
       }
     },
     "kind:tabs": {
-      "_note": "The Tabs component reads NO settings of its own (PRIMITIVE_DEFAULTS explicitly documents this: \"tabs — the component reads no settings at all\"). Its per-child tab label comes from shared:structural's tab_label on each CHILD's own settings, not from a tabs-kind setting.",
+      "_note": "The Tabs component reads NO settings of its own (PRIMITIVE_DEFAULTS explicitly documents this: \"tabs — the component reads no settings at all\"). Its per-child tab label comes from shared:structural's tab_label on each CHILD's own settings, not from a tabs-kind setting. MIO-3344: `animation` (shared:animation) is its only setting.",
       "core": {},
-      "presentational": {}
+      "presentational": {
+        "animation": {
+          "type": "object",
+          "shape": "animation",
+          "description": "Entrance animation — see shared:animation (MIO-3344)."
+        }
+      }
     },
     "kind:container": {
       "_note": "No PRIMITIVE_DEFAULTS entry (container: {}) — the DS-intended maxWidth:'content' default has NO inline `??` fallback in container.tsx, deliberately undeclared per that file's own comment (would change rendering the moment MIO-2358 wires cascade layer 1).",
@@ -1092,6 +1178,11 @@
             "7xl"
           ],
           "description": "Content-width cap + gutter. 'content' is the DS gutter-outside-cap idiom (MIO-2128) that pairs with shared:surface.padding='section' on an ancestor surface."
+        },
+        "animation": {
+          "type": "object",
+          "shape": "animation",
+          "description": "Entrance animation — see shared:animation (MIO-3344)."
         }
       }
     },
@@ -1117,6 +1208,11 @@
           "type": "boolean",
           "default": false,
           "description": "Opens the resolved href in a new tab."
+        },
+        "animation": {
+          "type": "object",
+          "shape": "animation",
+          "description": "Entrance animation — see shared:animation (MIO-3344)."
         }
       }
     },
@@ -1138,7 +1234,13 @@
           "description": "Node ids expanded by default."
         }
       },
-      "presentational": {}
+      "presentational": {
+        "animation": {
+          "type": "object",
+          "shape": "animation",
+          "description": "Entrance animation — see shared:animation (MIO-3344)."
+        }
+      }
     },
     "kind:video": {
       "core": {
@@ -2531,6 +2633,44 @@
       "_note": "A widget: mio-hub renders the hub's pinned Discussions posts as a horizontal card row (DS `Mio-Platform-Design` `hub-pinned-posts-section.tsx`, `variant=\"section\"`), fetched client-side for whoever is viewing (a member, or a logged-out visitor on a public hub whose discussions are public), so it carries no dataSource. With nothing pinned it shows an empty state that links to Discussions. Reads NO settings of its own: the section title is a sibling `kind:headline` and the band is the template root's `surface`. Children: none. Not `system`: a system descendant locks its whole section against delete in the hub editor, and the creator must be able to remove this section.",
       "core": {},
       "presentational": {}
+    },
+    "kind:embed": {
+      "_note": "A sandboxed third-party <iframe> that is not a video: a chat widget, an event calendar, a map, a booking form. The iframe src is the node `value` (an https URL, never raw HTML); mio-hub frames it only when its host is on the hub's embed allowlist (safe-embed.ts `ALLOWED_IFRAME_HOSTS`, the same gate kind:video's iframe mode uses) and renders an inline error in the editor, and nothing for members, otherwise. Per-host accessible title and extra sandbox tokens follow the same host profiles as the video iframe. The value may carry render-time `{{viewer.*}}` tokens (URL-encoded, resolved per signed-in member); an embed with a token that resolves empty is not framed. The frame fills its column up to `maxWidth`, and `align` places a frame narrower than its column at the left, centre or right (left by default); its `height` is a fixed px value that does not shrink with the width on phones. No thumbnail, aspect ratio or playback settings: the embed is not a video. Children: none.",
+      "core": {},
+      "presentational": {
+        "height": {
+          "type": "number",
+          "default": 400,
+          "description": "The frame's fixed height in px. The renderer clamps it to [80, 4000] and applies it via inline `height`; it does NOT scale with the width, so a chat widget or calendar keeps its usable height on a phone. Unset = 400 (the renderer default). Non-number values fall back to the default."
+        },
+        "maxWidth": {
+          "type": "number",
+          "description": "Per-node MAX-width cap in px for the embed frame. Same clamp/behaviour contract as kind:video's maxWidth: the renderer clamps it to [16, 1440] and applies it via inline `max-width`; it is always a MAX, so the frame fills its column up to the cap and shrinks below it on narrow viewports. Where the capped frame sits in its column is `align`'s job. Unset = no cap (fills the column)."
+        },
+        "align": {
+          "type": "string",
+          "enum": [
+            "start",
+            "center",
+            "end"
+          ],
+          "default": "start",
+          "description": "Horizontal placement of the frame in its column when `maxWidth` makes it narrower than the column: 'start' (left), 'center', 'end' (right). Same key and enum as kind:doodle's `align`. Unset = 'start', also under a stack that declares its own alignment: the embed's own placement wins over the column's, so the inspector's Left and the rendered frame always agree. No visible effect on a full-width frame."
+        },
+        "radius": {
+          "type": [
+            "string",
+            "number"
+          ],
+          "enum": [
+            "control",
+            "control-l",
+            "m"
+          ],
+          "freeform": true,
+          "description": "The frame's corner radius — same contract as kind:video's radius (ui/thumbnail `radius`): 'control' (0.5× hub radius), 'control-l' (0.6×), 'm' (1× hub radius). Presets follow the hub-wide corner-radius setting. ALSO accepts an absolute px NUMBER — freeform:true admits any number here; the renderer clamps it to [0,200] and applies it via inline `border-radius`. 0 = square corners. Unset renders 'm', as kind:video does. Any other unrecognized value falls back to 'control-l'."
+        }
+      }
     }
   },
   "templates": [
