@@ -51,7 +51,7 @@ func fileResolveServer(t *testing.T, filePath, writePath, mediaID, writeResponse
 			w.WriteHeader(writeStatus)
 			_, _ = w.Write([]byte(writeResponse))
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))
@@ -379,7 +379,7 @@ func TestContentReconcile_NoPlaylistIDsSendsNoBody(t *testing.T) {
 	var hit bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/teams/t_team1/hubs/hub_abc/content/reconcile" {
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}

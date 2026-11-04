@@ -33,7 +33,7 @@ func TestFileThumbnailSet_Wire(t *testing.T) {
 					w.WriteHeader(http.StatusCreated)
 					_, _ = w.Write([]byte(`{"data":{"type":"attachments","id":"att","attributes":{}}}`))
 				default:
-					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+					failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 					w.WriteHeader(500)
 				}
 			}))
@@ -120,7 +120,7 @@ func TestFileThumbnailRemove_Wire(t *testing.T) {
 				case "DELETE /api/v1/teams/t_team1/attachments/thumb":
 					w.WriteHeader(204)
 				default:
-					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+					failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 					w.WriteHeader(500)
 				}
 			}))
@@ -177,7 +177,7 @@ func TestFileThumbnailRemove_PagesAttachments(t *testing.T) {
 			deleted++
 			w.WriteHeader(204)
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(500)
 		}
 	}))
@@ -197,7 +197,7 @@ func TestFileThumbnailRemove_RejectsUnusableCursor(t *testing.T) {
 		case "/api/v1/teams/t_team1/attachments":
 			_, _ = w.Write([]byte(`{"data":[],"meta":{"has_more":true}}`))
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(500)
 		}
 	}))

@@ -33,6 +33,10 @@ func newRecordingServer(t *testing.T, status int) *recordingServer {
 	t.Helper()
 	rs := &recordingServer{status: status}
 	rs.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isStrayProbe(r) { // the dev box's port prober, not a request the test sent
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		b, _ := io.ReadAll(r.Body)
 		rs.mu.Lock()
 		rs.seen = append(rs.seen, seenReq{r.Method, r.URL.Path, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), b})

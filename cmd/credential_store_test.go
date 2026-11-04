@@ -62,8 +62,10 @@ func noRequestServer(t *testing.T) (*httptest.Server, *atomic.Bool) {
 	t.Helper()
 	var hit atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit.Store(true)
-		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		if !isStrayProbe(r) {
+			hit.Store(true)
+		}
+		failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 		w.WriteHeader(http.StatusTeapot)
 	}))
 	t.Cleanup(srv.Close)

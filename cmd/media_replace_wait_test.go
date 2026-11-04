@@ -86,7 +86,7 @@ func replaceStatusServer(t *testing.T, polls []string) (*httptest.Server, *int32
 			}
 			_, _ = w.Write([]byte(polls[i]))
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, p)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, p)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))

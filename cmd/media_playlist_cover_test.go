@@ -33,7 +33,7 @@ func TestPlaylistSetCover_ResolvesFileMediaID(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"data":{"type":"attachments","id":"att_x","attributes":{"role":"thumbnail"}}}`))
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))
