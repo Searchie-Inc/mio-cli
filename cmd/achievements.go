@@ -758,7 +758,7 @@ var achievementsArchiveCmd = &cobra.Command{
 from lists and can no longer be granted; existing earns are unaffected.
 
 --yes is REQUIRED in a non-interactive shell (scripts, CI, AI agents): without it
-the command exits 5 before sending anything.`,
+the command exits 5 before it changes anything.`,
 	Example: `  mio achievements archive ach_abc123 --yes`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -840,7 +840,7 @@ var achievementsOfferingsDetachCmd = &cobra.Command{
 	Long: `Detach an achievement from the hub. It stops being grantable and visible
 there; the definition itself and any existing earns are unaffected.
 
---yes is REQUIRED in a non-interactive shell: without it the command exits 5 before sending anything.`,
+--yes is REQUIRED in a non-interactive shell: without it the command exits 5 before it changes anything.`,
 	Example: `  mio achievements offerings detach ach_abc123 --hub hub_123 --yes`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -1015,7 +1015,7 @@ This STOPS the badge from awarding anyone new in this hub until
 
 Hub-scoped: --hub is required (or a configured current_hub).
 
---yes is REQUIRED in a non-interactive shell: without it the command exits 5 before sending anything.`,
+--yes is REQUIRED in a non-interactive shell: without it the command exits 5 before it changes anything.`,
 	Example: `  mio achievements rule delete ach_abc123 --hub hub_123 --yes`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -1091,7 +1091,7 @@ Reversible via 'mio achievements restore'.
 
 --reason travels as the ?reason= query parameter (the DELETE has no body).
 
---yes is REQUIRED in a non-interactive shell: without it the command exits 5 before sending anything.`,
+--yes is REQUIRED in a non-interactive shell: without it the command exits 5 before it changes anything.`,
 	Example: `  mio achievements revoke ach_abc123 --hub hub_123 --contact-id ct_456 --yes
   mio achievements revoke ach_abc123 --hub hub_123 --contact-id ct_456 --reason "granted in error" --yes`,
 	Args: cobra.ExactArgs(1),
