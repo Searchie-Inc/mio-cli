@@ -441,6 +441,10 @@ mio contacts delete "$FIRST_ID" --yes
 
 ---
 
+## Commit guard (Claude Code hook)
+
+Claude Code sessions using this project's settings check code commit messages for a Jira key such as `MIO-1234`. Code means `*.go`, `go.mod`, and `go.sum`; Go test files count as code. Docs, Markdown, CI YAML, and scripts are exempt. Include the key in the commit message, for example `MIO-1234: describe change` or `(MIO-1234)`.
+
 ## Useful Links
 
 - [README.md](./README.md) — install, quickstart, global flags, full usage guide
