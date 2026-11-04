@@ -330,7 +330,7 @@ func recordHubOpResult(sc *scaffoldContext, res client.HubFromTemplateResult) {
 	}
 
 	recordHubOpPublishState(sc, res)
-	readBackHubIdentity(sc)
+	readBackHubIdentity(sc, res.Replayed)
 }
 
 // recordHubOpPublishState reads the publish outcome off the summary rather than
@@ -365,9 +365,13 @@ func recordHubOpPublishState(sc *scaffoldContext, res client.HubFromTemplateResu
 // resort), so the created hub's slug can differ from what we sent — and
 // hub_path is built from it. A wrong URL is worse than a slow one.
 //
+// A slug that differs from the request is reported to the user: on a first run
+// the backend suffixed it (taken); on a replay nothing was created and the note
+// only states the stored slug.
+//
 // Failure here is NOT a run failure: the hub exists and the op already
 // succeeded. It degrades to the requested values with a note.
-func readBackHubIdentity(sc *scaffoldContext) {
+func readBackHubIdentity(sc *scaffoldContext, replayed bool) {
 	res, err := sc.cl.Retrieve(sc.ctx, hubsPath(sc.teamID, sc.hubID))
 	if err != nil {
 		sc.notef("could not read the new hub back (%v) — reporting the requested name/slug; verify with `mio hubs retrieve %s`", err, sc.hubID)
@@ -375,7 +379,15 @@ func readBackHubIdentity(sc *scaffoldContext) {
 	}
 	if slug, _ := res.Attributes["slug"].(string); slug != "" {
 		if slug != sc.hubSlug {
-			sc.notef("backend assigned slug %q (requested %q — it was taken)", slug, sc.hubSlug)
+			if replayed {
+				// A replay created nothing: this run already IS the resume. The
+				// stored hub's slug differs from the request because the first
+				// run was suffixed, or the slug was edited since — the CLI cannot
+				// tell which, so it must not say "taken".
+				sc.notef("the stored hub %s has slug %q (this run requested %q)", sc.hubID, slug, sc.hubSlug)
+			} else {
+				sc.notef("backend assigned slug %q (requested %q — it was taken, here or by another team); the hub is %s. If you meant to resume a hub of yours instead of creating a new one, re-run with --hub <its id>", slug, sc.hubSlug, sc.hubID)
+			}
 		}
 		sc.hubSlug = slug
 	}

@@ -314,8 +314,25 @@ func stepHub(sc *scaffoldContext, _ *catalog.HubTemplate) error {
 		if p, ok := res.Attributes["is_private"].(bool); ok {
 			sc.isPrivate, sc.isPrivateKnown = p, true
 		}
+		noteSlugAssigned(sc)
 		return nil
 	})
+}
+
+// noteSlugAssigned says so when the backend created the hub under a different
+// slug than the one requested (MIO-2565). Create mode always POSTs a NEW hub and
+// the backend mints a unique slug when the requested one is taken, so re-running
+// the same create command after a hiccup yields a SECOND hub with a suffixed
+// slug — silently, unless this says it. (The server-side op's idempotency record
+// expires after 24 hours, so even that path can do the same later.) The backend does not normalise slugs
+// (uppercase or spaces 422), so a differing slug is always a collision suffix.
+// The suffix behaviour itself is the
+// backend's and is deliberately unchanged; resuming an existing hub is --hub.
+func noteSlugAssigned(sc *scaffoldContext) {
+	if sc.slugOverride == "" || sc.hubSlug == "" || sc.hubSlug == sc.slugOverride {
+		return
+	}
+	sc.notef("backend assigned slug %q (requested %q — it was taken). This run created a NEW hub (%s); if you meant to resume the hub you already have, re-run with --hub <its id> instead", sc.hubSlug, sc.slugOverride, sc.hubID)
 }
 
 // stepBlobs applies the template's presentation blobs onto the hub created (or
