@@ -48,6 +48,25 @@ package cmd
 // only a team API key configured, eventsContext fails fast with an actionable
 // error rather than letting every command round-trip to a guaranteed 401.
 //
+// TEAM-KEY AUTHORING (MIO-3610). The backend has since added an ops twin of the
+// create/update/cancel routes, gated by require_hub_event_author:
+//
+//	create  POST   /api/admin/teams/{team_id}/hubs/{hub_id}/events
+//	update  PATCH  /api/admin/teams/{team_id}/hubs/{hub_id}/events/{id}
+//	cancel  POST   /api/admin/teams/{team_id}/hubs/{hub_id}/events/{id}/cancel
+//
+// which accepts a team-bound API key carrying can_author_events (or a team-owner
+// JWT, or a hub-owner contact JWT). So the three AUTHORING verbs now need no
+// MIO_CONTACT_TOKEN: with none set (and not --anonymous) they use the resolved
+// API key against that route. With MIO_CONTACT_TOKEN set they behave exactly as
+// before (member route, contact bearer) — an explicit token is an explicit
+// choice, and switching such a user to a key that may lack can_author_events
+// would turn working setups into 403s. list/retrieve/rsvp are unchanged: they
+// stay on the member route and still need the token (a team key cannot name a
+// person, so RSVP never moves; list/retrieve are a follow-up). The admin cancel
+// takes NO body, so `cancel --message` is refused on the team-key route rather
+// than silently dropped. See eventsAuthoringContext.
+//
 // OUT OF SCOPE (deferred to a follow-up ticket): GET .../events/{id}/calendar.ics
 // — a raw text/calendar download that needs a new raw-response client method
 // distinct from the JSON:API decoders used everywhere else in this file.
@@ -60,6 +79,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -119,6 +139,74 @@ consistency with the rest of the CLI.
 
 create/update/cancel require hub owner/admin/moderator permissions. See
 'mio events rsvp --help' for the member-facing RSVP actions.`,
+}
+
+// adminEventsPath returns /api/admin/teams/{team_id}/hubs/{hub_id}/events[/{id}],
+// the team-principal authoring twin (MIO-3610).
+func adminEventsPath(teamID, hubID, id string) string {
+	base := fmt.Sprintf("/api/admin/teams/%s/hubs/%s/events", teamID, hubID)
+	if id != "" {
+		return base + "/" + id
+	}
+	return base
+}
+
+// eventsAuthoringUsesTeamKey reports whether create/update/cancel go to the
+// admin route with the team API key: no MIO_CONTACT_TOKEN and not --anonymous.
+// Pure (no I/O), so a flag combination that cannot work on that route can be
+// refused before anything is sent or confirmed.
+func eventsAuthoringUsesTeamKey() bool {
+	return !flags.anonymous && strings.TrimSpace(os.Getenv(eventsContactTokenEnv)) == ""
+}
+
+// eventsAuthoringContext resolves the client and the path builder for the
+// authoring verbs (create/update/cancel). See the TEAM-KEY AUTHORING note above.
+func eventsAuthoringContext(cmd *cobra.Command) (*cmdContext, func(id string) string, error) {
+	if !eventsAuthoringUsesTeamKey() {
+		c, hubID, err := eventsContext(cmd)
+		if err != nil {
+			return nil, nil, err
+		}
+		return c, func(id string) string { return eventsPath(hubID, id) }, nil
+	}
+	c, err := newContext(cmd)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := c.requireAuth(); err != nil {
+		return nil, nil, err
+	}
+	teamID, err := c.requireTeam()
+	if err != nil {
+		return nil, nil, err
+	}
+	hubID, err := c.requireHub()
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, func(id string) string { return adminEventsPath(teamID, hubID, id) }, nil
+}
+
+// teamKeyHintIf adds the can_author_events hint when the request went to the
+// team-key route.
+func teamKeyHintIf(err error) error {
+	if eventsAuthoringUsesTeamKey() {
+		return withTeamKeyHint(err)
+	}
+	return err
+}
+
+// withTeamKeyHint explains a 403 from the team-key route: the key needs the
+// can_author_events flag (an API key is not an event author by default) and only
+// the team owner can grant it. Only called on the team-key route.
+func withTeamKeyHint(err error) error {
+	if err == nil || errs.HTTPStatusOf(err) != http.StatusForbidden {
+		return err
+	}
+	return fmt.Errorf("%w; hint: authoring events with a team API key needs the key to carry the can_author_events flag (and the key to belong to this team). "+
+		"The team owner grants it with `mio api-keys update <key-id> --can-author-events` (find the id with `mio api-keys list`), "+
+		"or mints a new key with `mio api-keys create --name <n> --can-author-events`. "+
+		"Alternatively set %s to a member access token to author as that member", err, eventsContactTokenEnv)
 }
 
 // eventsPath returns /api/hubs/{hub_id}/events[/{id}]. NOTE: no team_id
@@ -393,7 +481,7 @@ Requires hub owner/admin/moderator permissions.`,
 			return err
 		}
 
-		c, hubID, err := eventsContext(cmd)
+		c, pathFor, err := eventsAuthoringContext(cmd)
 		if err != nil {
 			return err
 		}
@@ -402,9 +490,9 @@ Requires hub owner/admin/moderator permissions.`,
 		// required by the backend HubEventCreateAttributes schema; cobra
 		// enforces them before RunE (markFlagsRequired in init).
 
-		res, err := c.client.Create(c.ctx, eventsPath(hubID, ""), attrs)
+		res, err := c.client.Create(c.ctx, pathFor(""), attrs)
 		if err != nil {
-			return err
+			return teamKeyHintIf(err)
 		}
 		return c.render(cmd, res)
 	},
@@ -537,14 +625,14 @@ Requires hub owner/admin/moderator permissions.`,
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
-		c, hubID, err := eventsContext(cmd)
+		c, pathFor, err := eventsAuthoringContext(cmd)
 		if err != nil {
 			return err
 		}
 
-		res, err := c.client.Update(c.ctx, eventsPath(hubID, args[0]), attrs)
+		res, err := c.client.Update(c.ctx, pathFor(args[0]), attrs)
 		if err != nil {
-			return err
+			return teamKeyHintIf(err)
 		}
 		return c.render(cmd, res)
 	},
@@ -574,19 +662,25 @@ confirmation prompt in non-interactive environments (scripts, CI, AI agents).`,
 				return errs.New(errs.ExitUsage, "--message must not be blank")
 			}
 			attrs = map[string]any{"message": message}
+			if eventsAuthoringUsesTeamKey() {
+				// The admin cancel takes no body: sending the message would be
+				// accepted and dropped, and attendees would never see it.
+				return errs.New(errs.ExitUsage, "--message cannot be sent with a team API key: the team-key cancel route takes no body. "+
+					"Set "+eventsContactTokenEnv+" to a member access token to cancel with an organiser message, or cancel without --message")
+			}
 		}
 		if err := confirmDestructive(cmd, fmt.Sprintf("Cancel event %s?", args[0])); err != nil {
 			return err
 		}
-		c, hubID, err := eventsContext(cmd)
+		c, pathFor, err := eventsAuthoringContext(cmd)
 		if err != nil {
 			return err
 		}
 
-		path := eventsPath(hubID, args[0]) + "/cancel"
+		path := pathFor(args[0]) + "/cancel"
 		res, err := c.client.Action(c.ctx, "POST", path, attrs)
 		if err != nil {
-			return err
+			return teamKeyHintIf(err)
 		}
 		if res == nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Cancelled event %s.\n", args[0])
