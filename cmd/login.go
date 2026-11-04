@@ -165,7 +165,15 @@ The key is stored in an OS credential store when this build can open one,
 otherwise in an encrypted file under the config dir — always the file for the
 macOS release binaries, which are built without the Keychain backend. 'mio
 whoami' names the store as key_source; 'mio auth token' prints the stored key.
-Off a TTY with no resolvable key or credentials, login exits with code 3.`,
+Off a TTY with no resolvable key or credentials, login exits with code 3.
+
+mio keeps ONE stored key. When logging in would replace a stored key that belongs
+to a DIFFERENT team (or one the API rejects or cannot verify), login asks first,
+before it mints a key: y/N on a terminal, otherwise exit 5 unless --yes. To check
+the stored key's team it sends that key to the API base this run points at, as
+every other command does. Declining leaves the stored key and current_team as
+they were. (A second login running at the same moment can still overwrite the
+key; the check is not a lock.)`,
 	Args: cobra.NoArgs,
 	RunE: runLogin,
 }

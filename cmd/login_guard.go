@@ -73,10 +73,15 @@ func confirmReplaceStoredKey(cmd *cobra.Command, apiBase, newTeamID string, in i
 		// MIO-2995 recovery path.
 		return nil
 	case err != nil:
-		// Something is stored (or the store itself misbehaves) and we cannot
-		// read it — a permissions problem, say. Overwriting would destroy a
-		// credential nobody has looked at, so ask rather than assume.
-		what = fmt.Sprintf("a stored credential that could not be read (%v)", err)
+		// Something is stored (or the store itself misbehaves) and mio cannot
+		// read it — a permissions problem, say. `MIO_API_KEY=<key> mio login` is
+		// the DOCUMENTED way out of exactly that (MIO-2995; `mio auth token
+		// --help`), and the old credential cannot be exported either, so a
+		// confirmation would only block the recovery. It is never silent, though:
+		// the note names what is being replaced, and that fixing the file's
+		// permissions first would have kept it.
+		fmt.Fprintf(cmd.ErrOrStderr(), "Note: replacing a stored credential mio could not read (%v). If it was a valid key, fix the file's permissions first to keep it.\n", err)
+		return nil
 	case stored == "":
 		return nil
 	case !verify:

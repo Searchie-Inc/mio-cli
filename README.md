@@ -212,7 +212,7 @@ export MIO_API_KEY                # a separate statement: export MIO_API_KEY="$(
 
 ### `mio register` (create an account)
 
-Don't have an account yet? `mio register` creates one and logs you in in a single step — it mints and stores a key just like `mio login`, so you end up authenticated as the new account (this **replaces** any key already stored).
+Don't have an account yet? `mio register` creates one and logs you in in a single step — it mints and stores a key just like `mio login`, so you end up authenticated as the new account (this **replaces** any key already stored — mio keeps ONE key, so it **asks first** when one exists: y/N on a terminal, otherwise exit 5 unless `--yes`, before the account is created).
 
 ```sh
 # Interactive: prompts for email, password (typed twice), optional name
@@ -511,7 +511,7 @@ Scripts and agents can branch on these stable codes.
 
 | Resource | Available actions |
 |----------|-------------------|
-| `login` / `logout` | Interactive auth |
+| `login` / `logout` | Interactive auth. mio keeps ONE stored key: `login` (and `register`) ask first before replacing a key that belongs to a different team or cannot be verified (y/N on a terminal; off a TTY exit 5 unless `--yes`) |
 | `register` | Create a new account (email + password, optional first/last name) and auto-login — interactive, or headless via `--email`/`--password` (or `MIO_EMAIL`/`MIO_PASSWORD`). Replaces any stored key. |
 | `whoami` | Print resolved identity — user, team, hub, api-base, profile, key source |
 | `auth` | `token` — print the stored API key to stdout (`MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY`); exit 3 with empty stdout when none is stored. `forgot-password --email <addr>` / `reset-password --token <token\|link>` — recover a lost platform-user password from the CLI alone (unauthenticated; the new password is prompted for or read from `MIO_PASSWORD`, never on argv; then `mio login`). Release after `v0.24.0` |

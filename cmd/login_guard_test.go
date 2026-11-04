@@ -368,9 +368,12 @@ func TestRegisterGuard_DoesNotSendTheStoredKeyToTheAPI(t *testing.T) {
 	}
 }
 
-// A stored credential that cannot be READ (permissions) is not "nothing to
-// protect": overwriting it would destroy a credential nobody looked at.
-func TestLoginGuard_UnreadableStoredCredential_Asks(t *testing.T) {
+// A stored credential mio cannot READ (permissions) is replaced by the documented
+// recovery (MIO-2995: `MIO_API_KEY=<key> mio login`; the old credential cannot be
+// exported either) — but never silently: the note names what is being replaced.
+// (Codex's review wanted a confirmation here; the documented recovery wins, and
+// TestLogin_EnvKeyReplacesABlobItCannotRead pins it.)
+func TestLoginGuard_UnreadableStoredCredential_ReplacedWithAVisibleNote(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("permission bits do not bind root")
 	}
@@ -381,16 +384,15 @@ func TestLoginGuard_UnreadableStoredCredential_Asks(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(keyFile, 0o600) })
 	b := newGuardBackend(t, guardBetaTeam)
-	// An explicit key skips config.Resolve's read of the store, so the guard is the
-	// only thing between the unreadable credential and the overwrite (the password
-	// path aborts earlier with exit 1 when the store cannot be read).
-	res, err := runResume(t, []string{"MIO_API_BASE_URL=" + b.srv.URL, "MIO_API_KEY=" + guardNewKey}, "login")
-	if res.Code != errs.ExitNeedsConfir {
-		t.Fatalf("exit = %d (err=%v), want 5: an unreadable stored credential must be asked about, not overwritten", res.Code, err)
+	res := runContract(t, []string{"MIO_API_BASE_URL=" + b.srv.URL, "MIO_API_KEY=" + guardNewKey}, "login")
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d, want 0 (the documented recovery); stderr=%q", res.Code, res.Stderr)
 	}
-	_ = os.Chmod(keyFile, 0o600)
-	if got := storedKey(t); got != guardOldKey {
-		t.Errorf("stored key = %q, want the unreadable-then-restored old key still there", got)
+	if !strings.Contains(res.Stderr, "replacing a stored credential mio could not read") {
+		t.Errorf("the replacement must be announced, stderr=%q", res.Stderr)
+	}
+	if got := storedKey(t); got != guardNewKey {
+		t.Errorf("stored key = %q, want the pasted key", got)
 	}
 }
 

@@ -34,7 +34,12 @@ store (see 'mio login --help'), exactly like ` + "`mio login`" + `. Your
 password is never echoed or saved.
 
 Because it logs you in, register REPLACES any API key already stored — you end
-up authenticated as the newly-created account.
+up authenticated as the newly-created account. mio keeps ONE key, so when one is
+already stored register ASKS first (before the account is created): y/N on a
+terminal, otherwise exit 5 unless --yes. It does not look the stored key up, so
+that key is never sent to the API base this run points at. If that key is your
+only way into its account (no password set), export it first:
+MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY.
 
 Resolution order:
   1. If --email and --password are set (or MIO_EMAIL/MIO_PASSWORD env vars),
