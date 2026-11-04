@@ -186,7 +186,9 @@ func TestEventsAuthoring_Forbidden_ExplainsTheFlag(t *testing.T) {
 	if res.Code != errs.ExitAuth {
 		t.Fatalf("exit = %d, want 3 (a 403 keeps its exit code); err=%v", res.Code, err)
 	}
-	for _, want := range []string{"can_author_events", "mio api-keys update", "--can-author-events", eventsContactTokenEnv} {
+	// The recovery command (api-keys update/create) is refused for an API key by
+	// the backend, so the hint must say what credential it needs (codex review).
+	for _, want := range []string{"can_author_events", "mio api-keys update", "--can-author-events", eventsContactTokenEnv, "USER access token", "/api/v1/auth/login", "--api-key"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("the 403 hint must mention %q; got %v", want, err)
 		}
@@ -276,5 +278,66 @@ func TestEventsAuthoring_NoCredentialsAtAll_FailsBeforeAnyRequest(t *testing.T) 
 	res := runContract(t, []string{"MIO_API_BASE_URL=" + rs.srv.URL, "MIO_API_KEY="}, withTeam("t_team1", createArgs...)...)
 	if res.Code != errs.ExitAuth || rs.count() != 0 {
 		t.Errorf("exit=%d requests=%d, want exit 3 and none", res.Code, rs.count())
+	}
+}
+
+// The admin route must carry exactly the attributes the member route would for
+// the same flags: the oracle is the member-route body for identical args, not a
+// second hand-written list, so a flag dropped on the admin path (or added to
+// only one path) fails here.
+func TestEventsAuthoring_AdminRouteCarriesTheSameAttributesAsTheMemberRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"create", createArgs},
+		{"update", []string{"--hub", "hub_123", "events", "update", "evt_1", "--title", "Renamed", "--capacity", "40", "--visibility", "members", "--description", "d"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(eventsContactTokenEnv, "")
+			adminSrv := newRecordingServer(t, 0)
+			if res := runContract(t, baseEnv(adminSrv.srv.URL), withTeam("t_team1", tc.args...)...); res.Code != errs.ExitOK {
+				t.Fatalf("admin exit = %d; %q", res.Code, res.Stderr)
+			}
+			t.Setenv(eventsContactTokenEnv, "member-token")
+			memberSrv := newRecordingServer(t, 0)
+			if res := runContract(t, baseEnv(memberSrv.srv.URL), withTeam("t_team1", tc.args...)...); res.Code != errs.ExitOK {
+				t.Fatalf("member exit = %d; %q", res.Code, res.Stderr)
+			}
+			_, adminAttrs := bodyTypeAttrs(t, adminSrv.only(t).body)
+			_, memberAttrs := bodyTypeAttrs(t, memberSrv.only(t).body)
+			if len(memberAttrs) < 2 {
+				t.Fatalf("member-route attrs %v: the oracle is too thin to prove anything", memberAttrs)
+			}
+			a, _ := json.Marshal(adminAttrs)
+			m, _ := json.Marshal(memberAttrs)
+			if string(a) != string(m) {
+				t.Errorf("admin attrs %s != member attrs %s", a, m)
+			}
+		})
+	}
+}
+
+// A blank or whitespace-only MIO_CONTACT_TOKEN is "no token": it must select the
+// admin route; a non-blank one (even padded) must select the member route.
+func TestEventsAuthoring_ContactTokenBlankVersusSet(t *testing.T) {
+	for _, tc := range []struct {
+		token, wantPath, wantBearer string
+	}{
+		{"   ", adminBase, "test-key-contract"},
+		{"", adminBase, "test-key-contract"},
+		{"  member-token  ", memberBase, "member-token"},
+	} {
+		t.Run("token="+strings.ReplaceAll(tc.token, " ", "_"), func(t *testing.T) {
+			t.Setenv(eventsContactTokenEnv, tc.token)
+			rs := newRecordingServer(t, 0)
+			if res := runContract(t, baseEnv(rs.srv.URL), withTeam("t_team1", createArgs...)...); res.Code != errs.ExitOK {
+				t.Fatalf("exit = %d; %q", res.Code, res.Stderr)
+			}
+			r := rs.only(t)
+			if r.path != tc.wantPath || r.bearer != tc.wantBearer {
+				t.Errorf("request = %s bearer %q, want %s bearer %q", r.path, r.bearer, tc.wantPath, tc.wantBearer)
+			}
+		})
 	}
 }

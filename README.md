@@ -405,6 +405,8 @@ mio segments members <segment-id>
 # that carries the can_author_events flag — no member token needed (MIO-3610):
 #   mio api-keys update <key-id> --can-author-events   # team owner; or mint with
 #   mio api-keys create --name bot --can-author-events
+# (key management needs a USER access token via --api-key — the access_token from
+# POST /api/v1/auth/login; a team API key, even the owner's, gets 403)
 # (a cancel through the key route cannot carry --message: that route takes no body).
 # Everything else — list, retrieve, RSVP — still needs a member (contact) identity,
 # so a key alone 401s and the CLI stops with exit 3 before it sends. Export a member

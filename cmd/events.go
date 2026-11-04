@@ -132,10 +132,11 @@ var eventsCmd = &cobra.Command{
 	Short: "Manage hub events.",
 	Long: `Create, list, retrieve, update, and cancel events within a hub.
 
-Hub-scoped: --hub is required (or a configured current_hub). Unlike most
-resources in this CLI, events has NO team_id segment in its API path — only
---hub matters for routing, though a team context is still resolved for
-consistency with the rest of the CLI.
+Hub-scoped: --hub is required (or a configured current_hub). The member
+routes (list, retrieve, rsvp, and create/update/cancel with MIO_CONTACT_TOKEN)
+have NO team_id segment in their API path — only --hub matters there. The
+team-key authoring route (create/update/cancel with no MIO_CONTACT_TOKEN) is
+/api/admin/teams/{team}/hubs/{hub}/events and does carry the team.
 
 create/update/cancel require hub owner/admin/moderator permissions. See
 'mio events rsvp --help' for the member-facing RSVP actions.`,
@@ -205,7 +206,8 @@ func withTeamKeyHint(err error) error {
 	}
 	return fmt.Errorf("%w; hint: authoring events with a team API key needs the key to carry the can_author_events flag (and the key to belong to this team). "+
 		"The team owner grants it with `mio api-keys update <key-id> --can-author-events` (find the id with `mio api-keys list`), "+
-		"or mints a new key with `mio api-keys create --name <n> --can-author-events`. "+
+		"or mints a new key with `mio api-keys create --name <n> --can-author-events` — but key management needs a USER access token "+
+		"(the access_token from POST /api/v1/auth/login, passed with --api-key): a team API key, this one included, cannot do it. "+
 		"Alternatively set %s to a member access token to author as that member", err, eventsContactTokenEnv)
 }
 

@@ -63,7 +63,11 @@ var apikeysCreateCmd = &cobra.Command{
 	Long: `Create a new API key for the active team.
 
 The secret is returned exactly once in the response. Store it immediately —
-it cannot be retrieved again after this call.`,
+it cannot be retrieved again after this call.
+
+Managing keys (create, list, retrieve, update, delete) needs a USER access token:
+pass the access_token from POST /api/v1/auth/login with --api-key. A team API key,
+including the stored one, is refused with 403 (exit 3).`,
 	Example: `  # Create a key with a name only (no expiry)
   mio api-keys create --name="CI deploy key"
 
@@ -190,8 +194,10 @@ omitted flag is left as it is, and at least one must be given.
                         MIO_CONTACT_TOKEN is set — MIO-3610)
   --can-moderate        let the key use the member-moderation endpoints
 
-Pass =false to revoke a flag (--can-author-events=false). The backend allows the
-team owner to do this. Find a key's id with 'mio api-keys list'.`,
+Pass =false to revoke a flag (--can-author-events=false). Only the team owner
+may do this, and it needs a USER access token: pass the access_token from
+POST /api/v1/auth/login with --api-key — a team API key, including the stored
+one, is refused with 403 (exit 3). Find a key's id with 'mio api-keys list'.`,
 	Example: `  mio api-keys update apk_abc123 --can-author-events
   mio api-keys update apk_abc123 --can-moderate=false`,
 	Args: cobra.ExactArgs(1),
