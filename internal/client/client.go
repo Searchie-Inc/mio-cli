@@ -164,6 +164,7 @@ var typeOverrides = []struct {
 	// full-list PUT replaces whose backend Literal types are the snake_case
 	// plurals, not the "cards"/"chapters" URL segments.
 	{"files/cards", "file_cards"},
+	{"files/captions", "file_captions"},
 	{"files/chapters", "file_chapters"},
 	// NOTE (MIO-3074): the content reconcile op deliberately has NO entry here.
 	// Its path tail .../content/reconcile is AMBIGUOUS — the backend's
@@ -415,7 +416,7 @@ var knownCollections = map[string]bool{
 	"items": true,
 	// Media enrichment (MIO-2266): in-video cards, authorable chapters, folder
 	// subtree move, and standalone-file hub publishing (hubs/{hub}/media).
-	"cards": true, "chapters": true, "move": true, "media": true,
+	"cards": true, "captions": true, "chapters": true, "move": true, "media": true,
 	// Media transcripts (MIO-2289): edit (PATCH .../media/{id}/transcript) +
 	// revert (POST .../transcript/revert) derive type "transcripts" via the
 	// bare-segment override. "revert" is deliberately NOT a known token so the
