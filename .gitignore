@@ -38,3 +38,7 @@ dist/
 # Claude Code creates isolated agent worktrees inside the repo; the rest of
 # .claude/ (skills, rules) is tracked deliberately.
 .claude/worktrees/
+
+# Python hook test artifacts
+__pycache__/
+*.pyc
