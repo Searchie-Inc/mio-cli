@@ -24,6 +24,14 @@
 # When the App is not configured the job skips gracefully (no-op exit 0), so
 # this workflow can land before the credentials do.
 #
+# CI on the bump PR (MIO-2998): a PR opened with GITHUB_TOKEN gets no usable CI
+# (its PR-triggered runs wait in action_required), so the bump sat unmergeable.
+# The job now opens it as the GitHub App when the App is installed on mio-cli,
+# and otherwise dispatches ci.yml (workflow_dispatch) on the bump branch and says
+# in the summary what to install. The last step then makes a bump that has been
+# waiting for review longer than STALE_BUMP_DAYS turn this job red, so it cannot
+# sit unnoticed behind a green check-mark.
+#
 # Mirrors mio-backend's .github/workflows/catalog-pin-staleness.yml. Why this
 # exists (MIO-2665): the CLI's embed sat at 0.10.0 for two upstream releases
 # while mio-backend served 0.12.0, because the pin lived only in a Go comment
@@ -46,6 +54,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write   # to dispatch CI on the bump branch (see "Run CI on the bump branch")
 
 concurrency:
   group: catalog-pin-staleness
@@ -143,7 +152,18 @@ jobs:
           # suite, plus the cmd tests that read the embedded catalog through the
           # `pages catalog` read path.
           go build ./...
-          go test ./internal/catalog/... ./cmd/... -timeout 120s
+          if ! go test ./internal/catalog/... ./cmd/... -timeout 120s 2>&1 | tee /tmp/guard.log; then
+            {
+              echo "### Catalog bump blocked: the CLI's guards reject mio-page-catalog ${latest_ref:0:7}"
+              echo
+              echo "The new catalog needs CLI work (usually internal/docsgen learning a new shape) before it can be pinned. First failures:"
+              echo '```'
+              { grep -E '^(--- FAIL|    [A-Za-z0-9_]+_test.go:[0-9]+)' /tmp/guard.log || true; } | head -20 | cut -c1-300
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::catalog ${latest_ref:0:7} cannot be pinned yet: the guards fail (see the job summary)"
+            exit 1
+          fi
 
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
@@ -178,12 +198,31 @@ jobs:
         id: bump
 
       # ── 6. Open / update the bump PR ────────────────────────────────────
-      #   Pushes with the checkout's own GITHUB_TOKEN credentials (mio-cli write
-      #   access) — the App token above is scoped only to mio-page-catalog.
+      #   Preferably as the GitHub App, scoped to THIS repo: pushes and PRs made
+      #   with an App token start CI like any contributor's. That needs the App
+      #   INSTALLED on mio-cli (contents + pull-requests write) — as of MIO-2998 it
+      #   is installed only on mio-page-catalog (GET /repos/.../mio-cli/installation
+      #   answers 404), so the mint is allowed to fail and the job falls back to
+      #   GITHUB_TOKEN, whose pushes/PRs start no usable CI; step 7 dispatches CI
+      #   and the summary says what is missing.
+      - name: Generate GitHub App token (mio-cli)
+        if: env.APP_TOKEN_AVAILABLE == 'true' && steps.bump.outputs.changed == 'true'
+        id: repo-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SIBLING_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SIBLING_APP_PRIVATE_KEY }}
+          owner: Searchie-Inc
+          repositories: 'mio-cli'
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Open or update bump PR
         if: env.APP_TOKEN_AVAILABLE == 'true' && steps.bump.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.repo-token.outputs.token || secrets.GITHUB_TOKEN }}
+          APP_PUSH_TOKEN: ${{ steps.repo-token.outputs.token }}
         run: |
           set -euo pipefail
 
@@ -191,7 +230,21 @@ jobs:
           OLD_REF="${{ steps.bump.outputs.old_ref }}"
           NEW_REF="${{ steps.bump.outputs.new_ref }}"
 
-          git push --force-with-lease origin "$BRANCH"
+          if [ -n "${APP_PUSH_TOKEN:-}" ]; then
+            # An App-token push starts CI normally (no GITHUB_TOKEN suppression).
+            # scripts/push_bump_branch.sh blanks the checkout's persisted
+            # GITHUB_TOKEN header (it would otherwise win over the URL's
+            # credentials) and names the lease explicitly (a URL push has no
+            # remote-tracking ref); both are tested in scripts/test_push_bump_branch.sh.
+            ./scripts/push_bump_branch.sh "$BRANCH" \
+              "https://x-access-token:${APP_PUSH_TOKEN}@github.com/Searchie-Inc/mio-cli.git" origin
+          else
+            {
+              echo "### The bump PR was opened with GITHUB_TOKEN — its CI will not start by itself"
+              echo "The GitHub App is not installed on mio-cli, so the push/PR is made as GITHUB_TOKEN and its PR-triggered runs do not run unattended (the first ones wait in \`action_required\`; after a force-push they were cancelled with no jobs). CI is dispatched on the branch below, but its results attach to the commit, not to the PR's check list. **Fix: install the App on mio-cli with contents and pull-requests write** (MIO-2998)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            ./scripts/push_bump_branch.sh "$BRANCH" origin origin
+          fi
 
           if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -qiE "^OPEN$"; then
             echo "PR for $BRANCH already open — branch updated."
@@ -215,4 +268,45 @@ jobs:
           CI runs the full suite; the workflow additionally gated on \`go test ./internal/catalog/... ./cmd/...\`." \
               --base main \
               --head "$BRANCH"
+          fi
+
+      # ── 7. Run CI on the bump branch ────────────────────────────────────
+      #   FALLBACK ONLY (App not installed on mio-cli, see step 6): pushes/PRs made
+      #   with GITHUB_TOKEN start no usable CI, so ci.yml is dispatched explicitly.
+      #   Its check runs attach to the branch head COMMIT (visible under the
+      #   commit and in Actions) but GitHub does not list a workflow_dispatch run in
+      #   the PR's own check list.
+      - name: Run CI on the bump branch
+        if: env.APP_TOKEN_AVAILABLE == 'true' && steps.bump.outputs.changed == 'true' && steps.repo-token.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --ref chore/bump-catalog-pin
+          echo "Dispatched CI on chore/bump-catalog-pin" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 8. Do not let a bump sit unreviewed ─────────────────────────────
+      #   A human must merge the bump. If one has been open for more than
+      #   STALE_BUMP_DAYS this job fails, so the daily run is red until someone
+      #   merges or closes it (runs on every schedule, bump or not).
+      - name: Fail when a bump PR has been open too long
+        if: env.APP_TOKEN_AVAILABLE == 'true' && always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STALE_BUMP_DAYS: "3"
+        run: |
+          set -euo pipefail
+          info=$(gh pr list --head chore/bump-catalog-pin --state open --json number,createdAt,url --jq '.[0] // empty')
+          if [ -z "$info" ]; then
+            echo "No open catalog bump PR."
+            exit 0
+          fi
+          created=$(echo "$info" | jq -r .createdAt)
+          url=$(echo "$info" | jq -r .url)
+          age_days=$(( ( $(date -u +%s) - $(date -u -d "$created" +%s) ) / 86400 ))
+          echo "Open catalog bump PR $url is $age_days day(s) old."
+          echo "Open catalog bump PR: $url ($age_days day(s) old)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$age_days" -ge "$STALE_BUMP_DAYS" ]; then
+            echo "::error::catalog bump PR $url has been open $age_days day(s) (limit $STALE_BUMP_DAYS) — review and merge it, or close it"
+            exit 1
           fi

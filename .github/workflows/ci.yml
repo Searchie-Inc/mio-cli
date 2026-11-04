@@ -5,6 +5,13 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["**"]
+  # The catalog-pin watcher opens its bump PR with GITHUB_TOKEN, and GitHub does
+  # not start workflows for pushes/PRs made with that token (the PR sat with no
+  # checks at all, MIO-2998). It dispatches this workflow on the bump branch
+  # instead. Those check runs attach to the branch's head COMMIT (Actions, the
+  # commit page); GitHub does not list a workflow_dispatch run in the PR's own
+  # check list, so this is a fallback until the App is installed on this repo.
+  workflow_dispatch: {}
 
 jobs:
   build-and-test:
@@ -23,6 +30,9 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+      - name: Catalog-watcher push script (MIO-2998)
+        run: sh scripts/test_push_bump_branch.sh
 
       - name: Vet
         run: go vet ./...
