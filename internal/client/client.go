@@ -144,6 +144,7 @@ var typeOverrides = []struct {
 	suffix string // collection segments, most-specific listed first below
 	typ    string
 }{
+	{"remote-connections", "remote_connections"},
 	// Contextual collisions — keep these BEFORE the bare-segment entries.
 	// All type values are snake_case per MIO-636 (backend cutover 2026-06-04).
 	{"coupons/products", "coupon_products"},
@@ -343,6 +344,18 @@ func resourceTypeFromPath(path string) string {
 	// (create/list/search/action) or the second-to-last when it ends in an id
 	// (retrieve/update/delete). We disambiguate by checking whether the last
 	// segment matches a known collection token; ids never do.
+	// These action tails are scoped to remote connections; do not make generic
+	// "import" or "browse" collection tokens, which would alter other routes.
+	for i, seg := range segs {
+		if seg == "remote-connections" && i+2 == len(segs)-1 {
+			switch segs[len(segs)-1] {
+			case "import":
+				return "remote_imports"
+			case "browse":
+				return "remote_recordings"
+			}
+		}
+	}
 	collections := collectionSegments(segs)
 	if len(collections) == 0 {
 		// Fallback: last segment.
@@ -371,7 +384,8 @@ func resourceTypeFromPath(path string) string {
 // Used to tell a collection segment from an opaque resource id when deriving
 // the resource type from a path.
 var knownCollections = map[string]bool{
-	"teams": true, "hubs": true, "products": true, "prices": true,
+	"remote-connections": true,
+	"teams":              true, "hubs": true, "products": true, "prices": true,
 	"deliverables": true, "coupons": true, "segments": true, "search": true,
 	"members": true, "contacts": true, "content": true, "children": true,
 	"tags": true, "contact-attributes": true, "options": true,

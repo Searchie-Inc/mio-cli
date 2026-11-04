@@ -478,6 +478,7 @@ var realAfterShapes = map[string]string{
 	"media hub-playlists list":           "media_links",        // media/router.py list_hub_media_playlists
 	"media playlists items list":         "media_links",        // media/router.py list_playlist_items
 	"media playlists list":               "media_links",        // media/router.py list_playlists
+	"media remote-connections browse":    "media_links",        // media/remote_router.py browse_remote_recordings (links.next only, sent when a cursor exists)
 	"oauth-clients list":                 "tags",               // oauth/router.py list_oauth_clients
 	"pages list":                         "products",           // pages/router.py admin_list_pages
 	"pages sections list":                "unpaged_count",      // pages/router.py admin_list_sections

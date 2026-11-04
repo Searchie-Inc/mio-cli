@@ -288,6 +288,10 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/files/f1/chapters/import", "file_chapters"},
 		{"/api/teams/t1/files/f1/chapters/auto", "file_chapters"},
 		// Simple: type == last collection segment.
+		{"/api/teams/t1/remote-connections", "remote_connections"},
+		{"/api/teams/t1/remote-connections/c1", "remote_connections"},
+		{"/api/teams/t1/remote-connections/c1/import", "remote_imports"},
+		{"/api/teams/t1/remote-connections/c1/browse", "remote_recordings"},
 		{"/api/teams/t1/products", "products"},
 		{"/api/teams/t1/products/p1", "products"},
 		{"/api/teams/t1/products/p1/prices", "prices"},
