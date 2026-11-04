@@ -158,7 +158,7 @@ jobs:
               echo
               echo "The new catalog needs CLI work (usually internal/docsgen learning a new shape) before it can be pinned. First failures:"
               echo '```'
-              grep -E '^(--- FAIL|    [A-Za-z0-9_]+_test.go:[0-9]+)' /tmp/guard.log | head -20 | cut -c1-300
+              { grep -E '^(--- FAIL|    [A-Za-z0-9_]+_test.go:[0-9]+)' /tmp/guard.log || true; } | head -20 | cut -c1-300
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::error::catalog ${latest_ref:0:7} cannot be pinned yet: the guards fail (see the job summary)"
@@ -232,14 +232,18 @@ jobs:
 
           if [ -n "${APP_PUSH_TOKEN:-}" ]; then
             # An App-token push starts CI normally (no GITHUB_TOKEN suppression).
-            git push --force-with-lease \
-              "https://x-access-token:${APP_PUSH_TOKEN}@github.com/Searchie-Inc/mio-cli.git" "$BRANCH"
+            # scripts/push_bump_branch.sh blanks the checkout's persisted
+            # GITHUB_TOKEN header (it would otherwise win over the URL's
+            # credentials) and names the lease explicitly (a URL push has no
+            # remote-tracking ref); both are tested in scripts/test_push_bump_branch.sh.
+            ./scripts/push_bump_branch.sh "$BRANCH" \
+              "https://x-access-token:${APP_PUSH_TOKEN}@github.com/Searchie-Inc/mio-cli.git" origin
           else
             {
               echo "### The bump PR was opened with GITHUB_TOKEN — its CI will not start by itself"
-              echo "The GitHub App is not installed on mio-cli, so the push/PR cannot start workflows (the PR-triggered runs sit in \`action_required\`). CI is dispatched on the branch below, but its results attach to the commit, not to the PR's check list. **Fix: install the App on mio-cli with contents and pull-requests write** (MIO-2998)."
+              echo "The GitHub App is not installed on mio-cli, so the push/PR is made as GITHUB_TOKEN and its PR-triggered runs do not run unattended (the first ones wait in \`action_required\`; after a force-push they were cancelled with no jobs). CI is dispatched on the branch below, but its results attach to the commit, not to the PR's check list. **Fix: install the App on mio-cli with contents and pull-requests write** (MIO-2998)."
             } >> "$GITHUB_STEP_SUMMARY"
-            git push --force-with-lease origin "$BRANCH"
+            ./scripts/push_bump_branch.sh "$BRANCH" origin origin
           fi
 
           if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -qiE "^OPEN$"; then
