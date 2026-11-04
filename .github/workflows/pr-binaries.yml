@@ -35,6 +35,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # Build the PR HEAD, not GitHub's synthetic merge commit: the commit that
+          # `mio version` prints must be one a reviewer can find on the branch and
+          # match to the artifact name (a merge sha is on no branch and is rewritten
+          # whenever the base moves).
+          ref: ${{ github.event.pull_request.head.sha }}
           # Tags are needed so the snapshot version derives from the latest release.
           fetch-depth: 0
 
@@ -48,15 +53,13 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: latest   # same as release.yml, so the tool cannot drift from the release
           args: build --snapshot --clean
 
       - name: Package one archive per platform
         run: |
           set -euo pipefail
-          min_platforms=4
           mkdir -p pr-binaries
-          found=0
           for dir in dist/mio_*/; do
             name=$(basename "$dir")                  # e.g. mio_linux_amd64_v1
             plat=${name#mio_}
@@ -67,9 +70,17 @@ jobs:
             else
               continue
             fi
-            found=$((found + 1))
           done
-          test "$found" -ge "$min_platforms" || { echo "::error::expected at least $min_platforms platform binaries, found $found"; ls -R dist | head -50; exit 1; }
+          # Every platform QA may run must be present BY NAME. A bare count would
+          # stay green if one platform silently dropped out of .goreleaser.yaml.
+          missing=0
+          for plat in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64; do
+            if ! ls pr-binaries/mio_${plat}_* >/dev/null 2>&1; then
+              echo "::error::no binary for ${plat} in this build"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then ls -R dist | head -50; exit 1; fi
           (cd pr-binaries && sha256sum * > checksums.txt)
           ls -l pr-binaries
 
@@ -81,6 +92,7 @@ jobs:
           path: pr-binaries/*
           retention-days: 14
           if-no-files-found: error
+          overwrite: true   # a re-run of the same head must not fail with a name conflict
 
       - name: How to use
         run: |
@@ -90,8 +102,10 @@ jobs:
             echo "Artifact: [${{ steps.upload.outputs.artifact-url }}](${{ steps.upload.outputs.artifact-url }}) (14 days). Pick your platform, extract, run:"
             echo
             echo '```sh'
-            echo 'tar -xzf mio_linux_amd64_v1.tar.gz && ./mio version   # reports a 0.x.y-pr.<sha> snapshot version'
+            echo 'tar -xzf mio_linux_amd64_*.tar.gz && ./mio version   # reports a 0.x.y-pr.<head sha> snapshot version'
             echo '```'
+            echo
+            echo "**Built from the unreviewed code of this pull request** — run it only on machines and accounts you would run a contributor's code on, and use a throwaway API key."
             echo
             echo "macOS: unsigned build — \`xattr -d com.apple.quarantine ./mio\` if Gatekeeper blocks it."
           } >> "$GITHUB_STEP_SUMMARY"
