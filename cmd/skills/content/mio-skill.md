@@ -757,7 +757,9 @@ Per `type`: **`url` takes a FULL URL including its scheme** (`https:`, `http:`,
 `tel:`, `sms:`) and is passed through untouched, so a schemeless `example.com/x` yields
 a non-navigating button; `email` takes a bare address (the renderer adds `mailto:`);
 `scroll` a bare anchor id (it adds the `#`); `page` a system page type, a content-page
-UUID, or a `/`-prefixed hub path; `playlist` a playlist id. Optional
+UUID, or a `/`-prefixed hub path; `playlist` a playlist id; `submit` submits the
+enclosing form and carries `value: ""` — it is valid ONLY on a `button` that has a
+`form` ancestor, and the catalog validator rejects it anywhere else. Optional
 `action.params` is a string map merged onto the resolved href. A malformed or missing
 action renders a non-navigating button. `settings.href` is a deprecated alias.
 
@@ -779,6 +781,9 @@ action renders a non-navigating button. `settings.href` is a deprecated alias.
 | `color` | *string* | — |
 | `tone` | *string* | `primary\|secondary\|white\|custom` |
 <!-- /catalog-gen -->
+
+Unset `tone` is Auto (the consumer's own default ink). `tone: "custom"` paints the sibling
+`color` (`#rrggbb`); a missing or invalid `color` silently falls back to Auto, with no error.
 
 ### Every kind's settings — generated from the catalog
 
