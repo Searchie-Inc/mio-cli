@@ -59,4 +59,10 @@ sed "s#http.https://github.com/.extraheader=#http.http://127.0.0.1:$port/.extrah
 "$tmp/push_test_host.sh" bump "http://x-access-token:APPTOKEN@127.0.0.1:$port/o/r.git" origin >/dev/null 2>&1 || true
 if grep -q "CHECKOUTTOKEN" "$tmp/auth.log" 2>/dev/null || grep -q "$(printf 'x-access-token:CHECKOUTTOKEN' | base64)" "$tmp/auth.log" 2>/dev/null; then bad "the persisted checkout token reached the server"; else ok "the persisted checkout token is not sent"; fi
 if grep -q "$(printf 'x-access-token:APPTOKEN' | base64)" "$tmp/auth.log" 2>/dev/null; then ok "the URL (App) credentials are what authenticates"; else bad "the URL (App) credentials never reached the server"; fi
+# origin target: the persisted header must still be sent (it is origin's only credential)
+: > "$tmp/auth.log"
+git remote set-url origin "http://127.0.0.1:$port/o/r.git"
+sed "s#http.https://github.com/.extraheader=#http.http://127.0.0.1:$port/.extraheader=#" "$here/push_bump_branch.sh" > "$tmp/push_test_host.sh"; chmod +x "$tmp/push_test_host.sh"
+"$tmp/push_test_host.sh" bump origin "file://$tmp/remote.git" >/dev/null 2>&1 || true
+if grep -q "$(printf 'x-access-token:CHECKOUTTOKEN' | base64)" "$tmp/auth.log" 2>/dev/null; then ok "a push to origin keeps the persisted checkout credential"; else bad "a push to origin lost its only credential (fallback path would fail to push)"; fi
 exit $fail
