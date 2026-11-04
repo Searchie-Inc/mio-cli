@@ -19,6 +19,7 @@ package cmd
 // carrying an Authorization header still fails the test.
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -32,14 +33,53 @@ func isStrayProbe(r *http.Request) bool {
 		r.Header.Get("Authorization") == ""
 }
 
+// errorReporter is the slice of *testing.T that failUnlessStrayProbe needs, so a
+// test can hand it a recording fake and watch whether it reports.
+type errorReporter interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
 // failUnlessStrayProbe is t.Errorf for an "unexpected request" stub branch,
 // except that the dev box's port prober is not a request the test sent.
-func failUnlessStrayProbe(t *testing.T, r *http.Request, format string, args ...any) {
+func failUnlessStrayProbe(t errorReporter, r *http.Request, format string, args ...any) {
 	t.Helper()
 	if isStrayProbe(r) {
 		return
 	}
 	t.Errorf(format, args...)
+}
+
+type recordedErrors struct{ msgs []string }
+
+func (r *recordedErrors) Helper() {}
+func (r *recordedErrors) Errorf(format string, args ...any) {
+	r.msgs = append(r.msgs, fmt.Sprintf(format, args...))
+}
+
+// TestFailUnlessStrayProbe pins the property the ~20 converted stubs rely on:
+// a request that is NOT the prober still fails the test, and the prober does
+// not. (TestIsStrayProbe alone pins only the predicate; a helper that stopped
+// calling Errorf would leave every stub silent and the suite green.)
+func TestFailUnlessStrayProbe(t *testing.T) {
+	mk := func(ua string) *http.Request {
+		r, err := http.NewRequest("GET", "http://127.0.0.1/", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set("User-Agent", ua)
+		return r
+	}
+	var cli recordedErrors
+	failUnlessStrayProbe(&cli, mk("Go-http-client/1.1"), "unexpected request %s %s", "GET", "/")
+	if len(cli.msgs) != 1 || cli.msgs[0] != "unexpected request GET /" {
+		t.Errorf("a CLI request to / must be reported once with the caller's message; got %q", cli.msgs)
+	}
+	var probe recordedErrors
+	failUnlessStrayProbe(&probe, mk("node"), "unexpected request %s %s", "GET", "/")
+	if len(probe.msgs) != 0 {
+		t.Errorf("the port prober must not be reported; got %q", probe.msgs)
+	}
 }
 
 // TestIsStrayProbe pins how narrow the exemption is: each row that must NOT be
