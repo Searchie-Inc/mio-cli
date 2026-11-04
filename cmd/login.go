@@ -387,7 +387,7 @@ func validateAndStore(cmd *cobra.Command, apiBase, key string, in io.Reader) err
 	// team needs confirmation (MIO-3572). Reading the stored key here is fine:
 	// an unreadable blob is simply replaced (the recovery path above).
 	newTeam, _ := me["team_id"].(string)
-	if err := confirmReplaceStoredKey(cmd, apiBase, newTeam, in); err != nil {
+	if err := confirmReplaceStoredKey(cmd, apiBase, newTeam, in, true); err != nil {
 		return err
 	}
 	if err := config.SetAPIKey(key); err != nil {

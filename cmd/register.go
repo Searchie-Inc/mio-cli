@@ -96,7 +96,7 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 		// Registering creates a NEW account and team and then REPLACES the stored
 		// key with theirs. Ask first, before the account exists (MIO-3572: this
 		// exact sequence locked a QA account out for good).
-		if err := confirmReplaceStoredKey(cmd, resolved.APIBase, "", cmd.InOrStdin()); err != nil {
+		if err := confirmReplaceStoredKey(cmd, resolved.APIBase, "", cmd.InOrStdin(), false); err != nil {
 			return err
 		}
 		return registerAndLogin(cmd, resolved.APIBase, mintTeam, email, password, firstName, lastName, cfg)
@@ -115,7 +115,7 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Same question, asked before the user types an email and password.
-	if err := confirmReplaceStoredKey(cmd, resolved.APIBase, "", cmd.InOrStdin()); err != nil {
+	if err := confirmReplaceStoredKey(cmd, resolved.APIBase, "", cmd.InOrStdin(), false); err != nil {
 		return err
 	}
 

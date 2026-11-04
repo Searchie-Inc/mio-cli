@@ -27,8 +27,10 @@ package cmd
 // nothing has been sent that cannot be undone when it refuses.
 
 import (
+	"bufio"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -49,37 +51,95 @@ func noStoredKeyGuard(string) error { return nil }
 // storedKeyGuardFor builds the guard for one login invocation.
 func storedKeyGuardFor(cmd *cobra.Command, apiBase string, in io.Reader) storedKeyGuard {
 	return func(newTeamID string) error {
-		return confirmReplaceStoredKey(cmd, apiBase, newTeamID, in)
+		return confirmReplaceStoredKey(cmd, apiBase, newTeamID, in, true)
 	}
 }
 
-// confirmReplaceStoredKey implements the policy above.
-func confirmReplaceStoredKey(cmd *cobra.Command, apiBase, newTeamID string, in io.Reader) error {
+// stdinIsTerminal reports whether the answer can come from a person. A
+// package variable so tests can stand in for a terminal.
+var stdinIsTerminal = isInteractiveStdin
+
+// confirmReplaceStoredKey implements the policy above. verify=false skips the
+// lookup of the stored key's team — used by register, which always creates a NEW
+// team (so the answer is "ask" either way) and documents that it sends no key:
+// asking the API about the stored key would send that key to whatever API base
+// this invocation points at, for nothing.
+func confirmReplaceStoredKey(cmd *cobra.Command, apiBase, newTeamID string, in io.Reader, verify bool) error {
 	stored, err := config.GetAPIKey()
-	if err != nil || stored == "" {
-		// Nothing readable to protect. An unreadable blob is replaced by design
-		// (MIO-2995); any other read failure surfaces at the write that follows.
-		return nil
-	}
-	cli := client.New(apiBase, stored, client.WithDebug(flags.debug))
 	var what string
-	me, merr := cli.Me(cmd.Context())
 	switch {
-	case merr == nil:
-		storedTeam, _ := me["team_id"].(string)
-		if newTeamID != "" && storedTeam == newTeamID {
-			return nil
-		}
-		what = "the stored API key for " + describeStoredTeam(cmd, cli, storedTeam)
-	case errs.HTTPStatusOf(merr) == 401 || errs.HTTPStatusOf(merr) == 403:
-		what = fmt.Sprintf("a stored API key that %s did not accept (revoked or expired — or issued for a different API base)", apiBase)
+	case err != nil && config.StoredKeyUnusable(err):
+		// Legacy/undecodable blob: nothing usable to protect; replacing it is the
+		// MIO-2995 recovery path.
+		return nil
+	case err != nil:
+		// Something is stored (or the store itself misbehaves) and we cannot
+		// read it — a permissions problem, say. Overwriting would destroy a
+		// credential nobody has looked at, so ask rather than assume.
+		what = fmt.Sprintf("a stored credential that could not be read (%v)", err)
+	case stored == "":
+		return nil
+	case !verify:
+		what = "the stored API key (this signs the machine into a different account and its new team)"
 	default:
-		what = fmt.Sprintf("a stored API key that could not be verified against %s (%v)", apiBase, merr)
+		cli := client.New(apiBase, stored, client.WithDebug(flags.debug))
+		me, merr := cli.Me(cmd.Context())
+		switch {
+		case merr == nil:
+			storedTeam, _ := me["team_id"].(string)
+			if newTeamID != "" && storedTeam == newTeamID {
+				return nil
+			}
+			what = "the stored API key for " + describeStoredTeam(cmd, cli, storedTeam)
+		case errs.HTTPStatusOf(merr) == 401 || errs.HTTPStatusOf(merr) == 403:
+			what = fmt.Sprintf("a stored API key that %s did not accept (revoked or expired — or issued for a different API base)", apiBase)
+		default:
+			// Status only: the error text can carry a response body, and a
+			// proxy or server that reflects its request headers would put the
+			// stored key into this message.
+			what = fmt.Sprintf("a stored API key that could not be verified against %s (%s)", apiBase, describeFailure(merr))
+		}
 	}
 
 	prompt := fmt.Sprintf("This will REPLACE %s. mio keeps ONE key and cannot restore it afterwards; if that key is your only way into the account (no password set), you could be locked out for good. "+
 		"To keep it, export it first (MIO_API_KEY=\"$(mio auth token)\"; export MIO_API_KEY) or save it somewhere safe", what)
-	return confirmDestructiveFrom(cmd, prompt, in)
+	return confirmReplacement(cmd, prompt, in)
+}
+
+// describeFailure names a failed request without its body.
+func describeFailure(err error) string {
+	if st := errs.HTTPStatusOf(err); st != 0 {
+		return fmt.Sprintf("HTTP %d", st)
+	}
+	return "the request failed"
+}
+
+// confirmReplacement is the y/N question. It is deliberately stricter than the
+// generic destructive-op prompt (confirmDestructive), which treats any character
+// device on stdout — /dev/null included — as a terminal: here an answer is only
+// accepted from a REAL terminal on stdin, so `printf 'y\n' | mio login … >/dev/null`
+// cannot approve a replacement. Non-interactive callers pass --yes (or get exit 5).
+// The whole line must be exactly y/yes.
+func confirmReplacement(cmd *cobra.Command, prompt string, in io.Reader) error {
+	if flags.yes {
+		return nil
+	}
+	if !stdinIsTerminal(cmd) {
+		return errs.New(errs.ExitNeedsConfir,
+			"%s — refusing in a non-interactive shell; pass --yes to proceed", prompt)
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s [y/N]: ", prompt)
+	reader, ok := in.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(in)
+	}
+	line, _ := reader.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return nil
+	default:
+		return errs.New(errs.ExitNeedsConfir, "aborted")
+	}
 }
 
 // describeStoredTeam names the team a stored key belongs to, best-effort: the

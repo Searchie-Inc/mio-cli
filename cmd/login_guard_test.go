@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -241,6 +242,9 @@ func TestRegisterGuard_NoStoredKey_Proceeds(t *testing.T) {
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d; stderr=%q", res.Code, res.Stderr)
 	}
+	if !b.saw("POST /api/v1/auth/register") || storedKey(t) != guardMinted {
+		t.Errorf("register must create the account and store the minted key: requests=%v stored=%q", b.reqs, storedKey(t))
+	}
 }
 
 func TestLoginGuard_PastedOrEnvKey(t *testing.T) {
@@ -280,7 +284,7 @@ func TestLoginGuard_InteractiveAnswers(t *testing.T) {
 	for _, tc := range []struct {
 		name, answer string
 		wantErr      bool
-	}{{"y proceeds", "y\n", false}, {"n aborts", "n\n", true}, {"empty aborts", "\n", true}} {
+	}{{"y proceeds", "y\n", false}, {"yes proceeds", "YES\n", false}, {"n aborts", "n\n", true}, {"empty aborts", "\n", true}, {"EOF aborts", "", true}, {"partial parse 'yes no' aborts", "yes no\n", true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			seedStoredKey(t, guardOldKey)
 			b := newGuardBackend(t, guardBetaTeam)
@@ -289,7 +293,9 @@ func TestLoginGuard_InteractiveAnswers(t *testing.T) {
 			cmd.SetOut(devnull)
 			// A caller-owned bufio.Reader that already holds the answer: the guard
 			// must read THIS reader (the interactive login wraps stdin in one).
-			err := confirmReplaceStoredKey(cmd, b.srv.URL, guardBetaTeam, bufio.NewReader(strings.NewReader(tc.answer)))
+			stdinIsTerminal = func(*cobra.Command) bool { return true }
+			t.Cleanup(func() { stdinIsTerminal = isInteractiveStdin })
+			err := confirmReplaceStoredKey(cmd, b.srv.URL, guardBetaTeam, bufio.NewReader(strings.NewReader(tc.answer)), true)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
 			}
@@ -325,4 +331,161 @@ func TestMintAndStore_Guard_AskedAgainAfterOwnershipRecovery(t *testing.T) {
 		t.Errorf("guard asked about %v, want [team_not_owned team_owned] (the guess, then the team recovery chose)", asked)
 	}
 	_ = cobra.Command{}
+}
+
+// ── review of MIO-3572 (Codex gpt-6.1-sol, xhigh) ────────────────────────────
+
+// A piped "y" must not approve a replacement just because stdout is a character
+// device (generic confirmDestructive treats /dev/null as a terminal).
+func TestLoginGuard_PipedYesWithDevNullStdoutDoesNotApprove(t *testing.T) {
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = devnull.Close() })
+	seedStoredKey(t, guardOldKey)
+	b := newGuardBackend(t, guardBetaTeam)
+	resetGlobalFlags()
+	cmd, _ := testCmd("y\n") // stdin is not a terminal (a *strings.Reader)
+	cmd.SetOut(devnull)      // stdout IS a character device
+	err = confirmReplaceStoredKey(cmd, b.srv.URL, guardBetaTeam, cmd.InOrStdin(), true)
+	if err == nil || errs.CodeOf(err) != errs.ExitNeedsConfir {
+		t.Fatalf("err = %v, want exit 5 (a real terminal on stdin is required, or --yes)", err)
+	}
+}
+
+// register must not send the stored key anywhere: it documents that it sends no
+// key, and the answer is "ask" either way (it always creates a new team).
+func TestRegisterGuard_DoesNotSendTheStoredKeyToTheAPI(t *testing.T) {
+	seedStoredKey(t, guardOldKey)
+	b := newGuardBackend(t, guardBetaTeam)
+	res, _ := runResume(t, guardEnv(b), "register", "--email", "n@test.member.dev", "--password", "s3cr3tpass")
+	if res.Code != errs.ExitNeedsConfir {
+		t.Fatalf("exit = %d, want 5", res.Code)
+	}
+	if b.saw("GET /api/v1/auth/me") {
+		t.Errorf("register looked the stored key up against the API (sending it to %s); requests=%v", b.srv.URL, b.reqs)
+	}
+}
+
+// A stored credential that cannot be READ (permissions) is not "nothing to
+// protect": overwriting it would destroy a credential nobody looked at.
+func TestLoginGuard_UnreadableStoredCredential_Asks(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits do not bind root")
+	}
+	seedStoredKey(t, guardOldKey)
+	keyFile := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "mio", "keyring", "api-key")
+	if err := os.Chmod(keyFile, 0o000); err != nil {
+		t.Skipf("no file keyring at %s (%v) — this build stores the key elsewhere", keyFile, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(keyFile, 0o600) })
+	b := newGuardBackend(t, guardBetaTeam)
+	// An explicit key skips config.Resolve's read of the store, so the guard is the
+	// only thing between the unreadable credential and the overwrite (the password
+	// path aborts earlier with exit 1 when the store cannot be read).
+	res, err := runResume(t, []string{"MIO_API_BASE_URL=" + b.srv.URL, "MIO_API_KEY=" + guardNewKey}, "login")
+	if res.Code != errs.ExitNeedsConfir {
+		t.Fatalf("exit = %d (err=%v), want 5: an unreadable stored credential must be asked about, not overwritten", res.Code, err)
+	}
+	_ = os.Chmod(keyFile, 0o600)
+	if got := storedKey(t); got != guardOldKey {
+		t.Errorf("stored key = %q, want the unreadable-then-restored old key still there", got)
+	}
+}
+
+// The prompt must not echo a response body: a proxy that reflects request
+// headers would put the stored key into the message.
+func TestLoginGuard_UnverifiableKey_PromptNeverEchoesTheResponseBody(t *testing.T) {
+	seedStoredKey(t, "mio_sk_reflect")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/auth/me") {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"errors":[{"status":"503","detail":"upstream said Authorization: Bearer ` + r.Header.Get("Authorization")[7:] + `"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": makeLoginJWT(t, guardBetaTeam), "token_type": "Bearer"})
+	}))
+	t.Cleanup(srv.Close)
+	res, err := runResume(t, []string{"MIO_API_BASE_URL=" + srv.URL, "MIO_API_KEY="}, "login", "--email", "a@test.member.dev", "--password", "pw")
+	if res.Code != errs.ExitNeedsConfir || err == nil {
+		t.Fatalf("exit = %d err = %v, want 5", res.Code, err)
+	}
+	if strings.Contains(err.Error(), "mio_sk_reflect") || strings.Contains(res.Stderr, "mio_sk_reflect") {
+		t.Errorf("the stored key leaked into the refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP 503") {
+		t.Errorf("want the status named, got %v", err)
+	}
+}
+
+// A refusal must leave config.toml (current_team) untouched too.
+func TestLoginGuard_RefusalLeavesCurrentTeamUntouched(t *testing.T) {
+	seedStoredKey(t, guardOldKey)
+	cfgDir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "mio")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("current_team = \"team_old\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := newGuardBackend(t, guardBetaTeam)
+	res, _ := runResume(t, guardEnv(b), "login", "--email", "a@test.member.dev", "--password", "pw")
+	if res.Code != errs.ExitNeedsConfir {
+		t.Fatalf("exit = %d, want 5", res.Code)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CurrentTeam != "team_old" {
+		t.Errorf("current_team = %q after a REFUSED login, want team_old untouched", cfg.CurrentTeam)
+	}
+}
+
+// The pasted --api-key path is guarded like the env path.
+func TestLoginGuard_ApiKeyFlag(t *testing.T) {
+	seedStoredKey(t, guardOldKey)
+	b := newGuardBackend(t, guardBetaTeam)
+	res := runContract(t, guardEnv(b), "login", "--api-key", guardNewKey)
+	if res.Code != errs.ExitNeedsConfir {
+		t.Fatalf("exit = %d, want 5", res.Code)
+	}
+	if got := storedKey(t); got != guardOldKey {
+		t.Errorf("stored key = %q, want the old key kept", got)
+	}
+}
+
+// Refusal in the ownership-recovery branch must stop the retry mint and keep the
+// stored key — the callback list alone cannot tell "asked" from "obeyed".
+func TestMintAndStore_Guard_RefusalAfterOwnershipRecoveryStopsTheRetry(t *testing.T) {
+	seedStoredKey(t, guardOldKey)
+	resetGlobalFlags()
+	token := makeLoginJWT(t, "team_not_owned")
+	srv, mintedPaths, _ := newMintServer(t, mintServerConfig{
+		teams:      []teamRow{{id: "team_not_owned", name: "Shared", ownerID: "someone"}, {id: "team_owned", name: "Mine", ownerID: "user-test"}},
+		mintStatus: map[string]int{"team_not_owned": http.StatusForbidden, "team_owned": http.StatusCreated},
+	})
+	cli := client.New(srv.URL, "", client.WithHTTPClient(srv.Client()))
+	cmd, _ := testCmd("")
+	cfg, _ := config.Load()
+	calls := 0
+	guard := func(string) error {
+		calls++
+		if calls == 2 {
+			return errs.New(errs.ExitNeedsConfir, "declined")
+		}
+		return nil
+	}
+	if _, err := mintAndStore(cmd, cli, token, "", cfg, guard); err == nil {
+		t.Fatal("a refusing second guard must fail mintAndStore")
+	}
+	if len(*mintedPaths) != 1 {
+		t.Errorf("mint attempts = %v, want only the first (the 403'd one): the retry was sent after the refusal", *mintedPaths)
+	}
+	if got := storedKey(t); got != guardOldKey {
+		t.Errorf("stored key = %q, want the old key kept", got)
+	}
 }
