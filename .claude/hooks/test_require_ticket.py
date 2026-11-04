@@ -245,4 +245,66 @@ class GuardTests(unittest.TestCase):
         self.check_hook('git commit -m MIO-1', 0, env=env)
         self.check_hook('echo commit', 0, env=env)
 
+    def test_f5_workflow_trigger(self):
+        root = HERE.parent.parent
+        workflow = (root / '.github/workflows/jira-ticket.yml').read_text()
+        self.assertIn('types: [opened, synchronize, reopened, edited]', workflow)
+        self.assertIn('name: Jira ticket', workflow)
+        self.assertIn('PR_TITLE: ${{ github.event.pull_request.title }}', workflow)
+
+    def test_f1_newlines(self):
+        self.staged()
+        for prefix in ['echo hi', 'git status', 'git add cmd/x.go', 'cd /tmp\n', 'git add cmd/x.go\r', 'echo a\necho b', 'echo hi # comment']:
+            with self.subTest(prefix=prefix): self.check_hook(prefix + '\ngit commit -m x', 2)
+        for cmd in ['git commit -m x\necho done', 'cat > f <<EOF\nhello\nEOF\ngit commit -m x', 'git commit \\\n -m x', 'git commit -m "hello\nworld"']:
+            with self.subTest(cmd=cmd): self.check_hook(cmd, 2)
+        self.check_hook('git commit -m \"hello\nMIO-1: world\"', 0)
+        self.check_hook('git commit \\\n -m MIO-1', 0)
+
+    def test_f2_unresolvable_add(self):
+        for add in ['git add {a,b}.go', 'git add $(ls *.go)', 'git add $FILES', 'git add "$PWD"', 'git add --pathspec-from-file=files.txt', 'echo cmd/x.go | xargs git add', 'echo cmd/x.go | git add', 'git add missing*.go', 'git add -p', 'git add -i', 'git add -A $FILES', 'git add -A --pathspec-from-file=files.txt']:
+            with self.subTest(add=add): self.check_hook(add + ' && git commit -m x', 2)
+        self.modified()
+        for add in ['git add cmd/', 'git add "cmd/*.go"']:
+            with self.subTest(add=add): self.check_hook(add + ' && git commit -m x', 2, 'cmd/x.go')
+
+    def test_f3_heredoc_scope(self):
+        self.staged()
+        for cmd in ['cat > a.go <<EOF\n// MIO-77\nEOF\ngit add a.go && git commit -m "feat: thing"', 'git commit -m x && gh pr create --body "$(cat <<EOF\nCloses MIO-5\nEOF\n)"']:
+            with self.subTest(cmd=cmd): self.check_hook(cmd, 2)
+        self.check_hook("git commit -m \"$(cat <<'EOF'\nMIO-1: x\nEOF\n)\"", 0)
+
+    def test_f4_message_sources(self):
+        self.staged()
+        for cmd in ['git checkout -b MIO-1-x; git commit -F /nonexistent', 'git log --grep=MIO-1 -1 >/dev/null; git commit -F - <<EOF\nfix\nEOF', 'git commit -F - # MIO-1', 'echo MIO-1 > other; git commit -F missing']:
+            with self.subTest(cmd=cmd): self.check_hook(cmd, 2)
+        self.check_hook('echo MIO-1 | git commit -F -', 0)
+        self.check_hook('echo MIO-1 > message && git commit -F message', 0)
+
+    def test_f6_staged_rename(self):
+        self.git('mv', 'cmd/x.go', 'docs/x.txt')
+        self.check_hook('git commit -m tidy', 2, 'cmd/x.go')
+
+    def test_f7_safe_commands(self):
+        for step in ['echo hi 2>&1', 'echo hi >/dev/null', 'echo hi 2>/dev/null', 'echo hi &>/dev/null', 'echo hi >&2', 'git fetch', 'git remote', 'git config --get user.name', 'git checkout -b topic', 'git checkout -B topic', 'git switch -c topic', 'git switch topic', 'git branch', 'git tag', 'git stash list', 'git stash show', 'go test ./...', 'go vet ./...', 'go list ./...', 'go version', 'go env', 'go doc fmt', 'gofmt -l .', 'gofmt -d .', 'golangci-lint run', 'make -n']:
+            with self.subTest(step=step): self.check_hook(step + ' && git commit -m x', 0)
+        for step in ['go build', 'go generate', 'go mod tidy', 'gofmt -w x.go', 'sed -i s/a/b/ x', 'golangci-lint run --fix', 'git config --unset user.name']:
+            with self.subTest(step=step): self.check_hook(step + ' && git commit -m x', 2)
+        self.staged()
+        for args in ['--dry-run', '--short --dry-run']:
+            self.check_hook('git commit ' + args, 0)
+        self.check_hook('git commit -n -m x', 2)
+
+    def test_fuzz_command_combinations(self):
+        self.modified()
+        forms = [lambda s:s, lambda s:'echo ok\n'+s, lambda s:'echo ok && '+s, lambda s:'echo ok; '+s, lambda s:'('+s+')', lambda s:'{ '+s+'; }']
+        for staged in (False, True):
+            if staged: self.git('add', 'cmd/x.go')
+            for form in forms:
+                for add in ('', 'git add cmd/x.go && ', 'git add -A && '):
+                    # With no add, only staged changes can land.
+                    for msg, expected in [('x', 0 if not staged and not add else 2), ('MIO-1: x', 0)]:
+                        cmd=form(add + 'git commit -m "' + msg + '"')
+                        with self.subTest(staged=staged, cmd=cmd): self.check_hook(cmd, expected)
+
 if __name__ == '__main__': unittest.main()

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Conservative preflight for ticketless code commits."""
 import json
+import glob
 import os
 import re
 import shlex
@@ -89,12 +90,29 @@ def git_command(tokens, cwd):
 def add_paths(repo, args):
     if any(x in ('-p', '-i', '--patch', '--interactive') or (x.startswith('-') and not x.startswith('--') and any(c in x[1:] for c in 'pi')) for x in args):
         raise ValueError('interactive git add')
+    if any(x.startswith('--pathspec-from-file') for x in args): raise ValueError('unresolvable git add pathspec file')
+    specs = [x for x in args if not x.startswith('-')]
+    for spec in specs:
+        if re.search(r'[$ {}\x60(]', spec) or 'SUBSTITUTION' in spec: raise ValueError('unresolvable git add pathspec')
+        if glob.has_magic(spec) and not glob.glob(str(Path(repo) / spec), recursive=True): raise ValueError('unmatched git add glob')
     if any(x in ('--all', '--update', '.', ':/', '--no-ignore-removal', '-N') or (x.startswith('-') and not x.startswith('--') and any(c in x[1:] for c in 'AuN')) for x in args):
         return status_paths(repo)
-    specs = [x for x in args if not x.startswith('-')]
     if not specs: return set()
     # Git returns root-relative names even when invoked from a subdirectory.
     return paths(repo, 'ls-files', '--full-name', '-z', '--cached', '--others', '--exclude-standard', '--', *specs) & status_paths(repo)
+
+
+def message_file(repo, value, bodies, context, message_only):
+    if value in ('-', '/dev/stdin'):
+        if bodies: return bodies
+        if context['pipe']: return [context['pipe']]
+        if not message_only: raise ValueError('unresolvable commit stdin')
+        return []
+    try: return [Path(repo, value).read_text()]
+    except (OSError, TypeError):
+        if value in context['writes']: return [context['writes'][value]]
+        if not message_only: raise ValueError('unresolvable commit message file: ' + value)
+        return []
 
 
 def commit_details(repo, args, bodies, command, added, message_only=False):
@@ -108,13 +126,11 @@ def commit_details(repo, args, bodies, command, added, message_only=False):
             value = args[i]; i += 1
             if t in ('-m', '--message', '--trailer'): messages.append(value)
             elif t in ('-F', '--file'):
-                try: messages.append(Path(repo, value).read_text() if value not in ('-', '/dev/stdin') else command)
-                except (OSError, TypeError): messages.append(command)
+                messages.extend(message_file(repo, value, bodies, command, message_only))
             elif t in ('-C', '-c', '--reuse-message', '--reedit-message', '--fixup', '--squash'): reuse.append(value.removeprefix('amend:').removeprefix('reword:'))
         elif t.startswith(('--message=', '--trailer=')): messages.append(t.split('=', 1)[1])
         elif t.startswith('--file='):
-            try: messages.append(Path(repo, t.split('=', 1)[1]).read_text())
-            except (OSError, TypeError): messages.append(command)
+            messages.extend(message_file(repo, t.split('=', 1)[1], bodies, command, message_only))
         elif t.startswith(('--fixup=', '--squash=', '--reuse-message=', '--reedit-message=')): reuse.append(t.split('=', 1)[1].removeprefix('amend:').removeprefix('reword:'))
         elif t.startswith('-') and not t.startswith('--') and 'm' in t[1:]:
             pos = t.index('m'); all_flag |= 'a' in t[1:pos]
@@ -133,7 +149,7 @@ def commit_details(repo, args, bodies, command, added, message_only=False):
     if TICKET.search('\n'.join(messages)): return set(), True
     if message_only: return set(), False
     if repo is None: raise ValueError('unresolvable cwd')
-    files = paths(repo, 'diff', '--cached', '--name-only', '-z') | added
+    files = paths(repo, 'diff', '--cached', '--no-renames', '--name-only', '-z') | added
     if all_flag: files |= status_paths(repo, tracked=True)
     if specs: files |= paths(repo, 'ls-files', '--full-name', '-z', '--cached', '--', *specs)
     if amend: files |= paths(repo, 'diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-z', 'HEAD')
@@ -141,64 +157,105 @@ def commit_details(repo, args, bodies, command, added, message_only=False):
 
 
 def parse(command):
-    bodies = []
-    pattern = re.compile(r'<<-?\s*([\'\"]?)([A-Za-z_][A-Za-z_0-9]*)\1([^\n]*)\n')
+    bodies = {}
+    pattern = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z_0-9]*)\1([^\n]*)\n")
     while (match := pattern.search(command)):
         end = re.search(r'(?m)^\s*' + re.escape(match.group(2)) + r'\s*$', command[match.end():])
         if not end: raise ValueError('unterminated heredoc')
-        bodies.append(command[match.end():match.end()+end.start()])
-        command = command[:match.start()] + ' HEREDOC ' + match.group(3) + '\n' + command[match.end()+end.end():]
-    # Extract command substitutions, never plain quoted arguments.
+        key = 'HEREDOC' + str(len(bodies)) + 'END'
+        bodies[key] = command[match.end():match.end()+end.start()]
+        command = command[:match.start()] + ' ' + key + match.group(3) + '\n' + command[match.end()+end.end():]
     substitutions = []
     def sub(m):
-        substitutions.append(m.group(1) or m.group(2)); return ' SUBSTITUTION '
+        value = m.group(1) or m.group(2); substitutions.append(value)
+        text = ' '.join(bodies[k] for k in bodies if k in value)
+        return 'SUBSTITUTION' + str(len(substitutions)-1) + 'END ' + text.replace(' ', '_')
     command = re.sub(r'\$\(([^()]*)\)|`([^`]*)`', sub, command)
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()<>')
+    out = []; quote = None; i = 0
+    while i < len(command):
+        c = command[i]
+        if c == "\\" and quote != "'" and i+1 < len(command):
+            if command[i+1] == '\n': i += 2; continue
+            if command[i+1:i+3] == '\r\n': i += 3; continue
+            out.extend(command[i:i+2]); i += 2; continue
+        if c in "'\"":
+            if quote == c: quote = None
+            elif quote is None: quote = c
+        if c == '\n' and quote is None: out.append('\n;')
+        elif c != '\r' or quote is not None: out.append(c)
+        i += 1
+    lexer = shlex.shlex(''.join(out), posix=True, punctuation_chars=';&|()<>')
     lexer.whitespace_split = True; lexer.commenters = '#'
-    tokens = list(lexer); parts = []; part = []
+    tokens = list(lexer); parts = []; part = []; separator = ';'
     for token in tokens:
         if token in ('{', '}') or (token and all(c in ';&|()' for c in token)):
-            if part: parts.append(part); part = []
+            if part: parts.append((part, separator)); part = []
+            separator = token
         else: part.append(token)
-    if part: parts.append(part)
+    if part: parts.append((part, separator))
     return parts, bodies, substitutions
+
+
+def safe_redirects(tokens):
+    for i, token in enumerate(tokens):
+        if '>' not in token: continue
+        target = tokens[i+1] if i+1 < len(tokens) else ''
+        if target not in ('/dev/null', '/dev/stdout', '/dev/stderr') and not re.fullmatch(r'&?\d+', target): return False
+    return True
 
 
 def inspect(command, cwd, state, depth=0):
     if depth > 12: raise ValueError('wrapper nesting too deep')
     parts, bodies, substitutions = parse(command)
     for sub in substitutions: inspect(sub, cwd, state, depth + 1)
-    for tokens in parts:
+    pipeline = []; writes = {}
+    for tokens, separator in parts:
+        if separator != '|': pipeline = []
         while tokens and tokens[0] in ('if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'fi', 'done'): tokens = tokens[1:]
         if not tokens: continue
         if tokens[0] == 'for': continue
         if tokens[0] == 'cd':
             cwd = expand_dir(cwd, tokens[1] if len(tokens) > 1 else os.path.expanduser('~')); continue
-        if tokens[0] in ('pushd', 'popd'): cwd = None; state['uncertain'] = tokens[0]; continue
         parsed = git_command(tokens, cwd)
+        local_bodies = [bodies[t] for t in tokens if t in bodies]
+        for i, t in enumerate(tokens[:-1]):
+            if t in ('>', '>>', 'tee'): writes[tokens[i+1]] = ' '.join(tokens)
+        context = {'pipe': ' '.join(pipeline), 'writes': writes}
         if parsed:
             verb, repo, args = parsed
-            if verb != 'commit' and any(t.startswith('>') for t in tokens): state['uncertain'] = 'redirection'
+            if verb != 'commit' and not safe_redirects(tokens): state['uncertain'] = 'redirection'
             if verb == 'shell': inspect(args, repo, state, depth + 1); continue
             if verb == 'commit':
-                _, ticket = commit_details(repo, args, bodies, command, set(), True)
+                if '--dry-run' in args: continue
+                _, ticket = commit_details(repo, args, local_bodies, context, set(), True)
                 if ticket: continue
                 if state['uncertain']: fail('cannot parse or inspect: unmodelled step ' + state['uncertain'])
                 added = set()
                 for add_repo, add_args in state['adds']:
                     if add_repo is None: raise ValueError('unresolvable cwd for git add')
                     added.update(add_paths(add_repo, add_args))
-                files, _ = commit_details(repo, args, bodies, command, added)
+                files, _ = commit_details(repo, args, local_bodies, context, added)
                 code = sorted(p for p in files if p.endswith('.go') or Path(p).name in ('go.mod', 'go.sum'))
                 if code: fail('code commit detected: ' + ', '.join(code))
             elif verb in ('add', 'stage'):
+                if separator == '|' or any(os.path.basename(t) == 'xargs' for t in tokens): state['uncertain'] = 'piped git add'
                 state['adds'].append((repo, args))
-            elif verb not in ('status', 'diff', 'log', 'show', 'ls-files', 'rev-parse', 'branch'): state['uncertain'] = 'git ' + verb
-            continue
-        name = os.path.basename(tokens[0])
-        if any(t.startswith('>') for t in tokens): state['uncertain'] = 'redirection'
-        elif name == 'sed' and ('-n' not in tokens[1:] or any(t.startswith('--in-place') or (t.startswith('-') and not t.startswith('--') and 'i' in t[1:]) for t in tokens[1:])): state['uncertain'] = 'sed'
-        elif name not in ('echo', 'printf', 'cat', 'true', 'test', '[', 'ls', 'pwd', 'grep', 'head', 'tail', 'sed', 'wc'): state['uncertain'] = name
+            elif verb in ('status', 'diff', 'log', 'show', 'ls-files', 'rev-parse', 'branch', 'fetch', 'remote', 'tag'): pass
+            elif verb == 'config' and not any(x.startswith(('--unset', '--add', '--replace', '--remove', '--rename', '--edit')) for x in args) and (not args or any(x in args for x in ('--get', '--get-all', '--list', '-l', '--get-regexp', '--get-urlmatch')) or len([x for x in args if not x.startswith('-')]) == 1): pass
+            elif verb == 'checkout' and any(x in args for x in ('-b', '-B')): pass
+            elif verb == 'switch' and '--discard-changes' not in args and '-f' not in args: pass
+            elif verb == 'stash' and args and args[0] in ('list', 'show'): pass
+            else: state['uncertain'] = 'git ' + verb
+        else:
+            name = os.path.basename(tokens[0])
+            if not safe_redirects(tokens): state['uncertain'] = 'redirection'
+            elif name == 'sed' and ('-n' not in tokens[1:] or any(t.startswith('--in-place') or (t.startswith('-') and not t.startswith('--') and 'i' in t[1:]) for t in tokens[1:])): state['uncertain'] = 'sed'
+            elif name == 'go' and len(tokens)>1 and tokens[1] in ('test', 'vet', 'list', 'version', 'env', 'doc'): pass
+            elif name == 'gofmt' and any(t in ('-l', '-d') for t in tokens) and '-w' not in tokens: pass
+            elif name == 'golangci-lint' and len(tokens)>1 and tokens[1] == 'run' and not any(t == '--fix' or t.startswith('--fix=') for t in tokens): pass
+            elif name == 'make' and '-n' in tokens: pass
+            elif name not in ('echo', 'printf', 'cat', 'true', 'test', '[', 'ls', 'pwd', 'grep', 'head', 'tail', 'sed', 'wc'): state['uncertain'] = name
+        pipeline.extend(tokens + local_bodies)
 
 
 def main():
@@ -210,7 +267,7 @@ def main():
         if not isinstance(command, str) or not isinstance(cwd, str): raise ValueError('invalid payload fields')
         inspect(command, cwd, {'adds': [], 'uncertain': None})
     except Exception as exc:
-        if 'git' in raw and 'commit' in raw and not TICKET.search(raw): fail('cannot parse or inspect this git commit: ' + str(exc))
+        if 'git' in raw and 'commit' in raw and (not isinstance(exc, json.JSONDecodeError) or not TICKET.search(raw)): fail('cannot parse or inspect this git commit: ' + str(exc))
 
 
 if __name__ == '__main__': main()

@@ -39,3 +39,28 @@ printf module > go.mod
 git add .
 git commit -qm dependencies
 check go-mod 1 deps topic
+git reset --hard -q origin/base
+printf 'package x\n' > café.go
+git add .
+git commit -qm unicode
+check unicode-go 1 unicode topic
+git reset --hard -q origin/base
+printf 'package x\n' > a.go
+git add .
+git commit -qm base-code
+git update-ref refs/remotes/origin/base HEAD
+git mv a.go a.txt
+git commit -qm rename
+check rename-go 1 rename topic
+git reset --hard -q origin/base
+printf 'package x\n' > b.go
+git add .
+git commit -qm feature
+feature=$(git rev-parse HEAD)
+git checkout -q --detach origin/base
+printf advance > base-only
+git add .
+git commit -qm 'MIO-42: base advance'
+git update-ref refs/remotes/origin/base HEAD
+git checkout -q --detach "$feature"
+check base-advance 1 feature topic
