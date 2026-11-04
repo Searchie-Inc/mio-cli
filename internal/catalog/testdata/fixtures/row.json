@@ -12,32 +12,86 @@
   "children": [
     {
       "id": "#1",
-      "kind": "row",
+      "kind": "stack",
       "settings": {
-        "responsive": true,
-        "wrap": true,
-        "gap": 6,
-        "mobileGap": 3,
-        "align": "stretch"
+        "gap": 8,
+        "mobileGap": 6
       },
       "children": [
         {
           "id": "#2",
-          "kind": "stack",
+          "kind": "headline",
           "settings": {
-            "width": "1/2",
-            "gap": 4
+            "weight": 700
           },
-          "children": []
+          "value": "Columns section"
         },
         {
           "id": "#3",
-          "kind": "stack",
+          "kind": "row",
           "settings": {
-            "width": "1/2",
-            "gap": 4
+            "responsive": true,
+            "wrap": true,
+            "gap": 6,
+            "mobileGap": 3,
+            "align": "stretch"
           },
-          "children": []
+          "children": [
+            {
+              "id": "#4",
+              "kind": "stack",
+              "settings": {
+                "width": "1/2",
+                "gap": 2.5
+              },
+              "children": [
+                {
+                  "id": "#5",
+                  "kind": "headline",
+                  "settings": {
+                    "level": 5,
+                    "weight": 700
+                  },
+                  "value": "First point"
+                },
+                {
+                  "id": "#6",
+                  "kind": "text",
+                  "settings": {
+                    "marginBottom": 0
+                  },
+                  "value": "Say the one thing this card is for."
+                }
+              ]
+            },
+            {
+              "id": "#7",
+              "kind": "stack",
+              "settings": {
+                "width": "1/2",
+                "gap": 2.5
+              },
+              "children": [
+                {
+                  "id": "#8",
+                  "kind": "headline",
+                  "settings": {
+                    "level": 5,
+                    "weight": 700
+                  },
+                  "value": "Second point"
+                },
+                {
+                  "id": "#9",
+                  "kind": "text",
+                  "settings": {
+                    "marginBottom": 0
+                  },
+                  "value": "Each card holds a single idea."
+                }
+              ]
+            }
+          ]
         }
       ]
     }

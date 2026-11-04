@@ -1,0 +1,24 @@
+{
+  "id": "#0",
+  "kind": "stack",
+  "template": "form-success",
+  "settings": {
+    "slot": "success"
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "headline",
+      "settings": {
+        "level": 3
+      },
+      "value": "You're in."
+    },
+    {
+      "id": "#2",
+      "kind": "text",
+      "settings": {},
+      "value": "Check your inbox — the next steps are on their way."
+    }
+  ]
+}

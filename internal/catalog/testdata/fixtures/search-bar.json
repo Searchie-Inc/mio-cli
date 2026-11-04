@@ -32,7 +32,8 @@
               "settings": {
                 "weight": 700,
                 "align": "center"
-              }
+              },
+              "value": "Search section"
             },
             {
               "id": "#4",
@@ -41,7 +42,8 @@
                 "size": "body",
                 "align": "center",
                 "marginBottom": 0
-              }
+              },
+              "value": "A search prompt in a band of its own."
             }
           ]
         },

@@ -2,6 +2,7 @@
   "id": "#0",
   "kind": "container",
   "template": "hero",
+  "templateVariant": "file",
   "settings": {
     "maxWidth": "content",
     "padding": 0,
@@ -78,7 +79,8 @@
                     "ring": {
                       "value": 100,
                       "size": 16
-                    }
+                    },
+                    "optional": true
                   }
                 },
                 {
@@ -87,7 +89,8 @@
                   "settings": {
                     "name": "duration",
                     "role": "meta",
-                    "icon": "clock"
+                    "icon": "clock",
+                    "optional": true
                   }
                 },
                 {
@@ -96,7 +99,8 @@
                   "settings": {
                     "name": "plays",
                     "role": "meta",
-                    "icon": "eye"
+                    "icon": "eye",
+                    "optional": true
                   }
                 }
               ]
@@ -108,14 +112,15 @@
                 "name": "description",
                 "role": "body",
                 "clamp": 5,
-                "marginBottom": 4
+                "marginBottom": 4,
+                "optional": true
               }
             },
             {
               "id": "#10",
               "kind": "button",
               "settings": {
-                "size": "lg",
+                "compactMobile": true,
                 "icon": "play-filled",
                 "actionFromScope": "action"
               },

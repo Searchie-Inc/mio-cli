@@ -2,6 +2,7 @@
   "id": "#0",
   "kind": "container",
   "template": "hero",
+  "templateVariant": "playlist",
   "settings": {
     "maxWidth": "content",
     "padding": 0,
@@ -14,13 +15,9 @@
   },
   "dataSource": {
     "type": "playlist",
-    "id": "",
-    "resume": true
+    "id": ""
   },
-  "repeat": {
-    "over": "dataSource",
-    "limit": 1
-  },
+  "collapseWhenEmpty": true,
   "children": [
     {
       "id": "#1",
@@ -39,8 +36,7 @@
             "preset": "medium-720",
             "aspectRatio": "16:9",
             "radius": "m",
-            "outline": true,
-            "progressBar": true
+            "outline": true
           }
         },
         {
@@ -53,33 +49,6 @@
           "children": [
             {
               "id": "#4",
-              "kind": "row",
-              "settings": {
-                "align": "center",
-                "gap": 1.5
-              },
-              "children": [
-                {
-                  "id": "#5",
-                  "kind": "progress-ring",
-                  "settings": {
-                    "valueFrom": "progressPercent",
-                    "size": 16
-                  }
-                },
-                {
-                  "id": "#6",
-                  "kind": "field",
-                  "settings": {
-                    "name": "playlistLabel",
-                    "size": "body",
-                    "tone": "primary"
-                  }
-                }
-              ]
-            },
-            {
-              "id": "#7",
               "kind": "field",
               "settings": {
                 "name": "title",
@@ -89,7 +58,7 @@
               }
             },
             {
-              "id": "#8",
+              "id": "#5",
               "kind": "row",
               "settings": {
                 "gap": 2.5,
@@ -97,7 +66,31 @@
               },
               "children": [
                 {
-                  "id": "#9",
+                  "id": "#6",
+                  "kind": "field",
+                  "settings": {
+                    "name": "progressLabel",
+                    "role": "meta",
+                    "tone": "primary",
+                    "ring": {
+                      "valueFrom": "progressPercent",
+                      "size": 16
+                    },
+                    "optional": true
+                  }
+                },
+                {
+                  "id": "#7",
+                  "kind": "field",
+                  "settings": {
+                    "name": "scheduledDate",
+                    "role": "meta",
+                    "icon": "calendar",
+                    "optional": true
+                  }
+                },
+                {
+                  "id": "#8",
                   "kind": "field",
                   "settings": {
                     "name": "status",
@@ -106,7 +99,18 @@
                     "ring": {
                       "value": 100,
                       "size": 16
-                    }
+                    },
+                    "optional": true
+                  }
+                },
+                {
+                  "id": "#9",
+                  "kind": "field",
+                  "settings": {
+                    "name": "contentCountLabel",
+                    "role": "meta",
+                    "icon": "content",
+                    "optional": true
                   }
                 },
                 {
@@ -115,39 +119,80 @@
                   "settings": {
                     "name": "duration",
                     "role": "meta",
-                    "icon": "clock"
-                  }
-                },
-                {
-                  "id": "#11",
-                  "kind": "field",
-                  "settings": {
-                    "name": "plays",
-                    "role": "meta",
-                    "icon": "eye"
+                    "icon": "clock",
+                    "optional": true
                   }
                 }
               ]
             },
             {
-              "id": "#12",
+              "id": "#11",
               "kind": "field",
               "settings": {
                 "name": "description",
                 "role": "body",
                 "clamp": 5,
-                "marginBottom": 4
+                "marginBottom": 4,
+                "optional": true
+              }
+            },
+            {
+              "id": "#12",
+              "kind": "divider",
+              "settings": {
+                "opacity": 10,
+                "visibleFrom": "nextLessonTitle"
               }
             },
             {
               "id": "#13",
-              "kind": "button",
+              "kind": "row",
               "settings": {
-                "size": "lg",
-                "icon": "play-filled",
-                "actionFromScope": "action"
+                "gap": 5,
+                "align": "center",
+                "fullWidth": true
               },
-              "value": "Resume"
+              "children": [
+                {
+                  "id": "#14",
+                  "kind": "media-slot",
+                  "settings": {
+                    "name": "nextLessonCover",
+                    "aspectRatio": "16:9",
+                    "radius": "m",
+                    "outline": true,
+                    "width": 113,
+                    "visibleFrom": "nextLessonTitle",
+                    "visibility": {
+                      "mobile": false
+                    }
+                  }
+                },
+                {
+                  "id": "#15",
+                  "kind": "field",
+                  "settings": {
+                    "name": "nextLessonTitle",
+                    "size": "body",
+                    "weight": 700,
+                    "fade": true,
+                    "optional": true
+                  }
+                },
+                {
+                  "id": "#16",
+                  "kind": "button",
+                  "settings": {
+                    "compactMobile": true,
+                    "icon": "play-filled",
+                    "iconFrom": "ctaIcon",
+                    "labelFrom": "ctaLabel",
+                    "actionFromScope": "ctaAction",
+                    "disabledFrom": "ctaDisabled"
+                  },
+                  "value": "Start watching"
+                }
+              ]
             }
           ]
         }

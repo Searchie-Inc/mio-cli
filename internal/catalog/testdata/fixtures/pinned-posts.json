@@ -1,0 +1,41 @@
+{
+  "id": "#0",
+  "kind": "container",
+  "template": "pinned-posts",
+  "settings": {
+    "maxWidth": "content",
+    "padding": 0,
+    "surface": {
+      "padding": "section",
+      "background": {
+        "type": "color",
+        "token": "primary"
+      }
+    }
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "stack",
+      "settings": {
+        "gap": 8,
+        "mobileGap": 6
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "headline",
+          "settings": {
+            "weight": 700
+          },
+          "value": "Pinned posts"
+        },
+        {
+          "id": "#3",
+          "kind": "pinned-posts",
+          "settings": {}
+        }
+      ]
+    }
+  ]
+}

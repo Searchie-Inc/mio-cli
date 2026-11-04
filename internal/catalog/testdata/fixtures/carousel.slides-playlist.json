@@ -1,0 +1,298 @@
+{
+  "id": "#0",
+  "kind": "container",
+  "template": "carousel",
+  "templateVariant": "slides-playlist",
+  "settings": {
+    "maxWidth": "content",
+    "padding": 0,
+    "surface": {
+      "padding": "section"
+    }
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "carousel",
+      "settings": {},
+      "children": [
+        {
+          "id": "#2",
+          "kind": "row",
+          "settings": {
+            "responsive": true,
+            "split": true,
+            "gap": "section"
+          },
+          "dataSource": {
+            "type": "playlist",
+            "id": "",
+            "resume": true
+          },
+          "repeat": {
+            "over": "dataSource",
+            "limit": 1
+          },
+          "children": [
+            {
+              "id": "#3",
+              "kind": "media-slot",
+              "settings": {
+                "name": "cover",
+                "preset": "medium-720",
+                "aspectRatio": "16:9",
+                "radius": "m",
+                "outline": true
+              }
+            },
+            {
+              "id": "#4",
+              "kind": "stack",
+              "settings": {
+                "gap": 2,
+                "align": "start"
+              },
+              "children": [
+                {
+                  "id": "#5",
+                  "kind": "row",
+                  "settings": {
+                    "align": "center",
+                    "gap": 1.5
+                  },
+                  "children": [
+                    {
+                      "id": "#6",
+                      "kind": "field",
+                      "settings": {
+                        "name": "playlistLabel",
+                        "size": "body",
+                        "tone": "primary"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "#7",
+                  "kind": "field",
+                  "settings": {
+                    "name": "title",
+                    "role": "title",
+                    "size": "title",
+                    "weight": 700
+                  }
+                },
+                {
+                  "id": "#8",
+                  "kind": "row",
+                  "settings": {
+                    "gap": 2.5,
+                    "align": "center"
+                  },
+                  "children": [
+                    {
+                      "id": "#9",
+                      "kind": "field",
+                      "settings": {
+                        "name": "playlistProgressLabel",
+                        "role": "meta",
+                        "tone": "primary",
+                        "ring": {
+                          "valueFrom": "playlistProgressPercent",
+                          "size": 16
+                        },
+                        "optional": true
+                      }
+                    },
+                    {
+                      "id": "#10",
+                      "kind": "field",
+                      "settings": {
+                        "name": "playlistStatus",
+                        "role": "meta",
+                        "tone": "primary",
+                        "ring": {
+                          "value": 100,
+                          "size": 16
+                        },
+                        "optional": true
+                      }
+                    },
+                    {
+                      "id": "#11",
+                      "kind": "field",
+                      "settings": {
+                        "name": "duration",
+                        "role": "meta",
+                        "icon": "clock",
+                        "optional": true
+                      }
+                    },
+                    {
+                      "id": "#12",
+                      "kind": "field",
+                      "settings": {
+                        "name": "plays",
+                        "role": "meta",
+                        "icon": "eye",
+                        "optional": true
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "#13",
+                  "kind": "button",
+                  "settings": {
+                    "compactMobile": true,
+                    "icon": "play-filled",
+                    "actionFromScope": "action"
+                  },
+                  "value": "Resume"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "#14",
+          "kind": "row",
+          "settings": {
+            "responsive": true,
+            "split": true,
+            "gap": "section"
+          },
+          "dataSource": {
+            "type": "playlist",
+            "id": "",
+            "resume": true
+          },
+          "repeat": {
+            "over": "dataSource",
+            "limit": 1
+          },
+          "children": [
+            {
+              "id": "#15",
+              "kind": "media-slot",
+              "settings": {
+                "name": "cover",
+                "preset": "medium-720",
+                "aspectRatio": "16:9",
+                "radius": "m",
+                "outline": true
+              }
+            },
+            {
+              "id": "#16",
+              "kind": "stack",
+              "settings": {
+                "gap": 2,
+                "align": "start"
+              },
+              "children": [
+                {
+                  "id": "#17",
+                  "kind": "row",
+                  "settings": {
+                    "align": "center",
+                    "gap": 1.5
+                  },
+                  "children": [
+                    {
+                      "id": "#18",
+                      "kind": "field",
+                      "settings": {
+                        "name": "playlistLabel",
+                        "size": "body",
+                        "tone": "primary"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "#19",
+                  "kind": "field",
+                  "settings": {
+                    "name": "title",
+                    "role": "title",
+                    "size": "title",
+                    "weight": 700
+                  }
+                },
+                {
+                  "id": "#20",
+                  "kind": "row",
+                  "settings": {
+                    "gap": 2.5,
+                    "align": "center"
+                  },
+                  "children": [
+                    {
+                      "id": "#21",
+                      "kind": "field",
+                      "settings": {
+                        "name": "playlistProgressLabel",
+                        "role": "meta",
+                        "tone": "primary",
+                        "ring": {
+                          "valueFrom": "playlistProgressPercent",
+                          "size": 16
+                        },
+                        "optional": true
+                      }
+                    },
+                    {
+                      "id": "#22",
+                      "kind": "field",
+                      "settings": {
+                        "name": "playlistStatus",
+                        "role": "meta",
+                        "tone": "primary",
+                        "ring": {
+                          "value": 100,
+                          "size": 16
+                        },
+                        "optional": true
+                      }
+                    },
+                    {
+                      "id": "#23",
+                      "kind": "field",
+                      "settings": {
+                        "name": "duration",
+                        "role": "meta",
+                        "icon": "clock",
+                        "optional": true
+                      }
+                    },
+                    {
+                      "id": "#24",
+                      "kind": "field",
+                      "settings": {
+                        "name": "plays",
+                        "role": "meta",
+                        "icon": "eye",
+                        "optional": true
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "#25",
+                  "kind": "button",
+                  "settings": {
+                    "compactMobile": true,
+                    "icon": "play-filled",
+                    "actionFromScope": "action"
+                  },
+                  "value": "Resume"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -2,6 +2,7 @@
   "id": "#0",
   "kind": "container",
   "template": "row",
+  "templateVariant": "1col",
   "settings": {
     "maxWidth": "content",
     "padding": 0,
