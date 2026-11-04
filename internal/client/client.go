@@ -309,6 +309,8 @@ var typeOverrides = []struct {
 	// the AttachmentCreateRequest whose type Literal is "attachments"; the
 	// hyphenated segment would not match without this override.
 	{"playlist-cover-attachments", "attachments"},
+	// File thumbnail upsert (MIO-5832) uses the attachments envelope.
+	{"file-thumbnail-attachments", "attachments"},
 	// Hub branding attach (MIO-3465): POST .../hub-branding-attachments binds
 	// the same AttachmentCreateRequest (type Literal "attachments").
 	{"hub-branding-attachments", "attachments"},
@@ -428,6 +430,7 @@ var knownCollections = map[string]bool{
 	// (via the typeOverride below).
 	"attachments":                true,
 	"playlist-cover-attachments": true,
+	"file-thumbnail-attachments": true,
 	// Hub branding attach create collection (MIO-3465) — same "attachments"
 	// type via the typeOverride above.
 	"hub-branding-attachments": true,
