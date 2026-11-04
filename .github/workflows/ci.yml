@@ -5,6 +5,11 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["**"]
+  # The catalog-pin watcher opens its bump PR with GITHUB_TOKEN, and GitHub does
+  # not start workflows for pushes/PRs made with that token (the PR sat with no
+  # checks at all, MIO-2998). It dispatches this workflow on the bump branch
+  # instead; the check runs attach to the PR's head commit like any other.
+  workflow_dispatch: {}
 
 jobs:
   build-and-test:

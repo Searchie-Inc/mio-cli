@@ -24,6 +24,13 @@
 # When the App is not configured the job skips gracefully (no-op exit 0), so
 # this workflow can land before the credentials do.
 #
+# CI on the bump PR (MIO-2998): a PR opened with GITHUB_TOKEN triggers no
+# workflows, so before this the bump sat with NO checks and could not be merged.
+# The job now dispatches ci.yml (workflow_dispatch) on the bump branch; the runs
+# report on the PR's head commit. The last step then makes a bump that has been
+# waiting for review longer than STALE_BUMP_DAYS turn this job red, so it cannot
+# sit unnoticed behind a green check-mark.
+#
 # Mirrors mio-backend's .github/workflows/catalog-pin-staleness.yml. Why this
 # exists (MIO-2665): the CLI's embed sat at 0.10.0 for two upstream releases
 # while mio-backend served 0.12.0, because the pin lived only in a Go comment
@@ -46,6 +53,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write   # to dispatch CI on the bump branch (see "Run CI on the bump branch")
 
 concurrency:
   group: catalog-pin-staleness
@@ -215,4 +223,43 @@ jobs:
           CI runs the full suite; the workflow additionally gated on \`go test ./internal/catalog/... ./cmd/...\`." \
               --base main \
               --head "$BRANCH"
+          fi
+
+      # ── 7. Run CI on the bump branch ────────────────────────────────────
+      #   Pushes/PRs made with GITHUB_TOKEN start no workflows, so ci.yml is
+      #   dispatched explicitly. Its check runs attach to the branch head and show
+      #   on the PR (same job names as a normal PR run).
+      - name: Run CI on the bump branch
+        if: env.APP_TOKEN_AVAILABLE == 'true' && steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --ref chore/bump-catalog-pin
+          echo "Dispatched CI on chore/bump-catalog-pin" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 8. Do not let a bump sit unreviewed ─────────────────────────────
+      #   A human must merge the bump. If one has been open for more than
+      #   STALE_BUMP_DAYS this job fails, so the daily run is red until someone
+      #   merges or closes it (runs on every schedule, bump or not).
+      - name: Fail when a bump PR has been open too long
+        if: env.APP_TOKEN_AVAILABLE == 'true' && always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STALE_BUMP_DAYS: "3"
+        run: |
+          set -euo pipefail
+          info=$(gh pr list --head chore/bump-catalog-pin --state open --json number,createdAt,url --jq '.[0] // empty')
+          if [ -z "$info" ]; then
+            echo "No open catalog bump PR."
+            exit 0
+          fi
+          created=$(echo "$info" | jq -r .createdAt)
+          url=$(echo "$info" | jq -r .url)
+          age_days=$(( ( $(date -u +%s) - $(date -u -d "$created" +%s) ) / 86400 ))
+          echo "Open catalog bump PR $url is $age_days day(s) old."
+          echo "Open catalog bump PR: $url ($age_days day(s) old)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$age_days" -ge "$STALE_BUMP_DAYS" ]; then
+            echo "::error::catalog bump PR $url has been open $age_days day(s) (limit $STALE_BUMP_DAYS) — review and merge it, or close it"
+            exit 1
           fi
