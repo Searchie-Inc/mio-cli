@@ -93,6 +93,12 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 
 	// Headless when both email and password are already available.
 	if email != "" && password != "" {
+		// Registering creates a NEW account and team and then REPLACES the stored
+		// key with theirs. Ask first, before the account exists (MIO-3572: this
+		// exact sequence locked a QA account out for good).
+		if err := confirmReplaceStoredKey(cmd, resolved.APIBase, "", "", cmd.InOrStdin()); err != nil {
+			return err
+		}
 		return registerAndLogin(cmd, resolved.APIBase, mintTeam, email, password, firstName, lastName, cfg)
 	}
 
@@ -106,6 +112,11 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 	if !isTTY(cmd.ErrOrStderr()) {
 		return errs.New(errs.ExitUsage,
 			"register needs --email and --password (or MIO_EMAIL/MIO_PASSWORD) when not run interactively")
+	}
+
+	// Same question, asked before the user types an email and password.
+	if err := confirmReplaceStoredKey(cmd, resolved.APIBase, "", "", cmd.InOrStdin()); err != nil {
+		return err
 	}
 
 	email, password, firstName, lastName, err = promptRegistration(cmd, email, firstName, lastName)
@@ -182,7 +193,8 @@ func registerAndLogin(cmd *cobra.Command, apiBase, teamID, email, password, firs
 		return err
 	}
 
-	displayTeam, err := mintAndStore(cmd, cli, regRes.AccessToken, teamID, cfg)
+	// runRegister already asked (once, before the account was created).
+	displayTeam, err := mintAndStore(cmd, cli, regRes.AccessToken, teamID, cfg, noStoredKeyGuard)
 	if err != nil {
 		return err
 	}

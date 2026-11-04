@@ -12,6 +12,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"sync"
@@ -452,6 +453,13 @@ func isTTY(w any) bool {
 // operations require --yes. Off a TTY without --yes it returns exit code 5; on
 // a TTY it prompts. With --yes it always proceeds.
 func confirmDestructive(cmd *cobra.Command, prompt string) error {
+	return confirmDestructiveFrom(cmd, prompt, cmd.InOrStdin())
+}
+
+// confirmDestructiveFrom is confirmDestructive reading the answer from in. A
+// caller that already wrapped stdin in a bufio.Reader (the interactive login
+// prompts) must pass THAT reader: the wrapper may have buffered the answer.
+func confirmDestructiveFrom(cmd *cobra.Command, prompt string, in io.Reader) error {
 	if flags.yes {
 		return nil
 	}
@@ -461,7 +469,7 @@ func confirmDestructive(cmd *cobra.Command, prompt string) error {
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "%s [y/N]: ", prompt)
 	var answer string
-	_, _ = fmt.Fscanln(cmd.InOrStdin(), &answer)
+	_, _ = fmt.Fscanln(in, &answer)
 	switch answer {
 	case "y", "Y", "yes", "YES":
 		return nil
