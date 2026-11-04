@@ -441,6 +441,16 @@ mio contacts delete "$FIRST_ID" --yes
 
 ---
 
+## Commit guard (Claude Code hook)
+
+Claude Code checks Bash commit commands: a message with a `MIO-1234` key is allowed.
+Without a key, it allows a commit only when it can prove no code is landing.
+Code means `*.go`, `go.mod`, and `go.sum`; Go test files count as code.
+When it cannot tell it blocks — add the key to the commit message.
+Sessions started before this lands do not load the project settings; restart them.
+
+Known limits: aliases, `git comm''it`, `c\ommit`, `${V}mit`, and commits made by merge, cherry-pick, revert, rebase or commit-tree are not interpreted. Commits inside `sh script.sh`, `. script`, `make commit`, `python3 -c`, or `ssh host git commit` cannot be read by the hook. The hook is best-effort fast feedback; the PR-only **Jira ticket** CI check is the guarantee. It checks code changes against the PR title, commit messages, and branch name; the title becomes the squash-merge message.
+
 ## Useful Links
 
 - [README.md](./README.md) — install, quickstart, global flags, full usage guide
