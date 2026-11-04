@@ -23,15 +23,15 @@ func TestPagesCreate_ReservedSlugConduit(t *testing.T) {
 		_, _ = w.Write([]byte(`{"errors":[{"status":"422","code":"page_slug_reserved","detail":"` + detail + `"}]}`))
 	}))
 	t.Cleanup(srv.Close)
-	res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", "--hub", "hub_123", "pages", "create", "--title", "Login", "--slug", "login")...)
+	res, err := runResume(t, baseEnv(srv.URL), withTeam("t_team1", "--hub", "hub_123", "pages", "create", "--title", "Login", "--slug", "login")...)
 	if !fired {
 		t.Error("reserved slug login was not sent to the API")
 	}
 	if res.Code != errs.ExitUsage {
 		t.Errorf("exit = %d, want %d; stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
 	}
-	if !strings.Contains(res.Stderr, detail) {
-		t.Errorf("stderr = %q, want detail %q verbatim", res.Stderr, detail)
+	if err == nil || !strings.Contains(err.Error(), detail) {
+		t.Errorf("error = %v, want detail %q verbatim", err, detail)
 	}
 }
 
