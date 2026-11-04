@@ -141,7 +141,7 @@ func TestMintAndStore_ClaimedTeamNotOwned_RecoversToOwnedTeam(t *testing.T) {
 		t.Fatalf("config.Load: %v", err)
 	}
 
-	displayTeam, err := mintAndStore(cmd, cli, token, "", cfg)
+	displayTeam, err := mintAndStore(cmd, cli, token, "", cfg, noStoredKeyGuard)
 	if err != nil {
 		t.Fatalf("mintAndStore error: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestMintAndStore_ClaimedTeamNotOwned_NoOwnedTeamAtAll(t *testing.T) {
 		t.Fatalf("config.Load: %v", err)
 	}
 
-	_, err = mintAndStore(cmd, cli, token, "", cfg)
+	_, err = mintAndStore(cmd, cli, token, "", cfg, noStoredKeyGuard)
 	if err == nil {
 		t.Fatal("mintAndStore must fail when the caller owns no team")
 	}
@@ -234,7 +234,7 @@ func TestMintAndStore_ExplicitTeamFlagNotOwned_DoesNotRetry(t *testing.T) {
 		t.Fatalf("config.Load: %v", err)
 	}
 
-	_, err = mintAndStore(cmd, cli, token, "team_explicit", cfg)
+	_, err = mintAndStore(cmd, cli, token, "team_explicit", cfg, noStoredKeyGuard)
 	if err == nil {
 		t.Fatal("mintAndStore must fail when the explicit --team is rejected")
 	}
@@ -411,7 +411,7 @@ func TestMintAndStore_RecoveryWithMultipleOwnedTeams_DevNullStdinStaysNonInterac
 		t.Fatalf("config.Load: %v", err)
 	}
 
-	_, err = mintAndStore(cmd, cli, token, "", cfg)
+	_, err = mintAndStore(cmd, cli, token, "", cfg, noStoredKeyGuard)
 	if err == nil {
 		t.Fatal("mintAndStore must fail when the caller owns multiple teams and none was chosen")
 	}

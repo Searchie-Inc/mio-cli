@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -164,7 +165,17 @@ The key is stored in an OS credential store when this build can open one,
 otherwise in an encrypted file under the config dir — always the file for the
 macOS release binaries, which are built without the Keychain backend. 'mio
 whoami' names the store as key_source; 'mio auth token' prints the stored key.
-Off a TTY with no resolvable key or credentials, login exits with code 3.`,
+Off a TTY with no resolvable key or credentials, login exits with code 3.
+
+mio keeps ONE stored key. When logging in would replace a stored key that belongs
+to a DIFFERENT team (or one the API rejects or cannot verify), login asks first,
+before it mints a key: y/N on a terminal, otherwise exit 5 unless --yes. To name
+the stored key's team it asks the API about it — only on an email+password login
+(where the stored key is the one ordinary commands would send to this API base);
+with --anonymous, or when you pass a key (--api-key / MIO_API_KEY), the stored
+key is never sent and the question is generic. Declining leaves the stored key and current_team as
+they were. (A second login running at the same moment can still overwrite the
+key; the check is not a lock.)`,
 	Args: cobra.NoArgs,
 	RunE: runLogin,
 }
@@ -208,7 +219,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 
 	// Path 1: env / flag key — validate and store.
 	if envKey := firstNonEmpty(flags.apiKey, os.Getenv(config.EnvAPIKey)); envKey != "" {
-		return validateAndStore(cmd, resolved.APIBase, envKey)
+		return validateAndStore(cmd, resolved.APIBase, envKey, cmd.InOrStdin())
 	}
 
 	// Path 2: headless email+password (--email/--password flags or MIO_EMAIL/MIO_PASSWORD env).
@@ -223,7 +234,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		headlessPassword = os.Getenv(envPassword)
 	}
 	if headlessEmail != "" && headlessPassword != "" {
-		return loginPasswordHeadless(cmd, resolved.APIBase, resolved.TeamID, headlessEmail, headlessPassword, cfg)
+		return loginPasswordHeadless(cmd, resolved.APIBase, resolved.TeamID, headlessEmail, headlessPassword, cfg, storedKeyGuardFor(cmd, resolved.APIBase, cmd.InOrStdin()))
 	}
 
 	// Interactive paths require a TTY. Off a TTY we cannot prompt → exit 3.
@@ -252,14 +263,14 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 // loginPasswordHeadless performs the email+password → mint flow without any TTY
 // prompts. Used when both --email/MIO_EMAIL and --password/MIO_PASSWORD are set.
 // The password is never echoed or stored.
-func loginPasswordHeadless(cmd *cobra.Command, apiBase, teamID, email, password string, cfg *config.Config) error {
+func loginPasswordHeadless(cmd *cobra.Command, apiBase, teamID, email, password string, cfg *config.Config, guard storedKeyGuard) error {
 	cli := client.New(apiBase, "", client.WithDebug(flags.debug))
 	loginRes, err := cli.Login(cmd.Context(), email, password)
 	if err != nil {
 		return err
 	}
 
-	displayTeam, err := mintAndStore(cmd, cli, loginRes.AccessToken, teamID, cfg)
+	displayTeam, err := mintAndStore(cmd, cli, loginRes.AccessToken, teamID, cfg, guard)
 	if err != nil {
 		return err
 	}
@@ -275,7 +286,7 @@ func loginPasteKey(cmd *cobra.Command, reader *bufio.Reader, apiBase string) err
 	if key == "" {
 		return errs.New(errs.ExitUsage, "no key entered")
 	}
-	return validateAndStore(cmd, apiBase, key)
+	return validateAndStore(cmd, apiBase, key, reader)
 }
 
 // loginPassword performs the email+password → mint flow.
@@ -297,7 +308,7 @@ func loginPassword(cmd *cobra.Command, reader *bufio.Reader, apiBase, teamID str
 		return err
 	}
 
-	displayTeam, err := mintAndStore(cmd, cli, loginRes.AccessToken, teamID, cfg)
+	displayTeam, err := mintAndStore(cmd, cli, loginRes.AccessToken, teamID, cfg, storedKeyGuardFor(cmd, apiBase, reader))
 	if err != nil {
 		return err
 	}
@@ -311,9 +322,14 @@ func loginPassword(cmd *cobra.Command, reader *bufio.Reader, apiBase, teamID str
 // or the bare id when the name is unknown). It is the shared tail of every
 // password→key flow — `login` (interactive + headless) and `register` — which
 // differ only in their final confirmation wording.
-func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamID string, cfg *config.Config) (displayTeam string, err error) {
+func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamID string, cfg *config.Config, guard storedKeyGuard) (displayTeam string, err error) {
 	resolvedTeam, teamName, err := resolveTeamID(cmd, cli, accessToken, flagTeamID)
 	if err != nil {
+		return "", err
+	}
+	// Before anything irreversible: minting creates a key server-side, so a
+	// refusal after it would leave an orphan (MIO-3572).
+	if err := guard(resolvedTeam); err != nil {
 		return "", err
 	}
 
@@ -337,6 +353,11 @@ func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamI
 		resolvedTeam, teamName, rerr = resolveOwnedTeamID(cmd, cli, accessToken)
 		if rerr != nil {
 			return "", rerr
+		}
+		// Recovery moved the target to a team that was only a guess a moment
+		// ago: protect against the NEW team too (a no-op when it is unchanged).
+		if err := guard(resolvedTeam); err != nil {
+			return "", err
 		}
 		minted, err = cli.MintAPIKey(cmd.Context(), accessToken, resolvedTeam, keyName)
 	}
@@ -366,10 +387,21 @@ func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamI
 // validateAndStore validates a key against /api/auth/me and, on success, stores
 // it in the credential store. It never reads the stored key first, which is
 // why `MIO_API_KEY=<key> mio login` can replace a blob mio cannot read.
-func validateAndStore(cmd *cobra.Command, apiBase, key string) error {
+func validateAndStore(cmd *cobra.Command, apiBase, key string, in io.Reader) error {
 	cli := client.New(apiBase, key, client.WithDebug(flags.debug))
 	if _, err := cli.Me(cmd.Context()); err != nil {
 		return err
+	}
+	// Replacing a stored key needs confirmation (MIO-3572). The stored key is NOT
+	// sent to the API here: this login carries an explicit key, so an ordinary
+	// command would send THAT one, and --anonymous promises to ignore stored
+	// credentials — the prompt is generic for that reason. Storing the key that is
+	// already stored needs no question (and an unreadable store is handled inside
+	// the guard: the documented MIO-2995 recovery, announced).
+	if stored, serr := config.GetAPIKey(); serr != nil || stored != key {
+		if err := confirmReplaceStoredKey(cmd, apiBase, "", in, false); err != nil {
+			return err
+		}
 	}
 	if err := config.SetAPIKey(key); err != nil {
 		return errs.Wrap(errs.ExitGeneric, err)
