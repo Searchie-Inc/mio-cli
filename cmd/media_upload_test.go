@@ -39,7 +39,7 @@ func TestFilesUpload_Orchestration(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"data":{"id":"file_new","type":"files","attributes":{"status_upload":"READY"}}}`)
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))
@@ -102,7 +102,7 @@ func TestFilesUpload_FolderID(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"data":{"id":"file_new","type":"files","attributes":{"folder_id":"fold_1"}}}`)
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))
@@ -173,7 +173,7 @@ func TestFilesUpload_Multipart(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"data":{"id":"file_mp","type":"files","attributes":{"status_upload":"READY"}}}`)
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))
@@ -231,7 +231,7 @@ func TestFilesReplace_Orchestration(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"data":{"id":"file_x","type":"files","attributes":{"status_upload":"READY"}}}`)
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))
@@ -295,7 +295,7 @@ func TestFilesReplace_Multipart(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"data":{"id":"file_x","type":"files","attributes":{"status_upload":"READY"}}}`)
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))

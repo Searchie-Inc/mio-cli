@@ -45,7 +45,7 @@ func brandingAttachStub(t *testing.T, fileAttrs, hubBranding string) (srv *httpt
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"hub_x","type":"hubs","attributes":{"name":"Hub","branding":` + hubBranding + `}}}`))
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			failUnlessStrayProbe(t, r, "unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))

@@ -695,7 +695,7 @@ func newContentPagingStub(t *testing.T, lessons, at int) *contentPagingStub {
 			}
 			write(w, 200, map[string]any{"data": data, "meta": map[string]any{"page": map[string]any{"size": size, "has_more": end < lessons}}})
 		default:
-			t.Errorf("the file-binding recipe sent an unexpected request: %s %s", r.Method, r.URL)
+			failUnlessStrayProbe(t, r, "the file-binding recipe sent an unexpected request: %s %s", r.Method, r.URL)
 			write(w, 404, map[string]any{"errors": []any{map[string]any{"status": "404", "title": "Not Found"}}})
 		}
 	}))
