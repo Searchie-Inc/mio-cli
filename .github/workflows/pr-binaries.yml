@@ -1,0 +1,96 @@
+# pr-binaries.yml — a runnable mio binary for every pull request (MIO-3822).
+#
+# QA runs released binaries, so before this a CLI change was untestable until it
+# was merged AND a tag was cut. This builds the same targets the release does,
+# from the same .goreleaser.yaml (so the build flags cannot drift), with
+# `goreleaser build --snapshot` — nothing is published, tagged or released — and
+# attaches them to the workflow run as ONE artifact of tar.gz/zip files (a plain
+# artifact zip would drop the executable bit).
+#
+# The binary reports a snapshot version (`mio version` -> 0.27.1-pr.<sha>), never
+# a release one, so a QA report cannot be mistaken for a released build.
+#
+# Fork PRs get a read-only token; that is enough (this only reads the repo and
+# uploads an artifact to its own run).
+
+name: PR binaries
+
+on:
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-binaries-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  binaries:
+    name: Build PR binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Tags are needed so the snapshot version derives from the latest release.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Build snapshot binaries (GoReleaser, nothing is published)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: build --snapshot --clean
+
+      - name: Package one archive per platform
+        run: |
+          set -euo pipefail
+          mkdir -p pr-binaries
+          found=0
+          for dir in dist/mio_*/; do
+            name=$(basename "$dir")                  # e.g. mio_linux_amd64_v1
+            plat=${name#mio_}
+            if [ -f "$dir/mio.exe" ]; then
+              (cd "$dir" && zip -q "../../pr-binaries/mio_${plat}.zip" mio.exe)
+            elif [ -f "$dir/mio" ]; then
+              tar -C "$dir" -czf "pr-binaries/mio_${plat}.tar.gz" mio
+            else
+              continue
+            fi
+            found=$((found + 1))
+          done
+          test "$found" -ge 4 || { echo "::error::expected at least 4 platform binaries, found $found"; ls -R dist | head -50; exit 1; }
+          (cd pr-binaries && sha256sum * > checksums.txt)
+          ls -l pr-binaries
+
+      - name: Upload binaries
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: mio-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: pr-binaries/*
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: How to use
+        run: |
+          {
+            echo "### mio binaries for this PR"
+            echo
+            echo "Artifact: [${{ steps.upload.outputs.artifact-url }}](${{ steps.upload.outputs.artifact-url }}) (14 days). Pick your platform, extract, run:"
+            echo
+            echo '```sh'
+            echo 'tar -xzf mio_linux_amd64_v1.tar.gz && ./mio version   # reports a 0.x.y-pr.<sha> snapshot version'
+            echo '```'
+            echo
+            echo "macOS: unsigned build — \`xattr -d com.apple.quarantine ./mio\` if Gatekeeper blocks it."
+          } >> "$GITHUB_STEP_SUMMARY"
