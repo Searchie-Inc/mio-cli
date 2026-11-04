@@ -169,9 +169,11 @@ Off a TTY with no resolvable key or credentials, login exits with code 3.
 
 mio keeps ONE stored key. When logging in would replace a stored key that belongs
 to a DIFFERENT team (or one the API rejects or cannot verify), login asks first,
-before it mints a key: y/N on a terminal, otherwise exit 5 unless --yes. To check
-the stored key's team it sends that key to the API base this run points at, as
-every other command does. Declining leaves the stored key and current_team as
+before it mints a key: y/N on a terminal, otherwise exit 5 unless --yes. To name
+the stored key's team it asks the API about it — only on an email+password login
+(where the stored key is the one ordinary commands would send to this API base);
+with --anonymous, or when you pass a key (--api-key / MIO_API_KEY), the stored
+key is never sent and the question is generic. Declining leaves the stored key and current_team as
 they were. (A second login running at the same moment can still overwrite the
 key; the check is not a lock.)`,
 	Args: cobra.NoArgs,
