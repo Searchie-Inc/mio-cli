@@ -112,12 +112,13 @@ mio contacts retrieve <id> 2>err.json || jq -r '.errors[0].status' err.json
 
 ## Destructive Operations
 
-Any `delete`, `cancel`, `refund`, or member-moderation command (`ban` / `unban` / `warn` / `soft-ban`, and `community moderation reports resolve`) in a non-TTY shell will exit **5** unless `--yes` (or `-y`) is passed. (`restore` is the undo of a soft-delete, not destructive, so it does NOT require `--yes`.)
+Any `delete`, `cancel`, `refund`, achievements `revoke` / `archive` / `offerings detach` / `rule delete`, or member-moderation command (`ban` / `unban` / `warn` / `soft-ban`, and `community moderation reports resolve`) in a non-TTY shell will exit **5** unless `--yes` (or `-y`) is passed. (`restore` is the undo of a soft-delete, not destructive, so it does NOT require `--yes`.)
 
 ```sh
 mio contacts delete <id> --yes
 mio checkout subscriptions cancel <id> --yes
 mio checkout payments refund <id> --reason requested_by_customer --yes
+mio achievements revoke <achievement_id> --hub <hub> --contact-id <global-contact-id> --yes   # scripted "revoke -> 204" flow
 mio community members ban <contact_id> --hub <hub> --yes
 ```
 
