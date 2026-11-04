@@ -375,7 +375,7 @@ func readBackHubIdentity(sc *scaffoldContext) {
 	}
 	if slug, _ := res.Attributes["slug"].(string); slug != "" {
 		if slug != sc.hubSlug {
-			sc.notef("backend assigned slug %q (requested %q — it was taken)", slug, sc.hubSlug)
+			sc.notef("backend assigned slug %q (requested %q — it was taken); the hub is %s. To resume an existing hub instead of creating one, re-run with --hub <its id>", slug, sc.hubSlug, sc.hubID)
 		}
 		sc.hubSlug = slug
 	}

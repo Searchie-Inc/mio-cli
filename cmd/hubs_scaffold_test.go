@@ -4047,3 +4047,69 @@ func TestPrintScaffoldRecovery_PreservesBrandingIntent(t *testing.T) {
 		t.Errorf("the CASCADED header_color must not be echoed as a flag (the resume re-derives it); got:\n%s", out)
 	}
 }
+
+// TestStepHub_CreateSaysWhenTheBackendSuffixedTheSlug is MIO-2565: create mode
+// always POSTs a NEW hub, and the backend mints a unique slug when the requested
+// one is taken, so re-running the same create command yields a second hub with a
+// suffixed slug. That behaviour is the backend's and stays; what must not stay is
+// the silence — the run has to say it created a new hub and how to resume.
+func TestStepHub_CreateSaysWhenTheBackendSuffixedTheSlug(t *testing.T) {
+	for _, tc := range []struct {
+		name, returnedSlug string
+		wantNote           bool
+	}{
+		{"slug taken, backend suffixed it", "my-community-33d229", true},
+		{"slug free, used as requested", "my-community", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/vnd.api+json")
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"data":{"id":"hub_second","type":"hubs","attributes":{"slug":"` + tc.returnedSlug + `","is_private":true}}}`))
+			}))
+			t.Cleanup(srv.Close)
+			sc := newStepSC(client.New(srv.URL, "k"), "", "")
+			sc.noteW = &bytes.Buffer{}
+			sc.nameOverride, sc.slugOverride = "My Community", "my-community"
+			if err := stepHub(sc, &catalog.HubTemplate{ID: "starter"}); err != nil {
+				t.Fatalf("stepHub: %v", err)
+			}
+			notes := stepNotes(sc)
+			if tc.wantNote {
+				for _, want := range []string{`assigned slug "my-community-33d229"`, `requested "my-community"`, "NEW hub (hub_second)", "--hub"} {
+					if !strings.Contains(notes, want) {
+						t.Errorf("notes missing %q; notes=%q", want, notes)
+					}
+				}
+			} else if strings.Contains(notes, "assigned slug") {
+				t.Errorf("no note expected when the slug was used as requested; notes=%q", notes)
+			}
+			if sc.hubSlug != tc.returnedSlug {
+				t.Errorf("hubSlug = %q, want the OBSERVED %q", sc.hubSlug, tc.returnedSlug)
+			}
+		})
+	}
+}
+
+// TestReadBackHubIdentity_SaysWhenTheSlugDiffers: the server-side op path reports
+// the same fact through its read-back, with the same pointer to --hub.
+func TestReadBackHubIdentity_SaysWhenTheSlugDiffers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		_, _ = w.Write([]byte(`{"data":{"id":"hub_op","type":"hubs","attributes":{"slug":"acme-ab12cd","title":"Acme","is_private":true}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	sc := newStepSC(client.New(srv.URL, "k"), "", "")
+	sc.noteW = &bytes.Buffer{}
+	sc.hubID, sc.hubSlug = "hub_op", "acme"
+	readBackHubIdentity(sc)
+	notes := stepNotes(sc)
+	for _, want := range []string{`assigned slug "acme-ab12cd"`, `requested "acme"`, "--hub"} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("notes missing %q; notes=%q", want, notes)
+		}
+	}
+	if sc.hubSlug != "acme-ab12cd" {
+		t.Errorf("hubSlug = %q, want the observed slug", sc.hubSlug)
+	}
+}
