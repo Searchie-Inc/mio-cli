@@ -44,17 +44,16 @@ func TestSectionType_KnownVsUnknown(t *testing.T) {
 
 func TestLoad_Counts(t *testing.T) {
 	c := loadForTest(t)
-	// 9 section templates as of the 0.14.1 pin (testimonials added in 0.13.0).
-	if got := len(c.Templates); got != 9 {
-		t.Errorf("section templates = %d, want 9", got)
+	// Counts from the pinned 0.31.0 catalog.
+	if got := len(c.Templates); got != 14 {
+		t.Errorf("section templates = %d, want 14", got)
 	}
-	// 14 page templates / 13 page types as of the 0.18.1 pin (page-sales
-	// added by the sales-template vocabulary, MIO-2724).
-	if got := len(c.PageTemplates); got != 14 {
-		t.Errorf("page templates = %d, want 14", got)
+	// The catalog declares 12 page templates and 13 page types.
+	if got := len(c.PageTemplates); got != 12 {
+		t.Errorf("page templates = %d, want 12", got)
 	}
-	if got := len(c.SectionTypes); got != 9 {
-		t.Errorf("section types = %d, want 9", got)
+	if got := len(c.SectionTypes); got != 10 {
+		t.Errorf("section types = %d, want 10", got)
 	}
 	if got := len(c.PageTypes); got != 13 {
 		t.Errorf("page types = %d, want 13", got)
@@ -153,7 +152,7 @@ func TestRecommendedTemplates_ForHomepage_OrderedByRecommendation(t *testing.T) 
 	// Section templates whose applicablePageTypes include "homepage", ordered by
 	// recommendation.order. content-card (applicablePageTypes: []) is excluded.
 	// testimonials (order 90) added in 0.13.0.
-	want := []string{"hero", "carousel", "grid", "content-grid", "row", "search-bar", "compact", "testimonials"}
+	want := []string{"hero", "carousel", "pinned-posts", "grid", "content-grid", "row", "search-bar", "compact", "testimonials"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Errorf("RecommendedTemplates(homepage) = %v, want %v", ids, want)
 	}

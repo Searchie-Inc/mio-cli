@@ -202,14 +202,14 @@ var codeRoutedPageTemplates = map[string]bool{
 }
 
 // rootSections counts the root children of an emitted page tree that carry a
-// section `template` — the children the backend compiles into sections.
+// section `template`; the auth brand panel is a fixed system region.
 func rootSections(tree map[string]any) int {
 	root, _ := tree["root"].(map[string]any)
 	kids, _ := root["children"].([]any)
 	n := 0
 	for _, k := range kids {
 		if child, ok := k.(map[string]any); ok {
-			if tpl, _ := child["template"].(string); tpl != "" {
+			if tpl, _ := child["template"].(string); tpl != "" && tpl != "auth-brand-panel" {
 				n++
 			}
 		}
@@ -521,8 +521,9 @@ func skillDataSourceRows(t *testing.T) map[string][]string {
 }
 
 // dataSourceIDNamespace is the id each bound type takes, as mio-hub's renderer
-// resolves it (origin/main 94d28ef8, src/lib/page-tree/data-binding/
-// use-data-source.ts; types.ts documents `file` as "id = content_node UUID").
+// resolves it (src/lib/page-tree/data-binding/
+// use-data-source.ts; types.ts documents `file` as "id = content_node UUID";
+// content queries use no id for recently-watched and query.playlist_id for in-progress).
 // The renderer lives in another repo, so this is a pinned reading of it, not
 // something the test can derive: it exists so the MIO-4176 answer cannot be
 // edited back to "media file id" unnoticed. A newly bound type needs an entry,
@@ -530,6 +531,7 @@ func skillDataSourceRows(t *testing.T) map[string][]string {
 var dataSourceIDNamespace = map[string]string{
 	"playlist": "playlist",
 	"file":     "content-node",
+	"content":  "none",
 }
 
 var boldRE = regexp.MustCompile(`\*\*([^*]+)\*\*`)

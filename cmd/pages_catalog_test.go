@@ -229,7 +229,7 @@ func TestCatalogSectionTypes_WritableOnly(t *testing.T) {
 	}
 }
 
-func TestCatalogSectionTypes_AllNine(t *testing.T) {
+func TestCatalogSectionTypes_AllTen(t *testing.T) {
 	res := runContract(t, offlineEnv(), "pages", "catalog", "section-types", "--offline", "--output", "json")
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
@@ -241,8 +241,8 @@ func TestCatalogSectionTypes_AllNine(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Stdout), &rows); err != nil {
 		t.Fatalf("stdout not a JSON array: %v\n%s", err, res.Stdout)
 	}
-	if len(rows) != 9 {
-		t.Errorf("section types = %d, want 9", len(rows))
+	if len(rows) != 10 {
+		t.Errorf("section types = %d, want 10", len(rows))
 	}
 	if !strings.Contains(res.Stdout, `"feature"`) || !strings.Contains(res.Stdout, `"compact"`) {
 		t.Errorf("full section-types list should include both writable and non-writable ids; got %s", res.Stdout)
