@@ -13,7 +13,7 @@ import (
 // agent actually reads (the command's own Example and the shipped docs), not a
 // second list. This is a tripwire for that exact regression; the real oracle
 // (the live catalog) is out of reach offline.
-var retiredTemplateRe = regexp.MustCompile(`--template[ =]community\b`)
+var retiredTemplateRe = regexp.MustCompile(`--template[ =]["']?community\b|the (shipped |live )?` + "`community`" + ` (one|template)`)
 
 func TestDocs_DoNotTeachRetiredCommunityTemplate(t *testing.T) {
 	surfaces := map[string]string{
