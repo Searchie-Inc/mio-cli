@@ -320,7 +320,7 @@ by `TestSkillDocIsGeneratedFromCatalog`. Do not transcribe those lists here; the
 moved three catalog minors in a day.
 
 **Button action** is `{"type": …, "value": …}` with `type` ∈ `url` | `page` |
-`email` | `scroll` | `playlist`; `value` is canonical **for its type** — `url` takes a
+`email` | `scroll` | `playlist` | `submit` (`value: ""`; only on a `button` inside a `form` — the catalog validator rejects it elsewhere); `value` is canonical **for its type** — `url` takes a
 FULL URL *including* the scheme (a schemeless value is passed through and does not
 navigate), while `email` takes a bare address and `scroll` a bare anchor id.
 

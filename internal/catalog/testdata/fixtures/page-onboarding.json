@@ -8,17 +8,22 @@
   "children": [
     {
       "id": "#1",
+      "kind": "headline",
+      "settings": {
+        "slot": "form-title",
+        "level": 1,
+        "size": "title",
+        "align": "center"
+      },
+      "value": "Welcome to {{hub_name}}"
+    },
+    {
+      "id": "#2",
       "kind": "stack",
-      "settings": {},
-      "children": [
-        {
-          "id": "#2",
-          "kind": "headline",
-          "settings": {
-            "level": 1
-          }
-        }
-      ]
+      "settings": {
+        "slot": "form-steps"
+      },
+      "children": []
     }
   ]
 }

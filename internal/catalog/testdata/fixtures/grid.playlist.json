@@ -2,6 +2,7 @@
   "id": "#0",
   "kind": "container",
   "template": "grid",
+  "templateVariant": "playlist",
   "dataSource": {
     "type": "playlist",
     "id": ""

@@ -36,6 +36,24 @@
           "settings": {}
         }
       ]
+    },
+    {
+      "id": "#6",
+      "kind": "stack",
+      "template": "auth-brand-panel",
+      "settings": {
+        "slot": "brand-panel",
+        "side": "right"
+      },
+      "children": [
+        {
+          "id": "#7",
+          "kind": "logo",
+          "settings": {
+            "height": 48
+          }
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,128 @@
+{
+  "id": "#0",
+  "kind": "container",
+  "template": "carousel",
+  "templateVariant": "slides-page",
+  "settings": {
+    "maxWidth": "content",
+    "padding": 0,
+    "surface": {
+      "padding": "section"
+    }
+  },
+  "children": [
+    {
+      "id": "#1",
+      "kind": "carousel",
+      "settings": {},
+      "children": [
+        {
+          "id": "#2",
+          "kind": "row",
+          "settings": {
+            "responsive": true,
+            "split": true,
+            "gap": "section"
+          },
+          "children": [
+            {
+              "id": "#3",
+              "kind": "image",
+              "settings": {
+                "radius": "m"
+              }
+            },
+            {
+              "id": "#4",
+              "kind": "stack",
+              "settings": {
+                "gap": 2,
+                "align": "start"
+              },
+              "children": [
+                {
+                  "id": "#5",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700
+                  },
+                  "value": "Page or link title"
+                },
+                {
+                  "id": "#6",
+                  "kind": "text",
+                  "settings": {
+                    "clamp": 5,
+                    "marginBottom": 4
+                  },
+                  "value": "Say where this takes a member."
+                },
+                {
+                  "id": "#7",
+                  "kind": "button",
+                  "settings": {
+                    "compactMobile": true
+                  },
+                  "value": "Open"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "#8",
+          "kind": "row",
+          "settings": {
+            "responsive": true,
+            "split": true,
+            "gap": "section"
+          },
+          "children": [
+            {
+              "id": "#9",
+              "kind": "image",
+              "settings": {
+                "radius": "m"
+              }
+            },
+            {
+              "id": "#10",
+              "kind": "stack",
+              "settings": {
+                "gap": 2,
+                "align": "start"
+              },
+              "children": [
+                {
+                  "id": "#11",
+                  "kind": "headline",
+                  "settings": {
+                    "weight": 700
+                  },
+                  "value": "Page or link title"
+                },
+                {
+                  "id": "#12",
+                  "kind": "text",
+                  "settings": {
+                    "clamp": 5,
+                    "marginBottom": 4
+                  },
+                  "value": "Say where this takes a member."
+                },
+                {
+                  "id": "#13",
+                  "kind": "button",
+                  "settings": {
+                    "compactMobile": true
+                  },
+                  "value": "Open"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

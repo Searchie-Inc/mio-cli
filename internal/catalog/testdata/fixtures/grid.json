@@ -14,7 +14,8 @@
       "id": "#1",
       "kind": "stack",
       "settings": {
-        "gap": 6
+        "gap": 8,
+        "mobileGap": 6
       },
       "children": [
         {
@@ -22,7 +23,8 @@
           "kind": "headline",
           "settings": {
             "weight": 700
-          }
+          },
+          "value": "Section Title"
         },
         {
           "id": "#3",
@@ -35,9 +37,7 @@
               "id": "#4",
               "kind": "content-card",
               "template": "content-card",
-              "settings": {
-                "actionFromScope": "action"
-              },
+              "settings": {},
               "children": [
                 {
                   "id": "#5",
@@ -58,13 +58,84 @@
                   "children": [
                     {
                       "id": "#7",
-                      "kind": "field",
+                      "kind": "headline",
                       "settings": {
-                        "name": "title",
-                        "role": "title",
-                        "size": "body",
+                        "level": 6,
                         "weight": 700
-                      }
+                      },
+                      "value": "Content 1"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#8",
+              "kind": "content-card",
+              "template": "content-card",
+              "settings": {},
+              "children": [
+                {
+                  "id": "#9",
+                  "kind": "media-slot",
+                  "settings": {
+                    "name": "cover",
+                    "aspectRatio": "16:9",
+                    "radius": "m",
+                    "outline": true
+                  }
+                },
+                {
+                  "id": "#10",
+                  "kind": "stack",
+                  "settings": {
+                    "gap": 0.5
+                  },
+                  "children": [
+                    {
+                      "id": "#11",
+                      "kind": "headline",
+                      "settings": {
+                        "level": 6,
+                        "weight": 700
+                      },
+                      "value": "Content 2"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "#12",
+              "kind": "content-card",
+              "template": "content-card",
+              "settings": {},
+              "children": [
+                {
+                  "id": "#13",
+                  "kind": "media-slot",
+                  "settings": {
+                    "name": "cover",
+                    "aspectRatio": "16:9",
+                    "radius": "m",
+                    "outline": true
+                  }
+                },
+                {
+                  "id": "#14",
+                  "kind": "stack",
+                  "settings": {
+                    "gap": 0.5
+                  },
+                  "children": [
+                    {
+                      "id": "#15",
+                      "kind": "headline",
+                      "settings": {
+                        "level": 6,
+                        "weight": 700
+                      },
+                      "value": "Content 3"
                     }
                   ]
                 }

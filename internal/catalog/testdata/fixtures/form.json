@@ -1,0 +1,92 @@
+{
+  "id": "#0",
+  "kind": "form",
+  "template": "form",
+  "settings": {},
+  "children": [
+    {
+      "id": "#1",
+      "kind": "row",
+      "settings": {
+        "align": "start",
+        "responsive": true
+      },
+      "children": [
+        {
+          "id": "#2",
+          "kind": "form-field",
+          "settings": {
+            "binding": {
+              "kind": "contact",
+              "key": "first_name"
+            },
+            "label": "First name"
+          }
+        },
+        {
+          "id": "#3",
+          "kind": "form-field",
+          "settings": {
+            "binding": {
+              "kind": "email"
+            },
+            "label": "Email",
+            "required": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "#4",
+      "kind": "form-field",
+      "settings": {
+        "label": "Your answer"
+      }
+    },
+    {
+      "id": "#5",
+      "kind": "form-field",
+      "settings": {
+        "binding": {
+          "kind": "consent"
+        },
+        "label": "I'd like to receive emails and updates"
+      }
+    },
+    {
+      "id": "#6",
+      "kind": "button",
+      "settings": {
+        "action": {
+          "type": "submit",
+          "value": ""
+        }
+      },
+      "value": "Save my seat"
+    },
+    {
+      "id": "#7",
+      "kind": "stack",
+      "template": "form-success",
+      "settings": {
+        "slot": "success"
+      },
+      "children": [
+        {
+          "id": "#8",
+          "kind": "headline",
+          "settings": {
+            "level": 3
+          },
+          "value": "You're in."
+        },
+        {
+          "id": "#9",
+          "kind": "text",
+          "settings": {},
+          "value": "Check your inbox — the next steps are on their way."
+        }
+      ]
+    }
+  ]
+}

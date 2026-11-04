@@ -266,7 +266,7 @@ func TestSurfaceDeclaringTemplatesMatchesPresenceRule(t *testing.T) {
 	}
 
 	// The set mio-hub's generated manifest ships for this catalog digest.
-	want := []string{"hero", "carousel", "grid", "content-grid", "row", "search-bar", "compact", "testimonials"}
+	want := []string{"hero", "carousel", "pinned-posts", "grid", "content-grid", "row", "search-bar", "compact", "testimonials"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("surface-declaring templates = %v, want %v (mio-hub SURFACE_TEMPLATE_IDS for this catalog)", got, want)
 	}

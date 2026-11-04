@@ -2,6 +2,7 @@
   "id": "#0",
   "kind": "container",
   "template": "row",
+  "templateVariant": "bound-cards",
   "settings": {
     "maxWidth": "content",
     "padding": 0,
@@ -133,7 +134,8 @@
                       "settings": {
                         "name": "contentCountLabel",
                         "role": "meta",
-                        "icon": "content"
+                        "icon": "content",
+                        "optional": true
                       }
                     },
                     {
@@ -142,7 +144,8 @@
                       "settings": {
                         "name": "duration",
                         "role": "meta",
-                        "icon": "clock"
+                        "icon": "clock",
+                        "optional": true
                       }
                     }
                   ]
