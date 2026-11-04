@@ -99,6 +99,28 @@ jobs:
           repositories: 'mio-page-catalog'
           permission-contents: read
 
+      # PROBE (temporary): can the App mint a token for THIS repo?
+      - name: PROBE mint mio-cli token
+        if: env.APP_TOKEN_AVAILABLE == 'true'
+        id: probe
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SIBLING_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SIBLING_APP_PRIVATE_KEY }}
+          owner: Searchie-Inc
+          repositories: 'mio-cli'
+          permission-contents: write
+          permission-pull-requests: write
+      - name: PROBE result
+        if: env.APP_TOKEN_AVAILABLE == 'true'
+        env:
+          GH_TOKEN: ${{ steps.probe.outputs.token }}
+          OUTCOME: ${{ steps.probe.outcome }}
+        run: |
+          echo "mint outcome: $OUTCOME" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$OUTCOME" = "success" ]; then gh api repos/Searchie-Inc/mio-cli --jq '"permissions: \(.permissions)"' | tee -a "$GITHUB_STEP_SUMMARY"; fi
+
       # ── 4. Set up Go (matches ci.yml) ───────────────────────────────────
       - name: Set up Go
         if: env.APP_TOKEN_AVAILABLE == 'true'
