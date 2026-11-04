@@ -412,13 +412,19 @@ mio events create --hub <hub-id> --title "Community Meetup" \
 # An event carries 1-3 hosts. --host-contact-id and --host-contact-ids are mutually
 # exclusive, and on `update` they REPLACE the whole host set, never add to it.
 mio events update <event-id> --hub <hub-id> --host-contact-ids con_a,con_b
+# --cover-media-id binds an id from a hub-scoped attachment upload session.
+# Binding is one-shot: clearing it is irreversible; the same id cannot be rebound.
+# A bound media cover takes precedence over --cover-image-url. Clear it in the
+# same update when changing the URL; an empty URL clears the URL itself.
+mio events update <event-id> --hub <hub-id> --clear-cover-media --cover-image-url "" --yes
 mio events list --hub <hub-id> --status upcoming --sort starts_at
 # RSVP is three-state and acts as YOU: `rsvp` (singular) is your own answer,
 # `rsvps` (plural) is everyone's. A `maybe` takes no seat against --capacity.
 mio events rsvp set <event-id> --hub <hub-id> --status maybe
 mio events rsvps list <event-id> --hub <hub-id>   # "going" only — never maybe/not_going
 # `cancel` is an action, not a delete: the event is kept, marked cancelled.
-mio events cancel <event-id> --hub <hub-id> --yes
+# An optional message (max 280 characters) reaches going/maybe attendees.
+mio events cancel <event-id> --hub <hub-id> --message "Rescheduled" --yes
 ```
 
 `segments search` takes the **full condition tree** (matching the backend write shape), not a flat list. You can also read it from a file and paginate:

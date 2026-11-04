@@ -271,6 +271,7 @@ var typeOverrides = []struct {
 	// Event RSVP set (PUT .../events/{id}/rsvp): backend EventRSVPSetAttributes
 	// type Literal is "event_rsvps", not the bare "rsvp" segment.
 	{"events/rsvp", "event_rsvps"},
+	{"events/cancel", "hub_event_cancellations"},
 	// Achievements (MIO-3054/MIO-3412): the bare "achievements" segment
 	// self-derives the definitions type, but the hub-offering attach (POST
 	// .../hubs/{hub}/achievements) binds AchievementAttachData (Literal
@@ -356,6 +357,11 @@ func resourceTypeFromPath(path string) string {
 		}
 	}
 	collections := collectionSegments(segs)
+	// Only the event cancellation action is a collection token; treating every
+	// cancel segment as one would change unrelated action paths.
+	if len(segs) == 6 && segs[0] == "api" && segs[1] == "hubs" && segs[3] == "events" && segs[5] == "cancel" {
+		collections = append(collections, "cancel")
+	}
 	if len(collections) == 0 {
 		// Fallback: last segment.
 		return segs[len(segs)-1]
