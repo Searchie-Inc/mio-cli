@@ -33,6 +33,11 @@ builds:
       - -X github.com/Searchie-Inc/mio-cli/internal/version.Date={{.Date}}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+# Snapshot builds (`goreleaser build --snapshot`, used by .github/workflows/pr-binaries.yml
+# for pull-request binaries, MIO-3822). Never applies to a tagged release.
+snapshot:
+  version_template: "{{ incpatch .Version }}-pr.{{ .ShortCommit }}"
+
 # macOS universal binary (lipo-merged amd64 + arm64)
 universal_binaries:
   - id: mio-darwin-universal
