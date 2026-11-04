@@ -2095,6 +2095,9 @@ func scaffoldStepError(sc *scaffoldContext, step string, err error) error {
 	if sc.hubID == "" {
 		return fmt.Errorf("scaffold: step %q failed: %w", step, err)
 	}
+	if sc.resume {
+		return fmt.Errorf("scaffold: step %q failed (target hub %s): %w", step, sc.hubID, err)
+	}
 	return fmt.Errorf("scaffold: step %q failed (hub %s was created and is NOT rolled back): %w",
 		step, sc.hubID, err)
 }
@@ -2113,15 +2116,19 @@ func printScaffoldPlan(w io.Writer, templateID string, plan []planEntry) {
 }
 
 // printScaffoldRecovery implements the recovery contract (design §Idempotency &
-// recovery): scaffold does not roll back, so on a step failure it prints the
-// created hub id (if any) and the exact command to resume onto it. It does NOT
+// recovery): on a step failure it prints the target hub id (if any) and
+// the exact command to resume onto it. It does NOT
 // print the error text — main.go renders that once from the returned error, so
 // printing it here too would double it on stderr.
 func printScaffoldRecovery(w io.Writer, sc *scaffoldContext, templateID string) {
 	if sc.hubID == "" {
 		return
 	}
-	fmt.Fprintf(w, "Hub %s was created but the scaffold did not finish (no rollback).\n", sc.hubID)
+	if sc.resume {
+		fmt.Fprintf(w, "Scaffold did not finish for target hub %s.\n", sc.hubID)
+	} else {
+		fmt.Fprintf(w, "Hub %s was created but the scaffold did not finish (no rollback).\n", sc.hubID)
+	}
 	// Reconstruct an EXACT resume command that preserves the caller's intent —
 	// team, --publish, and the presentation overrides — so following it verbatim
 	// doesn't leave a requested-published hub private or revert an override back

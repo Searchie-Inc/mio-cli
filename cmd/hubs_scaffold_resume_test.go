@@ -48,6 +48,7 @@ type resumeStub struct {
 	// hubPatchError, when set, is the JSON:API error body every hub PATCH is
 	// answered with, as a 422.
 	hubPatchError string
+	opError       string
 
 	mu      sync.Mutex
 	reqs    []resumeReq
@@ -165,7 +166,12 @@ func (s *resumeStub) serve(t *testing.T) *httptest.Server {
 		case r.Method == http.MethodPut && strings.HasSuffix(p, "/tree"):
 			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(p, "/scaffold-from-template"):
-			w.WriteHeader(http.StatusNotFound)
+			if s.opError != "" {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(s.opError))
+			} else {
+				w.WriteHeader(http.StatusNotFound)
+			}
 		case r.Method == http.MethodPost && strings.HasSuffix(p, "/hubs/from-template"):
 			w.Header().Set("Allow", "GET")
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1107,4 +1113,73 @@ func redigestCatalog(t *testing.T, doc map[string]any) []byte {
 		t.Fatalf("marshal catalog: %v", err)
 	}
 	return out
+}
+
+// TestScaffoldFailureClaims distinguishes a target hub from one created here.
+func TestScaffoldFailureClaims(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		sc           scaffoldContext
+		want, absent string
+	}{
+		{"before_hub", scaffoldContext{}, `scaffold: step "pages" failed: boom`, "was created"},
+		{"create", scaffoldContext{hubID: "hub_new"}, "hub hub_new was created and is NOT rolled back", ""},
+		{"resume", scaffoldContext{hubID: "hub_r", resume: true}, "hub hub_r", "was created"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := scaffoldStepError(&tc.sc, "pages", fmt.Errorf("boom")).Error()
+			if !strings.Contains(msg, tc.want) || (tc.absent != "" && strings.Contains(msg, tc.absent)) {
+				t.Errorf("failure claim = %q, want %q and absent %q", msg, tc.want, tc.absent)
+			}
+			if tc.sc.resume && strings.Contains(msg, "rolled back") {
+				t.Errorf("resume must not claim rollback state: %s", msg)
+			}
+			var b strings.Builder
+			printScaffoldRecovery(&b, &tc.sc, "community")
+			if tc.sc.hubID != "" && !strings.Contains(b.String(), "Resume with:") {
+				t.Errorf("missing resume command: %s", b.String())
+			}
+			if tc.sc.resume && strings.Contains(b.String(), "was created") {
+				t.Errorf("resume recovery claims creation: %s", b.String())
+			}
+			if tc.name == "create" && !strings.Contains(b.String(), "was created") {
+				t.Errorf("create recovery must claim creation: %s", b.String())
+			}
+		})
+	}
+}
+
+func TestScaffoldPagesOpRejectionGuidance(t *testing.T) {
+	for _, tc := range []struct{ name, code, detail, want, absent string }{
+		{"page_conflict", "page_conflict", "page conflict at slug 'about'", "inspect the hub's pages", "digest"},
+		{"reserved_page_conflict", "reserved_page_conflict", "reserved slug 'about'", "inspect the hub's pages", "digest"},
+		{"catalog_digest_mismatch", "catalog_digest_mismatch", "catalog rejected", "automatic retry did not resolve", "inspect the hub's pages"},
+		{"invalid_scaffold_request", "invalid_scaffold_request", "invalid tree", "template", "digest"},
+		{"template_not_scaffoldable", "template_not_scaffoldable", "template unavailable", "template", "digest"},
+		{"unknown", "some_future_code", "backend specific detail", "backend specific detail", "invented advice"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("MIO_CATALOG_CACHE_DIR", t.TempDir())
+			body, _ := json.Marshal(map[string]any{"errors": []map[string]string{{"status": "409", "code": tc.code, "detail": tc.detail}}})
+			stub := &resumeStub{hubAttrs: qaHubAttrs, opError: string(body)}
+			srv := stub.serve(t)
+			_, err := runResume(t, scaffoldEnv(t, srv.URL), resumeArgs("hub_r")...)
+			if err == nil {
+				t.Fatal("expected op rejection")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, tc.detail) || !strings.Contains(msg, tc.want) || strings.Contains(msg, tc.absent) {
+				t.Errorf("%s guidance = %q; want detail %q and %q, absent %q", tc.name, msg, tc.detail, tc.want, tc.absent)
+			}
+			if (tc.name == "page_conflict" || tc.name == "reserved_page_conflict") && strings.Contains(msg, "re-run") {
+				t.Errorf("%s must not suggest re-run: %s", tc.name, msg)
+			}
+			if tc.name == "unknown" && !strings.HasSuffix(msg, tc.detail) {
+				t.Errorf("unknown code must end with backend detail, without appended advice: %s", msg)
+			}
+			if tc.name == "catalog_digest_mismatch" && (!strings.Contains(msg, "pin") || !strings.Contains(msg, "re-run")) {
+				t.Errorf("digest guidance must mention pin and re-run: %s", msg)
+			}
+		})
+	}
 }

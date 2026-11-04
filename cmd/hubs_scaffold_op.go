@@ -121,8 +121,16 @@ func applyViaServerOp(sc *scaffoldContext) (bool, error) {
 // the two POSTs) falls back client-side like any other probe miss.
 func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTemplateRequest, opErr error) (bool, error) {
 	rejected := func() error {
-		return errs.Wrap(errs.CodeOf(opErr), fmt.Errorf(
-			"scaffold-from-template rejected the request: %w (if this is a digest mismatch the backend pin may have moved — re-run; otherwise inspect the hub's pages)", opErr))
+		var advice string
+		switch {
+		case client.HasAPIErrorCode(opErr, "catalog_digest_mismatch"):
+			advice = " (automatic retry did not resolve the mismatch; the backend pin may have moved — re-run)"
+		case client.HasAPIErrorCode(opErr, "page_conflict"), client.HasAPIErrorCode(opErr, "reserved_page_conflict"):
+			advice = " (inspect the hub's pages)"
+		case client.HasAPIErrorCode(opErr, "invalid_scaffold_request"), client.HasAPIErrorCode(opErr, "template_not_scaffoldable"):
+			advice = " (inspect the template and its instantiation)"
+		}
+		return errs.Wrap(errs.CodeOf(opErr), fmt.Errorf("scaffold-from-template rejected the request: %w%s", opErr, advice))
 	}
 
 	cat, src, rerr := catalog.Resolve(sc.ctx, scaffoldResolveOptions(sc, sc.notef))
