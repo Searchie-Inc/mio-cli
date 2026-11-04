@@ -27,7 +27,7 @@ func TestRemoteConnectionsWire(t *testing.T) {
 		{"disconnect", []string{"disconnect", "c", "--yes"}, "DELETE", "/c", "", "", nil, ""},
 		{"browse", []string{"browse", "c", "--limit", "2", "--after", "old"}, "GET", "/c/browse", "page%5Bafter%5D=old&page%5Bsize%5D=2", `{"data":[{"type":"remote_recordings","id":"e","attributes":{"title":"Episode"}}],"links":{"next":"https://example.com/?page%5Bafter%5D=next"}}`, nil, "--after next"},
 		{"browse default", []string{"browse", "c"}, "GET", "/c/browse", "", `{"data":[]}`, nil, ""},
-		{"import", []string{"import", "c", "--external-id", "e1", "--external-ids", "e2,e3"}, "POST", "/c/import", "", `{"data":[{"type":"remote_imports","id":"e1","attributes":{"status":"rejected","error":"not_found"}},{"type":"remote_imports","id":"e2","attributes":{"status":"imported"}}]}`, map[string]any{"data": map[string]any{"type": "remote_imports", "attributes": map[string]any{"external_ids": []any{"e1", "e2", "e3"}}}}, "note: 1 of 2 episodes were rejected (see .attributes.error)"},
+		{"import", []string{"import", "c", "--external-id", "e1", "--external-ids", "e2, e3"}, "POST", "/c/import", "", `{"data":[{"type":"remote_imports","id":"e1","attributes":{"status":"rejected","error":"not_found"}},{"type":"remote_imports","id":"e2","attributes":{"status":"imported"}}]}`, map[string]any{"data": map[string]any{"type": "remote_imports", "attributes": map[string]any{"external_ids": []any{"e1", "e2", "e3"}}}}, "note: 1 of 2 episodes were rejected (see .error on each row)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := 0

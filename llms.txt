@@ -195,7 +195,7 @@ mio pages catalog scaffold — scaffold a node-tree from a catalog template (Go 
 mio pages catalog templates — list catalog author templates + their variants; --page-type <pt> shows the section templates recommended for that page type (ordered) + its page template
 mio pages catalog section-types — list catalog compiled section types; --writable-only lists just the imperative-door allow-list
 
-mio media remote-connections list — list team remote connections; team API key accepted
+mio media remote-connections list — list team remote connections; full-access team API key accepted. These routes are feature-flagged server-side (default off): a deployment with them off answers 404 (exit 4) on EVERY verb, list included — not a bad id
 mio media remote-connections connect — connect a podcast with --url; optional --no-auto-import and repeatable --target-playlist-id (maximum 10). Requires a USER access_token from POST /api/v1/auth/login passed via --api-key; a stored/team API key gets 403 (exit 3)
 mio media remote-connections disconnect — disconnect a connection by positional id; --yes; team API key accepted
 mio media remote-connections browse — browse podcast episodes by positional connection id; --limit --after; team API key accepted

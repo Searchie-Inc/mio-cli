@@ -84,7 +84,7 @@ var remoteConnectCmd = &cobra.Command{Use: "connect", Short: "Connect a podcast 
 	if err != nil {
 		var ce *errs.CLIError
 		if errors.As(err, &ce) && ce.HTTPStatus == http.StatusForbidden {
-			return fmt.Errorf("%w; hint: connect needs a USER access token; the stored/API key cannot connect a podcast. Get access_token from POST /api/v1/auth/login and pass it with --api-key; list, browse, import and disconnect accept the API key", err)
+			return fmt.Errorf("%w; hint: connecting a podcast needs a USER access token, not an API key. If you used an API key (including the stored one), get access_token from POST /api/v1/auth/login and pass it with --api-key; if you already did, that user must own the team. List, browse, import and disconnect accept a full-access API key", err)
 		}
 		return err
 	}
@@ -130,7 +130,9 @@ var remoteImportCmd = &cobra.Command{Use: "import <connection_id>", Short: "Impo
 	ids, _ := cmd.Flags().GetStringArray("external-id")
 	groups, _ := cmd.Flags().GetStringArray("external-ids")
 	for _, group := range groups {
-		ids = append(ids, strings.Split(group, ",")...)
+		for _, id := range strings.Split(group, ",") {
+			ids = append(ids, strings.TrimSpace(id))
+		}
 	}
 	// The API is authoritative; mirror its batch constraints to name the flags before a round trip.
 	if len(ids) == 0 || len(ids) > 50 {
@@ -158,7 +160,7 @@ var remoteImportCmd = &cobra.Command{Use: "import <connection_id>", Short: "Impo
 		}
 	}
 	if n > 0 {
-		fmt.Fprintf(cmd.ErrOrStderr(), "note: %d of %d episodes were rejected (see .attributes.error)\n", n, len(col.Data))
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: %d of %d episodes were rejected (see .error on each row)\n", n, len(col.Data))
 	}
 	return c.render(cmd, col)
 }}
