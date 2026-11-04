@@ -34,10 +34,25 @@ const (
 
 // guardBackend is a fake mio API recording every request ("METHOD path").
 type guardBackend struct {
-	srv   *httptest.Server
-	mu    sync.Mutex
-	reqs  []string
-	token string // JWT handed out by /auth/login and /auth/register
+	srv  *httptest.Server
+	mu   sync.Mutex
+	reqs []string
+	// bearers lists every Authorization bearer any request carried, in order —
+	// the oracle for "was the stored key sent anywhere".
+	bearers []string
+	token   string // JWT handed out by /auth/login and /auth/register
+}
+
+// sawBearer reports whether any request carried this key as its bearer.
+func (b *guardBackend) sawBearer(key string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, k := range b.bearers {
+		if k == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *guardBackend) saw(prefix string) bool {
@@ -58,10 +73,13 @@ func newGuardBackend(t *testing.T, loginTeam string) *guardBackend {
 	t.Helper()
 	b := &guardBackend{token: makeLoginJWT(t, loginTeam)}
 	b.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		b.mu.Lock()
 		b.reqs = append(b.reqs, r.Method+" "+r.URL.Path)
+		if bearer != "" {
+			b.bearers = append(b.bearers, bearer)
+		}
 		b.mu.Unlock()
-		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		switch {
 		case r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/register":
 			w.Header().Set("Content-Type", "application/json")
@@ -74,6 +92,8 @@ func newGuardBackend(t *testing.T, loginTeam string) *guardBackend {
 				_ = json.NewEncoder(w).Encode(map[string]any{"id": "u1", "team_id": guardAlphaTeam})
 			case guardNewKey, guardMinted:
 				_ = json.NewEncoder(w).Encode(map[string]any{"id": "u2", "team_id": guardBetaTeam})
+			case "mio_sk_noteam":
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": "u3"})
 			case "mio_sk_dead":
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"errors":[{"status":"401","detail":"invalid key"}]}`))
@@ -230,6 +250,9 @@ func TestRegisterGuard_AsksBeforeTheAccountIsCreated(t *testing.T) {
 	if res.Code != errs.ExitOK || !b2.saw("POST /api/v1/auth/register") {
 		t.Fatalf("with --yes register must proceed: exit=%d requests=%v stderr=%q", res.Code, b2.reqs, res.Stderr)
 	}
+	if b2.sawBearer(guardOldKey) {
+		t.Errorf("register sent the stored key to the API (it documents that it sends no key); requests=%v", b2.reqs)
+	}
 	if got := storedKey(t); got != guardMinted {
 		t.Errorf("stored key = %q, want the minted key", got)
 	}
@@ -248,29 +271,56 @@ func TestRegisterGuard_NoStoredKey_Proceeds(t *testing.T) {
 }
 
 func TestLoginGuard_PastedOrEnvKey(t *testing.T) {
-	t.Run("a key for another team is confirmed", func(t *testing.T) {
+	t.Run("a different key is confirmed — without sending the STORED key anywhere", func(t *testing.T) {
 		seedStoredKey(t, guardOldKey)
 		b := newGuardBackend(t, guardBetaTeam)
-		res := runContract(t, []string{"MIO_API_BASE_URL=" + b.srv.URL, "MIO_API_KEY=" + guardNewKey}, "login")
+		res, err := runResume(t, []string{"MIO_API_BASE_URL=" + b.srv.URL, "MIO_API_KEY=" + guardNewKey}, "login")
 		if res.Code != errs.ExitNeedsConfir {
 			t.Fatalf("exit = %d, want %d", res.Code, errs.ExitNeedsConfir)
 		}
 		if got := storedKey(t); got != guardOldKey {
 			t.Errorf("stored key = %q, want the old key kept", got)
 		}
+		if b.sawBearer(guardOldKey) {
+			t.Errorf("the STORED key was sent to the API during a login that carries an explicit key; requests=%v", b.reqs)
+		}
+		if err == nil || !strings.Contains(err.Error(), "the stored API key") {
+			t.Errorf("refusal %v must use the generic wording (no lookup was made)", err)
+		}
 		res = runContract(t, []string{"MIO_API_BASE_URL=" + b.srv.URL, "MIO_API_KEY=" + guardNewKey}, "login", "--yes")
 		if res.Code != errs.ExitOK || storedKey(t) != guardNewKey {
 			t.Errorf("with --yes the pasted key must be stored: exit=%d stored=%q", res.Code, storedKey(t))
 		}
 	})
-	t.Run("storing the key that is already stored is silent", func(t *testing.T) {
-		seedStoredKey(t, guardOldKey)
+	t.Run("storing the key that is already stored is silent, even if the API reports no team", func(t *testing.T) {
+		seedStoredKey(t, "mio_sk_noteam")
 		b := newGuardBackend(t, guardAlphaTeam)
-		res := runContract(t, []string{"MIO_API_BASE_URL=" + b.srv.URL, "MIO_API_KEY=" + guardOldKey}, "login")
+		res := runContract(t, []string{"MIO_API_BASE_URL=" + b.srv.URL, "MIO_API_KEY=mio_sk_noteam"}, "login")
 		if res.Code != errs.ExitOK {
-			t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
+			t.Fatalf("exit = %d, want 0 (replacing a key with itself needs no question); stderr=%q", res.Code, res.Stderr)
 		}
 	})
+}
+
+// --anonymous promises to ignore stored credentials: the stored key must not be
+// sent to the API to learn its team, on the password path or with an explicit key.
+func TestLoginGuard_Anonymous_NeverSendsTheStoredKey(t *testing.T) {
+	seedStoredKey(t, guardOldKey)
+	b := newGuardBackend(t, guardBetaTeam)
+	res, err := runResume(t, guardEnv(b), "login", "--anonymous", "--email", "a@test.member.dev", "--password", "pw")
+	if res.Code != errs.ExitNeedsConfir {
+		t.Fatalf("password login: exit = %d (err=%v), want 5", res.Code, err)
+	}
+	res, _ = runResume(t, guardEnv(b), "login", "--anonymous", "--api-key", guardNewKey)
+	if res.Code != errs.ExitNeedsConfir {
+		t.Fatalf("explicit-key login: exit = %d, want 5", res.Code)
+	}
+	if b.sawBearer(guardOldKey) {
+		t.Errorf("--anonymous login sent the stored key to the API; requests=%v", b.reqs)
+	}
+	if got := storedKey(t); got != guardOldKey {
+		t.Errorf("stored key = %q, want the old key kept", got)
+	}
 }
 
 // interactive answers: the prompt is shown only on a terminal; a character
@@ -284,7 +334,7 @@ func TestLoginGuard_InteractiveAnswers(t *testing.T) {
 	for _, tc := range []struct {
 		name, answer string
 		wantErr      bool
-	}{{"y proceeds", "y\n", false}, {"yes proceeds", "YES\n", false}, {"n aborts", "n\n", true}, {"empty aborts", "\n", true}, {"EOF aborts", "", true}, {"partial parse 'yes no' aborts", "yes no\n", true}} {
+	}{{"y proceeds", "y\n", false}, {"yes proceeds", "YES\n", false}, {"n aborts", "n\n", true}, {"empty aborts", "\n", true}, {"EOF aborts", "", true}, {"an answer cut short by EOF is not consent", "yes", true}, {"partial parse 'yes no' aborts", "yes no\n", true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			seedStoredKey(t, guardOldKey)
 			b := newGuardBackend(t, guardBetaTeam)
@@ -481,8 +531,12 @@ func TestMintAndStore_Guard_RefusalAfterOwnershipRecoveryStopsTheRetry(t *testin
 		}
 		return nil
 	}
-	if _, err := mintAndStore(cmd, cli, token, "", cfg, guard); err == nil {
-		t.Fatal("a refusing second guard must fail mintAndStore")
+	_, merr := mintAndStore(cmd, cli, token, "", cfg, guard)
+	if merr == nil || errs.CodeOf(merr) != errs.ExitNeedsConfir {
+		t.Fatalf("a refusing second guard must fail mintAndStore with its own error (exit 5), got %v", merr)
+	}
+	if calls != 2 {
+		t.Fatalf("guard called %d times, want 2 (before the first mint, and after the recovery)", calls)
 	}
 	if len(*mintedPaths) != 1 {
 		t.Errorf("mint attempts = %v, want only the first (the 403'd one): the retry was sent after the refusal", *mintedPaths)

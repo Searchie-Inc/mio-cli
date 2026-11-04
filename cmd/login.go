@@ -387,16 +387,19 @@ func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamI
 // why `MIO_API_KEY=<key> mio login` can replace a blob mio cannot read.
 func validateAndStore(cmd *cobra.Command, apiBase, key string, in io.Reader) error {
 	cli := client.New(apiBase, key, client.WithDebug(flags.debug))
-	me, err := cli.Me(cmd.Context())
-	if err != nil {
+	if _, err := cli.Me(cmd.Context()); err != nil {
 		return err
 	}
-	// The new key's team comes from the API; replacing a stored key for another
-	// team needs confirmation (MIO-3572). Reading the stored key here is fine:
-	// an unreadable blob is simply replaced (the recovery path above).
-	newTeam, _ := me["team_id"].(string)
-	if err := confirmReplaceStoredKey(cmd, apiBase, newTeam, in, true); err != nil {
-		return err
+	// Replacing a stored key needs confirmation (MIO-3572). The stored key is NOT
+	// sent to the API here: this login carries an explicit key, so an ordinary
+	// command would send THAT one, and --anonymous promises to ignore stored
+	// credentials — the prompt is generic for that reason. Storing the key that is
+	// already stored needs no question (and an unreadable store is handled inside
+	// the guard: the documented MIO-2995 recovery, announced).
+	if stored, serr := config.GetAPIKey(); serr != nil || stored != key {
+		if err := confirmReplaceStoredKey(cmd, apiBase, "", in, false); err != nil {
+			return err
+		}
 	}
 	if err := config.SetAPIKey(key); err != nil {
 		return errs.Wrap(errs.ExitGeneric, err)

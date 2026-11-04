@@ -48,10 +48,12 @@ type storedKeyGuard func(newTeamID string) error
 // up front, before it creates the account).
 func noStoredKeyGuard(string) error { return nil }
 
-// storedKeyGuardFor builds the guard for one login invocation.
+// storedKeyGuardFor builds the guard for one login invocation. The stored key
+// is only sent to the API (to learn its team) when this run would send it there
+// anyway — never with --anonymous, which promises to ignore stored credentials.
 func storedKeyGuardFor(cmd *cobra.Command, apiBase string, in io.Reader) storedKeyGuard {
 	return func(newTeamID string) error {
-		return confirmReplaceStoredKey(cmd, apiBase, newTeamID, in, true)
+		return confirmReplaceStoredKey(cmd, apiBase, newTeamID, in, !flags.anonymous)
 	}
 }
 
@@ -60,10 +62,12 @@ func storedKeyGuardFor(cmd *cobra.Command, apiBase string, in io.Reader) storedK
 var stdinIsTerminal = isInteractiveStdin
 
 // confirmReplaceStoredKey implements the policy above. verify=false skips the
-// lookup of the stored key's team — used by register, which always creates a NEW
-// team (so the answer is "ask" either way) and documents that it sends no key:
-// asking the API about the stored key would send that key to whatever API base
-// this invocation points at, for nothing.
+// lookup of the stored key's team, and the prompt is then generic ("the stored
+// API key"). It is used wherever this run would NOT otherwise send the stored key
+// to the API base: register (it documents that it sends no key, and always makes a
+// new team, so the answer is "ask" either way), a login that carries an explicit
+// key (--api-key / MIO_API_KEY: ordinary commands would send THAT key, not the
+// stored one), and --anonymous (which promises to ignore stored credentials).
 func confirmReplaceStoredKey(cmd *cobra.Command, apiBase, newTeamID string, in io.Reader, verify bool) error {
 	stored, err := config.GetAPIKey()
 	var what string
@@ -138,7 +142,11 @@ func confirmReplacement(cmd *cobra.Command, prompt string, in io.Reader) error {
 	if !ok {
 		reader = bufio.NewReader(in)
 	}
-	line, _ := reader.ReadString('\n')
+	line, rerr := reader.ReadString('\n')
+	// A complete line only: an answer cut short by EOF is not consent.
+	if rerr != nil {
+		return errs.New(errs.ExitNeedsConfir, "aborted")
+	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
 		return nil
