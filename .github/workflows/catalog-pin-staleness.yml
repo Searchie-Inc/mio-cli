@@ -24,10 +24,11 @@
 # When the App is not configured the job skips gracefully (no-op exit 0), so
 # this workflow can land before the credentials do.
 #
-# CI on the bump PR (MIO-2998): a PR opened with GITHUB_TOKEN triggers no
-# workflows, so before this the bump sat with NO checks and could not be merged.
-# The job now dispatches ci.yml (workflow_dispatch) on the bump branch; the runs
-# report on the PR's head commit. The last step then makes a bump that has been
+# CI on the bump PR (MIO-2998): a PR opened with GITHUB_TOKEN gets no usable CI
+# (its PR-triggered runs wait in action_required), so the bump sat unmergeable.
+# The job now opens it as the GitHub App when the App is installed on mio-cli,
+# and otherwise dispatches ci.yml (workflow_dispatch) on the bump branch and says
+# in the summary what to install. The last step then makes a bump that has been
 # waiting for review longer than STALE_BUMP_DAYS turn this job red, so it cannot
 # sit unnoticed behind a green check-mark.
 #
@@ -197,12 +198,31 @@ jobs:
         id: bump
 
       # ── 6. Open / update the bump PR ────────────────────────────────────
-      #   Pushes with the checkout's own GITHUB_TOKEN credentials (mio-cli write
-      #   access) — the App token above is scoped only to mio-page-catalog.
+      #   Preferably as the GitHub App, scoped to THIS repo: pushes and PRs made
+      #   with an App token start CI like any contributor's. That needs the App
+      #   INSTALLED on mio-cli (contents + pull-requests write) — as of MIO-2998 it
+      #   is installed only on mio-page-catalog (GET /repos/.../mio-cli/installation
+      #   answers 404), so the mint is allowed to fail and the job falls back to
+      #   GITHUB_TOKEN, whose pushes/PRs start no usable CI; step 7 dispatches CI
+      #   and the summary says what is missing.
+      - name: Generate GitHub App token (mio-cli)
+        if: env.APP_TOKEN_AVAILABLE == 'true' && steps.bump.outputs.changed == 'true'
+        id: repo-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SIBLING_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SIBLING_APP_PRIVATE_KEY }}
+          owner: Searchie-Inc
+          repositories: 'mio-cli'
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Open or update bump PR
         if: env.APP_TOKEN_AVAILABLE == 'true' && steps.bump.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.repo-token.outputs.token || secrets.GITHUB_TOKEN }}
+          APP_PUSH_TOKEN: ${{ steps.repo-token.outputs.token }}
         run: |
           set -euo pipefail
 
@@ -210,7 +230,17 @@ jobs:
           OLD_REF="${{ steps.bump.outputs.old_ref }}"
           NEW_REF="${{ steps.bump.outputs.new_ref }}"
 
-          git push --force-with-lease origin "$BRANCH"
+          if [ -n "${APP_PUSH_TOKEN:-}" ]; then
+            # An App-token push starts CI normally (no GITHUB_TOKEN suppression).
+            git push --force-with-lease \
+              "https://x-access-token:${APP_PUSH_TOKEN}@github.com/Searchie-Inc/mio-cli.git" "$BRANCH"
+          else
+            {
+              echo "### The bump PR was opened with GITHUB_TOKEN — its CI will not start by itself"
+              echo "The GitHub App is not installed on mio-cli, so the push/PR cannot start workflows (the PR-triggered runs sit in \`action_required\`). CI is dispatched on the branch below, but its results attach to the commit, not to the PR's check list. **Fix: install the App on mio-cli with contents and pull-requests write** (MIO-2998)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            git push --force-with-lease origin "$BRANCH"
+          fi
 
           if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -qiE "^OPEN$"; then
             echo "PR for $BRANCH already open — branch updated."
@@ -237,11 +267,13 @@ jobs:
           fi
 
       # ── 7. Run CI on the bump branch ────────────────────────────────────
-      #   Pushes/PRs made with GITHUB_TOKEN start no workflows, so ci.yml is
-      #   dispatched explicitly. Its check runs attach to the branch head and show
-      #   on the PR (same job names as a normal PR run).
+      #   FALLBACK ONLY (App not installed on mio-cli, see step 6): pushes/PRs made
+      #   with GITHUB_TOKEN start no usable CI, so ci.yml is dispatched explicitly.
+      #   Its check runs attach to the branch head COMMIT (visible under the
+      #   commit and in Actions) but GitHub does not list a workflow_dispatch run in
+      #   the PR's own check list.
       - name: Run CI on the bump branch
-        if: env.APP_TOKEN_AVAILABLE == 'true' && steps.bump.outputs.changed == 'true'
+        if: env.APP_TOKEN_AVAILABLE == 'true' && steps.bump.outputs.changed == 'true' && steps.repo-token.outcome != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
