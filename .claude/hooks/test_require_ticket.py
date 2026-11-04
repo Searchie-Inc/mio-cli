@@ -91,6 +91,14 @@ class GuardTests(unittest.TestCase):
         self.staged(); self.check_hook('echo x | xargs -I{} git commit -m {}', 2, 'cmd/x.go')
     def test_docs_only(self):
         self.write('docs/readme.md', 'changed'); self.git('add', '.'); self.check_hook('git commit -m tidy', 0)
+    def test_go_mod_and_go_sum_are_code(self):
+        # The guard's header says go.mod / go.sum are code; a version that only
+        # matched *.go would let a dependency change through without a ticket.
+        for name in ('go.mod', 'go.sum'):
+            with self.subTest(name=name):
+                self.write(name, 'changed ' + name); self.git('add', name)
+                self.check_hook('git commit -m tidy', 2, name)
+                self.git('reset', '-q', 'HEAD', '--', name)
     def test_non_commands(self):
         self.staged()
         for cmd in ['grep -rn "git commit" .', 'git log --grep="git commit"', 'echo "git commit"']:
