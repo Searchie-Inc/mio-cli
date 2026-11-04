@@ -205,6 +205,8 @@ mio media files replace — replace an existing file's underlying asset; <file_i
 mio media files finalize — finalize a file after its presigned upload (POST .../finalize); file id POSITIONAL
 mio media files transcode — (re)start transcoding for a file (POST .../transcode); file id POSITIONAL
 mio media files register-synthetic — register a synthetic (document/pdf) file; --title (required) --asset-kind (document|pdf) --visibility --mime-type --original-filename --description. Omit --mime-type and the CLI sends no mime_type, so the endpoint stores application/octet-stream whatever --asset-kind says (MIO-4175): pass `--asset-kind pdf --mime-type application/pdf` for a pdf
+mio media files thumbnail set — team-scoped episode-art upsert; file id POSITIONAL; exactly one of --image-file-id (preferred, resolved) or --image-media-id (Media PK)
+mio media files thumbnail remove — remove a file thumbnail idempotently; file id POSITIONAL; --yes
 mio media files cards get — list a file's in-video CTA cards; file id POSITIONAL
 mio media files cards set — replace a file's CTA cards (full-list PUT); --cards (JSON array or @file)
 mio media files chapters get — list a file's effective chapters (authored else auto); file id POSITIONAL
