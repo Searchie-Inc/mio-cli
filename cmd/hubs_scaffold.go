@@ -1882,13 +1882,13 @@ Output follows --output: json (the default off a TTY) and plain emit the result
 — the new hub's id/slug plus the page, space, onboarding and playlist ids the
 run created — while table prints the human summary. Progress notes always go to
 stderr, so a json stdout stays parseable.`,
-	Example: `  mio hubs scaffold --template community --name "My Community" --slug my-community
-  mio hubs scaffold --template community --name "My Community" --slug my-community --dry-run
-  mio hubs scaffold --template community --name Acme --slug acme --primary-color '#B91C1C' --secondary-color '#F59E0B'
-  mio hubs scaffold --template community --name Acme --slug acme --branding-json '{"primary":"#B91C1C","font_body":"Inter"}'
-  mio hubs scaffold --template community --hub hub_abc123
-  mio hubs scaffold --template community --hub hub_abc123 --reapply-template --yes
-  HUB_ID=$(mio hubs scaffold --template community --name "My Community" --slug my-community -o plain --jq .hub_id)`,
+	Example: `  mio hubs scaffold --template starter --name "My Community" --slug my-community
+  mio hubs scaffold --template starter --name "My Community" --slug my-community --dry-run
+  mio hubs scaffold --template starter --name Acme --slug acme --primary-color '#B91C1C' --secondary-color '#F59E0B'
+  mio hubs scaffold --template starter --name Acme --slug acme --branding-json '{"primary":"#B91C1C","font_body":"Inter"}'
+  mio hubs scaffold --template starter --hub hub_abc123
+  mio hubs scaffold --template starter --hub hub_abc123 --reapply-template --yes
+  HUB_ID=$(mio hubs scaffold --template starter --name "My Community" --slug my-community -o plain --jq .hub_id)`,
 	Args: cobra.NoArgs,
 	RunE: runHubsScaffold,
 }
@@ -2531,7 +2531,7 @@ func init() {
 	// resolved context).
 	//
 	// CORE flags (MIO-2543 Task 11): --template/--name/--slug/--dry-run.
-	hubsScaffoldCmd.Flags().String("template", "", "Template id to apply (e.g. community). Required.")
+	hubsScaffoldCmd.Flags().String("template", "", "Template id to apply (e.g. starter; list them with `mio hubs templates list`). Required.")
 	hubsScaffoldCmd.Flags().String("name", "", "Display name for the new hub (create mode).")
 	hubsScaffoldCmd.Flags().String("slug", "", "URL slug for the new hub (create mode).")
 	hubsScaffoldCmd.Flags().Bool("dry-run", false, "Print the ordered plan and make no changes.")

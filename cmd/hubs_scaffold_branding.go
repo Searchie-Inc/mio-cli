@@ -8,7 +8,7 @@ package cmd
 // template's indigo primary + green secondary no matter whose brand it was.
 // Recoloring meant a SECOND command and a hand-authored blob:
 //
-//	mio hubs scaffold --template community --name Acme --slug acme
+//	mio hubs scaffold --template starter --name Acme --slug acme
 //	mio hubs update <id> --branding-json '{"primary":"#B91C1C", …}'
 //
 // — two commands and a JSON literal for what the epic calls the "one-command
