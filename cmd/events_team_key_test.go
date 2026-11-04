@@ -266,3 +266,15 @@ func TestAPIKeys_PermissionFlags(t *testing.T) {
 		}
 	})
 }
+
+// With neither a contact token nor any API key there is nothing to author with:
+// exit 3 before a request (the admin route must not be tried unauthenticated).
+func TestEventsAuthoring_NoCredentialsAtAll_FailsBeforeAnyRequest(t *testing.T) {
+	t.Setenv(eventsContactTokenEnv, "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	rs := newRecordingServer(t, 0)
+	res := runContract(t, []string{"MIO_API_BASE_URL=" + rs.srv.URL, "MIO_API_KEY="}, withTeam("t_team1", createArgs...)...)
+	if res.Code != errs.ExitAuth || rs.count() != 0 {
+		t.Errorf("exit=%d requests=%d, want exit 3 and none", res.Code, rs.count())
+	}
+}
