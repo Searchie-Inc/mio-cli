@@ -288,6 +288,7 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/remote-connections/c1", "remote_connections"},
 		{"/api/teams/t1/remote-connections/c1/import", "remote_imports"},
 		{"/api/teams/t1/remote-connections/c1/browse", "remote_recordings"},
+		{"/api/hubs/h1/events/e1/cancel", "hub_event_cancellations"},
 		{"/api/teams/t1/products", "products"},
 		{"/api/teams/t1/products/p1", "products"},
 		{"/api/teams/t1/products/p1/prices", "prices"},

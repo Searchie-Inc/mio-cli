@@ -243,7 +243,7 @@ var eventsAttrFlags = []string{
 // setEventAttrs copies every changed create/update flag into attrs, applying
 // the correct getter per field. Only flags the user actually set are copied
 // (setStringFlag/setIntFlag/setBoolFlag all no-op on an unset flag), so a
-// PATCH stays a partial update and no field is ever sent as an explicit null.
+// PATCH stays a partial update; clearing cover media is handled explicitly by update.
 //
 // HOSTS (MIO-3740). The backend accepts EITHER host_contact_id (a single
 // contact id, sugar for a one-entry list) OR host_contact_ids (the full
@@ -276,6 +276,17 @@ func setEventAttrs(cmd *cobra.Command, attrs map[string]any) error {
 	}
 	setIntFlag(cmd, attrs, "capacity")
 	setBoolFlag(cmd, attrs, "attendee-list-visible")
+
+	if cmd.Flags().Changed("cover-media-id") {
+		id, err := cmd.Flags().GetString("cover-media-id")
+		if err != nil {
+			return errs.Wrap(errs.ExitGeneric, err)
+		}
+		if strings.TrimSpace(id) == "" {
+			return errs.New(errs.ExitUsage, "--cover-media-id must not be blank")
+		}
+		attrs["cover_media_id"] = id
+	}
 
 	if cmd.Flags().Changed("host-contact-id") {
 		raw, ferr := cmd.Flags().GetString("host-contact-id")
@@ -515,13 +526,20 @@ Requires hub owner/admin/moderator permissions.`,
 			return err
 		}
 
+		clear, _ := cmd.Flags().GetBool("clear-cover-media")
+		if clear {
+			if err := confirmDestructive(cmd, "Clear the one-shot cover media binding? It cannot be restored with the same media id."); err != nil {
+				return err
+			}
+			attrs["cover_media_id"] = nil
+		}
+		if len(attrs) == 0 {
+			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
+		}
+
 		c, hubID, err := eventsContext(cmd)
 		if err != nil {
 			return err
-		}
-
-		if len(attrs) == 0 {
-			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
 		res, err := c.client.Update(c.ctx, eventsPath(hubID, args[0]), attrs)
@@ -546,17 +564,27 @@ confirmation prompt in non-interactive environments (scripts, CI, AI agents).`,
   mio events cancel evt_abc123 --hub hub_123 --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		var attrs map[string]any
+		if cmd.Flags().Changed("message") {
+			message, err := cmd.Flags().GetString("message")
+			if err != nil {
+				return errs.Wrap(errs.ExitGeneric, err)
+			}
+			if strings.TrimSpace(message) == "" {
+				return errs.New(errs.ExitUsage, "--message must not be blank")
+			}
+			attrs = map[string]any{"message": message}
+		}
+		if err := confirmDestructive(cmd, fmt.Sprintf("Cancel event %s?", args[0])); err != nil {
+			return err
+		}
 		c, hubID, err := eventsContext(cmd)
 		if err != nil {
 			return err
 		}
 
-		if err := confirmDestructive(cmd, fmt.Sprintf("Cancel event %s?", args[0])); err != nil {
-			return err
-		}
-
 		path := eventsPath(hubID, args[0]) + "/cancel"
-		res, err := c.client.Action(c.ctx, "POST", path, nil)
+		res, err := c.client.Action(c.ctx, "POST", path, attrs)
 		if err != nil {
 			return err
 		}
@@ -717,7 +745,8 @@ func init() {
 		cmd.Flags().String("timezone", "", "IANA timezone name (e.g. America/New_York).")
 		cmd.Flags().String("location-type", "", "Location type: url or address.")
 		cmd.Flags().String("description", "", "Event description.")
-		cmd.Flags().String("cover-image-url", "", "Cover image URL.")
+		cmd.Flags().String("cover-image-url", "", "Cover image URL; an empty value clears the cover URL.")
+		cmd.Flags().String("cover-media-id", "", "Media id from a hub-scoped attachment upload session; binding is one-shot.")
 		cmd.Flags().String("location-url", "", "Location URL (when --location-type=url).")
 		cmd.Flags().String("location-address", "", "Location address (when --location-type=address).")
 		cmd.Flags().Int("capacity", 0, "Maximum attendee capacity. A \"maybe\" RSVP does not consume a seat — only \"going\" counts against this limit.")
@@ -745,6 +774,9 @@ func init() {
 				eventsMaxHosts))
 		cmd.MarkFlagsMutuallyExclusive("host-contact-id", "host-contact-ids")
 	}
+	eventsUpdateCmd.Flags().Bool("clear-cover-media", false, "Clear the media-backed cover (irreversible; requires confirmation).")
+	eventsUpdateCmd.MarkFlagsMutuallyExclusive("clear-cover-media", "cover-media-id")
+	eventsCancelCmd.Flags().String("message", "", "Organiser message to going/maybe attendees (max 280 characters).")
 	markFlagsRequired(eventsCreateCmd, "title", "starts-at", "ends-at", "timezone", "location-type")
 
 	// Pagination + filter/sort on list.
