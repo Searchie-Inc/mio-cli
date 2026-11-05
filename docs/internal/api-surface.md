@@ -393,3 +393,12 @@ contact_auth, hub_memberships, comments (contact routes), realtime SSE, all
 portal `/me` and `/api/hub/…` routes, webhooks, JWKS, magic-link landing.
 (The community ADMIN routes above are in scope and implemented; the member-facing
 community portal routes are not.)
+
+## apps  (`cmd/apps.go`) — team-scoped, team owner + USER access token (MIO-6609)
+- `create`   POST   `/api/teams/{team_id}/embedded-apps` flat body {name, hub_id, launch_url, allowed_origins[], webhook_url?, redirect_uris[]} → client_secret + webhook_signing_secret ONCE
+- `list`     GET    `/api/teams/{team_id}/embedded-apps` (cursor paged)
+- `retrieve` GET    `/api/teams/{team_id}/embedded-apps/{app_id}`
+- `update`   PATCH  same path {name, launch_url, allowed_origins, webhook_url (null clears)}
+- `delete`   DELETE same path → 204
+- `secrets update` POST `/api/teams/{team_id}/embedded-apps/{app_id}/rotate-secret` {secret: client|webhook} → new secret ONCE (rotation is not a fixed verb, so `secrets` + `update`)
+- `installs create|list|retrieve|update|delete` `/api/teams/{team_id}/embedded-apps/{app_id}/installs[/{install_id}]` {policy_type everyone|product, policy_product_id, approved_scopes[], enabled}; list is unpaged
