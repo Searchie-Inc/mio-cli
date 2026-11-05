@@ -435,6 +435,7 @@ var realAfterShapes = map[string]string{
 	"achievements offerings list":        "page_only",          // achievements/admin_router.py list_hub_achievements
 	"activity top-engaged":               "activity",           // activity/router.py list_top_engaged
 	"api-keys list":                      "tags",               // api_keys/router.py list_api_keys (build_cursor_links)
+	"apps list":                          "tags",               // embedded_apps/router.py list_embedded_apps (build_cursor_links, meta.has_more)
 	"automations enrollments":            "tags",               // automations/router.py list_enrollments
 	"automations list":                   "tags",               // automations/router.py list_automations
 	"automations versions":               "tags",               // automations/router.py list_automation_versions
