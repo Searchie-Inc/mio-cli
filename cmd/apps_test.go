@@ -222,3 +222,49 @@ func TestApps_Installs_ListRetrieveUpdateDelete(t *testing.T) {
 		t.Errorf("delete: exit=%d %s %s", res.Code, cap.Method, cap.Path)
 	}
 }
+
+// Malformed ids must send no request, for every command that takes one.
+func TestApps_MalformedIDs_SendNothing(t *testing.T) {
+	srv, cap := captureServer(t, http.StatusOK, appPlainBody)
+	for _, bad := range []string{"app_1#", "a/b", "a?x=1", "..", "a b", "a%2f", strings.Repeat("a", 37)} {
+		for _, args := range [][]string{
+			{"apps", "retrieve", bad},
+			{"apps", "update", bad, "--name", "x"},
+			{"apps", "delete", bad, "--yes"},
+			{"apps", "secrets", "update", bad, "--secret", "client", "--yes"},
+			{"apps", "installs", "create", bad, "--enabled"},
+			{"apps", "installs", "list", bad},
+			{"apps", "installs", "retrieve", bad, "inst_1"},
+			{"apps", "installs", "retrieve", "app_1", bad},
+			{"apps", "installs", "update", bad, "inst_1", "--enabled"},
+			{"apps", "installs", "update", "app_1", bad, "--enabled"},
+			{"apps", "installs", "delete", bad, "inst_1", "--yes"},
+			{"apps", "installs", "delete", "app_1", bad, "--yes"},
+		} {
+			res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
+			if res.Code != errs.ExitUsage || cap.Method != "" {
+				t.Errorf("%q: exit = %d, request = %s %s; want usage error and no request", args, res.Code, cap.Method, cap.Path)
+			}
+		}
+	}
+}
+
+func TestApps_Delete_StructuredOutput(t *testing.T) {
+	srv, _ := captureServer(t, http.StatusNoContent, ``)
+	res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", "apps", "delete", "app_1", "--yes", "-o", "json")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d; stderr=%q", res.Code, res.Stderr)
+	}
+	assertExactBody(t, []byte(res.Stdout), `{"id":"app_1","object":"embedded_app","deleted":true}`)
+
+	res = runContract(t, baseEnv(srv.URL), withTeam("t_team1", "apps", "installs", "delete", "app_1", "inst_1", "--yes", "-o", "json")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit = %d; stderr=%q", res.Code, res.Stderr)
+	}
+	assertExactBody(t, []byte(res.Stdout), `{"id":"inst_1","object":"embedded_app_install","deleted":true}`)
+
+	res = runContract(t, baseEnv(srv.URL), withTeam("t_team1", "apps", "delete", "app_1", "--yes", "-o", "plain", "--jq", ".deleted")...)
+	if res.Code != errs.ExitOK || strings.TrimSpace(res.Stdout) != "true" {
+		t.Errorf("--jq .deleted: exit = %d stdout=%q", res.Code, res.Stdout)
+	}
+}

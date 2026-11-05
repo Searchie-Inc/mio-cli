@@ -25,6 +25,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -94,6 +95,21 @@ func appsTeamContext(cmd *cobra.Command) (*cmdContext, string, error) {
 		return nil, "", err
 	}
 	return c, teamID, nil
+}
+
+// appIDPattern is the id shape the backend accepts (IdentifierStr: 1-36 chars),
+// narrowed to characters that are safe in a URL path segment, so an id can never
+// add a path segment, a query or a fragment.
+var appIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,35}$`)
+
+// checkAppIDs rejects a malformed id before any request is built.
+func checkAppIDs(kind string, ids ...string) error {
+	for _, id := range ids {
+		if !appIDPattern.MatchString(id) {
+			return errs.New(errs.ExitUsage, "%s id %q is not valid: use 1-36 letters, digits, '_' or '-'", kind, id)
+		}
+	}
+	return nil
 }
 
 // checkChoice rejects a value outside a closed set with a usage error.
@@ -226,6 +242,9 @@ var appsRetrieveCmd = &cobra.Command{
 	Example: `  mio apps retrieve app_abc123`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := checkAppIDs("app", args[0]); err != nil {
+			return err
+		}
 		c, teamID, err := appsTeamContext(cmd)
 		if err != nil {
 			return err
@@ -252,6 +271,9 @@ The hub cannot be changed.`,
   mio apps update app_abc123 --webhook-url ""`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := checkAppIDs("app", args[0]); err != nil {
+			return err
+		}
 		if stringArg(args[0]) == "" {
 			return errs.New(errs.ExitUsage, "app id is blank (an unset variable?)")
 		}
@@ -292,6 +314,9 @@ non-interactive environments.`,
   mio apps delete app_abc123 --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := checkAppIDs("app", args[0]); err != nil {
+			return err
+		}
 		c, teamID, err := appsTeamContext(cmd)
 		if err != nil {
 			return err
@@ -302,8 +327,7 @@ non-interactive environments.`,
 		if err := c.client.Delete(c.ctx, appsPath(teamID, args[0])); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Deleted embedded app %s.\n", args[0])
-		return nil
+		return c.render(cmd, map[string]any{"id": args[0], "object": "embedded_app", "deleted": true})
 	},
 }
 
@@ -327,6 +351,9 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
   mio apps secrets update app_abc123 --secret webhook --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := checkAppIDs("app", args[0]); err != nil {
+			return err
+		}
 		kind, _ := cmd.Flags().GetString("secret")
 		if err := checkChoice("secret", kind, appSecretKinds); err != nil {
 			return err
@@ -394,6 +421,9 @@ var appsInstallsCreateCmd = &cobra.Command{
   mio apps installs create app_abc123 --policy-type product --policy-product-id prod_123`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := checkAppIDs("app", args[0]); err != nil {
+			return err
+		}
 		attrs, err := appInstallAttrs(cmd)
 		if err != nil {
 			return err
@@ -417,6 +447,9 @@ var appsInstallsListCmd = &cobra.Command{
 	Example: `  mio apps installs list app_abc123`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := checkAppIDs("app", args[0]); err != nil {
+			return err
+		}
 		c, teamID, err := appsTeamContext(cmd)
 		if err != nil {
 			return err
@@ -436,6 +469,12 @@ var appsInstallsRetrieveCmd = &cobra.Command{
 	Example: `  mio apps installs retrieve app_abc123 inst_xyz789`,
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := checkAppIDs("app", args[0]); err != nil {
+			return err
+		}
+		if err := checkAppIDs("install", args[1]); err != nil {
+			return err
+		}
 		c, teamID, err := appsTeamContext(cmd)
 		if err != nil {
 			return err
@@ -460,6 +499,12 @@ required with --policy-type product and refused with everyone.
   mio apps installs update app_abc123 inst_xyz789 --approved-scope progress:read`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := checkAppIDs("app", args[0]); err != nil {
+			return err
+		}
+		if err := checkAppIDs("install", args[1]); err != nil {
+			return err
+		}
 		attrs, err := appInstallAttrs(cmd)
 		if err != nil {
 			return err
@@ -488,6 +533,12 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 	Example: `  mio apps installs delete app_abc123 inst_xyz789 --yes`,
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := checkAppIDs("app", args[0]); err != nil {
+			return err
+		}
+		if err := checkAppIDs("install", args[1]); err != nil {
+			return err
+		}
 		c, teamID, err := appsTeamContext(cmd)
 		if err != nil {
 			return err
@@ -498,8 +549,7 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 		if err := c.client.Delete(c.ctx, appInstallsPath(teamID, args[0], args[1])); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Deleted install %s of app %s.\n", args[1], args[0])
-		return nil
+		return c.render(cmd, map[string]any{"id": args[1], "object": "embedded_app_install", "deleted": true})
 	},
 }
 
