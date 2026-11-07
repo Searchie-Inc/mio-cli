@@ -10,8 +10,8 @@ Config mechanism: `internal/config/config.go` (flags > `MIO_*` env > profile/con
 
 | Area | Count | Headline |
 |---|---|---|
-| Hard-coded values | 6 rank A, 2 rank B, 6 rank C | The backend page-size cap `100` is typed six times and one comment about it is wrong |
-| Duplication | 12 groups | `--limit` has three validators with three messages; CSV splitting has three behaviours |
+| Hard-coded values | 6 rank A, 2 rank B, 6 rank C | The backend page-size cap `100` is typed in eight places and one comment about it is wrong |
+| Duplication | 12 groups | `--limit` handling differs per command; CSV splitting drops blanks in some commands and errors on them in others |
 
 ## 1. Hard-coded values
 
@@ -19,9 +19,9 @@ Config mechanism: `internal/config/config.go` (flags > `MIO_*` env > profile/con
 
 | # | file:line | Value | Note |
 |---|---|---|---|
-| A1 (checked) | `internal/client/resolve.go:47`, `cmd/more_rows_note.go:28`, `cmd/analytics.go:217`, `cmd/media.go:1365`, `cmd/contactattributes.go:985,1005`, `cmd/hubs_scaffold.go:1773`, `cmd/flags.go:254` | page size cap 100 | Six copies. `resolve.go:43` calls 100 "the universal maximum"; `cmd/segments.go:396-401` allows 200 |
+| A1 (checked) | `internal/client/resolve.go:47`, `cmd/more_rows_note.go:28`, `cmd/analytics.go:217`, `cmd/media.go:1365`, `cmd/contactattributes.go:985,1005`, `cmd/hubs_scaffold.go:1773`, `cmd/flags.go:254` | page size cap 100 | Seven files, eight occurrences (enforced caps, requested sizes, help text). `resolve.go:43` calls 100 "the universal maximum"; `cmd/segments.go:396-401` allows 200 |
 | A2 | `cmd/hubs_scaffold.go:584,764,1358,1770`, `hubs_scaffold_pages.go:552`, `hubs_scaffold_resume.go:582`, `contactattributes.go:986` | `maxPages = 1000` | seven copies of the stall guard |
-| A3 | `internal/config/config.go:355-356` vs `:622,624` | 5 tries / 10 ms vs 4 tries / 25 ms | same job, two policies |
+| A3 | `internal/config/config.go:355-356` vs `:622,624,658` | 5 tries / 10 ms vs 5 attempts (initial get plus 4 retries) / 25 ms | different jobs (new key file vs undecodable blob); ticketed as a naming/consolidation question only |
 | A4 | `cmd/update.go:19` vs `cmd/update_native.go:58` | release repo `Searchie-Inc/mio-cli` | typed twice |
 | A5 | `internal/config/config.go:868` vs `:880-888` | API base precedence | two copies of one rule |
 | A6 | `internal/client/hub_from_template.go:118` vs `internal/client/client.go:206` | `hub_scaffolds` | JSON:API type twice |
@@ -49,14 +49,14 @@ Rank D: sample IDs in help text, backend claims namespace.
 
 | # | What | Copies | Disagree? | To |
 |---|---|---|---|---|
-| G1 | Cursor walk | seven loops; readers at `hubs_scaffold.go:619,1844`, `contactattributes.go:951` | Yes: one errors on a missing cursor, one returns `""`; six loops hang silently on a repeated cursor | one walker in `internal/client` |
+| G1 | Cursor walk | seven loops; readers at `hubs_scaffold.go:619,1844`, `contactattributes.go:951` | Yes: one errors on a missing cursor, one returns `""`; six loops stop on a repeated cursor (`seen[next]`) and silently return an incomplete scan | one walker in `internal/client` |
 | G2 (checked) | int to string | `cmd/flags.go:283` `itoa`, `internal/client/resolve.go:355` `itoaCap` | Yes: `0` gives "0" vs "1"; the "avoid strconv" comment is stale | `strconv.Itoa` |
 | G3 | First non-empty | `cmd/flags.go:274`, `config.go:909`, `client/catalog.go:73` | no | one helper |
-| G4 | `--limit` validators | `media.go:1359`, `analytics.go:212`, `flags.go:259`, `segments.go:401` | Yes: three rules, three messages | `parseLimit(flag, max)` |
-| G5 | CSV split | nine sites | Yes: drop blanks, error on blanks, keep blanks (`media_remote_connections.go:133`) | one `splitCSV` with a policy |
-| G6 | JSON writers | `output.go:211`, `main.go:110`, `envelope.go:224`, `childbinary_keyring.go:33` | Yes: only the last HTML-escapes | `internal/output` |
+| G4 | `--limit` validation | `media.go:1359` and `analytics.go:212` reject invalid values with different messages; `flags.go:259` silently drops values <= 0; `segments.go:401` is a separate `--page-size` flag | Yes: two messages and a silent path | `parseLimit(flag, max)` |
+| G5 | CSV split | nine sites | Yes: drop blanks vs error on blanks (`media_remote_connections.go:133` appends blanks but rejects them at `:143`) | one `splitCSV` with a policy |
+| G6 | JSON writers | `output.go:211`, `main.go:110`, `envelope.go:224` (`childbinary_keyring.go:33` HTML-escapes but is test-build only, `mio_test_file_keyring`) | Minor: indent and fallback differ | `internal/output` |
 | G7 | Truncation | `interpolate.go:110`, `hubs_scaffold_resume.go:109` | Yes: limit and ellipsis | `internal/output` |
-| G8 | URL checks | `cmd/config.go:37`, `hubs_scaffold_branding.go:442-474` | Yes: the branding error says https only, no code enforces it | one validator |
+| G8 | URL checks | `cmd/config.go:37`, `hubs_scaffold_branding.go:442-474` | Low: the branding error describes what the API requires; the CLI only checks empty values | one validator |
 | G9 | UUID check | `cmd/config.go:19`, `client/resolve.go:102` | no | one |
 | G10 | HTTP client and body caps | `client.go:78,834`, `upload.go:21,44`, `update_native.go:81`, `catalog.go:63` | Yes: error bodies capped at 2048 in one place, unbounded in another | one constructor |
 | G11 | API base chain | same as A5 | no | `Resolve` |
@@ -64,5 +64,5 @@ Rank D: sample IDs in help text, backend claims namespace.
 
 ## 3. Plan
 
-- Fix now: A1 (one named cap, fix the wrong comment), G2, G4 (`--limit` validators), G5 (CSV blank policy), G1 (stall behaviour) if it fits the box.
+- Fix now: A1 (one named cap, fix the wrong comment), G2, G4 (`--limit` handling), G5 (CSV blank policy), G1 (stall behaviour) if it fits the box.
 - Ticket under MIO-6807, label `cleanup`: A2-A6, rank B and C rows, G3, G6-G12.
