@@ -28,6 +28,7 @@ import (
 	"io"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1770,7 +1771,7 @@ func (sc *scaffoldContext) findDiscussionByTitle(spaceID, title string) (*client
 	const maxPages = 1000 // hard ceiling (100k discussions at page_size 100); a stall guard, not a real bound
 	for page := 0; page < maxPages; page++ {
 		query := url.Values{}
-		query.Set("page[size]", "100")
+		query.Set("page[size]", strconv.Itoa(client.DefaultListCap))
 		if cursor != "" {
 			query.Set("page[after]", cursor)
 		}

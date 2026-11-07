@@ -20,15 +20,8 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/client"
 )
 
-// usualPageSizeCap is the most rows one page can hold on mio-backend's
-// paginated lists: infrastructure/pagination.py MAX_PAGE_SIZE = 100, and the
-// page[size] bound of every list handler but the two segments routes, which
-// markPageSizeCap raises. Past the cap the API rejects the request (422)
-// instead of returning more, so the note offers a larger page only below it.
-const usualPageSizeCap = 100
-
 // pageSizeCapAnnotation carries a command's own page-size cap when it is not
-// usualPageSizeCap. See markPageSizeCap.
+// client.DefaultListCap. See markPageSizeCap.
 const pageSizeCapAnnotation = "mio/page-size-cap"
 
 // markPageSizeCap records that cmd's route accepts pages of up to rows rows.
@@ -40,12 +33,12 @@ func markPageSizeCap(cmd *cobra.Command, rows int) {
 }
 
 // pageSizeCap returns cmd's page-size cap: its markPageSizeCap value, else
-// usualPageSizeCap.
+// client.DefaultListCap.
 func pageSizeCap(cmd *cobra.Command) int {
 	if n, err := strconv.Atoi(cmd.Annotations[pageSizeCapAnnotation]); err == nil && n > 0 {
 		return n
 	}
-	return usualPageSizeCap
+	return client.DefaultListCap
 }
 
 // unsignalledPagingAnnotation marks a list command whose route pages — it

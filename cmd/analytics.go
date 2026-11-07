@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -214,8 +215,8 @@ Naive date-times are treated as UTC by the backend.`,
 			if gerr != nil {
 				return errs.New(errs.ExitUsage, "--limit: %s", gerr.Error())
 			}
-			if v < 1 || v > 100 {
-				return errs.New(errs.ExitUsage, "--limit must be between 1 and 100 (got %d)", v)
+			if v < 1 || v > client.DefaultListCap {
+				return errs.New(errs.ExitUsage, "--limit must be between 1 and %d (got %d)", client.DefaultListCap, v)
 			}
 			query.Set("page[size]", itoa(v))
 		}
@@ -265,5 +266,5 @@ func init() {
 
 	// Engagement-only filters.
 	analyticsEngagementCmd.Flags().String("section", "", "Drill down into a single section: one of "+engagementSectionList+".")
-	analyticsEngagementCmd.Flags().Int("limit", 0, "Cap the size of the returned top-N lists (page[size], 1–100).")
+	analyticsEngagementCmd.Flags().Int("limit", 0, fmt.Sprintf("Cap the size of the returned top-N lists (page[size], 1–%d).", client.DefaultListCap))
 }

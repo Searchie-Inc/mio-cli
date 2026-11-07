@@ -982,7 +982,7 @@ func caDefFieldTypesBySlug(c *cmdContext, teamID string) (map[string]caAttrDef, 
 	out := map[string]caAttrDef{}
 	seen := map[string]bool{}
 	query := url.Values{}
-	query.Set("page[size]", "100")
+	query.Set("page[size]", strconv.Itoa(client.DefaultListCap))
 	const maxPages = 1000
 	for page := 0; page < maxPages; page++ {
 		col, err := c.client.List(c.ctx, contactAttributesDefsPath(teamID, ""), query)
@@ -1002,7 +1002,7 @@ func caDefFieldTypesBySlug(c *cmdContext, teamID string) (map[string]caAttrDef, 
 		}
 		seen[next] = true
 		query = url.Values{}
-		query.Set("page[size]", "100")
+		query.Set("page[size]", strconv.Itoa(client.DefaultListCap))
 		query.Set("page[after]", next)
 	}
 	return out, nil

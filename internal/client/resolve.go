@@ -35,16 +35,7 @@ import (
 	"sync"
 )
 
-// resolveListCap bounds the list+match fallback for resources with no server
-// filter. A team's tag/hub/team counts are small in practice; capping the page
-// keeps the lookup a single bounded request instead of an unbounded sweep. If a
-// name genuinely lives beyond this cap the user can always pass the raw id.
-//
-// The value is 100 because that is the universal backend page[size] maximum
-// (the list endpoints validate page[size] with le=100 and 400 on anything
-// larger — e.g. tags list, MIO-2496). Requesting more makes name/slug
-// resolution fail before it can match.
-const resolveListCap = 100
+const DefaultListCap = 100
 
 // id-prefix conventions per resource. Production ids are bare UUIDs (uuid7 via
 // the backend UUIDMixin), but the docs, examples, tests, and existing scripts
@@ -267,7 +258,7 @@ func (c *Client) ResolveContactByEmail(ctx context.Context, teamID, email string
 
 	q := url.Values{}
 	q.Set("filter[email]", email)
-	q.Set("page[size]", itoaCap(resolveListCap))
+	q.Set("page[size]", itoaCap(DefaultListCap))
 	col, err := c.List(ctx, fmt.Sprintf("/api/teams/%s/contacts", teamID), q)
 	if err != nil {
 		return "", err
@@ -346,7 +337,7 @@ func ambiguousError(kind, value string, candidates []Resource) error {
 // resolution so the fallback is a single bounded request.
 func listCapQuery() url.Values {
 	q := url.Values{}
-	q.Set("page[size]", itoaCap(resolveListCap))
+	q.Set("page[size]", itoaCap(DefaultListCap))
 	return q
 }
 
