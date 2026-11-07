@@ -15,6 +15,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -217,7 +218,7 @@ Naive date-times are treated as UTC by the backend.`,
 			if v < 1 || v > 100 {
 				return errs.New(errs.ExitUsage, "--limit must be between 1 and 100 (got %d)", v)
 			}
-			query.Set("page[size]", itoa(v))
+			query.Set("page[size]", strconv.Itoa(v))
 		}
 
 		c, teamID, hubID, err := analyticsContext(cmd)

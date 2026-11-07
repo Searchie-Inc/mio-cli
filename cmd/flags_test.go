@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"net/url"
 	"os"
 	"testing"
 
@@ -156,4 +157,30 @@ func keysOf(m map[string]any) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestAddPageFlags_PageSize(t *testing.T) {
+	cases := []struct {
+		name string
+		set  string
+		want string
+	}{
+		{"positive limit is sent", "25", "25"},
+		{"zero limit is omitted", "0", ""},
+		{"negative limit is omitted", "-3", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &cobra.Command{Use: "x"}
+			addPaginationFlags(c)
+			if err := c.Flags().Set("limit", tc.set); err != nil {
+				t.Fatal(err)
+			}
+			q := url.Values{}
+			addPageFlags(c, q)
+			if got := q.Get("page[size]"); got != tc.want {
+				t.Fatalf("page[size] = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }

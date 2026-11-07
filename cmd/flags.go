@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -259,7 +260,7 @@ func addPaginationFlags(cmd *cobra.Command) {
 func addPageFlags(cmd *cobra.Command, query url.Values) {
 	if cmd.Flags().Changed("limit") {
 		if limit, err := cmd.Flags().GetInt("limit"); err == nil && limit > 0 {
-			query.Set("page[size]", itoa(limit))
+			query.Set("page[size]", strconv.Itoa(limit))
 		}
 	}
 	if cmd.Flags().Changed("after") {
@@ -278,27 +279,4 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-func itoa(n int) string {
-	// Small dependency-free int→string for query params.
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }
