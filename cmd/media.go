@@ -56,6 +56,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1378,7 +1379,7 @@ Returns ranked snippets with timestamps and share URLs. Team-admin scope. Pass
 			query.Set("hub_id", hubID)
 		}
 		if pageSize > 0 {
-			query.Set("page[size]", itoa(pageSize))
+			query.Set("page[size]", strconv.Itoa(pageSize))
 		}
 		col, err := c.client.List(c.ctx, searchMediaPath(teamID), query)
 		if err != nil {

@@ -31,6 +31,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -267,7 +268,7 @@ func (c *Client) ResolveContactByEmail(ctx context.Context, teamID, email string
 
 	q := url.Values{}
 	q.Set("filter[email]", email)
-	q.Set("page[size]", itoaCap(resolveListCap))
+	q.Set("page[size]", strconv.Itoa(resolveListCap))
 	col, err := c.List(ctx, fmt.Sprintf("/api/teams/%s/contacts", teamID), q)
 	if err != nil {
 		return "", err
@@ -346,22 +347,6 @@ func ambiguousError(kind, value string, candidates []Resource) error {
 // resolution so the fallback is a single bounded request.
 func listCapQuery() url.Values {
 	q := url.Values{}
-	q.Set("page[size]", itoaCap(resolveListCap))
+	q.Set("page[size]", strconv.Itoa(resolveListCap))
 	return q
-}
-
-// itoaCap renders a small positive cap as a decimal string without pulling in
-// strconv (matching the dependency-free itoa helper in the cmd package).
-func itoaCap(n int) string {
-	if n <= 0 {
-		return "1"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }
