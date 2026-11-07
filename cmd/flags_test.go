@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 )
 
 // TestSetFlags_SnakeCaseKeys verifies that kebab-case flag names are written to
@@ -156,4 +160,14 @@ func keysOf(m map[string]any) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestPaginationLimitHelpNamesTheDefaultListCap(t *testing.T) {
+	c := &cobra.Command{Use: "x"}
+	addPaginationFlags(c)
+	usage := c.Flags().Lookup("limit").Usage
+	want := fmt.Sprintf("usually at %d", client.DefaultListCap)
+	if !strings.Contains(usage, want) {
+		t.Fatalf("limit help %q does not contain %q", usage, want)
+	}
 }

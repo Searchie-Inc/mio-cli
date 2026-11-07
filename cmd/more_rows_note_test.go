@@ -524,7 +524,7 @@ func TestMoreRowsNote_RealShapes(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			if strings.HasPrefix(shape, "unpaged_") {
-				ids := make([]string, usualPageSizeCap)
+				ids := make([]string, client.DefaultListCap)
 				for i := range ids {
 					ids[i] = fmt.Sprintf("u%03d", i)
 				}

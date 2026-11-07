@@ -61,6 +61,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
@@ -107,7 +108,7 @@ func init() {
 	mediaSearchCmd.Flags().String("query", "", "Search query string. Required.")
 	markFlagsRequired(mediaSearchCmd, "query")
 	mediaSearchCmd.Flags().String("hub-id", "", "Optional hub id to scope the search.")
-	mediaSearchCmd.Flags().Int("limit", 0, "Max results (page[size], 1-100).")
+	mediaSearchCmd.Flags().Int("limit", 0, fmt.Sprintf("Max results (page[size], 1-%d).", client.DefaultListCap))
 
 	// media hub-media <action>  (standalone files — MIO-2266)
 	mediaHubMediaCmd.AddCommand(
@@ -1362,8 +1363,8 @@ Returns ranked snippets with timestamps and share URLs. Team-admin scope. Pass
 			}
 			// Backend caps page[size] at 1..100 (top-N pagination); reject
 			// out-of-range client-side so it fires no request.
-			if limit < 1 || limit > 100 {
-				return errs.New(errs.ExitUsage, "invalid --limit %d: must be between 1 and 100", limit)
+			if limit < 1 || limit > client.DefaultListCap {
+				return errs.New(errs.ExitUsage, "invalid --limit %d: must be between 1 and %d", limit, client.DefaultListCap)
 			}
 			pageSize = limit
 		}

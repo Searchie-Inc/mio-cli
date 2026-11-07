@@ -19,6 +19,8 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
+const segmentsPageSizeCap = 200
+
 func init() {
 	// segments <action>
 	segmentsCmd.AddCommand(
@@ -393,8 +395,8 @@ func init() {
 	// (mio-backend origin/main segments/router.py list_members page[size]
 	// le=200; schemas.py search page.size le=200), so the more-rows note may
 	// suggest a larger page up to there (MIO-4174).
-	markPageSizeCap(segmentsMembersCmd, 200)
-	markPageSizeCap(segmentsSearchCmd, 200)
+	markPageSizeCap(segmentsMembersCmd, segmentsPageSizeCap)
+	markPageSizeCap(segmentsSearchCmd, segmentsPageSizeCap)
 
 	// Search flags.
 	segmentsSearchCmd.Flags().String("conditions", "", `Condition tree as JSON: {"version":1,"groups":[...]}. Prefix with @ to read from a file (e.g. @conditions.json).`)
