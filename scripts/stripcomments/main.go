@@ -21,11 +21,10 @@ import (
 )
 
 var (
-	directive   = regexp.MustCompile(`^//(go:[a-z]+|line |export |\s?\+build )`)
+	directive   = regexp.MustCompile(`^//(go:[a-z]+|line |export |\s?\+build\s)`)
 	nolint      = regexp.MustCompile(`^//\s?(nolint:[A-Za-z0-9_-]+(?:,[A-Za-z0-9_-]+)*)(?:\s|$)`)
-	vendorLine  = regexp.MustCompile(`^//\s?vendor: .*https?://\S+`)
+	vendorLine  = regexp.MustCompile(`^//\s?vendor: \S.* https?://[^\s#]\S*$`)
 	licenseWord = regexp.MustCompile(`Copyright|SPDX-License-Identifier`)
-	generated   = regexp.MustCompile(`(?m)^// Code generated .* DO NOT EDIT\.$`)
 	salvage     = regexp.MustCompile(`(?i)https?://|\b(workaround|work-around|work around|hack|because)\b|\b(stripe|github|goreleaser|homebrew|keychain|wincred|kwallet|secret service|d-bus|dbus|windows|macos|darwin|cobra|pflag|jira|mjml|cloudflare|apple|aws|s3|vault|npm|node|powershell|curl)\b`)
 	posType     = reflect.TypeOf(token.NoPos)
 )
@@ -36,12 +35,9 @@ type finding struct {
 	Text string
 }
 
-func isGenerated(src []byte) bool {
-	head := src
-	if i := bytes.Index(src, []byte("\npackage ")); i >= 0 {
-		head = src[:i]
-	}
-	return generated.Match(head)
+func isGenerated(path string, src []byte) bool {
+	_, f, err := parse(path, src, parser.ParseComments|parser.PackageClauseOnly)
+	return err == nil && ast.IsGenerated(f)
 }
 
 func parse(path string, src []byte, mode parser.Mode) (*token.FileSet, *ast.File, error) {
@@ -78,7 +74,10 @@ func keepText(c *ast.Comment) (string, bool) {
 	return "", false
 }
 
-type span struct{ start, end int }
+type span struct {
+	start, end int
+	repl       string
+}
 
 func analyze(path string, src []byte) (kept, dropped []finding, spans []span, err error) {
 	fset, f, err := parse(path, src, parser.ParseComments|parser.SkipObjectResolution)
@@ -97,12 +96,12 @@ func analyze(path string, src []byte) (kept, dropped []finding, spans []span, er
 				kept = append(kept, finding{path, pos.Line, text})
 				if text != c.Text {
 					dropped = append(dropped, finding{path, pos.Line, "(trailing text after nolint rule)"})
-					spans = append(spans, span{start + len(text), end})
+					spans = append(spans, span{start, end, text})
 				}
 				continue
 			}
 			dropped = append(dropped, finding{path, pos.Line, c.Text})
-			spans = append(spans, span{start, end})
+			spans = append(spans, span{start, end, ""})
 		}
 	}
 	return kept, dropped, spans, nil
@@ -111,25 +110,31 @@ func analyze(path string, src []byte) (kept, dropped []finding, spans []span, er
 func cut(src []byte, spans []span) []byte {
 	out := append([]byte(nil), src...)
 	for i := len(spans) - 1; i >= 0; i-- {
-		s, e := spans[i].start, spans[i].end
+		s, e, repl := spans[i].start, spans[i].end, spans[i].repl
+		if repl != "" {
+			out = append(out[:s], append([]byte(repl), out[e:]...)...)
+			continue
+		}
 		ls := bytes.LastIndexByte(out[:s], '\n') + 1
-		le := e
-		if i := bytes.IndexByte(out[e:], '\n'); i >= 0 {
-			le = e + i + 1
-		} else {
-			le = len(out)
+		le := len(out)
+		if j := bytes.IndexByte(out[e:], '\n'); j >= 0 {
+			le = e + j + 1
 		}
 		if len(bytes.TrimSpace(out[ls:s])) == 0 && len(bytes.TrimSpace(out[e:le])) == 0 {
 			out = append(out[:ls], out[le:]...)
 			continue
 		}
-		out = append(out[:s], out[e:]...)
+		sep := " "
+		if bytes.IndexByte(src[spans[i].start:spans[i].end], '\n') >= 0 {
+			sep = "\n"
+		}
+		out = append(out[:s], append([]byte(sep), out[e:]...)...)
 	}
 	return out
 }
 
 func strip(path string, src []byte) ([]byte, bool, error) {
-	if isGenerated(src) {
+	if isGenerated(path, src) {
 		return src, false, nil
 	}
 	_, dropped, spans, err := analyze(path, src)
@@ -139,15 +144,29 @@ func strip(path string, src []byte) ([]byte, bool, error) {
 	if len(dropped) == 0 {
 		return src, false, nil
 	}
+	if bytes.Contains(src, []byte("import \"C\"")) {
+		return nil, false, fmt.Errorf("%s: cgo preamble comments are code; strip by hand", path)
+	}
 	out, err := format.Source(cut(src, spans))
 	if err != nil {
 		return nil, false, err
+	}
+	before, err := astDigest(path, src)
+	if err != nil {
+		return nil, false, err
+	}
+	after, err := astDigest(path, out)
+	if err != nil {
+		return nil, false, err
+	}
+	if before != after {
+		return nil, false, fmt.Errorf("%s: stripping would change the syntax tree; strip by hand", path)
 	}
 	return out, !bytes.Equal(out, src), nil
 }
 
 func violations(path string, src []byte) ([]finding, error) {
-	if isGenerated(src) {
+	if isGenerated(path, src) {
 		return nil, nil
 	}
 	_, dropped, _, err := analyze(path, src)
@@ -166,7 +185,7 @@ func goFiles(roots []string) ([]string, error) {
 			}
 			if d.IsDir() {
 				n := d.Name()
-				if p != root && (strings.HasPrefix(n, ".") || n == "vendor" || n == "testdata" || n == "node_modules") {
+				if p != root && (n == ".git" || n == "vendor" || n == "node_modules") {
 					return filepath.SkipDir
 				}
 				return nil
@@ -210,6 +229,9 @@ func gitShow(base, path string) ([]byte, bool) {
 
 func proof(files []string, base string) (int, error) {
 	bad := 0
+	if err := exec.Command("git", "rev-parse", "--verify", "--quiet", base+"^{commit}").Run(); err != nil {
+		return 0, fmt.Errorf("proof base %q is not a commit", base)
+	}
 	for _, p := range files {
 		after, err := os.ReadFile(p)
 		if err != nil {
@@ -220,7 +242,7 @@ func proof(files []string, base string) (int, error) {
 			fmt.Printf("NEW   %s (not in %s)\n", p, base)
 			continue
 		}
-		if isGenerated(after) {
+		if isGenerated(p, after) {
 			fmt.Printf("GEN   %s untouched=%v\n", p, bytes.Equal(before, after))
 			if !bytes.Equal(before, after) {
 				bad++
