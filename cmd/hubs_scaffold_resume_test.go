@@ -1,15 +1,5 @@
 package cmd
 
-// hubs_scaffold_resume_test.go — `mio hubs scaffold --hub` FILLS GAPS by default
-// (MIO-4166 + MIO-2818). A --hub run must not overwrite state the hub already
-// has: branding/palette keys, navigation buckets, settings (registration
-// included), policy text, the policy gate, onboarding hub-config. Flags given on
-// the invocation still win, and --reapply-template (destructive, --hub only)
-// restores the template-wins apply.
-//
-// The oracle throughout is THE WIRE — the bodies the stub server receives — so
-// no edit to a list or a message can green these tests without the behaviour.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -26,27 +16,19 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// resumeReq is one request the resume stub saw.
 type resumeReq struct {
 	method, path string
 	body         []byte
 }
 
-// resumeStub is a full-pipeline stub for a --hub run. Everything a real run
-// reads is configurable; every request is recorded.
 type resumeStub struct {
-	hubID      string
-	hubAttrs   string // JSON object: the hub GET's attributes
-	catBody    []byte
-	hubConfigs string // JSON array: GET …/hubs/{id}/contact-attributes
-	defs       string // JSON array: GET …/teams/{t}/contact-attributes
-	pages      string // JSON array: GET …/pages
-	// hubAttrsLater, when set, is served by every hub GET after the FIRST one
-	// (the resume read the plan is made from): a hub that changed between that
-	// read and the write a step makes.
+	hubID         string
+	hubAttrs      string
+	catBody       []byte
+	hubConfigs    string
+	defs          string
+	pages         string
 	hubAttrsLater string
-	// hubPatchError, when set, is the JSON:API error body every hub PATCH is
-	// answered with, as a 422.
 	hubPatchError string
 	opError       string
 
@@ -63,7 +45,6 @@ func (s *resumeStub) record(r *http.Request) []byte {
 	return body
 }
 
-// writes returns every non-GET request, in order.
 func (s *resumeStub) writes() []resumeReq {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -76,8 +57,6 @@ func (s *resumeStub) writes() []resumeReq {
 	return out
 }
 
-// bodies returns the bodies of every request with this method whose path ends
-// with suffix.
 func (s *resumeStub) bodies(method, suffix string) [][]byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,8 +69,6 @@ func (s *resumeStub) bodies(method, suffix string) [][]byte {
 	return out
 }
 
-// blobsPatch returns the attributes of the hub PATCH that carries branding,
-// settings or navigation (the blobs step), or nil when the run sent none.
 func (s *resumeStub) blobsPatch(t *testing.T) map[string]any {
 	t.Helper()
 	var out map[string]any
@@ -146,7 +123,6 @@ func (s *resumeStub) serve(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			_, _ = w.Write([]byte(s.hubPatchError))
 		case r.Method == http.MethodPatch && strings.HasSuffix(p, hubSuffix):
-			// Echo what was sent (a real PATCH returns the stored hub).
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"hubs","attributes":%s}}`, s.hubID, s.hubAttrs)
 		case r.Method == http.MethodGet && strings.HasSuffix(p, hubSuffix+"/contact-attributes"):
 			_, _ = fmt.Fprintf(w, `{"data":%s,"meta":{}}`, orEmpty(s.hubConfigs))
@@ -154,7 +130,7 @@ func (s *resumeStub) serve(t *testing.T) *httptest.Server {
 			_, _ = fmt.Fprintf(w, `{"data":%s}`, orEmpty(s.defs))
 		case r.Method == http.MethodGet && strings.HasSuffix(p, "/pages"):
 			_, _ = fmt.Fprintf(w, `{"data":%s}`, orEmpty(s.pages))
-		case r.Method == http.MethodGet && strings.HasSuffix(p, "/tree"): // recovery draft_version read: no draft
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/tree"):
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"no draft"}]}`))
 		case r.Method == http.MethodGet:
@@ -199,9 +175,6 @@ func (s *resumeStub) serve(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// qaHubAttrs is the hub QA reported (MIO-4166): a palette set at create, a
-// logo, self-signup CLOSED by the owner, and a menu edited after the scaffold
-// — one header item and a mobile bucket, and no footer at all.
 const qaHubAttrs = `{
   "slug": "trail", "title": "Trail Academy", "is_private": true,
   "branding": {"primary": "#2F4A2E", "secondary": "#1C2419", "header_accent": "#E8A33D",
@@ -213,9 +186,6 @@ const qaHubAttrs = `{
   }
 }`
 
-// runResume is runContract that also hands back the command's error, so a
-// test can assert on the message (root.Execute does not print it; main.go
-// does) as well as on the exit code and the captured streams.
 func runResume(t *testing.T, env []string, args ...string) (contractResult, error) {
 	t.Helper()
 	restore := overlayEnv(t, env)
@@ -235,10 +205,6 @@ func resumeArgs(hubID string, extra ...string) []string {
 	return withTeam("t_team1", append([]string{"hubs", "scaffold", "--template", "community", "--hub", hubID}, extra...)...)
 }
 
-// TestScaffoldResume_BlobsKeepWhatTheHubHasAndFillTheRest is the MIO-4166 repro
-// one layer below the live hub: a --hub run against QA's hub must PATCH the
-// hub's own palette, registration and menu back unchanged, and fill ONLY the
-// keys and buckets the hub does not have.
 func TestScaffoldResume_BlobsKeepWhatTheHubHasAndFillTheRest(t *testing.T) {
 	stub := &resumeStub{hubAttrs: qaHubAttrs}
 	srv := stub.serve(t)
@@ -254,15 +220,13 @@ func TestScaffoldResume_BlobsKeepWhatTheHubHasAndFillTheRest(t *testing.T) {
 
 	branding, _ := patch["branding"].(map[string]any)
 	for k, want := range map[string]string{
-		// the hub's own values — the template's are #4F46E5 / #15803D / #A5B4FC / its CDN logo
 		"primary":       "#2F4A2E",
 		"secondary":     "#1C2419",
 		"header_accent": "#E8A33D",
 		"logo_url":      "https://cdn.example.com/trail-logo.png",
-		// gaps, filled from the template
-		"header_color": "#4F46E5",
-		"background":   "#FFFFFF",
-		"text":         "#111827",
+		"header_color":  "#4F46E5",
+		"background":    "#FFFFFF",
+		"text":          "#111827",
 	} {
 		if branding[k] != want {
 			t.Errorf("branding.%s = %v, want %q; branding=%v", k, branding[k], want, branding)
@@ -295,7 +259,6 @@ func TestScaffoldResume_BlobsKeepWhatTheHubHasAndFillTheRest(t *testing.T) {
 		t.Errorf("navigation.footer = %v, want the template's two items, hub-scoped (/trail/about)", nav["footer"])
 	}
 
-	// Kept values are reported on stderr, by path, with the value kept.
 	for _, want := range []string{"branding.primary", "#2F4A2E", "settings.registration.enabled", "navigation.header", "--reapply-template"} {
 		if !strings.Contains(res.Stderr, want) {
 			t.Errorf("stderr must report the kept value %q; stderr=%q", want, res.Stderr)
@@ -306,9 +269,6 @@ func TestScaffoldResume_BlobsKeepWhatTheHubHasAndFillTheRest(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_InvocationFlagsStillWin: the printed "Resume with:" command
-// repeats the operator's flags, so a flag given on a --hub run must still win
-// over the hub's own value.
 func TestScaffoldResume_InvocationFlagsStillWin(t *testing.T) {
 	stub := &resumeStub{hubAttrs: qaHubAttrs}
 	srv := stub.serve(t)
@@ -335,20 +295,11 @@ func TestScaffoldResume_InvocationFlagsStillWin(t *testing.T) {
 	if reg, _ := settings["registration"].(map[string]any); reg["enabled"] != true {
 		t.Errorf("settings.registration.enabled = %v, want true from --registration-enabled", reg["enabled"])
 	}
-	// A value a flag overwrote was not KEPT, so it must not be reported as kept.
 	if strings.Contains(res.Stderr, "branding.primary") || strings.Contains(res.Stderr, "settings.registration.enabled") {
 		t.Errorf("a key an invocation flag overwrote must not be reported as kept; stderr=%q", res.Stderr)
 	}
 }
 
-// completeHubAttrs is a hub that already has every blob value the community
-// template declares — the second resume, typically — in a state the backend
-// can actually hold. Its settings.policies is {"enabled": true} and nothing
-// else: the gate endpoint writes only `enabled`, the hub PATCH pops `policies`
-// wholesale (MIO-497), and nothing on the scaffold path ever stores the
-// template's settings.policies.show. (The fixture this replaced carried
-// "show": true, which no scaffolded hub can reach, and so hid a settings PATCH
-// sent on every real --hub run.) Its own primary differs from the template's.
 const completeHubAttrs = `{
 	  "slug": "trail", "title": "Trail", "is_private": true,
 	  "branding": {"logo_url": "https://assets.searchie.io/hub-templates/community/logo.png",
@@ -362,8 +313,6 @@ const completeHubAttrs = `{
 	    "footer": [{"type": "url", "label": "Mine", "href": "/trail/mine"}]}
 	}`
 
-// TestScaffoldResume_NothingToFillSendsNoBlobsPatch: a hub that already carries
-// every template value (the second resume, typically) gets no blobs write.
 func TestScaffoldResume_NothingToFillSendsNoBlobsPatch(t *testing.T) {
 	stub := &resumeStub{hubAttrs: completeHubAttrs}
 	srv := stub.serve(t)
@@ -372,9 +321,6 @@ func TestScaffoldResume_NothingToFillSendsNoBlobsPatch(t *testing.T) {
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
 	}
-	// ANY hub PATCH, not just one carrying a blob: an empty-attributes PATCH is
-	// still a write (it bumps updated_at and the hub's ETag). --publish is off,
-	// so nothing else in the run PATCHes the hub itself.
 	if p := stub.bodies(http.MethodPatch, "/hubs/"+stub.hubID); len(p) != 0 {
 		t.Errorf("nothing is missing on the hub, so no hub PATCH may be sent; got %d, first %s", len(p), p[0])
 	}
@@ -386,10 +332,6 @@ func TestScaffoldResume_NothingToFillSendsNoBlobsPatch(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_OverrideFlagAloneStillPatches: on a hub with nothing to
-// fill, each scalar override flag is by itself a reason to PATCH — "nothing to
-// fill" must never swallow a value the operator asked for on this command.
-// One flag per subtest, so each of the three is guarded on its own.
 func TestScaffoldResume_OverrideFlagAloneStillPatches(t *testing.T) {
 	for _, tc := range []struct {
 		flag, blob, key string
@@ -423,13 +365,6 @@ func TestScaffoldResume_OverrideFlagAloneStillPatches(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_StrictTemplateKeysStillChecked: fill-gaps must not make the
-// strict template-key check depend on what the hub already has — a template
-// key outside the allowlist fails even when the hub carries that key already
-// (so the fill would never have sent it). Since MIO-4171 the keys the CLI
-// checks at all are branding keys and settings.achievements sub-keys — the
-// ones the API stores as sent — so each is pinned here; every other settings
-// key is the API's to judge (TestScaffoldResume_TemplateSettingsKeysAreTheAPIsToCheck).
 func TestScaffoldResume_StrictTemplateKeysStillChecked(t *testing.T) {
 	for _, tc := range []struct {
 		name, key, hubAttrs string
@@ -474,12 +409,6 @@ func TestScaffoldResume_StrictTemplateKeysStillChecked(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_TemplateSettingsKeysAreTheAPIsToCheck (MIO-4171 on the
-// --hub path): the fill-gaps key check must make the settings checks the
-// template-wins apply makes, and no more. A template settings key the API
-// accepts but the CLI's retired allowlist never listed (`language`,
-// `email.from_localpart`) must reach the fill PATCH, not fail the run with a
-// usage error on a hub the operator is trying to repair.
 func TestScaffoldResume_TemplateSettingsKeysAreTheAPIsToCheck(t *testing.T) {
 	cat := catalogWithTemplateEdit(t, func(ht map[string]any) {
 		s, _ := ht["settings"].(map[string]any)
@@ -506,15 +435,6 @@ func TestScaffoldResume_TemplateSettingsKeysAreTheAPIsToCheck(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_KeptNavigationIsNotReScoped: when a --hub run fills one
-// navigation bucket it must send the hub's OTHER buckets back as they are —
-// the API stores navigation whole — and it must not run them through the
-// CLI's hub-scoped href check (MIO-2270). The backend accepts any root-relative
-// href (app/hubs/validation.py _validate_nav_href, form 1): a "/content" link,
-// a same-origin link to a sibling hub, or a "/old-slug/…" link a slug rename
-// left behind. Re-judging those made the run exit 2 at the blobs step, blaming
-// an item it had just reported as kept, on a hub the template-wins apply
-// handled without complaint.
 func TestScaffoldResume_KeptNavigationIsNotReScoped(t *testing.T) {
 	for _, tc := range []struct {
 		name, hubAttrs, keptHref, filledHref string
@@ -553,14 +473,6 @@ func TestScaffoldResume_KeptNavigationIsNotReScoped(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_DanglingPageInKeptBucketNamesTheWayOut: the API refuses
-// every navigation write while a type=page item points at a deleted page (page
-// deletion does not cascade to the menu), so filling one bucket on such a hub
-// is a 422 about an item the run is only carrying back. The run must not drop
-// that item to get through; it stops with the API's verdict, and says the item
-// is on the hub's own menu and how to remove it, instead of leaving the
-// printed "Resume with:" command to hit the same wall. (The 422 body is the
-// one mio-backend returned live for this hub state.)
 func TestScaffoldResume_DanglingPageInKeptBucketNamesTheWayOut(t *testing.T) {
 	stub := &resumeStub{
 		hubAttrs: `{"slug":"trail","title":"Trail","is_private":true,
@@ -576,7 +488,7 @@ func TestScaffoldResume_DanglingPageInKeptBucketNamesTheWayOut(t *testing.T) {
 		t.Fatalf("exit = %d, want %d (the API's 422); err=%v", res.Code, errs.ExitUsage, err)
 	}
 	for _, want := range []string{
-		"is not a valid page for this hub's navigation", // the API's own words survive
+		"is not a valid page for this hub's navigation",
 		"hub's own navigation bucket(s) [footer]",
 		"mio hubs navigation remove hub_r <bucket> --index <n>",
 	} {
@@ -589,15 +501,11 @@ func TestScaffoldResume_DanglingPageInKeptBucketNamesTheWayOut(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_TemplateNavHrefsStillChecked: the other half of the rule
-// above. The template's OWN navigation is still hub-scope-checked in full,
-// whatever the hub holds — even when every bucket it declares is kept and so
-// never sent — exactly as StrictTemplateKeysStillChecked does for blob keys.
 func TestScaffoldResume_TemplateNavHrefsStillChecked(t *testing.T) {
 	cat := catalogWithTemplateEdit(t, func(ht map[string]any) {
 		nav, _ := ht["navigation"].(map[string]any)
 		footer, _ := nav["footer"].([]any)
-		footer[0].(map[string]any)["href"] = "/../escape" // scoped to /trail/../escape, which resolves to /escape
+		footer[0].(map[string]any)["href"] = "/../escape"
 	})
 	stub := &resumeStub{catBody: cat, hubAttrs: completeHubAttrs}
 	srv := stub.serve(t)
@@ -614,23 +522,13 @@ func TestScaffoldResume_TemplateNavHrefsStillChecked(t *testing.T) {
 	}
 }
 
-// ─── policies (MIO-2818) ─────────────────────────────────────────────────────
-
-// customToSHub carries a hand-written ToS (the stored content is what the
-// backend serves instead of the default) and an owner-set gate of false.
 const customToSHub = `{"slug":"trail","title":"Trail","is_private":true,
   "settings":{"policies":{"enabled":false,
     "tos":{"content":"Our own terms.","version":"v_24c5","require_acceptance":true}}}}`
 
-// qaHubWithCustomPolicies is QA's hub with a hand-written ToS and an owner-set
-// gate of false as well.
 var qaHubWithCustomPolicies = strings.Replace(qaHubAttrs, `"settings": {"registration": {"enabled": false}}`,
 	`"settings": {"registration": {"enabled": false}, "policies": {"enabled": false, "tos": {"content": "Our own terms."}}}`, 1)
 
-// TestScaffoldResume_PoliciesNeverRevertCustomText: the community template
-// declares NO policy text. On a --hub run that must never become content:null
-// — that is exactly the write that replaced QA's ToS with the platform default
-// and re-prompted every member.
 func TestScaffoldResume_PoliciesNeverRevertCustomText(t *testing.T) {
 	stub := &resumeStub{hubAttrs: customToSHub}
 	srv := stub.serve(t)
@@ -653,24 +551,16 @@ func TestScaffoldResume_PoliciesNeverRevertCustomText(t *testing.T) {
 	if got := decodeSoleJSON(t, res.Stdout)["policy_gate"]; got != nil {
 		t.Errorf("result.policy_gate = %v, want null — this run wrote no gate", got)
 	}
-	// The blobs step must not claim to have "kept" settings.policies: the backend
-	// pops `policies` from every hub PATCH, so the template could never have
-	// changed it there. The gate is reported by the policies step alone.
 	if strings.Contains(res.Stderr, "settings.policies") {
 		t.Errorf("settings.policies is not the blobs step's to keep or change; stderr=%q", res.Stderr)
 	}
 }
 
-// TestScaffoldResume_PoliciesFillOnlyUnconfiguredText: template-declared text is
-// written to a policy the hub has not configured, and ONLY to that one. The
-// stored content is the backend's own "unconfigured" signal: the admin read
-// renders the platform default exactly when it is null.
 func TestScaffoldResume_PoliciesFillOnlyUnconfiguredText(t *testing.T) {
 	cat := catalogWithPolicies(t, map[string]any{
 		"terms":          map[string]any{"content": "Template terms.", "required": true, "enabled": true},
 		"privacy_policy": map[string]any{"content": "Template privacy.", "enabled": true},
 	})
-	// tos is hand-written; privacy_policy was reset (content null) — a gap.
 	stub := &resumeStub{catBody: cat, hubAttrs: `{"slug":"trail","title":"Trail","is_private":true,
 	  "settings":{"policies":{"tos":{"content":"Our own terms."},"privacy_policy":{"content":null}}}}`}
 	srv := stub.serve(t)
@@ -689,7 +579,6 @@ func TestScaffoldResume_PoliciesFillOnlyUnconfiguredText(t *testing.T) {
 	if sent[0]["policy_type"] != "privacy_policy" || sent[0]["content"] != "Template privacy." {
 		t.Errorf("policy write = %v, want privacy_policy with the template's text", sent[0])
 	}
-	// The gate is absent on the hub — a gap — so it IS written.
 	gates := stub.bodies(http.MethodPatch, "/policies/gate")
 	if len(gates) != 1 || decodeHubAttrs(t, gates[0])["enabled"] != true {
 		t.Errorf("an unset gate is a gap and must be enabled once; got %d gate PATCH(es)", len(gates))
@@ -699,10 +588,6 @@ func TestScaffoldResume_PoliciesFillOnlyUnconfiguredText(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_PoliciesDecideOnTheReadBeforeTheWrite: the policies step
-// decides against a read it makes right before it writes, not against the
-// resume read the plan was made from. Here the owner writes their own ToS
-// after that read: the template's text must not be written over it.
 func TestScaffoldResume_PoliciesDecideOnTheReadBeforeTheWrite(t *testing.T) {
 	cat := catalogWithPolicies(t, map[string]any{
 		"terms":          map[string]any{"content": "Template terms.", "required": true, "enabled": true},
@@ -726,12 +611,6 @@ func TestScaffoldResume_PoliciesDecideOnTheReadBeforeTheWrite(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_NonBooleanGateIsAGap: only a JSON boolean is a gate the
-// hub has set. `hubs create --settings-json '{"policies":{"enabled":"true"}}'`
-// can store a string there (the create path keeps the gate flags, and the
-// backend's settings validator checks keys, not value types), and the backend
-// reads the gate with `is True` — so that hub's enforcement is OFF, it was
-// never set as a boolean, and a --hub run fills it like any other gap.
 func TestScaffoldResume_NonBooleanGateIsAGap(t *testing.T) {
 	stub := &resumeStub{hubAttrs: `{"slug":"trail","title":"Trail","is_private":true,
 	  "settings":{"policies":{"enabled":"true"}}}`}
@@ -750,11 +629,6 @@ func TestScaffoldResume_NonBooleanGateIsAGap(t *testing.T) {
 	}
 }
 
-// ─── onboarding hub-config ───────────────────────────────────────────────────
-
-// TestScaffoldResume_OnboardingKeepsExistingHubConfig: a (hub, definition)
-// hub-config row the hub already has is not re-upserted; a missing one is
-// created.
 func TestScaffoldResume_OnboardingKeepsExistingHubConfig(t *testing.T) {
 	stub := &resumeStub{
 		hubAttrs: `{"slug":"trail","title":"Trail","is_private":true}`,
@@ -781,12 +655,6 @@ func TestScaffoldResume_OnboardingKeepsExistingHubConfig(t *testing.T) {
 	}
 }
 
-// ─── pages: checked before any write ─────────────────────────────────────────
-
-// TestScaffoldResume_PageConflictFailsBeforeAnyWrite: a foreign page at a
-// template slug used to exit 2 at step 7 — AFTER the blobs, spaces, onboarding
-// and policies had been written. On --hub it is checked in the preflight, so
-// the run exits 2 having written nothing.
 func TestScaffoldResume_PageConflictFailsBeforeAnyWrite(t *testing.T) {
 	stub := &resumeStub{
 		hubAttrs: qaHubAttrs,
@@ -808,11 +676,6 @@ func TestScaffoldResume_PageConflictFailsBeforeAnyWrite(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_HomepageConflictFailsBeforeAnyWrite: the other half of the
-// pages preflight. A hub whose homepage lives at a slug the template does not
-// use has no page at any template slug, so no slug conflict is found; but the
-// template's homepage entry would still clear that homepage server-side. That
-// too must stop a --hub run before its first write.
 func TestScaffoldResume_HomepageConflictFailsBeforeAnyWrite(t *testing.T) {
 	stub := &resumeStub{
 		hubAttrs: qaHubAttrs,
@@ -834,10 +697,6 @@ func TestScaffoldResume_HomepageConflictFailsBeforeAnyWrite(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_UnhomedHomepageWouldClearForeignHomepage (MIO-4929): our
-// own applied homepage exists but is not home, and another page is. Finishing
-// the run sets is_homepage on ours, which clears the other one server-side — so
-// the preflight must stop the run before ANY write, like the create-time hazard.
 func TestScaffoldResume_UnhomedHomepageWouldClearForeignHomepage(t *testing.T) {
 	m := ourMarker("applied")
 	m["applicationId"] = catalog.ApplicationID("hub_r", "community")
@@ -862,11 +721,6 @@ func TestScaffoldResume_UnhomedHomepageWouldClearForeignHomepage(t *testing.T) {
 	}
 }
 
-// ─── --reapply-template ──────────────────────────────────────────────────────
-
-// TestScaffoldResume_ReapplyTemplateOverwrites: the explicit opt-in restores the
-// template-wins apply — palette, registration, the whole navigation blob, the
-// policy text reset and the gate.
 func TestScaffoldResume_ReapplyTemplateOverwrites(t *testing.T) {
 	stub := &resumeStub{hubAttrs: qaHubWithCustomPolicies}
 	srv := stub.serve(t)
@@ -896,8 +750,6 @@ func TestScaffoldResume_ReapplyTemplateOverwrites(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_ReapplyTemplateIsDestructive: off a TTY without --yes the
-// opt-in exits 5 and sends NOTHING — not even the catalog read.
 func TestScaffoldResume_ReapplyTemplateIsDestructive(t *testing.T) {
 	stub := &resumeStub{hubAttrs: qaHubAttrs}
 	srv := stub.serve(t)
@@ -911,8 +763,6 @@ func TestScaffoldResume_ReapplyTemplateIsDestructive(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_ReapplyTemplateNeedsHub: without --hub there is nothing to
-// re-apply onto — a usage error before any request.
 func TestScaffoldResume_ReapplyTemplateNeedsHub(t *testing.T) {
 	stub := &resumeStub{hubAttrs: qaHubAttrs}
 	srv := stub.serve(t)
@@ -930,8 +780,6 @@ func TestScaffoldResume_ReapplyTemplateNeedsHub(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_DryRunPlanReportsKeptValues: kept values are named in the
-// --dry-run plan too, and the dry run writes nothing.
 func TestScaffoldResume_DryRunPlanReportsKeptValues(t *testing.T) {
 	stub := &resumeStub{
 		hubAttrs: qaHubWithCustomPolicies,
@@ -949,9 +797,9 @@ func TestScaffoldResume_DryRunPlanReportsKeptValues(t *testing.T) {
 		t.Errorf("a dry run writes nothing; got %d write(s)", len(w))
 	}
 	for _, want := range []string{
-		"fill gaps", "branding.primary", "navigation.header", "settings.registration.enabled", // blobs
-		"own text for [tos (14 characters)]", "enabled=false", // policies + gate
-		`config for "company"`, // onboarding
+		"fill gaps", "branding.primary", "navigation.header", "settings.registration.enabled",
+		"own text for [tos (14 characters)]", "enabled=false",
+		`config for "company"`,
 	} {
 		if !strings.Contains(res.Stdout, want) {
 			t.Errorf("the dry-run plan must report %q; stdout:\n%s", want, res.Stdout)
@@ -959,9 +807,6 @@ func TestScaffoldResume_DryRunPlanReportsKeptValues(t *testing.T) {
 	}
 }
 
-// TestScaffoldResume_ReapplyTemplateDryRunNeedsNoConfirmation: a dry run writes
-// nothing, so --reapply-template --dry-run previews without --yes — and says
-// the template will overwrite.
 func TestScaffoldResume_ReapplyTemplateDryRunNeedsNoConfirmation(t *testing.T) {
 	stub := &resumeStub{hubAttrs: qaHubAttrs}
 	srv := stub.serve(t)
@@ -978,10 +823,6 @@ func TestScaffoldResume_ReapplyTemplateDryRunNeedsNoConfirmation(t *testing.T) {
 	}
 }
 
-// TestStepBlobs_FillGapsDecidesAndMergesOnOneRead: the fill is computed from a
-// read and merged onto THAT read — exactly one hub GET and one PATCH. A second
-// GET between the decision and the merge could see a key the fill decided was
-// missing.
 func TestStepBlobs_FillGapsDecidesAndMergesOnOneRead(t *testing.T) {
 	var gets, patches int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1007,10 +848,6 @@ func TestStepBlobs_FillGapsDecidesAndMergesOnOneRead(t *testing.T) {
 	}
 }
 
-// TestFillMissing_Semantics pins what counts as a gap: an absent key and a null
-// are gaps; a present value of any other kind (false, "", [], a scalar where
-// the template has an object) is the hub's and is kept; objects both sides
-// have are recursed into.
 func TestFillMissing_Semantics(t *testing.T) {
 	tmpl := map[string]any{
 		"absent":  "t",
@@ -1045,8 +882,6 @@ func TestFillMissing_Semantics(t *testing.T) {
 	}
 }
 
-// TestFillNavigation_EmptyBucketIsAGap: an empty bucket is filled like an absent
-// one; a bucket the template does not declare is never dropped.
 func TestFillNavigation_EmptyBucketIsAGap(t *testing.T) {
 	tmpl := map[string]any{"header": []any{"t1"}, "footer": []any{"t2"}}
 	cur := map[string]any{"header": []any{}, "mobile": []any{"m"}}
@@ -1061,9 +896,6 @@ func TestFillNavigation_EmptyBucketIsAGap(t *testing.T) {
 	}
 }
 
-// TestPrintScaffoldRecovery_EchoesReapplyTemplate: a --reapply-template run that
-// dies mid-pipeline prints a resume command that keeps re-applying — without it
-// the resume would silently switch to fill-gaps half way through.
 func TestPrintScaffoldRecovery_EchoesReapplyTemplate(t *testing.T) {
 	var buf strings.Builder
 	printScaffoldRecovery(&buf, &scaffoldContext{hubID: "hub_r", teamID: "t1", resume: true, reapplyTemplate: true}, "community")
@@ -1077,8 +909,6 @@ func TestPrintScaffoldRecovery_EchoesReapplyTemplate(t *testing.T) {
 	}
 }
 
-// catalogWithTemplateEdit rewrites the 2.1 fixture's community hubTemplate with
-// edit and re-digests it (the same shape catalogWithPolicies builds).
 func catalogWithTemplateEdit(t *testing.T, edit func(ht map[string]any)) []byte {
 	t.Helper()
 	var doc map[string]any
@@ -1094,8 +924,6 @@ func catalogWithTemplateEdit(t *testing.T, edit func(ht map[string]any)) []byte 
 	return redigestCatalog(t, doc)
 }
 
-// redigestCatalog recomputes meta.digest over doc and marshals it, so an edited
-// fixture passes the same digest verification the live artifact does.
 func redigestCatalog(t *testing.T, doc map[string]any) []byte {
 	t.Helper()
 	meta, ok := doc["meta"].(map[string]any)
@@ -1115,7 +943,6 @@ func redigestCatalog(t *testing.T, doc map[string]any) []byte {
 	return out
 }
 
-// TestScaffoldFailureClaims distinguishes a target hub from one created here.
 func TestScaffoldFailureClaims(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

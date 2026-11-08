@@ -71,15 +71,10 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 		TeamID:  flags.team,
 		Profile: flags.profile,
 	})
-	// A stored key that cannot be used (legacy or unreadable, left in place by
-	// the read and about to be overwritten) is irrelevant here since register
-	// mints and stores a fresh key regardless. Any other resolution error is
-	// fatal.
 	if err != nil && !config.StoredKeyUnusable(err) {
 		return errs.Wrap(errs.ExitGeneric, err)
 	}
 
-	// Resolve credentials: flag > env. The password is NEVER echoed or stored.
 	email := firstNonEmpty(flagValue(cmd, "email"), os.Getenv(envEmail))
 	password, _ := cmd.Flags().GetString("password")
 	if password == "" {
@@ -88,38 +83,20 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 	firstName, _ := cmd.Flags().GetString("first-name")
 	lastName, _ := cmd.Flags().GetString("last-name")
 
-	// The mint step must target the NEWLY registered account's team, which the
-	// register token carries as a claim. So we honour only an explicit --team here
-	// (flags.team) and never resolved.TeamID: the latter inherits a stale
-	// current_team from config (left by a prior login), and resolveTeamID treats
-	// any non-empty value as overriding the token claim — which would mint the key
-	// on a team the new account does not belong to (403), breaking auto-login.
 	mintTeam := flags.team
 
-	// Headless when both email and password are already available.
 	if email != "" && password != "" {
-		// Registering creates a NEW account and team and then REPLACES the stored
-		// key with theirs. Ask first, before the account exists (MIO-3572: this
-		// exact sequence locked a QA account out for good).
 		if err := confirmReplaceStoredKey(cmd, resolved.APIBase, "", cmd.InOrStdin(), false); err != nil {
 			return err
 		}
 		return registerAndLogin(cmd, resolved.APIBase, mintTeam, email, password, firstName, lastName, cfg)
 	}
 
-	// Interactive registration requires an interactive terminal to prompt for the
-	// missing fields. We key off the stderr stream — where the prompts are written
-	// — so that off a terminal we cannot meaningfully prompt and instead return a
-	// usage error (exit 2) that fires no HTTP request. Gating on a command stream
-	// (rather than os.Stdin) also keeps the branch deterministic under `go test`,
-	// which connects os.Stdin to /dev/null (a char device isTTY treats as a TTY);
-	// confirmDestructive gates on cmd.OutOrStdout() for the same reason.
 	if !isTTY(cmd.ErrOrStderr()) {
 		return errs.New(errs.ExitUsage,
 			"register needs --email and --password (or MIO_EMAIL/MIO_PASSWORD) when not run interactively")
 	}
 
-	// Same question, asked before the user types an email and password.
 	if err := confirmReplaceStoredKey(cmd, resolved.APIBase, "", cmd.InOrStdin(), false); err != nil {
 		return err
 	}
@@ -131,10 +108,6 @@ func runRegister(cmd *cobra.Command, _ []string) error {
 	return registerAndLogin(cmd, resolved.APIBase, mintTeam, email, password, firstName, lastName, cfg)
 }
 
-// promptRegistration collects the registration fields interactively on a TTY:
-// email (if not already provided), password entered twice (never echoed) and
-// required to match, and optional first/last name (only prompted when not
-// already provided via flags). It performs no network I/O.
 func promptRegistration(cmd *cobra.Command, email, firstName, lastName string) (string, string, string, string, error) {
 	reader := bufio.NewReader(cmd.InOrStdin())
 
@@ -167,7 +140,6 @@ func promptRegistration(cmd *cobra.Command, email, firstName, lastName string) (
 		return "", "", "", "", errs.New(errs.ExitUsage, "passwords do not match")
 	}
 
-	// Optional names — prompt only when not already supplied via flags.
 	if firstName == "" {
 		fmt.Fprint(cmd.ErrOrStderr(), "First name (optional): ")
 		line, _ := reader.ReadString('\n')
@@ -182,12 +154,7 @@ func promptRegistration(cmd *cobra.Command, email, firstName, lastName string) (
 	return email, password, firstName, lastName, nil
 }
 
-// registerAndLogin creates the account and then auto-logs-in. The register route
-// returns the same token payload as login, so its access token feeds straight
-// into the shared mint-and-store flow — no second login round-trip. The password
-// is never stored.
 func registerAndLogin(cmd *cobra.Command, apiBase, teamID, email, password, firstName, lastName string, cfg *config.Config) error {
-	// Defensive guard: never fire a request with a missing credential.
 	if email == "" || password == "" {
 		return errs.New(errs.ExitUsage, "register requires both an email and a password")
 	}
@@ -198,7 +165,6 @@ func registerAndLogin(cmd *cobra.Command, apiBase, teamID, email, password, firs
 		return err
 	}
 
-	// runRegister already asked (once, before the account was created).
 	displayTeam, err := mintAndStore(cmd, cli, regRes.AccessToken, teamID, cfg, noStoredKeyGuard)
 	if err != nil {
 		return err
@@ -207,14 +173,6 @@ func registerAndLogin(cmd *cobra.Command, apiBase, teamID, email, password, firs
 	return nil
 }
 
-// readSecret reads a secret without echoing when stdin is a real terminal,
-// falling back to a plain line read from the shared reader otherwise.
-//
-// Unlike the package-level readPassword, it reads the non-terminal fallback from
-// a CALLER-OWNED bufio.Reader. register prompts for a password AND a
-// confirmation (and optional names) in sequence; wrapping cmd.InOrStdin() in a
-// fresh bufio per call would let the first read buffer — and then discard —
-// input meant for the next, so piped/non-TTY sequences must share one reader.
 func readSecret(cmd *cobra.Command, reader *bufio.Reader) (string, error) {
 	if f, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		b, err := term.ReadPassword(int(f.Fd()))

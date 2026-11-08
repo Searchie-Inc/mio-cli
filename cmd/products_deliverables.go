@@ -1,21 +1,5 @@
 package cmd
 
-// products_deliverables.go — the `mio products deliverables` sub-group (MIO-2268).
-//
-// A deliverable is what a product GRANTS the buyer on purchase — the row that
-// wires "paid for product X" to "gets hub access / content enrollment / a tag /
-// a file / community access". They are nested under a product and hard-deleted
-// on removal.
-//
-// Routes (app/products/router.py, prefix /api/teams/{team_id}):
-//
-//	list   GET    /products/{product_id}/deliverables
-//	create POST   /products/{product_id}/deliverables
-//	delete DELETE /products/{product_id}/deliverables/{deliverable_id}
-//
-// The write body derives JSON:API type "product_deliverables" from the
-// products/deliverables path tail (typeOverride already in internal/client).
-
 import (
 	"fmt"
 	"net/url"
@@ -27,7 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// deliverableTypes is the backend DELIVERABLE_TYPES enum (app/products/schemas.py).
 var deliverableTypes = map[string]bool{
 	"hub_access":         true,
 	"content_enrollment": true,
@@ -46,7 +29,6 @@ func init() {
 
 	addPaginationFlags(productsDeliverablesListCmd)
 
-	// create flags: deliverable_type is required.
 	productsDeliverablesCreateCmd.Flags().String("type", "", "Deliverable type: hub_access, content_enrollment, tag, file_download, or community_access. Required.")
 	markFlagsRequired(productsDeliverablesCreateCmd, "type")
 	productsDeliverablesCreateCmd.Flags().String("resource-id", "", "Id of the resource this deliverable grants (e.g. hub id, content id, tag id). Max 255 chars.")
@@ -55,7 +37,6 @@ func init() {
 	productsDeliverablesCreateCmd.Flags().Int("position", 0, "Ordering position among the product's deliverables (>= 0).")
 }
 
-// deliverablesPath returns /api/teams/{team}/products/{product}/deliverables[/{id}].
 func deliverablesPath(teamID, productID, deliverableID string) string {
 	base := fmt.Sprintf("/api/teams/%s/products/%s/deliverables", teamID, productID)
 	if deliverableID != "" {
@@ -116,12 +97,10 @@ access.`,
   mio products deliverables create prod_abc123 --type tag --resource-id tag_vip --duration-days 30`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate before resolving context so a usage error fires no request.
 		productID := stringArg(args[0])
 		if productID == "" {
 			return errs.New(errs.ExitUsage, "product id must not be empty")
 		}
-		// --type is required (cobra enforces its presence before RunE).
 		dtype := flagValue(cmd, "type")
 		if !deliverableTypes[dtype] {
 			return errs.New(errs.ExitUsage, "invalid --type %q: must be one of %s", dtype, deliverableTypesList())
@@ -189,7 +168,6 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 	},
 }
 
-// deliverablesContext resolves context + team id for deliverable commands.
 func deliverablesContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -205,8 +183,6 @@ func deliverablesContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	return c, teamID, nil
 }
 
-// deliverableTypesList returns the allowed deliverable types as a sorted,
-// comma-separated string for error messages.
 func deliverableTypesList() string {
 	out := make([]string, 0, len(deliverableTypes))
 	for k := range deliverableTypes {

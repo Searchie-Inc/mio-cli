@@ -1,12 +1,5 @@
 package cmd
 
-// pages_publish_test.go — contract tests for `mio pages publish` and the
-// --tree flag on `mio pages retrieve`.
-//
-// Both tests reuse the in-process harness from contract_test.go (runContract,
-// newMockServer, baseEnv, withTeam) which are package-level helpers in the same
-// `cmd` package.
-
 import (
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +9,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// pagePubBody is a minimal page-publishes resource response.
 const pagePubBody = `{
 	"data": {
 		"id": "ppub_1",
@@ -30,17 +22,8 @@ const pagePubBody = `{
 	}
 }`
 
-// TestPagesPublish_MissingIfMatch verifies that omitting --if-match exits 2
-// (ExitUsage — required flag not provided).
-//
-// This test uses the subprocess harness (buildBinary + runBinary) rather than
-// the in-process runContract harness, because the pagesPublishCmd is a package-
-// level singleton and cobra does not reset flag Changed state between in-process
-// Execute() calls. A prior in-process call with --if-match 7 would leave
-// Changed=true on the singleton, causing the Changed() guard in RunE to
-// produce false-pass. The subprocess has no shared state with other tests.
 func TestPagesPublish_MissingIfMatch(t *testing.T) {
-	srv := newMockServer(t, nil) // request must not reach the server
+	srv := newMockServer(t, nil)
 	bin := buildBinary(t)
 
 	_, _, exitCode := runBinary(t, bin, []string{
@@ -50,7 +33,6 @@ func TestPagesPublish_MissingIfMatch(t *testing.T) {
 		"--team", "t_team1",
 		"--hub", "hub_123",
 		"pages", "publish", "page_x",
-		// --if-match intentionally omitted
 	)
 
 	if exitCode != errs.ExitUsage {
@@ -58,11 +40,6 @@ func TestPagesPublish_MissingIfMatch(t *testing.T) {
 	}
 }
 
-// TestPagesPublish_PostWithIfMatchHeader verifies that:
-//   - the HTTP method is POST
-//   - the path ends in /pages/page_x/publish
-//   - the If-Match header value equals "7" when --if-match 7 is passed
-//   - the command exits 0
 func TestPagesPublish_PostWithIfMatchHeader(t *testing.T) {
 	var (
 		gotMethod  string
@@ -101,7 +78,6 @@ func TestPagesPublish_PostWithIfMatchHeader(t *testing.T) {
 	}
 }
 
-// pageTreeBody is a minimal page-trees resource response used by --tree tests.
 const pageTreeBody = `{
 	"data": {
 		"id": "page_x",
@@ -114,8 +90,6 @@ const pageTreeBody = `{
 	}
 }`
 
-// TestPagesRetrieve_TreeFlag verifies that passing --tree appends
-// resolve=false to the GET query string and that the command exits 0.
 func TestPagesRetrieve_TreeFlag(t *testing.T) {
 	var (
 		gotQuery string

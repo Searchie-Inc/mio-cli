@@ -1,10 +1,5 @@
 package cmd
 
-// hubmemberships_p2.go — admin membership authoring (MIO-2261 `add`, MIO-2263
-// `set-role`). The create-membership endpoint (POST .../members) ships in
-// mio-backend PR #487; set-role (PATCH .../members/{contact_id}/role) already
-// exists.
-
 import (
 	"github.com/spf13/cobra"
 
@@ -12,11 +7,8 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// hubMemberRoles is the elevated-role enum the backend accepts (None = a plain
-// active member — omit --role).
 var hubMemberRoles = map[string]bool{"admin": true, "moderator": true}
 
-// hubMembersPath returns /api/admin/teams/{team}/hubs/{hub}/members[/{contact_id}].
 func hubMembersPath(teamID, hubID, contactID string) string {
 	base := "/api/admin/teams/" + teamID + "/hubs/" + hubID + "/members"
 	if contactID != "" {
@@ -85,9 +77,6 @@ team-contact id). Capture it with:
 		if err != nil {
 			return errs.New(errs.ExitUsage, "--role: %s", err)
 		}
-		// admin/moderator elevate; member demotes to a plain member — the backend
-		// clears the role when it receives an explicit null (HubMembershipRoleUpdate
-		// role is Literal["admin","moderator"] | None, where None = regular member).
 		var roleValue any
 		switch role {
 		case "admin", "moderator":
@@ -102,8 +91,6 @@ team-contact id). Capture it with:
 		if err != nil {
 			return err
 		}
-		// PATCH .../members/{contact_id}/role with {data:{type:hub_memberships,attributes:{role}}};
-		// role is null to demote to a plain member.
 		res, err := c.client.ActionWith(c.ctx, client.StyleEnvelope, "PATCH",
 			hubMembersPath(teamID, hubID, args[0])+"/role", map[string]any{"role": roleValue})
 		if err != nil {

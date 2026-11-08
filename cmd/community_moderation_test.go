@@ -1,14 +1,5 @@
 package cmd
 
-// community_moderation_test.go — contract tests for the community moderation
-// console (MIO-2265): report-reasons CRUD, comments admin list/delete, the
-// moderation reads (queue/counts/audit-log/banned/removed), content
-// view/remove/restore, reports get/resolve, and members soft-ban.
-//
-// Each command pins method + path suffix + (for writes) JSON:API type + key
-// attrs + exit code, and every required-flag / enum has a case asserting
-// ExitUsage with NO HTTP request fired.
-
 import (
 	"encoding/json"
 	"net/http"
@@ -19,8 +10,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// moderationFiredServer returns a server that flips *fired and replies 2xx with the given
-// body. Used to prove client-side validation fires before any HTTP request.
 func moderationFiredServer(t *testing.T, fired *bool, status int, body string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -33,7 +22,6 @@ func moderationFiredServer(t *testing.T, fired *bool, status int, body string) *
 	return srv
 }
 
-// decodeDataTypeIDAttrs returns data.type, data.id and data.attributes.
 func decodeDataTypeIDAttrs(t *testing.T, body []byte) (string, string, map[string]any) {
 	t.Helper()
 	var doc struct {
@@ -48,8 +36,6 @@ func decodeDataTypeIDAttrs(t *testing.T, body []byte) (string, string, map[strin
 	}
 	return doc.Data.Type, doc.Data.ID, doc.Data.Attributes
 }
-
-// ── report-reasons ──────────────────────────────────────────────────────────
 
 func TestReportReasonsList_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _ := captureHubRequest(t, http.StatusOK)
@@ -194,8 +180,6 @@ func TestReportReasonsDelete_NonTTYWithoutYesBlocks(t *testing.T) {
 	}
 }
 
-// ── comments admin ──────────────────────────────────────────────────────────
-
 func TestCommentsList_PathAndFilters(t *testing.T) {
 	var gotMethod, gotPath, gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,8 +255,6 @@ func TestCommentsDelete_NonTTYWithoutYesBlocks(t *testing.T) {
 		t.Error("a delete without --yes must not fire an HTTP request in a non-TTY")
 	}
 }
-
-// ── moderation reads ────────────────────────────────────────────────────────
 
 func TestModerationQueue_PathAndQuery(t *testing.T) {
 	var gotPath, gotQuery string
@@ -388,7 +370,6 @@ func TestModerationBanned_RejectsBadSort(t *testing.T) {
 }
 
 func TestModerationRemoved_PathAndRejectsBadContentType(t *testing.T) {
-	// valid path
 	srv, _, gotPath, _ := captureHubRequest(t, http.StatusOK)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123",
@@ -399,7 +380,6 @@ func TestModerationRemoved_PathAndRejectsBadContentType(t *testing.T) {
 	if !strings.HasSuffix(*gotPath, "/moderation/removed") {
 		t.Errorf("path %q does not end with /moderation/removed", *gotPath)
 	}
-	// bad content-type → no request
 	fired := false
 	srv2 := moderationFiredServer(t, &fired, http.StatusOK, `{"data":[]}`)
 	res2 := runContract(t, baseEnv(srv2.URL),
@@ -412,8 +392,6 @@ func TestModerationRemoved_PathAndRejectsBadContentType(t *testing.T) {
 		t.Error("an invalid --content-type must exit before any HTTP request")
 	}
 }
-
-// ── moderation content view / remove / restore ──────────────────────────────
 
 func TestModerationContentView_PathAndEnum(t *testing.T) {
 	srv, gotMethod, gotPath, _ := captureHubRequest(t, http.StatusOK)
@@ -489,8 +467,6 @@ func TestModerationContentRestore_Path(t *testing.T) {
 	}
 }
 
-// ── moderation reports get / resolve ────────────────────────────────────────
-
 func TestModerationReportsGet_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _ := captureHubRequest(t, http.StatusOK)
 	res := runContract(t, baseEnv(srv.URL),
@@ -565,8 +541,6 @@ func TestModerationReportsResolve_RejectsBadResolution(t *testing.T) {
 	}
 }
 
-// ── members soft-ban ────────────────────────────────────────────────────────
-
 func TestMembersSoftBan_Body(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureHubRequest(t, http.StatusCreated)
 	res := runContract(t, baseEnv(srv.URL),
@@ -611,12 +585,6 @@ func TestMembersSoftBan_RejectsBadReason(t *testing.T) {
 	}
 }
 
-// TestModerationVerbsRequireYes (MIO-2595 / MIO-2599 scoped-B decision) verifies
-// every member-moderation verb is destructive-guarded: without --yes in a
-// non-interactive shell it exits ExitNeedsConfir and fires NO HTTP request (the
-// confirm runs after context resolution but before the write). This is the
-// prompt-injection brake for agent runs that act on member-supplied
-// moderation-queue content.
 func TestModerationVerbsRequireYes(t *testing.T) {
 	cases := [][]string{
 		{"community", "members", "ban", "contact_9"},

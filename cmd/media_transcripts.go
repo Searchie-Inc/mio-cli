@@ -1,19 +1,5 @@
 package cmd
 
-// media_transcripts.go — `mio media transcripts` command group (MIO-2289).
-//
-// Team-scoped transcript surface (backend app/media/router.py
-// media_transcript_router, guard _require_team_member):
-//
-//	get      GET   /api/teams/{team}/media/{media_id}/transcript
-//	vtt      GET   /api/teams/{team}/media/{media_id}/transcript.vtt      → {signed_url, expires_at}
-//	content  GET   /api/teams/{team}/media/{media_id}/transcript/content
-//	versions GET   /api/teams/{team}/media/{media_id}/transcript/versions[/{version}]
-//	edit     PATCH /api/teams/{team}/media/{media_id}/transcript          (type transcripts)
-//	revert   POST  /api/teams/{team}/media/{media_id}/transcript/revert   (type transcripts)
-//
-// Team-scoped; requires a team-member user JWT.
-
 import (
 	"fmt"
 	"net/http"
@@ -40,7 +26,6 @@ func init() {
 	mediaTranscriptsRevertCmd.Flags().Int("version", 0, "Transcript version to revert to (>= 1). Required.")
 }
 
-// transcriptBase returns /api/teams/{team}/media/{media_id}/transcript.
 func transcriptBase(teamID, mediaID string) string {
 	return fmt.Sprintf("/api/teams/%s/media/%s/transcript", teamID, mediaID)
 }
@@ -56,8 +41,6 @@ All commands are team-scoped and take the media file id.`,
   mio media transcripts edit file_abc123 --words @words.json
   mio media transcripts revert file_abc123 --version 2`,
 }
-
-// ---- get --------------------------------------------------------------------
 
 var mediaTranscriptsGetCmd = &cobra.Command{
 	Use:     "get <media_id>",
@@ -78,8 +61,6 @@ var mediaTranscriptsGetCmd = &cobra.Command{
 	},
 }
 
-// ---- vtt --------------------------------------------------------------------
-
 var mediaTranscriptsVttCmd = &cobra.Command{
 	Use:     "vtt <media_id>",
 	Short:   "Get a signed URL for the transcript WebVTT (.vtt) file.",
@@ -99,8 +80,6 @@ var mediaTranscriptsVttCmd = &cobra.Command{
 	},
 }
 
-// ---- content ----------------------------------------------------------------
-
 var mediaTranscriptsContentCmd = &cobra.Command{
 	Use:     "content <media_id>",
 	Short:   "Get the full transcript content (word tokens).",
@@ -119,8 +98,6 @@ var mediaTranscriptsContentCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- versions (list, or show a specific version) ----------------------------
 
 var mediaTranscriptsVersionsCmd = &cobra.Command{
 	Use:   "versions <media_id> [version]",
@@ -149,8 +126,6 @@ var mediaTranscriptsVersionsCmd = &cobra.Command{
 	},
 }
 
-// ---- edit -------------------------------------------------------------------
-
 var mediaTranscriptsEditCmd = &cobra.Command{
 	Use:   "edit <media_id>",
 	Short: "Edit a media file's transcript words (creates a new version).",
@@ -164,7 +139,6 @@ speaker_label are optional. --language optionally sets the transcript language.`
   mio media transcripts edit file_abc123 --words @words.json --language en`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate the payload before resolving auth/team so a bad flag fires no request.
 		words, err := parseJSONArrayFlag(cmd, "words")
 		if err != nil {
 			return err
@@ -184,8 +158,6 @@ speaker_label are optional. --language optionally sets the transcript language.`
 	},
 }
 
-// ---- revert -----------------------------------------------------------------
-
 var mediaTranscriptsRevertCmd = &cobra.Command{
 	Use:     "revert <media_id>",
 	Short:   "Revert a transcript to a prior version.",
@@ -193,7 +165,6 @@ var mediaTranscriptsRevertCmd = &cobra.Command{
 	Example: `  mio media transcripts revert file_abc123 --version 2`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate --version before resolving auth/team so a bad flag fires no request.
 		if !cmd.Flags().Changed("version") {
 			return errs.New(errs.ExitUsage, "--version is required (the transcript version to revert to)")
 		}

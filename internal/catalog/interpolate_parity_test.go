@@ -1,15 +1,5 @@
 package catalog
 
-// interpolate_parity_test.go — runs the Go interpolation implementation
-// (interpolate.go) against the vendored cross-language corpus in
-// testdata/interpolation. The corpus is the normative byte-parity arbiter
-// shared with the TS and Python implementations: if a corpus case and the Go
-// code disagree, the Go code is wrong — fix interpolate.go, never a fixture.
-//
-// Envelope: <case>.raw.json = {"vars": {hub_name, hub_slug}, "input": <plan>};
-// <case>.expected.json = {"output": <plan>} on success or {"error": "<CODE>"}
-// on rejection.
-
 import (
 	"errors"
 	"os"
@@ -18,10 +8,6 @@ import (
 	"testing"
 )
 
-// interpolatePlanForTest mirrors the TS reference interpolatePlan
-// (mio-page-catalog src/interpolate.ts): deep-clone the plan, then
-// interpolate page titles, navigation labels, and tree leaf values — in that
-// order — aborting on the first error. The input plan is never mutated.
 func interpolatePlanForTest(t *testing.T, plan map[string]any, name, slug string) (map[string]any, error) {
 	t.Helper()
 	out, ok := deepClone(plan).(map[string]any)
@@ -64,8 +50,6 @@ func interpolatePlanForTest(t *testing.T, plan map[string]any, name, slug string
 	return out, nil
 }
 
-// TestInterpolationCorpusParity replays every vendored corpus case against
-// the Go implementation and compares canonical JSON byte-for-byte.
 func TestInterpolationCorpusParity(t *testing.T) {
 	const dir = "testdata/interpolation"
 	entries, err := os.ReadDir(dir)
@@ -83,8 +67,6 @@ func TestInterpolationCorpusParity(t *testing.T) {
 		base := strings.TrimSuffix(e.Name(), ".raw.json")
 		rawPath := filepath.Join(dir, e.Name())
 
-		// Astral guard (§4.3): the corpus must exercise at least one
-		// non-BMP code point somewhere in a raw input.
 		rawBytes, err := os.ReadFile(rawPath)
 		if err != nil {
 			t.Fatalf("read %s: %v", rawPath, err)

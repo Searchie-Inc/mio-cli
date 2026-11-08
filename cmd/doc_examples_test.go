@@ -1,61 +1,5 @@
 package cmd
 
-// doc_examples_test.go — every `mio …` example the CLI ships must be a command
-// the CLI would actually accept (MIO-4154).
-//
-// WHY
-// README's "Products & prices" section documented
-//
-//	mio products create --name "Pro Plan" --description "Full access"
-//
-// long after --type became required, so the documented command exited 2. Nothing
-// noticed: the docs are hand-maintained, and an agent executes them verbatim. A
-// one-line doc fix would let the class recur the next time a flag becomes
-// required, is renamed, or a verb moves.
-//
-// WHAT THIS GUARDS
-// Every invocation in a fenced code block of the shipped doc surfaces, and in
-// every command's cobra Example, is resolved against the REAL root command using
-// cobra's own machinery — Find for the command path, the command's real flag set
-// (local + inherited + help) for parsing, and cobra's ValidateArgs,
-// ValidateRequiredFlags and ValidateFlagGroups. The oracle is cobra, not a list
-// kept beside it: marking a flag required (MarkFlagRequired) immediately obliges
-// every example of that command to pass it, and renaming or removing a flag
-// fails every example that still uses the old spelling.
-//
-// A failure names the file and line of the example and cobra's own error.
-//
-// WHAT IT DOES NOT SEE
-//   - A requirement enforced only inside a RunE body. cobra cannot report it, so
-//     neither can this. Declare required flags with markFlagsRequired (products
-//     create moved to it in MIO-4154 for exactly this reason). MIO-4154 moved
-//     the `missing required flag(s)` checks, except `hubs policies gate
-//     --enabled`, which stays in RunE to keep its usage hint. That one and 43
-//     others, mostly phrased `--x is required[: hint]`, still live in RunE.
-//     43 of those 44 are invisible here until they move; `pages publish
-//     --if-match` is seen because it is also declared with MarkFlagRequired.
-//     Some are conditional and cannot move.
-//     List all 44 with: grep -nE 'ExitUsage, *"[^"]*(required|missing)' cmd/*.go
-//   - Flag VALUES. Every flag is parsed into a stub that accepts anything, so
-//     placeholders (<id>, "$HUB_ID") never false-positive; an invalid enum value
-//     in a doc is out of scope.
-//   - Prose and inline `code spans`. Only fenced blocks (blockquoted ones too)
-//     and Example strings are read; the extractor reports any line of them that
-//     mentions `mio <word>` but that it could not turn into an invocation,
-//     including an unprompted line of a `$ ` console transcript
-//     (TestDocExamples_* fail on it). So llms.txt and
-//     docs/internal/api-surface.md, which have no fenced blocks, are not read.
-//
-// To sweep another repo's docs with the same checker (the docs site, say), set
-// MIO_DOC_EXAMPLES_EXTRA to a list of files/globs separated by the OS path-list
-// separator and run TestDocExamples_ShippedSurfaces. The sweep reads those
-// files exactly as it reads the shipped surfaces, with the same blind spots: it
-// checks fenced blocks only, so an inline `mio …` span in their prose is NOT
-// checked, and a clean sweep says nothing about it. Every fence is read as shell whatever its info string, so
-// a `text` block of CLI output is parsed too, and a `mio <word>` in it that is
-// not the head of a command (`Publish it with: mio hubs update …`) is reported
-// as unguarded.
-
 import (
 	"fmt"
 	"io"
@@ -71,34 +15,18 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/docexamples"
 )
 
-// shippedDocSurfaces are the hand-maintained documents that ship with (or are
-// generated into) the CLI and that agents execute verbatim. Paths are relative
-// to this package directory. Each must yield at least one checked invocation
-// (TestDocExamples_ShippedSurfaces fails otherwise), so this list cannot claim a
-// surface the guard never reads.
-//
-// Not listed, because they hold no fenced code block and so give this checker
-// nothing to read: llms.txt (a one-line-per-command index) and
-// docs/internal/api-surface.md (an endpoint reference). Neither is guarded.
-// docs/superpowers/ is excluded on purpose: it holds dated design plans and
-// specs describing the CLI as it was then, not docs.
 var shippedDocSurfaces = []string{
 	"../README.md",
 	"../AGENTS.md",
 	"skills/content/mio-skill.md",
 }
 
-// stubValue accepts any value. The guard checks which flags an example passes,
-// never what it passes, so `--amount <amount>` and `--hub "$HUB_ID"` parse.
 type stubValue struct{ typ string }
 
 func (s *stubValue) String() string   { return "" }
 func (s *stubValue) Set(string) error { return nil }
 func (s *stubValue) Type() string     { return s.typ }
 
-// stubOf clones f with a stub value, keeping everything cobra's validators and
-// pflag's parser read: name, shorthand, NoOptDefVal (whether a value must
-// follow) and annotations (required, flag groups).
 func stubOf(f *pflag.Flag) *pflag.Flag {
 	return &pflag.Flag{
 		Name:        f.Name,
@@ -112,35 +40,25 @@ func stubOf(f *pflag.Flag) *pflag.Flag {
 	}
 }
 
-// docExampleVerdict is the outcome of checking one invocation.
 type docExampleVerdict struct {
-	cmd     *cobra.Command // the resolved command (nil when resolution failed)
-	problem string         // non-empty: the example would not run as written
-	skipped string         // non-empty: deliberately not checked, with the reason
+	cmd     *cobra.Command
+	problem string
+	skipped string
 }
 
 var placeholderArgRE = regexp.MustCompile(`^<[^>]+>$`)
 
-// checkDocInvocation resolves args (the words after `mio`) against root exactly
-// as cobra would at execution time, without executing anything and without
-// touching the real commands' flag state.
 func checkDocInvocation(root *cobra.Command, args []string, elided bool) docExampleVerdict {
 	target, rest, _ := root.Find(args)
 	if target == nil {
 		return docExampleVerdict{problem: "does not resolve to a command"}
 	}
 
-	// The command's real flag set: its own flags plus every persistent flag it
-	// inherits, plus the help (and, on root, version) flag cobra adds at execute
-	// time. Each is cloned onto a throwaway command so parsing never mutates the
-	// singleton tree the in-process contract tests share.
 	tmp := &cobra.Command{Use: target.Name(), FParseErrWhitelist: target.FParseErrWhitelist}
 	tmp.SetOut(io.Discard)
 	tmp.SetErr(io.Discard)
 	fs := tmp.Flags()
 	fs.SetOutput(io.Discard)
-	// Spellings the command accepts through a normalize func (contacts'
-	// legacy --first_name) must resolve here exactly as they do at runtime.
 	fs.SetNormalizeFunc(target.Flags().GetNormalizeFunc())
 	var deprecated = map[string]string{}
 	add := func(f *pflag.Flag) {
@@ -203,7 +121,7 @@ func checkDocInvocation(root *cobra.Command, args []string, elided bool) docExam
 		return v
 	}
 	if help {
-		return v // cobra validates nothing further when help is requested
+		return v
 	}
 	if elided {
 		v.skipped = "elided (…) — command path and flag names checked only"
@@ -224,8 +142,6 @@ func checkDocInvocation(root *cobra.Command, args []string, elided bool) docExam
 	return v
 }
 
-// docRoot returns the real command tree with cobra's lazily-added commands
-// (help, completion) in place, as they are at execute time.
 func docRoot() *cobra.Command {
 	root := RootCmd()
 	root.InitDefaultHelpCmd()
@@ -233,7 +149,6 @@ func docRoot() *cobra.Command {
 	return root
 }
 
-// docSurfaceFiles returns the shipped surfaces plus any MIO_DOC_EXAMPLES_EXTRA.
 func docSurfaceFiles(t *testing.T) []string {
 	t.Helper()
 	files := append([]string(nil), shippedDocSurfaces...)
@@ -250,8 +165,6 @@ func docSurfaceFiles(t *testing.T) []string {
 	return files
 }
 
-// transcriptHint explains an uncovered mention on an output line of a `$ `
-// console transcript, which is read as output rather than parsed.
 func transcriptHint(m docexamples.Mention) string {
 	if !m.Output {
 		return ""
@@ -259,7 +172,6 @@ func transcriptHint(m docexamples.Mention) string {
 	return " (the block has `$ ` prompts, so this unprompted line is read as output; if it is a command, give it a `$ ` prompt)"
 }
 
-// displayPath renders a surface path relative to the repo root for messages.
 func displayPath(p string) string {
 	if strings.HasPrefix(p, "../") {
 		return strings.TrimPrefix(p, "../")
@@ -270,9 +182,6 @@ func displayPath(p string) string {
 	return p
 }
 
-// TestDocExamples_ShippedSurfaces fails for every documented invocation cobra
-// would reject: unknown command or flag, a missing required flag, a flag-group
-// violation, a wrong positional-argument count, or a deprecated spelling.
 func TestDocExamples_ShippedSurfaces(t *testing.T) {
 	root := docRoot()
 	checked := 0
@@ -303,8 +212,6 @@ func TestDocExamples_ShippedSurfaces(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no documented invocation was checked — the extractor or the surface list is broken")
 	}
-	// Per surface, not in total: a listed surface that yields nothing would be
-	// hidden by the others' counts while the list claims it is guarded.
 	for _, path := range shippedDocSurfaces {
 		if perSurface[path] == 0 {
 			t.Errorf("%s: listed in shippedDocSurfaces but no invocation from it was checked, so listing it guards nothing", displayPath(path))
@@ -312,8 +219,6 @@ func TestDocExamples_ShippedSurfaces(t *testing.T) {
 	}
 }
 
-// exampleSourceIndex maps a trimmed source line to its "file:line" in cmd/*.go,
-// so an Example failure names where to edit. Lines seen twice map to "".
 func exampleSourceIndex(t *testing.T) map[string]string {
 	t.Helper()
 	files, err := filepath.Glob("*.go")
@@ -345,8 +250,6 @@ func exampleSourceIndex(t *testing.T) map[string]string {
 	return idx
 }
 
-// TestDocExamples_CommandExamples applies the same check to every command's
-// cobra Example — what `mio <cmd> --help` prints and `mio gen-docs` publishes.
 func TestDocExamples_CommandExamples(t *testing.T) {
 	root := docRoot()
 	src := exampleSourceIndex(t)
@@ -391,12 +294,6 @@ func TestDocExamples_CommandExamples(t *testing.T) {
 	}
 }
 
-// TestDocExamples_ExtractorSeesProductsCreate proves the guard actually reaches
-// the example MIO-4154 was filed against: README's `mio products create` is
-// extracted, resolved to productsCreateCmd, and CHECKED (not skipped). An
-// example the extractor silently drops cannot be guarded, however good the
-// checker is. The line is located by content, not hard-coded, so unrelated edits
-// above it cannot void this test.
 func TestDocExamples_ExtractorSeesProductsCreate(t *testing.T) {
 	raw, err := os.ReadFile("../README.md")
 	if err != nil {
@@ -429,16 +326,12 @@ func TestDocExamples_ExtractorSeesProductsCreate(t *testing.T) {
 	t.Fatalf("README.md:%d `mio products create …` was not extracted as an invocation", wantLine)
 }
 
-// TestDocExamples_CheckerRejectsKnownBadInvocations pins the checker itself
-// against the real tree: each case is an invocation cobra rejects, and the
-// checker must say so, naming the property. Without this a regression that made
-// checkDocInvocation always return "" would leave the two surface tests green.
 func TestDocExamples_CheckerRejectsKnownBadInvocations(t *testing.T) {
 	root := docRoot()
 	cases := []struct {
 		name string
 		args []string
-		want string // substring of the problem
+		want string
 	}{
 		{"MIO-4154: products create without --type", []string{"products", "create", "--name", "Pro Plan", "--description", "x"}, `required flag(s) "type" not set`},
 		{"required flag from MarkFlagRequired", []string{"pages", "publish", "<page-id>", "--hub", "<hub-id>"}, `required flag(s) "if-match" not set`},
@@ -457,17 +350,12 @@ func TestDocExamples_CheckerRejectsKnownBadInvocations(t *testing.T) {
 		})
 	}
 
-	// And the accept side: a correct invocation, with placeholders and
-	// inherited/global flags, must produce no problem — otherwise the guard would
-	// be failing for reasons of its own.
 	ok := [][]string{
 		{"products", "create", "--name", "Pro Plan", "--type", "membership", "--description", "Full access"},
 		{"--api-base", "https://api.example.com", "contacts", "list", "-o", "plain", "--jq", ".[0].id"},
 		{"pages", "publish", "$PAGE_ID", "--hub", "<hub-id>", "--if-match", "<n>"},
 		{"contacts", "--help"},
 		{"--version"},
-		// A flag spelling the command accepts through its normalize func (the
-		// legacy underscore alias) is a flag cobra accepts.
 		{"contacts", "create", "--email", "a@example.com", "--first_name", "Ada"},
 	}
 	for _, args := range ok {

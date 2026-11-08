@@ -1,26 +1,5 @@
 package cmd
 
-// media_playlist_items.go — `mio media playlists items {add,list,remove,reorder}`
-// (MIO-2513).
-//
-// Item admin for a media playlist (backend app/media/router.py
-// playlists_admin_router, guard _require_team_member; requires the media
-// feature flag enabled):
-//
-//	add     POST   /api/teams/{team}/playlists/{playlist_id}/items            (type playlist_items)
-//	list    GET    /api/teams/{team}/playlists/{playlist_id}/items            [?page[...]]
-//	reorder PATCH  /api/teams/{team}/playlists/{playlist_id}/items/{item_id}  (type playlist_items; position)
-//	remove  DELETE /api/teams/{team}/playlists/{playlist_id}/items/{item_id}  (204)
-//
-// Before this group, playlists could only be created as empty shells — the only
-// way to populate one was a raw POST .../items. `add` closes that gap so a
-// playlist can be populated end-to-end from the CLI.
-//
-// Identifier note: reorder/remove key on the playlist_item ROW id (the `id`
-// from `items list`), NOT the file id. `reorder` repositions a single item —
-// the backend has no bulk-order route for playlist items — so it PATCHes one
-// item's position at a time.
-
 import (
 	"fmt"
 	"net/url"
@@ -39,7 +18,6 @@ func init() {
 	)
 	mediaPlaylistsCmd.AddCommand(mediaPlaylistsItemsCmd)
 
-	// --playlist-id identifies the parent playlist for every verb.
 	for _, cmd := range []*cobra.Command{
 		mediaPlaylistsItemsAddCmd,
 		mediaPlaylistsItemsListCmd,
@@ -60,8 +38,6 @@ func init() {
 	addPaginationFlags(mediaPlaylistsItemsListCmd)
 }
 
-// playlistItemsPath returns
-// /api/teams/{team}/playlists/{playlist_id}/items[/{item_id}].
 func playlistItemsPath(teamID, playlistID, itemID string) string {
 	base := fmt.Sprintf("/api/teams/%s/playlists/%s/items", teamID, playlistID)
 	if itemID != "" {
@@ -76,8 +52,6 @@ var mediaPlaylistsItemsCmd = &cobra.Command{
 	Long:  "Add, list, remove, and reorder the media files that make up a playlist.",
 }
 
-// ---- items add --------------------------------------------------------------
-
 var mediaPlaylistsItemsAddCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Add a media file to a playlist.",
@@ -86,8 +60,6 @@ var mediaPlaylistsItemsAddCmd = &cobra.Command{
   mio media playlists items add --playlist-id pl_abc123 --file-id file_xyz789 --position 2`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Required flags are enforced by cobra before RunE; their VALUES are
-		// validated here, before resolving auth/team, so a bad one fires no request.
 		pid := flagValue(cmd, "playlist-id")
 		if pid == "" {
 			return errs.New(errs.ExitUsage, "--playlist-id must not be empty")
@@ -116,8 +88,6 @@ var mediaPlaylistsItemsAddCmd = &cobra.Command{
 	},
 }
 
-// ---- items list -------------------------------------------------------------
-
 var mediaPlaylistsItemsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the items in a playlist.",
@@ -126,8 +96,6 @@ var mediaPlaylistsItemsListCmd = &cobra.Command{
   mio media playlists items list --playlist-id pl_abc123 --limit 50`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Required flags are enforced by cobra before RunE; their VALUES are
-		// validated here, before resolving auth/team, so a bad one fires no request.
 		pid := flagValue(cmd, "playlist-id")
 		if pid == "" {
 			return errs.New(errs.ExitUsage, "--playlist-id must not be empty")
@@ -147,8 +115,6 @@ var mediaPlaylistsItemsListCmd = &cobra.Command{
 	},
 }
 
-// ---- items remove -----------------------------------------------------------
-
 var mediaPlaylistsItemsRemoveCmd = &cobra.Command{
 	Use:     "remove <item_id>",
 	Short:   "Remove an item from a playlist.",
@@ -156,8 +122,6 @@ var mediaPlaylistsItemsRemoveCmd = &cobra.Command{
 	Example: `  mio media playlists items remove it_abc123 --playlist-id pl_abc123 --yes`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Required flags are enforced by cobra before RunE; their VALUES are
-		// validated here, before resolving auth/team, so a bad one fires no request.
 		pid := flagValue(cmd, "playlist-id")
 		if pid == "" {
 			return errs.New(errs.ExitUsage, "--playlist-id must not be empty")
@@ -178,8 +142,6 @@ var mediaPlaylistsItemsRemoveCmd = &cobra.Command{
 	},
 }
 
-// ---- items reorder ----------------------------------------------------------
-
 var mediaPlaylistsItemsReorderCmd = &cobra.Command{
 	Use:     "reorder <item_id>",
 	Short:   "Change an item's position in a playlist.",
@@ -187,14 +149,10 @@ var mediaPlaylistsItemsReorderCmd = &cobra.Command{
 	Example: `  mio media playlists items reorder it_abc123 --playlist-id pl_abc123 --position 3`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Required flags are enforced by cobra before RunE; their VALUES are
-		// validated here, before resolving auth/team, so a bad one fires no request.
 		pid := flagValue(cmd, "playlist-id")
 		if pid == "" {
 			return errs.New(errs.ExitUsage, "--playlist-id must not be empty")
 		}
-		// The backend treats an omitted position as a no-op, so --position is
-		// required (markFlagsRequired in init).
 		pos, _ := cmd.Flags().GetInt("position")
 		if pos < 0 {
 			return errs.New(errs.ExitUsage, "invalid --position: must be >= 0")
@@ -204,7 +162,6 @@ var mediaPlaylistsItemsReorderCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// PlaylistItemUpdateData requires data.id in the body (not just the URL).
 		res, err := c.client.UpdateWithID(c.ctx, playlistItemsPath(teamID, pid, args[0]), args[0], map[string]any{"position": pos})
 		if err != nil {
 			return err

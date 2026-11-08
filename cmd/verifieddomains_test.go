@@ -1,24 +1,11 @@
 package cmd
 
-// verifieddomains_test.go — wire-body and contract tests for
-// `mio verified-domains`.
-//
-// Tests pin:
-//   - Correct JSON:API data.type value ("verified_domains")
-//   - Exact wire body for create ({hub_id, domain})
-//   - Required-flag validation (--hub-id and --domain on create)
-//   - Correct team-scoped paths for list / retrieve
-//   - The custom verify action POSTs to .../{id}/verify
-//   - Destructive-guard behaviour on delete (non-TTY needs --yes)
-
 import (
 	"net/http"
 	"testing"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
-
-// ─── fixtures ─────────────────────────────────────────────────────────────────
 
 const unverifiedDomainBody = `{
 	"data":{
@@ -47,12 +34,6 @@ const verifiedDomainBody = `{
 	}
 }`
 
-// ─── create ───────────────────────────────────────────────────────────────────
-
-// TestVerifiedDomains_Create_ExactBody pins the EXACT wire body for
-// `mio verified-domains create`.
-//
-// CONTRACT: data.type = "verified_domains"; only {hub_id, domain} sent.
 func TestVerifiedDomains_Create_ExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, unverifiedDomainBody)
 
@@ -76,8 +57,6 @@ func TestVerifiedDomains_Create_ExactBody(t *testing.T) {
 	}`)
 }
 
-// TestVerifiedDomains_Create_RequiredFlags pins that both --hub-id and --domain
-// are required client-side and fire NO request when missing.
 func TestVerifiedDomains_Create_RequiredFlags(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -101,10 +80,6 @@ func TestVerifiedDomains_Create_RequiredFlags(t *testing.T) {
 	}
 }
 
-// ─── list / retrieve ──────────────────────────────────────────────────────────
-
-// TestVerifiedDomains_List_CallsCorrectPath verifies the list command hits the
-// right team-scoped collection URL.
 func TestVerifiedDomains_List_CallsCorrectPath(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{
 		Method:  "GET",
@@ -120,8 +95,6 @@ func TestVerifiedDomains_List_CallsCorrectPath(t *testing.T) {
 	}
 }
 
-// TestVerifiedDomains_Retrieve_CallsCorrectPath verifies retrieve appends the id
-// to the collection path.
 func TestVerifiedDomains_Retrieve_CallsCorrectPath(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{
 		Method:  "GET",
@@ -137,10 +110,6 @@ func TestVerifiedDomains_Retrieve_CallsCorrectPath(t *testing.T) {
 	}
 }
 
-// ─── verify ───────────────────────────────────────────────────────────────────
-
-// TestVerifiedDomains_Verify_PostsToVerifyPath pins that `verify <id>` issues a
-// POST to .../{id}/verify and renders the returned (now-verified) resource.
 func TestVerifiedDomains_Verify_PostsToVerifyPath(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{
 		Method:  "POST",
@@ -156,8 +125,6 @@ func TestVerifiedDomains_Verify_PostsToVerifyPath(t *testing.T) {
 	}
 }
 
-// TestVerifiedDomains_Verify_NotYetVerified pins that a 422 (TXT record not yet
-// visible) surfaces as ExitUsage and no panic.
 func TestVerifiedDomains_Verify_NotYetVerified(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{
 		Method:  "POST",
@@ -173,11 +140,8 @@ func TestVerifiedDomains_Verify_NotYetVerified(t *testing.T) {
 	}
 }
 
-// ─── delete ───────────────────────────────────────────────────────────────────
-
-// TestVerifiedDomains_Delete_NonTTYWithoutYes pins the non-TTY guard.
 func TestVerifiedDomains_Delete_NonTTYWithoutYes(t *testing.T) {
-	srv := newMockServer(t, nil) // DELETE must NOT be called
+	srv := newMockServer(t, nil)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "verified-domains", "delete", "vd_abc123")...)
 	if res.Code != errs.ExitNeedsConfir {
@@ -185,8 +149,6 @@ func TestVerifiedDomains_Delete_NonTTYWithoutYes(t *testing.T) {
 	}
 }
 
-// TestVerifiedDomains_Delete_WithYes pins that --yes bypasses the guard and the
-// DELETE is sent to the correct path.
 func TestVerifiedDomains_Delete_WithYes(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Method: "DELETE", PathPfx: "/api/v1/teams/t_team1/verified-domains/vd_abc123", Status: 204, Body: ""},

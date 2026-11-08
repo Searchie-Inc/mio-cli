@@ -1,19 +1,5 @@
 package cmd
 
-// pages_catalog.go — the `mio pages catalog` group (MIO-2340): consume the
-// page-builder catalog (mio-page-catalog, the cross-repo source of truth) to
-//
-//   - scaffold a real node-tree from a template recipe (the tree/publish-door
-//     artifact the visual builder produces — charter D1), via a Go port of the
-//     reference applier (internal/catalog);
-//   - list the author templates + recommendations per page type;
-//   - list the compiled section types (the imperative-door writable allow-list).
-//
-// Catalog source resolution (live fetch → last-good cache → embedded vendored)
-// lives in internal/catalog; this file wires the CLI flags, the HTTP fetcher
-// adapter, and rendering. Scaffolding is emit-only — it prints the tree to
-// stdout for `pages tree set` to apply; it never writes to the backend itself.
-
 import (
 	"context"
 	"fmt"
@@ -36,7 +22,6 @@ func init() {
 	)
 	pagesCmd.AddCommand(pagesCatalogCmd)
 
-	// Catalog-source flags, shared (persistent) across the whole group.
 	pf := pagesCatalogCmd.PersistentFlags()
 	pf.Bool("offline", false, "Use the embedded, digest-pinned vendored catalog only (no network).")
 	pf.String("catalog", "", "Path to a catalog.json to use instead of live-fetch/vendored.")
@@ -118,15 +103,11 @@ children. Scaffolding is offline-capable (falls back to the vendored catalog).`,
 			return errs.Wrap(errs.ExitGeneric, err)
 		}
 
-		// A page template is a whole-page root → wrap it in the tree envelope so
-		// the output is directly settable via 'pages tree set --file'. A section
-		// template is a fragment → emit the bare node.
 		var out any = node
 		if tmpl.IsPage {
 			out = map[string]any{"root": node}
 		}
 
-		// A scaffolded tree is always JSON (never a table); honor --jq.
 		return output.Render(cmd.OutOrStdout(), out, output.Options{Format: output.FormatJSON, JQ: flags.jq})
 	},
 }
@@ -203,10 +184,6 @@ accepted by the imperative 'pages sections create --type' door. Use
 	},
 }
 
-// ---- catalog resolution wiring ---------------------------------------------
-
-// catalogFetcher adapts *client.Client to catalog.Fetcher so internal/catalog
-// stays free of any dependency on the HTTP layer.
 type catalogFetcher struct{ c *client.Client }
 
 func (f catalogFetcher) FetchCatalog(ctx context.Context, ifNoneMatch string) (catalog.FetchResult, error) {
@@ -217,26 +194,16 @@ func (f catalogFetcher) FetchCatalog(ctx context.Context, ifNoneMatch string) (c
 	return catalog.FetchResult{Body: r.Body, ETag: r.ETag, NotModified: r.NotModified}, nil
 }
 
-// catalogWarnf returns the Warnf sink every catalog resolve site shares:
-// non-fatal resolver diagnostics go to stderr — never stdout, so piped output
-// stays pure data.
 func catalogWarnf(cmd *cobra.Command) func(string, ...any) {
 	return func(format string, a ...any) {
 		fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
 	}
 }
 
-// printCatalogProvenance reports which catalog a resolve ended up using —
-// source + version, one stderr line, identical across every resolve site
-// (resolveCatalog, scaffoldPreflight, hubs templates).
 func printCatalogProvenance(cmd *cobra.Command, src catalog.Source, cat *catalog.Catalog) {
 	fmt.Fprintf(cmd.ErrOrStderr(), "catalog: %s (version %s)\n", src, cat.Meta.CatalogVersion)
 }
 
-// resolveCatalog loads the active catalog per --offline/--catalog and the
-// live→cache→vendored precedence, wiring the client as the live fetcher and
-// reporting provenance to stderr (never stdout, so piped scaffold output stays
-// pure data).
 func resolveCatalog(cmd *cobra.Command, c *cmdContext) (*catalog.Catalog, error) {
 	offline := getBool(cmd, "offline")
 	override := strings.TrimSpace(getString(cmd, "catalog"))
@@ -263,8 +230,6 @@ func resolveCatalog(cmd *cobra.Command, c *cmdContext) (*catalog.Catalog, error)
 	return cat, nil
 }
 
-// catalogCacheDir returns the on-disk catalog cache directory. MIO_CATALOG_CACHE_DIR
-// overrides it (a testing / air-gapped hook); "" disables caching.
 func catalogCacheDir() string {
 	if d := os.Getenv("MIO_CATALOG_CACHE_DIR"); d != "" {
 		return d
@@ -272,10 +237,6 @@ func catalogCacheDir() string {
 	return catalog.DefaultCacheDir()
 }
 
-// catalogCacheDirFor scopes the catalog cache directory to a backend origin
-// (host[:port]) so a cache populated from one backend is never validated or
-// read against another (MIO-2672). An empty origin keeps the legacy unscoped
-// layout; MIO_CATALOG_CACHE_DIR still overrides the base.
 func catalogCacheDirFor(origin string) string {
 	return catalog.CacheDirUnder(catalogCacheDir(), origin)
 }
@@ -317,8 +278,6 @@ func sectionTypeRow(s catalog.SectionType) map[string]any {
 	}
 }
 
-// getString / getBool read a flag, ignoring the (impossible for registered
-// flags) lookup error to keep call sites terse.
 func getString(cmd *cobra.Command, name string) string {
 	v, _ := cmd.Flags().GetString(name)
 	return v

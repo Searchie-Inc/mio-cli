@@ -1,10 +1,5 @@
 package cmd
 
-// email_drip_test.go — contract tests for the new enrollment-mode flags on
-// `mio email drip-campaigns create` and `mio email drip-campaigns update`.
-//
-// Reuses the in-process harness from contract_test.go.
-
 import (
 	"encoding/json"
 	"io"
@@ -15,7 +10,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// dripCampaignBody is a minimal drip-campaign resource response.
 const dripCampaignBody = `{
 	"data": {
 		"id": "dc_1",
@@ -30,14 +24,6 @@ const dripCampaignBody = `{
 	}
 }`
 
-// TestEmailDripCreate_EnrollmentModeFlags verifies that when enrollment-mode
-// flags are supplied, they appear in the PATCH body attributes with the correct
-// snake_case keys and values.
-//
-//   - enrollment_mode == "segment"
-//   - segment_id == "seg_1"
-//   - segment_check_interval_minutes == 30 (integer)
-//   - command exits 0
 func TestEmailDripCreate_EnrollmentModeFlags(t *testing.T) {
 	var gotBody []byte
 
@@ -82,7 +68,6 @@ func TestEmailDripCreate_EnrollmentModeFlags(t *testing.T) {
 	if attrs["segment_id"] != "seg_1" {
 		t.Errorf("attributes.segment_id = %v, want \"seg_1\"", attrs["segment_id"])
 	}
-	// JSON numbers decode as float64 in Go.
 	if attrs["segment_check_interval_minutes"] != float64(30) {
 		t.Errorf("attributes.segment_check_interval_minutes = %v (%T), want 30", attrs["segment_check_interval_minutes"], attrs["segment_check_interval_minutes"])
 	}

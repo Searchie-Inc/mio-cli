@@ -1,10 +1,5 @@
 package cmd
 
-// community_spaces_test.go — contract tests for `mio community spaces`
-// create/update field alignment to the backend Space schema and the new
-// `spaces reorder` command (MIO-2260). The old --is-private flag was bogus
-// (Space has no is_private column; access is governed by access_level).
-
 import (
 	"encoding/json"
 	"io"
@@ -18,8 +13,6 @@ import (
 
 const minimalSpaceListBody = `{"data":[{"id":"sp_1","type":"spaces","attributes":{"name":"General","position":0}}]}`
 
-// TestCommunitySpacesCreate_Fields verifies the create body carries the real
-// Space schema keys and omits the removed bogus is_private/is-private.
 func TestCommunitySpacesCreate_Fields(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -64,8 +57,6 @@ func TestCommunitySpacesCreate_Fields(t *testing.T) {
 	}
 }
 
-// TestCommunitySpacesCreate_AdminsAndModeratorsPosting verifies the fourth
-// posting option is sent through, and that the usage error lists all four values.
 func TestCommunitySpacesCreate_AdminsAndModeratorsPosting(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 	res := runContract(t, baseEnv(srv.URL),
@@ -91,8 +82,6 @@ func TestCommunitySpacesCreate_AdminsAndModeratorsPosting(t *testing.T) {
 	}
 }
 
-// TestCommunitySpacesCreate_RejectsInvalidEnums verifies out-of-enum
-// --access-level / --posting-permission are rejected client-side with no request.
 func TestCommunitySpacesCreate_RejectsInvalidEnums(t *testing.T) {
 	for _, tc := range []struct{ name, flag, val string }{
 		{"access-level", "--access-level", "everyone"},
@@ -110,9 +99,6 @@ func TestCommunitySpacesCreate_RejectsInvalidEnums(t *testing.T) {
 
 			res := runContract(t, baseEnv(srv.URL),
 				withTeam("t_team1", "--hub", "hub_123",
-					// --slug present so that if enum validation regressed the create
-					// would reach the POST (fired=true) rather than false-passing on
-					// the missing-slug usage error.
 					"community", "spaces", "create", "--name", "X", "--slug", "x", tc.flag, tc.val,
 				)...)
 
@@ -126,8 +112,6 @@ func TestCommunitySpacesCreate_RejectsInvalidEnums(t *testing.T) {
 	}
 }
 
-// TestCommunitySpacesCreate_RequiresSlug verifies a create missing the required
-// --slug exits ExitUsage before any HTTP request (slug is a required Space field).
 func TestCommunitySpacesCreate_RequiresSlug(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -150,8 +134,6 @@ func TestCommunitySpacesCreate_RequiresSlug(t *testing.T) {
 	}
 }
 
-// TestCommunitySpacesReorder_SendsDataList verifies reorder POSTs to
-// .../spaces/reorder with a bare {data:[{type,id}]} list, order = position.
 func TestCommunitySpacesReorder_SendsDataList(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody []byte

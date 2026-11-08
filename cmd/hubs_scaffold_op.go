@@ -1,15 +1,5 @@
 package cmd
 
-// hubs_scaffold_op.go — the W2b backend-op branch of the pages step (MIO-2672
-// Task 9, spec §0). stepPages PROBES the backend's one-step
-// POST …/pages/scaffold-from-template op by simply calling it — the probe IS
-// the real POST, never a separate capability/HEAD check — and a 404/405 (op
-// absent: dormant flag, or the path shadowed by a GET route on older
-// backends; the client normalizes both onto ExitNotFound) falls back to the
-// client-side loop in hubs_scaffold_pages.go. This is the design's ONLY
-// runtime branch: BOTH paths produce a real hub; a missing op is never an
-// error.
-
 import (
 	"fmt"
 	"strings"
@@ -19,39 +9,8 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// opAbsentNote is the operator note both probe misses share — the initial
-// 404/405 and the freak retry miss (op disappeared between the two POSTs).
 const opAbsentNote = "scaffold-from-template op not available — applying client-side"
 
-// ---- playlist bindings and the server ops (MIO-3065, MIO-3073) ----------------
-//
-// The ops are a SECOND implementation of this pipeline, in another repo.
-// MIO-3065 found three hubTemplates[] declarations they ignored —
-// spaces[].icon, playlists[].documents and a page's playlist dataSource `key` —
-// and kept any template declaring one off BOTH ops.
-//
-// The WHOLE-HUB op has applied all three since mio-backend #680 (MIO-3073,
-// 54679a96, 2026-08-11): `_step_spaces` sends the icon, `_step_playlists`
-// registers each document as a synthetic file, publishes it to the hub and
-// attaches it in file_ids-then-documents order, and `_step_pages` fills every
-// binding from the ids its own playlists step created
-// (app/page_catalog/datasource.py, a port of internal/catalog/datasource.go).
-// So nothing about the template keeps a create off that op any more (MIO-4167).
-//
-// The PAGES-only op is different, and the gate on it stays. It fills a binding
-// by TITLE, from the playlists already on the hub
-// (app/pages/scaffold_service.py `_resolve_hub_playlist_ids`), and resolves a
-// title that two template playlists — or two hub playlists — share to nothing.
-// An unresolved key is LOGGED, not refused: the page is written with the
-// catalog's empty id, a blank band, and marked applied. This run already holds
-// the exact ids its playlists step created or recovered, and stepPages refuses
-// to write a binding it cannot fill, so a page that binds a playlist is still
-// applied client-side.
-
-// playlistBindingKeys returns the playlist dataSource keys the planned pages
-// declare — the fill contract the CLIENT resolves after stepPlaylists. Any at
-// all keeps the pages step off the pages-only op, which could only match them
-// by title (see above).
 func playlistBindingKeys(sc *scaffoldContext) []string {
 	if sc.pagePlan == nil {
 		return nil
@@ -69,28 +28,12 @@ func playlistBindingKeys(sc *scaffoldContext) []string {
 	return keys
 }
 
-// applyViaServerOp tries the backend op for the WHOLE pages[] plan. Returns
-// (true, nil) when the op handled it (stepPages is done), (false, nil) when
-// the op is absent — the 404/405 probe signal, surfaced by the client as
-// ExitNotFound; the caller runs the client-side loop — and (false, err) for
-// everything the op path must surface:
-//
-//   - ExitUsage (409/422/400): the likely cause is the backend's catalog pin
-//     moving between our preflight resolve and this POST, so the request is
-//     retried ONCE after a refetch — and only when the digest actually moved
-//     (retryServerOpAfterRefetch);
-//   - anything else (5xx, transport): the op EXISTS but the backend is
-//     unhealthy — NEVER fall back client-side; a client-side apply against an
-//     unhealthy backend just smears partial state.
 func applyViaServerOp(sc *scaffoldContext) (bool, error) {
 	req := client.ScaffoldFromTemplateRequest{
-		HubTemplateID: sc.hubTmpl.ID,
-		Name:          sc.hubName,
-		Slug:          sc.hubSlug,
-		CatalogDigest: sc.cat.Meta.Digest,
-		// The deterministic idempotency key (64-char hex, within the op's
-		// 255-char limit): a re-run of the same hub+template converges on the
-		// backend's stored application instead of double-applying.
+		HubTemplateID:  sc.hubTmpl.ID,
+		Name:           sc.hubName,
+		Slug:           sc.hubSlug,
+		CatalogDigest:  sc.cat.Meta.Digest,
 		IdempotencyKey: catalog.ApplicationID(sc.hubID, sc.hubTmpl.ID),
 	}
 	res, err := sc.cl.ScaffoldFromTemplate(sc.ctx, sc.teamID, sc.hubID, req)
@@ -108,17 +51,6 @@ func applyViaServerOp(sc *scaffoldContext) (bool, error) {
 	}
 }
 
-// retryServerOpAfterRefetch is the 409-refetch-once flow: re-resolve the
-// catalog with the SAME options shape as the preflight (scaffoldResolveOptions
-// — one construction site, no drift) and, ONLY if the digest actually moved,
-// rebuild the plan from the fresh catalog (the shared preflight tail, with the
-// FINAL hub vars — they are known post-create) and retry the op exactly once
-// with the new digest. An unchanged digest, a failed refetch, or a second op
-// rejection all surface the ORIGINAL error with guidance; a plan-rebuild
-// failure against the fresh catalog surfaces the REBUILD error instead (it is
-// the more actionable one: the new catalog is what the retry cannot proceed
-// against); the retry's own 404/405 (freak case: the op disappeared between
-// the two POSTs) falls back client-side like any other probe miss.
 func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTemplateRequest, opErr error) (bool, error) {
 	rejected := func(retried bool) error {
 		var advice string
@@ -143,16 +75,9 @@ func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTempl
 		return false, rejected(false)
 	}
 	if cat.Meta.Digest == sc.cat.Meta.Digest {
-		// The pin did not move — the rejection was not our staleness. Surface it.
 		return false, rejected(false)
 	}
 
-	// The pin moved under us: re-run the preflight tail (existence + invariants
-	// + plan + interpolation) against the fresh catalog, so a retry never sends
-	// a digest for a catalog the plan was not built from — and so the
-	// client-side loop, if the retry 404s, applies the NEW plan. The context
-	// adopts the fresh catalog only AFTER the rebuild succeeds (no half-updated
-	// context on a rebuild failure).
 	sc.notef("backend catalog pin moved (revision %d → %d) — retrying the op with the fresh digest",
 		sc.cat.Meta.Revision, cat.Meta.Revision)
 	if perr := rebuildScaffoldPlan(sc, cat, src, req.HubTemplateID, sc.hubName, sc.hubSlug); perr != nil {
@@ -160,13 +85,6 @@ func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTempl
 	}
 	sc.cat = cat
 
-	// MIO-3065: the plan just changed under us, so the op gate has to be asked
-	// again. stepPages decided to probe against the OLD plan; if the fresh
-	// catalog's template binds a playlist by key, retrying the op would hand
-	// those bindings to a fill that can only match by title — the case the
-	// gate exists to keep client-side, arriving through the one path that
-	// rebuilds the plan after the gate ran. Falling back client-side is always
-	// safe here: the op has not applied anything (it rejected the request).
 	if keys := playlistBindingKeys(sc); len(keys) > 0 {
 		sc.notef("the refetched catalog's template binds playlist dataSource key(s) %s, which the op could only match by playlist title — applying the new plan client-side instead of retrying",
 			strings.Join(keys, ", "))
@@ -183,37 +101,17 @@ func retryServerOpAfterRefetch(sc *scaffoldContext, req client.ScaffoldFromTempl
 		sc.notef(opAbsentNote)
 		return false, nil
 	default:
-		// ONE retry ever. A second rejection (any kind) surfaces the ORIGINAL
-		// error with guidance; the retry's own failure is noted, not swallowed.
 		sc.notef("retry with the refetched digest also failed: %v", err)
 		return false, rejected(true)
 	}
 }
 
-// recordServerOpResult translates the op's success into the same context state
-// + operator notes the client-side loop leaves behind. published_revision is a
-// PUBLISHED revision, NOT a draft version — sc.homeDraftVersion stays 0, and
-// nothing downstream may conflate the two (printScaffoldSummary reads neither
-// field, so empty/zero keeps its output sensible).
-//
-// Task-4 review note: a 201 whose body violates the contract can yield empty
-// Pages — that must NOT be read as "nothing created". The hub IS scaffolded
-// (the op returned success), so a missing/homepage-less listing degrades to a
-// WARNING note and an empty sc.homePageID, never a failure.
 func recordServerOpResult(sc *scaffoldContext, res client.ScaffoldFromTemplateResult) {
 	if len(res.Pages) == 0 {
 		sc.notef("scaffold-from-template op succeeded but returned no page listing — the pages were applied server-side; homepage id unknown to this run")
 		return
 	}
 	for _, p := range res.Pages {
-		// Record the id under the template SLUG (MIO-2574) so both apply
-		// branches key the machine-readable result the same way — the
-		// client-side loop is slug-keyed.
-		//
-		// MIO-2749: the op now returns the slug itself, so take it directly.
-		// templateSlugForRole is only the fallback for a backend that predates
-		// that change and still sends role alone; it cannot resolve a role two
-		// template entries share, so about/faq stay unrecorded there.
 		slug := p.Slug
 		if slug == "" {
 			slug = templateSlugForRole(sc, p.Role)
@@ -229,24 +127,6 @@ func recordServerOpResult(sc *scaffoldContext, res client.ScaffoldFromTemplateRe
 	}
 }
 
-// templateSlugForRole maps a role from the op's page listing back onto the
-// template pages[] slug that declared it, and does so ONLY when the role is
-// UNAMBIGUOUS — exactly one template entry claims it.
-//
-// LEGACY-BACKEND FALLBACK ONLY (MIO-2749). A current backend returns the slug
-// on every entry and recordServerOpResult uses that directly; this runs only
-// when the response carries no slug, i.e. a backend older than mio-backend
-// #631. Keep it: the CLI talks to whatever backend it is pointed at, and this
-// file already tolerates version skew elsewhere (the op-absent 404/405 probe).
-//
-// The ambiguity is real, not theoretical: the shipped community template gives
-// its secondary pages the SAME role ("secondary" for both about and faq), so a
-// first-match mapping would attribute one page's id to the other page's slug —
-// a wrong id is far worse than a missing one for a caller that acts on it. An
-// unmatched or ambiguous role yields "" and is simply not recorded (recordPageID
-// drops it), leaving that entry's page_id null in the result. The homepage —
-// the id callers actually chase — carries a unique role in every template we
-// serve, and has its own role-keyed fallback in scaffoldHomepageID besides.
 func templateSlugForRole(sc *scaffoldContext, role string) string {
 	if role == "" {
 		return ""

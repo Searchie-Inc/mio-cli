@@ -1,17 +1,5 @@
 package cmd
 
-// hubs_branding_attach_test.go — contract tests for `mio hubs branding attach`
-// (MIO-3465). The managed branding-image attach: resolve the file's media_id
-// (GET /files/{id}), preflight eligibility client-side, POST a
-// hub-branding-attachment, then re-read the hub to surface the resolved public
-// branding URL the read-time resolver overlays (MIO-2115/MIO-3354).
-//
-// Eligibility preflight mirrors the backend's is_media_eligible_for_public_branding
-// (app/infrastructure/storage/public_asset_url.py): the backend ACCEPTS an
-// ineligible attach (the row is created) but never publishes it to the public
-// bucket, so without the preflight the failure mode is a silent no-op — the
-// operator sees a 201 and no logo. The CLI errors up front instead.
-
 import (
 	"errors"
 	"io"
@@ -23,8 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// brandingAttachStub wires the three-route flow: GET file → POST attach → GET hub.
-// fileAttrs is the raw attributes JSON for the file resource.
 func brandingAttachStub(t *testing.T, fileAttrs, hubBranding string) (srv *httptest.Server, postBody *[]byte, postHit *bool, hubGetHit *bool) {
 	t.Helper()
 	var body []byte
@@ -55,9 +41,6 @@ func brandingAttachStub(t *testing.T, fileAttrs, hubBranding string) (srv *httpt
 
 const eligiblePNG = `{"title":"Logo","media_id":"media_pk_1","status_upload":"READY","mime_type":"image/png"}`
 
-// TestHubsBrandingAttach_EndToEnd pins the full flow: resolved media_id on the
-// wire (not the file id), pinned target_type, the chosen role, and the resolved
-// public URL surfaced from the post-attach hub read.
 func TestHubsBrandingAttach_EndToEnd(t *testing.T) {
 	srv, postBody, postHit, hubGetHit := brandingAttachStub(t, eligiblePNG,
 		`{"auth_logo_url":"https://cdn.example.com/hub-branding/t_team1/auth_logo/media_pk_1"}`)
@@ -119,9 +102,6 @@ func TestHubsBrandingAttach_RequiresRole(t *testing.T) {
 	}
 }
 
-// TestHubsBrandingAttach_InvalidRole pins the role allowlist to the backend's
-// BRANDING_ROLES — a non-branding attachment role (e.g. thumbnail) is refused
-// with an error that names the four valid roles.
 func TestHubsBrandingAttach_InvalidRole(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -135,9 +115,6 @@ func TestHubsBrandingAttach_InvalidRole(t *testing.T) {
 	}
 }
 
-// TestValidateBrandingRole pins the allowlist and that the error names every
-// valid role (main.go renders RunE error text outside the contract harness,
-// so the message is asserted here directly).
 func TestValidateBrandingRole(t *testing.T) {
 	for _, role := range []string{"logo", "favicon", "social_image", "auth_logo"} {
 		if err := validateBrandingRole(role); err != nil {
@@ -172,10 +149,6 @@ func TestHubsBrandingAttach_NegativePosition(t *testing.T) {
 	}
 }
 
-// ineligibleCase runs attach against a file with the given attributes and
-// asserts a usage error fires BEFORE the attach POST. (Error message CONTENT
-// is pinned in TestBrandingAttachPreflight_Messages — main.go renders RunE
-// error text outside this harness's capture, so it cannot be asserted here.)
 func ineligibleCase(t *testing.T, fileAttrs string) {
 	t.Helper()
 	srv, _, postHit, _ := brandingAttachStub(t, fileAttrs, `{}`)
@@ -198,9 +171,6 @@ func TestHubsBrandingAttach_NotReady(t *testing.T) {
 	ineligibleCase(t, `{"title":"Logo","media_id":"media_pk_1","status_upload":"PENDING","mime_type":"image/png"}`)
 }
 
-// SVG is the load-bearing exclusion: the backend attach succeeds but the asset
-// is never published (XSS surface), so without this preflight the operator
-// gets a silent no-op.
 func TestHubsBrandingAttach_SVGRejected(t *testing.T) {
 	ineligibleCase(t, `{"title":"Logo","media_id":"media_pk_1","status_upload":"READY","mime_type":"image/svg+xml"}`)
 }
@@ -209,16 +179,12 @@ func TestHubsBrandingAttach_NonImageRejected(t *testing.T) {
 	ineligibleCase(t, `{"title":"Clip","media_id":"media_pk_1","status_upload":"READY","mime_type":"video/mp4"}`)
 }
 
-// TestBrandingAttachPreflight_Messages pins the preflight's verdicts AND the
-// self-naming error text — the "helpful error for non-eligible media" half of
-// the MIO-3465 acceptance. Each ineligible case must name what is wrong;
-// attributes the file read does not carry must be skipped (backend authority).
 func TestBrandingAttachPreflight_Messages(t *testing.T) {
 	cases := []struct {
 		name     string
 		attrs    map[string]any
 		wantID   string
-		wantMsgs []string // all must appear in the error; empty = no error
+		wantMsgs []string
 	}{
 		{"eligible png", map[string]any{"media_id": "m1", "status_upload": "READY", "mime_type": "image/png"}, "m1", nil},
 		{"missing optional attrs skipped", map[string]any{"media_id": "m1"}, "m1", nil},
@@ -256,10 +222,6 @@ func TestBrandingAttachPreflight_Messages(t *testing.T) {
 	}
 }
 
-// TestHubsBrandingAttach_URLNotResolved: the attach succeeded but the hub read
-// shows no overlaid URL for the role (e.g. public CDN disabled on the env).
-// Still exit 0 — the attachment exists — but warn on stderr so the operator
-// knows the URL is not live yet.
 func TestHubsBrandingAttach_URLNotResolved(t *testing.T) {
 	srv, _, postHit, _ := brandingAttachStub(t, eligiblePNG, `{}`)
 	res := runContract(t, baseEnv(srv.URL),
@@ -276,9 +238,6 @@ func TestHubsBrandingAttach_URLNotResolved(t *testing.T) {
 	}
 }
 
-// TestAttachmentsUpdate_AcceptsAuthLogoRole: the generic attachments update
-// role allowlist must include auth_logo (added to the backend enum by
-// MIO-3354; the CLI list predates it).
 func TestAttachmentsUpdate_AcceptsAuthLogoRole(t *testing.T) {
 	srv, method, _, _, _ := captureAdminReq(t, http.StatusOK, attachmentResourceBody)
 	res := runContract(t, baseEnv(srv.URL),

@@ -1,9 +1,5 @@
 package cmd
 
-// hubs_policies_test.go — contract tests for `mio hubs policies update`.
-//
-// Reuses the in-process harness from contract_test.go.
-
 import (
 	"encoding/json"
 	"io"
@@ -15,10 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// resetPoliciesCmdFlags resets the Changed state and value of every flag on
-// hubsPoliciesUpdateCmd back to its default. The global rootCmd is a singleton
-// in the in-process harness; flag.Changed persists across Execute() calls
-// unless explicitly cleared between tests.
 func resetPoliciesCmdFlags(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{"policy-type", "content", "reset-content", "require-acceptance"} {
@@ -29,7 +21,6 @@ func resetPoliciesCmdFlags(t *testing.T) {
 	}
 }
 
-// hubsPoliciesBody is a minimal policies resource response.
 const hubsPoliciesBody = `{
 	"data": {
 		"id": "pol_1",
@@ -42,13 +33,6 @@ const hubsPoliciesBody = `{
 	}
 }`
 
-// TestHubsPoliciesUpdate_PatchBody verifies that:
-//   - the HTTP method is PATCH
-//   - the path ends in /hubs/hub_x/policies
-//   - the request body's data.type == "policies"
-//   - data.attributes.policy_type == "tos"
-//   - data.attributes.content is present and non-empty
-//   - the command exits 0
 func TestHubsPoliciesUpdate_PatchBody(t *testing.T) {
 	t.Cleanup(func() { resetPoliciesCmdFlags(t) })
 
@@ -85,7 +69,6 @@ func TestHubsPoliciesUpdate_PatchBody(t *testing.T) {
 		t.Errorf("path %q does not end with /hubs/hub_x/policies", gotPath)
 	}
 
-	// Decode the request body and assert envelope shape.
 	var doc struct {
 		Data struct {
 			Type       string         `json:"type"`
@@ -106,12 +89,10 @@ func TestHubsPoliciesUpdate_PatchBody(t *testing.T) {
 	}
 }
 
-// TestHubsPoliciesUpdate_InvalidPolicyType verifies that an unrecognised
-// --policy-type value exits 2 (ExitUsage) without making an API call.
 func TestHubsPoliciesUpdate_InvalidPolicyType(t *testing.T) {
 	t.Cleanup(func() { resetPoliciesCmdFlags(t) })
 
-	srv := newMockServer(t, nil) // request must not reach the server
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
@@ -125,8 +106,6 @@ func TestHubsPoliciesUpdate_InvalidPolicyType(t *testing.T) {
 	}
 }
 
-// TestHubsPoliciesUpdate_ResetContent verifies that --reset-content sends a
-// PATCH with data.attributes.content == JSON null (present but null, not absent).
 func TestHubsPoliciesUpdate_ResetContent(t *testing.T) {
 	t.Cleanup(func() { resetPoliciesCmdFlags(t) })
 
@@ -163,7 +142,6 @@ func TestHubsPoliciesUpdate_ResetContent(t *testing.T) {
 		t.Errorf("path %q does not end with /hubs/hub_x/policies", gotPath)
 	}
 
-	// Decode body as a raw JSON document so we can distinguish null from absent.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(gotBody, &raw); err != nil {
 		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
@@ -180,7 +158,6 @@ func TestHubsPoliciesUpdate_ResetContent(t *testing.T) {
 		t.Fatalf("data is not valid JSON: %v; data=%q", dataRaw, dataRaw)
 	}
 
-	// data.attributes.content must be present AND equal to JSON null.
 	contentRaw, present := data.Attributes["content"]
 	if !present {
 		t.Errorf("data.attributes.content is ABSENT; want JSON null; attrs=%v", data.Attributes)
@@ -189,12 +166,10 @@ func TestHubsPoliciesUpdate_ResetContent(t *testing.T) {
 	}
 }
 
-// TestHubsPoliciesUpdate_BothContentFlags verifies that providing both
-// --content and --reset-content exits 2 (ExitUsage) without making an API call.
 func TestHubsPoliciesUpdate_BothContentFlags(t *testing.T) {
 	t.Cleanup(func() { resetPoliciesCmdFlags(t) })
 
-	srv := newMockServer(t, nil) // request must not reach the server
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
@@ -209,12 +184,10 @@ func TestHubsPoliciesUpdate_BothContentFlags(t *testing.T) {
 	}
 }
 
-// TestHubsPoliciesUpdate_NeitherContentFlag verifies that providing neither
-// --content nor --reset-content exits 2 (ExitUsage) without making an API call.
 func TestHubsPoliciesUpdate_NeitherContentFlag(t *testing.T) {
 	t.Cleanup(func() { resetPoliciesCmdFlags(t) })
 
-	srv := newMockServer(t, nil) // request must not reach the server
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",

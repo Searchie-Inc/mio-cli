@@ -1,18 +1,5 @@
 package cmd
 
-// hubs_scaffold_starter_test.go — MIO-3065: the hubTemplate vocabulary the
-// starter template is the first to exercise (spaces[].icon, playlists[].
-// documents, the playlist dataSource fill contract), the hub-scoped playlist
-// create, and which server op may apply it: the whole-hub op since MIO-3073
-// (MIO-4167), the pages-only op still not for a playlist binding.
-//
-// THE ORACLE IS THE WIRE, everywhere in this file. Each of these defects was
-// invisible precisely because the CLI's own state looked right: a space was
-// created, a playlist was created, a page was published. What was wrong was the
-// REQUEST — a missing hub_id, a missing icon, a dataSource still carrying the
-// catalog's empty id — so nothing short of reading the emitted body can tell a
-// fixed run from a broken one.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -30,13 +17,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// ─── spaces[].icon ────────────────────────────────────────────────────────────
-
-// TestStepSpaces_SendsTheTemplateIcon: the icon the template declares reaches
-// the space create body. Before MIO-3065 templateSpaceInput copied name/slug/
-// description/access/posting only, so every scaffolded space came out icon-less
-// however loudly the catalog asked for one — and buildSpaceAttrs omits an unset
-// field by design, so the request simply had no `icon` key to notice.
 func TestStepSpaces_SendsTheTemplateIcon(t *testing.T) {
 	var bodies [][]byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,23 +50,18 @@ func TestStepSpaces_SendsTheTemplateIcon(t *testing.T) {
 	if got := decodeHubAttrs(t, bodies[0])["icon"]; got != "megaphone" {
 		t.Errorf("announcements create icon = %v, want megaphone (the declared sprite name)", got)
 	}
-	// A space that declares no icon must send no icon key — sending "" would
-	// overwrite the backend's own default with an empty string.
 	if got, present := decodeHubAttrs(t, bodies[1])["icon"]; present {
 		t.Errorf("general declares no icon, so the create must omit the key; got %v", got)
 	}
 }
 
-// ─── playlists: hub scope + documents ─────────────────────────────────────────
-
-// playlistWire is the traffic stepPlaylists emits, split by endpoint.
 type playlistWire struct {
-	creates    [][]byte // POST …/playlists             — the team playlist create
-	synthetics [][]byte // POST …/files/synthetic       — one per documents[] entry
-	itemFiles  []string // POST …/playlists/{id}/items  — file_id, in attach order
-	itemPos    []int    // …and the position each attach declared
-	publishes  [][]byte // POST …/hubs/{hub}/playlists  — the playlist's publication row
-	mediaPubs  [][]byte // POST …/hubs/{hub}/media      — a document file's publication row
+	creates    [][]byte
+	synthetics [][]byte
+	itemFiles  []string
+	itemPos    []int
+	publishes  [][]byte
+	mediaPubs  [][]byte
 }
 
 func playlistWireServer(t *testing.T) (*httptest.Server, *playlistWire) {
@@ -109,14 +84,14 @@ func playlistWireServer(t *testing.T) (*httptest.Server, *playlistWire) {
 			w.itemFiles = append(w.itemFiles, fid)
 			pos, ok := attrs["position"].(float64)
 			if !ok {
-				pos = -1 // absent: the collision shape — recorded, never silently 0
+				pos = -1
 			}
 			w.itemPos = append(w.itemPos, int(pos))
 			rw.WriteHeader(http.StatusCreated)
 			_, _ = rw.Write([]byte(`{"data":{"id":"it_1","type":"playlist_items","attributes":{}}}`))
 		case strings.Contains(path, "/hubs/") && r.Method == http.MethodGet:
 			rw.WriteHeader(http.StatusOK)
-			_, _ = rw.Write([]byte(`{"data":[]}`)) // O1 gate: hub has no playlists
+			_, _ = rw.Write([]byte(`{"data":[]}`))
 		case strings.HasSuffix(path, "/media") && r.Method == http.MethodPost:
 			w.mediaPubs = append(w.mediaPubs, body)
 			rw.WriteHeader(http.StatusCreated)
@@ -138,11 +113,6 @@ func playlistWireServer(t *testing.T) (*httptest.Server, *playlistWire) {
 	return srv, w
 }
 
-// TestStepPlaylists_ScopesTheCreateToTheHub: the playlist create carries
-// hub_id. Without it the playlist is team-scoped only and its hub detail page
-// 404s for every viewer no matter how the publication row is configured — the
-// defect that made every starter playlist page dead on arrival, latent until
-// then because the only shipped template declared `playlists: []`.
 func TestStepPlaylists_ScopesTheCreateToTheHub(t *testing.T) {
 	srv, w := playlistWireServer(t)
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
@@ -163,8 +133,6 @@ func TestStepPlaylists_ScopesTheCreateToTheHub(t *testing.T) {
 	if attrs["visibility"] != "public" {
 		t.Errorf("playlist create visibility = %v, want public (the template's own)", attrs["visibility"])
 	}
-	// The publication row's visibility is a DIFFERENT enum and is the ratified
-	// constant, not the template's value.
 	if len(w.publishes) != 1 {
 		t.Fatalf("hub publishes = %d, want 1", len(w.publishes))
 	}
@@ -173,10 +141,6 @@ func TestStepPlaylists_ScopesTheCreateToTheHub(t *testing.T) {
 	}
 }
 
-// TestStepPlaylists_MaterialisesDocumentsAsSyntheticItems: each documents[]
-// entry becomes a synthetic READY document file and then a playlist item.
-// Field-verified inert before MIO-3065 — the files were never created at all,
-// so the band had nothing to render.
 func TestStepPlaylists_MaterialisesDocumentsAsSyntheticItems(t *testing.T) {
 	srv, w := playlistWireServer(t)
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
@@ -204,18 +168,9 @@ func TestStepPlaylists_MaterialisesDocumentsAsSyntheticItems(t *testing.T) {
 	if first["asset_kind"] != "document" {
 		t.Errorf("document 1 asset_kind = %v, want document (no upload/finalize/transcode)", first["asset_kind"])
 	}
-	// MIO-3116: every scaffolded placeholder declares text/markdown explicitly —
-	// left unset, the endpoint defaults to application/octet-stream, which
-	// defeats every mime-keyed branch downstream (document viewers,
-	// awaitsTranscode's mime prefix check). Sent regardless of whether the
-	// template supplied a description, so document 2 (no description) must carry
-	// it too.
 	if first["mime_type"] != templateDocumentMimeType {
 		t.Errorf("document 1 mime_type = %v, want %q", first["mime_type"], templateDocumentMimeType)
 	}
-	// The file mirrors its playlist's visibility: a public playlist whose items
-	// are private (the endpoint's default) discloses no items to an anonymous
-	// viewer, quietly contradicting the template.
 	if first["visibility"] != "public" {
 		t.Errorf("document 1 visibility = %v, want public (mirrors the playlist)", first["visibility"])
 	}
@@ -226,24 +181,14 @@ func TestStepPlaylists_MaterialisesDocumentsAsSyntheticItems(t *testing.T) {
 	if second["mime_type"] != templateDocumentMimeType {
 		t.Errorf("document 2 mime_type = %v, want %q (sent even with no description)", second["mime_type"], templateDocumentMimeType)
 	}
-	// file_ids first, then documents — the order the items land in.
 	want := []string{"file_existing", "file_syn1", "file_syn2"}
 	if strings.Join(w.itemFiles, ",") != strings.Join(want, ",") {
 		t.Errorf("attached file ids = %v, want %v (file_ids then documents, in order)", w.itemFiles, want)
 	}
-	// Every attach declares a DISTINCT, incrementing position. The endpoint
-	// defaults to 0 and does not shift siblings, and mio-hub joins the item-card
-	// projection to the files rows BY POSITION — so N items all at 0 collapse to
-	// ONE rendered card, last-write-wins, while the API still reports N rows and
-	// file_count N. Asserting the positions on the wire is the only thing here
-	// that can see it: every API-level assertion in this file passes either way.
 	if !reflect.DeepEqual(w.itemPos, []int{0, 1, 2}) {
 		t.Errorf("attach positions = %v, want [0 1 2] — colliding positions render as a single card", w.itemPos)
 	}
 
-	// Each CREATED document gets a per-hub publication row. Without it the file
-	// is attached and invisible: measured on dev, the item-card projection
-	// returned zero rows to an anonymous viewer until the row existed.
 	if len(w.mediaPubs) != 2 {
 		t.Fatalf("hub-media publishes = %d, want 2 (one per created document)", len(w.mediaPubs))
 	}
@@ -259,17 +204,11 @@ func TestStepPlaylists_MaterialisesDocumentsAsSyntheticItems(t *testing.T) {
 			t.Errorf("document publication must set published_at (a null one is a draft); attrs=%v", attrs)
 		}
 	}
-	// NOT the file_ids entry: publishing media the template author already owns
-	// is a side effect the scaffold does not take on their behalf.
 	if strings.Join(pubFiles, ",") != "file_syn1,file_syn2" {
 		t.Errorf("published file ids = %v, want only the files this run created", pubFiles)
 	}
 }
 
-// ─── the fill contract, on the wire ───────────────────────────────────────────
-
-// bandPagePlan is a one-page plan whose tree binds a playlist by key — the
-// starter homepage's Getting Started band in miniature.
 func bandPagePlan() *scaffoldPlan {
 	return &scaffoldPlan{pages: []plannedPage{{
 		ref: catalog.PageRef{Role: "homepage", PageTemplate: "page-band", Slug: "homepage", Title: "Home", Privacy: "public", IsHomepage: true},
@@ -283,7 +222,6 @@ func bandPagePlan() *scaffoldPlan {
 	}}}
 }
 
-// treePUTBodies captures the draft-tree PUTs a page apply emits.
 func pageApplyServer(t *testing.T, puts *[][]byte) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +229,7 @@ func pageApplyServer(t *testing.T, puts *[][]byte) *httptest.Server {
 		body, _ := io.ReadAll(r.Body)
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/scaffold-from-template"):
-			w.WriteHeader(http.StatusNotFound) // pages op absent
+			w.WriteHeader(http.StatusNotFound)
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pages"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":[]}`))
@@ -311,8 +249,6 @@ func pageApplyServer(t *testing.T, puts *[][]byte) *httptest.Server {
 	return srv
 }
 
-// treeDataSourceIDs pulls every playlist dataSource id out of a captured tree
-// PUT body — the value mio-backend's compiler turns into the section's model_id.
 func treeDataSourceIDs(t *testing.T, body []byte) []string {
 	t.Helper()
 	var env struct {
@@ -349,10 +285,6 @@ func treeDataSourceIDs(t *testing.T, body []byte) []string {
 	return ids
 }
 
-// TestApplyPage_BindsThePlaylistDataSourceIntoTheTreePUT: the created playlist's
-// id is in the tree body the page PUT sends. This is the whole fill contract:
-// the backend compiles what it is PUT, so an id patched in anywhere later — or
-// merely held in a map — leaves the section bound to the catalog's empty string.
 func TestApplyPage_BindsThePlaylistDataSourceIntoTheTreePUT(t *testing.T) {
 	var puts [][]byte
 	srv := pageApplyServer(t, &puts)
@@ -375,9 +307,6 @@ func TestApplyPage_BindsThePlaylistDataSourceIntoTheTreePUT(t *testing.T) {
 	}
 }
 
-// The plan's rawTree must survive the bind untouched: a resume re-interpolates
-// and re-binds from it, and a tree mutated in place would carry the FIRST run's
-// playlist id into the second run's page.
 func TestApplyPage_BindLeavesThePlanTreePristine(t *testing.T) {
 	var puts [][]byte
 	srv := pageApplyServer(t, &puts)
@@ -401,10 +330,6 @@ func TestApplyPage_BindLeavesThePlanTreePristine(t *testing.T) {
 	}
 }
 
-// ─── the server-op gate ───────────────────────────────────────────────────────
-
-// vocabCatalogBody rewrites the 2.1 fixture's `community` hubTemplate with
-// mutate and recomputes meta.digest so the artifact still verifies.
 func vocabCatalogBody(t *testing.T, mutate func(ht map[string]any, cat map[string]any)) []byte {
 	t.Helper()
 	dec := json.NewDecoder(bytes.NewReader(catalog21Body(t)))
@@ -430,20 +355,6 @@ func vocabCatalogBody(t *testing.T, mutate func(ht map[string]any, cat map[strin
 	return out
 }
 
-// TestScaffoldOps_WholeHubOpTakesTheStarterVocabulary: a template declaring
-// spaces[].icon, playlists[].documents or a playlist dataSource key TAKES the
-// whole-hub op.
-//
-// Until MIO-3073 the op modelled none of the three, so MIO-3065 kept such a
-// template off it. mio-backend #680 (54679a96, 2026-08-11) made the op apply
-// all three — the icon on the space create, each document as a synthetic file
-// published to the hub and attached in order, and the dataSource fill from the
-// ids its own playlists step created — and the CLI's gate outlived the reason
-// for it, pushing every `starter` scaffold onto the slower client-side path.
-//
-// The oracle is the wire on both sides: exactly one op POST AND no client-side
-// hub create, with no skip note. Asserting only the note would pass over a run
-// that stayed quiet and still built the hub client-side.
 func TestScaffoldOps_WholeHubOpTakesTheStarterVocabulary(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -488,7 +399,6 @@ func TestScaffoldOps_WholeHubOpTakesTheStarterVocabulary(t *testing.T) {
 			},
 		},
 		{
-			// The shipped `starter` template declares all three at once.
 			name: "all three together",
 			want: "icons, documents and a dataSource key",
 			mutate: func(ht map[string]any, cat map[string]any) {
@@ -533,13 +443,6 @@ func TestScaffoldOps_WholeHubOpTakesTheStarterVocabulary(t *testing.T) {
 	}
 }
 
-// The control: the SAME harness, the unmutated fixture. A template declaring
-// none of that vocabulary must still take the op — otherwise the gate above
-// proves nothing (a CLI that never probed would pass every case).
-//
-// (Since MIO-3073's gate came out this is the baseline the cases above are
-// compared against: the same harness, a template declaring none of that
-// vocabulary.)
 func TestScaffoldOps_PlainTemplateStillTakesTheOp(t *testing.T) {
 	srv, rec := hubOpScaffoldServerWithCatalog(t, http.StatusCreated, hubOpLiveBody, catalog21Body(t))
 
@@ -555,10 +458,6 @@ func TestScaffoldOps_PlainTemplateStillTakesTheOp(t *testing.T) {
 	}
 }
 
-// TestStepPages_PlaylistBindingSkipsThePagesOp: one level down, the same rule
-// with a NARROWER trigger. By the time stepPages runs, the client-side spaces
-// and playlists steps have applied icons and documents already — the only thing
-// still at stake is the fill contract, so only a binding key skips the probe.
 func TestStepPages_PlaylistBindingSkipsThePagesOp(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -609,8 +508,6 @@ func TestStepPages_PlaylistBindingSkipsThePagesOp(t *testing.T) {
 	}
 }
 
-// unboundPagePlan is bandPagePlan without the dataSource — the control that
-// keeps the gate above from passing by never probing at all.
 func unboundPagePlan() *scaffoldPlan {
 	p := bandPagePlan()
 	kids, _ := p.pages[0].rawTree["children"].([]any)
@@ -618,11 +515,6 @@ func unboundPagePlan() *scaffoldPlan {
 	return p
 }
 
-// ─── round 2: resume, and the gate on the op-retry path ───────────────────────
-
-// resumeWireServer answers the O1 gate with an EXISTING hub playlist row (so
-// stepPlaylists skips the create loop) and serves each playlist's title on
-// retrieve. Records every POST so a "skip" that still writes can never pass.
 func resumeWireServer(t *testing.T, titlesByID map[string]string) (*httptest.Server, *int) {
 	t.Helper()
 	posts := 0
@@ -635,20 +527,18 @@ func resumeWireServer(t *testing.T, titlesByID map[string]string) (*httptest.Ser
 			return
 		}
 		path := r.URL.Path
-		// A team playlist retrieve: …/teams/{team}/playlists/{id}
 		if strings.Contains(path, "/playlists/") && !strings.Contains(path, "/hubs/") {
 			id := path[strings.LastIndex(path, "/")+1:]
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"playlists","attributes":{"title":%q}}}`, id, titlesByID[id])
 			return
 		}
-		// The O1 gate listing: hub publication rows, one per known playlist.
 		rows := make([]string, 0, len(titlesByID))
 		ids := make([]string, 0, len(titlesByID))
 		for id := range titlesByID {
 			ids = append(ids, id)
 		}
-		sort.Strings(ids) // deterministic order
+		sort.Strings(ids)
 		for _, id := range ids {
 			rows = append(rows, fmt.Sprintf(`{"id":"hm_%s","type":"hub_media","attributes":{"playlist_id":%q}}`, id, id))
 		}
@@ -659,15 +549,6 @@ func resumeWireServer(t *testing.T, titlesByID map[string]string) (*httptest.Ser
 	return srv, &posts
 }
 
-// TestStepPlaylists_ResumeRecoversBindingIDsByTitle: the ORDINARY resume — a
-// first run created the playlists and died before the pages. The O1 gate skips
-// the create loop, so nothing records the ids; without recovery the pages step
-// can never fill its bindings and the resume can never finish.
-//
-// The join is by TITLE (`key` is manifest vocabulary, never stored server-side)
-// and only where unambiguous, so the second subtest is the one that matters: a
-// hub carrying TWO playlists with the template's title must recover NOTHING,
-// because a wrong id would be acted on where a missing one is reported.
 func TestStepPlaylists_ResumeRecoversBindingIDsByTitle(t *testing.T) {
 	tmpl := func() *catalog.HubTemplate {
 		return &catalog.HubTemplate{
@@ -697,8 +578,6 @@ func TestStepPlaylists_ResumeRecoversBindingIDsByTitle(t *testing.T) {
 		if sc.playlistIDsByKey["getting-started"] != "pl_gs" {
 			t.Errorf("recovered id = %q, want pl_gs", sc.playlistIDsByKey["getting-started"])
 		}
-		// Only the BOUND key is looked up: the two duplicate-titled playlists are
-		// not needed by the plan, so their ambiguity is nobody's problem.
 		if len(sc.playlistIDsByKey) != 1 {
 			t.Errorf("recovered %v, want only the bound key", sc.playlistIDsByKey)
 		}
@@ -707,7 +586,7 @@ func TestStepPlaylists_ResumeRecoversBindingIDsByTitle(t *testing.T) {
 	t.Run("ambiguous title recovers nothing", func(t *testing.T) {
 		srv, _ := resumeWireServer(t, map[string]string{
 			"pl_a": "Getting Started",
-			"pl_b": "Getting Started", // a second playlist with the same title
+			"pl_b": "Getting Started",
 		})
 		sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
 		sc.pagePlan = bandPagePlan()
@@ -719,13 +598,6 @@ func TestStepPlaylists_ResumeRecoversBindingIDsByTitle(t *testing.T) {
 		}
 	})
 
-	// The subtle one (codex R2): ambiguity is decided across the WHOLE template,
-	// not just its bound playlists. Here the bound "getting-started" and the
-	// unbound "placeholder-2" share a title, and a partial prior run published
-	// only the unbound one — so the hub carries exactly ONE row with that title.
-	// Filtering to needed keys before deciding ambiguity would read that row as
-	// an unambiguous match and bind the page to the WRONG playlist, then mark it
-	// applied.
 	t.Run("a title shared with an UNBOUND template playlist recovers nothing", func(t *testing.T) {
 		srv, _ := resumeWireServer(t, map[string]string{"pl_other": "Shared Title"})
 		sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
@@ -758,14 +630,6 @@ func TestStepPlaylists_ResumeRecoversBindingIDsByTitle(t *testing.T) {
 	})
 }
 
-// TestStepPages_RefusesAnUnfillableBinding: when a declared binding cannot be
-// filled, the step exits 2 and writes NOTHING.
-//
-// The failure it prevents is the quiet one: a page written with the catalog's
-// empty id renders a permanently blank band AND gets its provenance marker
-// flipped to "applied", after which §5.1 reads it as converged and no re-run
-// ever repairs it. So the assertion is on the wire — zero page creates — not
-// merely on the error.
 func TestStepPages_RefusesAnUnfillableBinding(t *testing.T) {
 	creates := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -782,8 +646,6 @@ func TestStepPages_RefusesAnUnfillableBinding(t *testing.T) {
 	cat, _, _ := scaffoldFixture(t)
 	sc.cat, sc.pagePlan = cat, bandPagePlan()
 	sc.hubTmpl = catalog.HubTemplate{ID: "starter", Pages: []catalog.PageRef{sc.pagePlan.pages[0].ref}}
-	// playlistIDsByKey deliberately left EMPTY — the resume case where recovery
-	// found nothing.
 
 	err := stepPages(sc, &sc.hubTmpl)
 	if err == nil {
@@ -800,11 +662,6 @@ func TestStepPages_RefusesAnUnfillableBinding(t *testing.T) {
 	}
 }
 
-// TestStepPages_Op409RefetchIntoABindingFallsBackClientSide: the one path that
-// rebuilds the plan AFTER the op gate already ran. A 409 triggers a catalog
-// refetch; if the fresh catalog's template binds a playlist by key, retrying
-// the op would apply pages the op cannot fill — so the retry must be abandoned
-// for the client-side apply of the NEW plan.
 func TestStepPages_Op409RefetchIntoABindingFallsBackClientSide(t *testing.T) {
 	t.Setenv("MIO_CATALOG_CACHE_DIR", t.TempDir())
 	bindingBody := vocabCatalogBody(t, func(ht map[string]any, cat map[string]any) {
@@ -827,8 +684,6 @@ func TestStepPages_Op409RefetchIntoABindingFallsBackClientSide(t *testing.T) {
 	be.opHandler = func(w http.ResponseWriter, _ int) { opConflict409(w) }
 
 	sc, err := driveStepPagesCfg(t, srv.URL, func(sc *scaffoldContext) {
-		// The ids the client-side apply will bind with — in production the
-		// playlists step recorded (or recovered) them before pages ran.
 		sc.playlistIDsByKey["getting-started"] = "pl_made"
 	})
 	if err != nil {

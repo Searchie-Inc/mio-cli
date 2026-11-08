@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// countingServer wraps an httptest.Server with an atomic request counter so a
-// test can assert that an id-passthrough resolution made ZERO API calls.
 type countingServer struct {
 	*httptest.Server
 	calls atomic.Int64
@@ -28,18 +26,16 @@ func newCountingServer(t *testing.T, handler http.HandlerFunc) *countingServer {
 	return cs
 }
 
-// ─── id-shape helpers ──────────────────────────────────────────────────────────
-
 func TestIsUUID(t *testing.T) {
 	cases := map[string]bool{
-		"019e864a-7b10-74e0-9922-c2c62f9925eb":  true,  // uuid7 (real production id)
-		"550E8400-E29B-41D4-A716-446655440000":  true,  // uppercase
-		"tag_abc123":                            false, // CLI prefix convention
-		"My Community":                          false, // a name
-		"019e864a7b1074e09922c2c62f9925eb":      false, // unhyphenated 32-hex (ambiguous)
-		"019e864a-7b10-74e0-9922-c2c62f9925e":   false, // too short
-		"019e864a-7b10-74e0-9922-c2c62f9925ebX": false, // too long
-		"019e864a-7b10-74e0-9922-c2c62f9925eg":  false, // non-hex 'g'
+		"019e864a-7b10-74e0-9922-c2c62f9925eb":  true,
+		"550E8400-E29B-41D4-A716-446655440000":  true,
+		"tag_abc123":                            false,
+		"My Community":                          false,
+		"019e864a7b1074e09922c2c62f9925eb":      false,
+		"019e864a-7b10-74e0-9922-c2c62f9925e":   false,
+		"019e864a-7b10-74e0-9922-c2c62f9925ebX": false,
+		"019e864a-7b10-74e0-9922-c2c62f9925eg":  false,
 		"":                                      false,
 	}
 	for in, want := range cases {
@@ -61,8 +57,6 @@ func TestIsIDShaped(t *testing.T) {
 	}
 }
 
-// ─── id passthrough: NO API call ────────────────────────────────────────────────
-
 func TestResolveTeam_IDPassthrough_NoAPICall(t *testing.T) {
 	srv := newCountingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -70,7 +64,6 @@ func TestResolveTeam_IDPassthrough_NoAPICall(t *testing.T) {
 	})
 	c := New(srv.URL, "k", WithHTTPClient(srv.Client()))
 
-	// UUID id — passthrough.
 	id, err := c.ResolveTeam(context.Background(), "019e864a-7b10-74e0-9922-c2c62f9925eb")
 	if err != nil {
 		t.Fatalf("ResolveTeam(uuid) err: %v", err)
@@ -79,7 +72,6 @@ func TestResolveTeam_IDPassthrough_NoAPICall(t *testing.T) {
 		t.Errorf("uuid passthrough = %q", id)
 	}
 
-	// Prefixed id — passthrough.
 	id, err = c.ResolveTeam(context.Background(), "team_abc123")
 	if err != nil {
 		t.Fatalf("ResolveTeam(prefix) err: %v", err)
@@ -131,8 +123,6 @@ func TestResolveContactByEmail_IDPassthrough_NoAPICall(t *testing.T) {
 	}
 }
 
-// ─── resolve by name/slug (list + match) ────────────────────────────────────────
-
 const teamsListBody = `{"data":[
   {"id":"019e0001-0000-7000-8000-000000000001","type":"teams","attributes":{"name":"Acme Corp","slug":"acme"}},
   {"id":"019e0002-0000-7000-8000-000000000002","type":"teams","attributes":{"name":"Beta Inc","slug":"beta"}}
@@ -164,7 +154,7 @@ func TestResolveTeam_NameMatch_CaseInsensitive(t *testing.T) {
 	})
 	c := New(srv.URL, "k", WithHTTPClient(srv.Client()))
 
-	id, err := c.ResolveTeam(context.Background(), "beta inc") // lowercased name
+	id, err := c.ResolveTeam(context.Background(), "beta inc")
 	if err != nil {
 		t.Fatalf("ResolveTeam(name) err: %v", err)
 	}
@@ -231,7 +221,6 @@ func TestResolveHub_BySlug(t *testing.T) {
 }
 
 func TestResolveTag_Ambiguous_ErrorsWithCandidates(t *testing.T) {
-	// Two tags share the SAME name (slug differs) → name pass is ambiguous.
 	body := `{"data":[
 	  {"id":"019eb001-0000-7000-8000-00000000000b","type":"tags","attributes":{"name":"VIP","slug":"vip-1"}},
 	  {"id":"019eb002-0000-7000-8000-00000000000c","type":"tags","attributes":{"name":"VIP","slug":"vip-2"}}
@@ -254,8 +243,6 @@ func TestResolveTag_Ambiguous_ErrorsWithCandidates(t *testing.T) {
 }
 
 func TestResolveTag_SlugBeatsName(t *testing.T) {
-	// A value that is one tag's slug AND another tag's name resolves to the
-	// SLUG match (slug pass runs first and is unique).
 	body := `{"data":[
 	  {"id":"019eb010-0000-7000-8000-00000000001a","type":"tags","attributes":{"name":"alpha","slug":"vip"}},
 	  {"id":"019eb011-0000-7000-8000-00000000001b","type":"tags","attributes":{"name":"vip","slug":"beta"}}
@@ -275,11 +262,6 @@ func TestResolveTag_SlugBeatsName(t *testing.T) {
 	}
 }
 
-// ─── name resolution respects the backend page[size] cap ────────────────────────
-
-// TestResolveTag_PageSizeWithinAPILimit asserts the internal tags-list request
-// used for name/slug resolution requests page[size] <= 100 (the backend caps
-// the tags list at le=100 and 400s on 200) — regression capture for MIO-2496.
 func TestResolveTag_PageSizeWithinAPILimit(t *testing.T) {
 	var gotSize string
 	srv := newCountingServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -305,8 +287,6 @@ func TestResolveTag_PageSizeWithinAPILimit(t *testing.T) {
 		t.Errorf("tags-list page[size] = %d, want <= 100 (backend max)", n)
 	}
 }
-
-// ─── contact-by-email uses the SERVER filter ────────────────────────────────────
 
 func TestResolveContactByEmail_UsesServerFilter(t *testing.T) {
 	var gotFilter, gotPath string
@@ -351,8 +331,6 @@ func TestResolveContactByEmail_NotFound(t *testing.T) {
 	}
 }
 
-// ─── cache: a repeat name lookup lists at most once ──────────────────────────────
-
 func TestResolve_CachesNameLookup(t *testing.T) {
 	srv := newCountingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -369,8 +347,6 @@ func TestResolve_CachesNameLookup(t *testing.T) {
 		t.Errorf("repeated name resolution made %d API calls, want 1 (cached)", n)
 	}
 }
-
-// ─── empty input guard ──────────────────────────────────────────────────────────
 
 func TestResolve_EmptyValue(t *testing.T) {
 	c := New("http://unused", "k")

@@ -1,15 +1,5 @@
 package cmd
 
-// accessrules.go implements the `mio access-rules` command group for managing
-// access rules and access overrides nested under a hub. Every sub-command is
-// hub-scoped: both {team_id} and {hub_id} must be resolved from context (or
-// supplied via --team/--hub).
-//
-// Routes (see docs/internal/api-surface.md "access-rules"):
-//
-//	rules     create/list/retrieve/update/delete  /api/teams/{team_id}/hubs/{hub_id}/access-rules[/{id}]
-//	overrides create/list/retrieve/update/delete  /api/teams/{team_id}/hubs/{hub_id}/access-overrides[/{id}]
-
 import (
 	"encoding/json"
 	"fmt"
@@ -21,7 +11,6 @@ import (
 )
 
 func init() {
-	// access-rules rules <action>
 	accessRulesRulesCmd.AddCommand(
 		accessRulesRulesCreateCmd,
 		accessRulesRulesListCmd,
@@ -31,7 +20,6 @@ func init() {
 	)
 	accessRulesCmd.AddCommand(accessRulesRulesCmd)
 
-	// access-rules overrides <action>
 	accessRulesOverridesCmd.AddCommand(
 		accessRulesOverridesCreateCmd,
 		accessRulesOverridesListCmd,
@@ -41,11 +29,8 @@ func init() {
 	)
 	accessRulesCmd.AddCommand(accessRulesOverridesCmd)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(accessRulesCmd)
 }
-
-// ---- access-rules group -----------------------------------------------------
 
 var accessRulesCmd = &cobra.Command{
 	Use:   "access-rules",
@@ -59,8 +44,6 @@ individual contacts regardless of rules.
 Both sub-resources require --hub (or a configured hub in context).`,
 }
 
-// accessRulesContext is the shared boilerplate for access-rules sub-commands:
-// builds the context, requires auth, and resolves both team id and hub id.
 func accessRulesContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -80,15 +63,12 @@ func accessRulesContext(cmd *cobra.Command) (*cmdContext, string, string, error)
 	return c, teamID, hubID, nil
 }
 
-// ---- access-rules rules sub-resource ----------------------------------------
-
 var accessRulesRulesCmd = &cobra.Command{
 	Use:   "rules",
 	Short: "Manage access rules for a hub.",
 	Long:  "Create, list, retrieve, update, and delete access rules for a hub.",
 }
 
-// rulesPath returns /api/teams/{team_id}/hubs/{hub_id}/access-rules[/{id}].
 func rulesPath(teamID, hubID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/hubs/%s/access-rules", teamID, hubID)
 	if id != "" {
@@ -244,15 +224,12 @@ var accessRulesRulesDeleteCmd = &cobra.Command{
 	},
 }
 
-// ---- access-rules overrides sub-resource ------------------------------------
-
 var accessRulesOverridesCmd = &cobra.Command{
 	Use:   "overrides",
 	Short: "Manage access overrides for a hub.",
 	Long:  "Create, list, retrieve, update, and delete per-contact access overrides for a hub.",
 }
 
-// overridesPath returns /api/teams/{team_id}/hubs/{hub_id}/access-overrides[/{id}].
 func overridesPath(teamID, hubID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/hubs/%s/access-overrides", teamID, hubID)
 	if id != "" {
@@ -408,44 +385,31 @@ var accessRulesOverridesDeleteCmd = &cobra.Command{
 	},
 }
 
-// ---- flag registration ------------------------------------------------------
-
 func init() {
-	// Rules create flags.
 	accessRulesRulesCreateCmd.Flags().String("target-type", "", "Target type to gate (section, content_node, or node — node is the page-builder tree-node gate).")
 	accessRulesRulesCreateCmd.Flags().String("target-id", "", "Id of the target section, content node, or page-builder tree node (matching --target-type).")
 	accessRulesRulesCreateCmd.Flags().String("logic-operator", "", "Condition logic operator: any (default) or all.")
 	accessRulesRulesCreateCmd.Flags().String("conditions", "", "JSON array of condition objects [{condition_type, condition_data, position}].")
 
-	// Rules update flags.
 	accessRulesRulesUpdateCmd.Flags().String("logic-operator", "", "Condition logic operator: any or all.")
 	accessRulesRulesUpdateCmd.Flags().String("conditions", "", "JSON array of condition objects [{condition_type, condition_data, position}] to replace the existing list.")
 
-	// Rules pagination.
 	addPaginationFlags(accessRulesRulesListCmd)
 
-	// Overrides create flags.
 	accessRulesOverridesCreateCmd.Flags().String("contact-id", "", "GLOBAL contact id to grant or restrict access for, NOT the .id from 'mio contacts' (capture it with: mio contacts retrieve <team-contact-id> -o plain --jq .contact_id). Required.")
 	accessRulesOverridesCreateCmd.Flags().String("scope", "", "Override scope: full, basic, or product.")
 	accessRulesOverridesCreateCmd.Flags().String("product-id", "", "Id of the product (required when scope is \"product\").")
 	accessRulesOverridesCreateCmd.Flags().String("expires-at", "", "Override expiry timestamp in RFC 3339 format (e.g. 2026-12-31T00:00:00Z).")
 	accessRulesOverridesCreateCmd.Flags().String("reason", "", "Human-readable reason for this override.")
 
-	// Overrides update flags.
 	accessRulesOverridesUpdateCmd.Flags().String("scope", "", "Override scope: full, basic, or product.")
 	accessRulesOverridesUpdateCmd.Flags().String("product-id", "", "Id of the product (required when scope is \"product\").")
 	accessRulesOverridesUpdateCmd.Flags().String("expires-at", "", "Override expiry timestamp in RFC 3339 format (e.g. 2026-12-31T00:00:00Z).")
 	accessRulesOverridesUpdateCmd.Flags().String("reason", "", "Human-readable reason for this override.")
 
-	// Overrides pagination.
 	addPaginationFlags(accessRulesOverridesListCmd)
 }
 
-// ---- helpers ----------------------------------------------------------------
-
-// setJSONArrayFlag parses a JSON-array string flag into attrs[name] iff it was
-// set by the user. The flag value must be a valid JSON array; an error is
-// returned if it is set but cannot be decoded.
 func setJSONArrayFlag(cmd *cobra.Command, attrs map[string]any, name string) error {
 	if !cmd.Flags().Changed(name) {
 		return nil

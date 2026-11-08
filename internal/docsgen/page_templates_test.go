@@ -7,8 +7,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 )
 
-// pageKindLists splits the rendered page-template-kinds block into its lists,
-// keyed outline / complete / system.
 func pageKindLists(t *testing.T, body string) map[string][]string {
 	t.Helper()
 	headers := map[string]string{"Outlines —": "outline", "Complete —": "complete", "System pages —": "system"}
@@ -45,7 +43,6 @@ func contains(xs []string, want string) bool {
 	return false
 }
 
-// kindOf renders the block for cat and returns the lists naming id.
 func kindOf(t *testing.T, cat *catalog.Catalog, id string) []string {
 	t.Helper()
 	blocks, err := Render(cat)
@@ -61,10 +58,6 @@ func kindOf(t *testing.T, cat *catalog.Catalog, id string) []string {
 	return kinds
 }
 
-// TestPageTemplateKinds_EmbeddedCatalog pins the split the skill's prose leans
-// on: page-homepage is an outline (its hero arrives with `settings:{}` and no
-// value), page-sales is complete, page-login and page-file-detail are system
-// pages. Every page template lands in exactly one list.
 func TestPageTemplateKinds_EmbeddedCatalog(t *testing.T) {
 	cat, err := catalog.Load()
 	if err != nil {
@@ -94,7 +87,6 @@ func TestPageTemplateKinds_EmbeddedCatalog(t *testing.T) {
 	}
 }
 
-// pageStarter returns the starter of page template id in cat, to edit in place.
 func pageStarter(t *testing.T, cat *catalog.Catalog, id string) map[string]any {
 	t.Helper()
 	for _, pt := range cat.PageTemplates {
@@ -106,9 +98,6 @@ func pageStarter(t *testing.T, cat *catalog.Catalog, id string) map[string]any {
 	return nil
 }
 
-// TestPageTemplateKinds_OneValueMakesItComplete: the classifier reads the
-// recipe, not a list. Giving page-homepage's headline copy moves it to
-// Complete; an empty-string value does not count as copy.
 func TestPageTemplateKinds_OneValueMakesItComplete(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -132,10 +121,6 @@ func TestPageTemplateKinds_OneValueMakesItComplete(t *testing.T) {
 	}
 }
 
-// TestPageTemplateKinds_SectionsDecideSystem: a page whose root children carry
-// no section template is a system page even when it carries copy (the blind
-// review of #137: page-file-detail's three slot placeholders were filed under
-// "finished sections"), and ONE templated root child makes it a content page.
 func TestPageTemplateKinds_SectionsDecideSystem(t *testing.T) {
 	t.Run("page-sales with its section templates removed", func(t *testing.T) {
 		cat, err := catalog.Load()

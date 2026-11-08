@@ -1,12 +1,5 @@
 package cmd
 
-// contacts.go — the `mio contacts` command tree.
-//
-// Routes (see docs/internal/api-surface.md "contacts"):
-//
-//	contacts: CRUD /api/teams/{team_id}/contacts[/{id}]
-//	restore:  POST /api/teams/{team_id}/contacts/{id}/restore
-
 import (
 	"fmt"
 	"net/url"
@@ -18,7 +11,6 @@ import (
 )
 
 func init() {
-	// contacts <action>
 	contactsCmd.AddCommand(
 		contactsListCmd,
 		contactsCreateCmd,
@@ -28,11 +20,8 @@ func init() {
 		contactsRestoreCmd,
 	)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(contactsCmd)
 }
-
-// ---- contacts group ----------------------------------------------------------
 
 var contactsCmd = &cobra.Command{
 	Use:   "contacts",
@@ -55,7 +44,6 @@ Capture the global id with:
   CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 }
 
-// contactsPath returns /api/teams/{team_id}/contacts[/{id}].
 func contactsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/contacts", teamID)
 	if id != "" {
@@ -63,8 +51,6 @@ func contactsPath(teamID, id string) string {
 	}
 	return base
 }
-
-// ---- contacts list -----------------------------------------------------------
 
 var contactsListCmd = &cobra.Command{
 	Use:   "list",
@@ -122,8 +108,6 @@ contact_id attribute, flattened; .data[].attributes.contact_id under --raw).`,
 	},
 }
 
-// ---- contacts create ---------------------------------------------------------
-
 var contactsCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a contact.",
@@ -171,8 +155,6 @@ top-level .contact_id (the API's contact_id attribute, flattened;
 	},
 }
 
-// ---- contacts retrieve -------------------------------------------------------
-
 var contactsRetrieveCmd = &cobra.Command{
 	Use:   "retrieve <id>",
 	Short: "Retrieve a contact by id.",
@@ -207,8 +189,6 @@ attribute, flattened; under --raw it is .data.attributes.contact_id).`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- contacts update ---------------------------------------------------------
 
 var contactsUpdateCmd = &cobra.Command{
 	Use:     "update <id>",
@@ -247,8 +227,6 @@ var contactsUpdateCmd = &cobra.Command{
 	},
 }
 
-// ---- contacts delete ---------------------------------------------------------
-
 var contactsDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
 	Short: "Delete a contact by id.",
@@ -283,8 +261,6 @@ non-interactive shells.`,
 	},
 }
 
-// ---- contacts restore --------------------------------------------------------
-
 var contactsRestoreCmd = &cobra.Command{
 	Use:     "restore <id>",
 	Short:   "Restore a deleted contact.",
@@ -318,12 +294,6 @@ var contactsRestoreCmd = &cobra.Command{
 }
 
 func init() {
-	// Attribute flags for create/update. Names are kebab-case to match every
-	// other resource; the underscore spellings (--first_name/--last_name) are
-	// kept working as hidden, deprecated aliases via contactsNameFlagAlias so
-	// existing scripts do not break.
-	// --email is create-only (MIO-4930): the team-contacts PATCH contract has no
-	// email field (the API answers 422), so update does not define the flag.
 	contactsCreateCmd.Flags().String("email", "", "Contact email address.")
 	for _, cmd := range []*cobra.Command{contactsCreateCmd, contactsUpdateCmd} {
 		cmd.Flags().String("first-name", "", "Contact first name.")
@@ -333,17 +303,11 @@ func init() {
 		cmd.Flags().SetNormalizeFunc(contactsNameFlagAlias)
 	}
 
-	// Pagination + filter flags for list.
 	addPaginationFlags(contactsListCmd)
 	contactsListCmd.Flags().String("filter-email", "", "Filter contacts by exact email address.")
 	contactsListCmd.Flags().String("filter-status", "", "Filter contacts by status.")
 }
 
-// contactsNameFlagAlias keeps the deprecated underscore spellings of the
-// contact name flags working. It normalizes the legacy --first_name/--last_name
-// onto their canonical kebab-case names so `--first_name X` sets the SAME pflag
-// as `--first-name X`. This is a back-compat shim: the underscore forms are not
-// advertised in help, but existing scripts that pass them keep working.
 func contactsNameFlagAlias(_ *pflag.FlagSet, name string) pflag.NormalizedName {
 	switch name {
 	case "first_name":

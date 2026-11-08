@@ -1,19 +1,5 @@
 package cmd
 
-// media_attachments.go — `mio media attachments` admin command group (MIO-2289).
-//
-// Team-scoped attachment admin surface (backend app/media/router.py
-// attachments_admin_router, guard _require_team_member; requires the media
-// feature flag enabled):
-//
-//	list   GET    /api/teams/{team}/attachments   [?media_id&target_type&target_id&page[...]]
-//	show   GET    /api/teams/{team}/attachments/{id}
-//	update PATCH  /api/teams/{team}/attachments/{id}   (type attachments; position/role)
-//	delete DELETE /api/teams/{team}/attachments/{id}   (204)
-//
-// An attachment binds a media file to a target (playlist cover, page section,
-// content node, hub branding, ...). Team-scoped; requires a team-member JWT.
-
 import (
 	"fmt"
 	"net/url"
@@ -23,7 +9,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// attachmentRoles is the AttachmentRole enum the backend accepts.
 var attachmentRoles = map[string]bool{
 	"main": true, "thumbnail": true, "logo": true, "favicon": true,
 	"attachment": true, "social_image": true, "background_image": true,
@@ -48,7 +33,6 @@ func init() {
 	mediaAttachmentsUpdateCmd.Flags().String("role", "", "New attachment role: main, thumbnail, logo, favicon, attachment, social_image, background_image, widget_logo, widget_background, auth_logo.")
 }
 
-// attachmentsPath returns /api/teams/{team}/attachments[/{id}].
 func attachmentsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/attachments", teamID)
 	if id != "" {
@@ -62,8 +46,6 @@ var mediaAttachmentsCmd = &cobra.Command{
 	Short: "Manage media attachments.",
 	Long:  "List, inspect, update, and delete attachments — the rows that bind a media file to a target (playlist cover, page section, content node, hub branding, ...).",
 }
-
-// ---- list -------------------------------------------------------------------
 
 var mediaAttachmentsListCmd = &cobra.Command{
 	Use:   "list",
@@ -97,8 +79,6 @@ var mediaAttachmentsListCmd = &cobra.Command{
 	},
 }
 
-// ---- show -------------------------------------------------------------------
-
 var mediaAttachmentsShowCmd = &cobra.Command{
 	Use:     "show <attachment_id>",
 	Short:   "Show a media attachment by id.",
@@ -118,8 +98,6 @@ var mediaAttachmentsShowCmd = &cobra.Command{
 	},
 }
 
-// ---- update -----------------------------------------------------------------
-
 var mediaAttachmentsUpdateCmd = &cobra.Command{
 	Use:   "update <attachment_id>",
 	Short: "Update a media attachment's position or role.",
@@ -128,7 +106,6 @@ var mediaAttachmentsUpdateCmd = &cobra.Command{
   mio media attachments update att_abc123 --role thumbnail`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate before resolving auth/team so a no-op / bad flag fires no request.
 		attrs := map[string]any{}
 		setIntFlag(cmd, attrs, "position")
 		if cmd.Flags().Changed("role") {
@@ -146,7 +123,6 @@ var mediaAttachmentsUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// AttachmentUpdateRequest requires data.id in the body (not just the URL).
 		res, err := c.client.UpdateWithID(c.ctx, attachmentsPath(teamID, args[0]), args[0], attrs)
 		if err != nil {
 			return err
@@ -154,8 +130,6 @@ var mediaAttachmentsUpdateCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- delete -----------------------------------------------------------------
 
 var mediaAttachmentsDeleteCmd = &cobra.Command{
 	Use:     "delete <attachment_id>",

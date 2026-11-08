@@ -1,11 +1,5 @@
 package catalog
 
-// applier_test.go — Go port parity of mio-page-catalog src/applier.test.ts
-// (the applier UNIT invariants) plus the NormalizeIDs / CanonicalJSON helpers
-// the cross-language golden parity (parity_test.go) leans on. The reference
-// algorithm is mio-page-catalog@5f35b09 src/applier.ts (instantiateTemplate /
-// cloneWithFreshIds).
-
 import (
 	"bytes"
 	"encoding/json"
@@ -15,12 +9,8 @@ import (
 	"testing"
 )
 
-// uuidV7Re mirrors the TS test's UUID_V7 regex: version nibble 7, variant nibble
-// in [89ab]. Case-insensitive (our generator emits lowercase).
 var uuidV7Re = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
-// counterGen returns a deterministic IDGen yielding id-0, id-1, … — the Go
-// analogue of the TS test's injected `() => `id-${i++}“.
 func counterGen() IDGen {
 	i := 0
 	return func() (string, error) {
@@ -52,8 +42,6 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
-// allIDs collects node ids in pre-order over the children-tree (the same nodes
-// the applier re-ids).
 func allIDs(n Node) []string {
 	out := []string{}
 	if id, ok := n["id"].(string); ok {
@@ -69,8 +57,6 @@ func allIDs(n Node) []string {
 	return out
 }
 
-// readJSONNumber decodes a JSON file preserving numeric literals as json.Number
-// (so canonical comparison is byte-faithful, matching TS JSON.stringify).
 func readJSONNumber(t *testing.T, path string) any {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -86,7 +72,6 @@ func readJSONNumber(t *testing.T, path string) any {
 	return v
 }
 
-// mustCanonical canonicalizes or fails the test.
 func mustCanonical(t *testing.T, v any) string {
 	t.Helper()
 	b, err := CanonicalJSON(v)
@@ -96,7 +81,6 @@ func mustCanonical(t *testing.T, v any) string {
 	return string(b)
 }
 
-// sampleTemplate mirrors the inline SAMPLE fixture in applier.test.ts.
 func sampleTemplate() Template {
 	return Template{
 		ID: "sample",
@@ -252,14 +236,14 @@ func TestNormalizeIDs_PreorderPlaceholders(t *testing.T) {
 		"kind": "stack",
 		"children": []any{
 			map[string]any{"id": "b", "kind": "text"},
-			map[string]any{"kind": "spacer"}, // no id — must stay untouched
+			map[string]any{"kind": "spacer"},
 			map[string]any{"id": "c", "kind": "row", "children": []any{
 				map[string]any{"id": "d", "kind": "button"},
 			}},
 		},
 	}
 	got := NormalizeIDs(tree).(map[string]any)
-	want := []string{"#0", "#1", "#2", "#3"} // pre-order over id-bearing nodes
+	want := []string{"#0", "#1", "#2", "#3"}
 	ids := allIDs(got)
 	if len(ids) != len(want) {
 		t.Fatalf("id count = %d, want %d (%v)", len(ids), len(want), ids)
@@ -269,7 +253,6 @@ func TestNormalizeIDs_PreorderPlaceholders(t *testing.T) {
 			t.Errorf("id[%d] = %q, want %q", i, ids[i], want[i])
 		}
 	}
-	// The id-less spacer must remain id-less.
 	children := got["children"].([]any)
 	spacer := children[1].(map[string]any)
 	if _, ok := spacer["id"]; ok {
@@ -295,8 +278,6 @@ func TestCanonicalJSON_SortsKeysAndPreservesUnknowns(t *testing.T) {
 }
 
 func TestCanonicalJSON_NoHTMLEscaping(t *testing.T) {
-	// TS JSON.stringify does NOT escape <, >, &; Go's default encoder does. The
-	// digest parity depends on matching TS, so CanonicalJSON must disable it.
 	v := Node{"label": "A & B <tag>"}
 	got := mustCanonical(t, v)
 	want := `{"label":"A & B <tag>"}`
@@ -305,32 +286,22 @@ func TestCanonicalJSON_NoHTMLEscaping(t *testing.T) {
 	}
 }
 
-// TestCanonicalJSON_MatchesTSReference_UnicodeEdges pins the exact byte output
-// against the TS canonicalizer (JSON.stringify(sortKeys(v))) for the cases where
-// Go's encoding/json would diverge — proven equal to node's output. If these
-// diverged, a valid upstream catalog carrying such characters would be wrongly
-// rejected as a digest mismatch.
 func TestCanonicalJSON_MatchesTSReference_UnicodeEdges(t *testing.T) {
-	ls := string(rune(0x2028))      // U+2028 line separator
-	ps := string(rune(0x2029))      // U+2029 paragraph separator
-	pua := string(rune(0xE000))     // U+E000 private-use (BMP)
-	astral := string(rune(0x10000)) // U+10000 (astral plane)
+	ls := string(rune(0x2028))
+	ps := string(rune(0x2029))
+	pua := string(rune(0xE000))
+	astral := string(rune(0x10000))
 	cases := []struct {
 		name string
 		in   any
 		want string
 	}{
 		{
-			// JS emits U+2028/U+2029 raw; Go's encoding/json escapes them. The
-			// runes are built explicitly here to keep this source pure ASCII.
 			name: "line/paragraph separators emitted raw",
 			in:   Node{"s": "a" + ls + "b" + ps + "c"},
 			want: `{"s":"a` + ls + "b" + ps + `c"}`,
 		},
 		{
-			// UTF-16 key sort: the astral char's lead surrogate (0xD800) sorts
-			// BELOW the BMP char U+E000, so it comes first — the opposite of Go's
-			// UTF-8/codepoint ordering.
 			name: "astral key sorts before high-BMP key (UTF-16 order)",
 			in:   Node{pua: json.Number("1"), astral: json.Number("2")},
 			want: `{"` + astral + `":2,"` + pua + `":1}`,
@@ -350,7 +321,6 @@ func TestCanonicalJSON_MatchesTSReference_UnicodeEdges(t *testing.T) {
 	}
 }
 
-// TestFixturesDirExists is a canary: the golden fixtures must be vendored.
 func TestFixturesDirExists(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join("testdata", "fixtures"))
 	if err != nil {

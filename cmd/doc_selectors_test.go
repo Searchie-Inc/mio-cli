@@ -1,48 +1,5 @@
 package cmd
 
-// doc_selectors_test.go — MIO-3413.
-//
-// WHY
-// Every member-shaped verb's help told an agent the global contact id was
-// "the .attributes.contact_id field from 'mio contacts'". As a selector that
-// path yields null in every output mode: the default output flattens a
-// resource's attributes to the top level (the field is .contact_id), and under
-// --raw the envelope needs .data.attributes.contact_id. An agent that ran
-// `mio contacts retrieve <id> -o plain --jq '.attributes.contact_id'` captured
-// an empty string, fed it to the verb, and read the 404 as a missing member.
-//
-// WHAT THIS GUARDS
-//   - TestDocSelectors_AttributesPathsResolveInSomeOutputMode: every path that
-//     reads `attributes` — in any Go string literal the CLI can print (help,
-//     flag usage, error hints) and anywhere in the shipped docs, prose included
-//     — must yield the attribute it names in an output mode of the REAL
-//     renderer (internal/output.Render over a flattened and a raw resource and
-//     collection), for the commands it is about: the command whose --jq it is,
-//     one the line names, or every command a help page covers. A command with
-//     the --after cursor prints a list, so a one-resource path fails there. The
-//     oracle is the renderer, not a rule about spellings: `.attributes.x` fails
-//     because Render never emits a top-level `attributes`, and would pass the
-//     day it did.
-//   - TestContactIDHelp_EveryPageGivesAWorkingCapture: every help page that
-//     mentions the GLOBAL contact id must show a capture command
-//     (`mio contacts retrieve … --jq …` reading contact_id), and each one is
-//     RUN in-process against a contacts API stub; it must print exactly the
-//     contact's global id — not null, not an empty line, not a JSON-quoted
-//     string a shell capture would keep the quotes of (MIO-2792).
-//   - requireWorkingContactIDCapture, shared with the 404 hint test in
-//     contact_id_namespace_test.go, which applies the same run to the hint
-//     every member verb appends to a 404.
-//
-// WHAT IT DOES NOT SEE
-//   - Which shape a command without the --after cursor prints: the command tree
-//     does not say, so a path for one only has to work for one shape. Nor
-//     which command a path in docs prose is for, when its line names none.
-//   - A path that reads a key the flattened output lacks for reasons other than
-//     `attributes` (a misspelt attribute, a field this resource does not
-//     have). Those need the resource's real attributes; the MIO-4156 list
-//     guard does it for the hub display rows.
-//   - Go comments (they are not printed) and docs/superpowers/ (dated plans).
-
 import (
 	"bytes"
 	"encoding/json"
@@ -69,24 +26,17 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/output"
 )
 
-// selectorDocSurfaces are the docs whose every line — prose, tables and fences
-// — is read for selectors: the shipped surfaces the doc-example guard reads,
-// plus the two it cannot (they hold no fenced block).
 var selectorDocSurfaces = append(append([]string(nil), shippedDocSurfaces...),
 	"../llms.txt",
 	"../docs/internal/api-surface.md",
 )
 
-// selectorSource is one text the selector sweep reads.
 type selectorSource struct {
 	file      string
 	firstLine int
 	text      string
 }
 
-// goStringLiterals returns every string literal in the module's non-test Go
-// files (cmd/, internal/, main.go): help text, flag usage, error hints — all
-// of it can reach a user. Comments are not literals and are not read.
 func goStringLiterals(t *testing.T) []selectorSource {
 	t.Helper()
 	var out []selectorSource
@@ -119,8 +69,6 @@ func goStringLiterals(t *testing.T) []selectorSource {
 				return true
 			}
 			if !strings.HasPrefix(lit.Value, "`") {
-				// An interpreted literal is one source line; its \n escapes
-				// must not shift the reported line.
 				s = strings.ReplaceAll(s, "\n", " ")
 			}
 			out = append(out, selectorSource{
@@ -138,12 +86,8 @@ func goStringLiterals(t *testing.T) []selectorSource {
 	return out
 }
 
-// selectorSentinel is the attribute value the renderer probe plants.
 const selectorSentinel = "sentinel-3413"
 
-// attributesProbe builds the attributes object a path reading `attributes`
-// asks for: the steps after `attributes`, nested, with the sentinel at the
-// leaf. It returns the object and the value the path should yield.
 func attributesProbe(sel docexamples.Selector) (attrs map[string]any, want any) {
 	at := -1
 	for i, st := range sel.Steps {
@@ -168,19 +112,12 @@ func attributesProbe(sel docexamples.Selector) (attrs map[string]any, want any) 
 		return attrs, attrs
 	}
 	attrs, _ = build(0).(map[string]any)
-	if attrs == nil { // the step after `attributes` is an index: not an object
+	if attrs == nil {
 		attrs = map[string]any{}
 	}
 	return attrs, selectorSentinel
 }
 
-// selectorOutputModes renders the probe resource through the REAL renderer and
-// reports which output modes yield want. The default (flattened) modes are
-// always tried; the --raw modes only when the text names --raw on the same
-// line, because a path that works only under --raw is broken for a reader who
-// was not told to pass it. The raw envelopes are the API's own shapes (a
-// single resource is {"data": …}; a list adds links and meta). listOnly drops
-// the single-resource modes, for a command that prints a list.
 func selectorOutputModes(t *testing.T, path string, attrs map[string]any, want any, raw, listOnly bool) []string {
 	t.Helper()
 	item := map[string]any{"type": "things", "id": "thing_1", "attributes": attrs}
@@ -223,7 +160,7 @@ func selectorOutputModes(t *testing.T, path string, attrs map[string]any, want a
 		}
 		var buf bytes.Buffer
 		if err := output.Render(&buf, m.v, output.Options{Format: output.FormatJSON, JQ: path, Raw: m.raw}); err != nil {
-			continue // a path that errors in this mode does not yield
+			continue
 		}
 		var got any
 		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
@@ -236,38 +173,17 @@ func selectorOutputModes(t *testing.T, path string, attrs map[string]any, want a
 	return yields
 }
 
-// rawContextRE: the line the path is on tells the reader to pass --raw.
 var rawContextRE = regexp.MustCompile(`--raw\b`)
 
-// answersList reports whether c prints a list, read from the real command:
-// addPaginationFlags gives a command the --after cursor, and only a command
-// reading a collection route has one. Any other command may print either
-// shape as far as the command tree says, so a path for it only has to work
-// for one of them.
 func answersList(c *cobra.Command) bool {
 	return c.Flags().Lookup("after") != nil
 }
 
-// selectorAbout is what a path is about: the commands a reader will run it
-// against, and whether it must work for every one of them (true) or for one.
 type selectorAbout struct {
 	cmds  []*cobra.Command
 	every bool
 }
 
-// aboutSelector decides which commands sel is about (the blind review of #129
-// found the sweep accepted a single-resource path written on a list command,
-// because it asked only whether SOME shape answered it):
-//
-//   - a `mio` invocation on the line whose words hold the path (its --jq
-//     program): that command, and the path must work for it;
-//   - otherwise any invocation the line names ("… under `mio contacts retrieve
-//     --raw`"): the path must work for one of them;
-//   - otherwise the commands whose help the text is (context): the path must
-//     work for every one. A group's page is about every command beneath it,
-//     so a path there cannot be one that only a single-resource verb answers;
-//   - otherwise (docs prose naming no command) nothing: the path must work
-//     for some shape.
 func aboutSelector(t *testing.T, sel docexamples.Selector, context []*cobra.Command) selectorAbout {
 	t.Helper()
 	root := RootCmd()
@@ -295,9 +211,6 @@ func aboutSelector(t *testing.T, sel docexamples.Selector, context []*cobra.Comm
 	}
 }
 
-// attributesSelectorProblem returns "" when sel does not read `attributes`, or
-// when the renderer answers it in an output mode the text names, for the
-// commands it is about; otherwise it says why sel is broken.
 func attributesSelectorProblem(t *testing.T, sel docexamples.Selector, about selectorAbout) string {
 	t.Helper()
 	if !sel.Reads("attributes") {
@@ -342,9 +255,6 @@ func attributesSelectorProblem(t *testing.T, sel docexamples.Selector, about sel
 		sel.Path, modes, on, leaf, leaf, leaf)
 }
 
-// commandHelpTexts returns each command's own help text — Short, Long, Example and
-// the usage of every flag it defines — with the commands that text is about:
-// the command itself, or for a group every runnable command beneath it.
 func commandHelpTexts(root *cobra.Command) map[*cobra.Command][]string {
 	out := map[*cobra.Command][]string{}
 	var walk func(c *cobra.Command)
@@ -360,7 +270,6 @@ func commandHelpTexts(root *cobra.Command) map[*cobra.Command][]string {
 	return out
 }
 
-// runnableUnder returns c if it runs, plus every runnable command beneath it.
 func runnableUnder(c *cobra.Command) []*cobra.Command {
 	var out []*cobra.Command
 	if c.Runnable() {
@@ -372,13 +281,6 @@ func runnableUnder(c *cobra.Command) []*cobra.Command {
 	return out
 }
 
-// TestDocSelectors_AttributesPathsResolveInSomeOutputMode is the MIO-3413
-// class guard: a path through `attributes` that the CLI prints or ships must be
-// answered by the real renderer, in an output mode its line names, for the
-// commands it is about (aboutSelector): the command whose --jq it is, one of
-// the commands its line names, or — on a help page — every command the page
-// covers. A path in docs prose that names no command only has to work for one
-// shape, because nothing says which command it is for.
 func TestDocSelectors_AttributesPathsResolveInSomeOutputMode(t *testing.T) {
 	sources := goStringLiterals(t)
 	fromCmd := 0
@@ -410,14 +312,10 @@ func TestDocSelectors_AttributesPathsResolveInSomeOutputMode(t *testing.T) {
 			}
 		}
 	}
-	// The sweep must meet real `attributes` paths, or it proves nothing: the
-	// contacts help names the --raw path on purpose.
 	if probed == 0 {
 		t.Fatal("no path reading `attributes` was found anywhere; the sweep is not reading the help or the docs")
 	}
 
-	// The help pages again, now knowing whose page each text is: a line that
-	// names no command is about the page's own command(s).
 	problems, onPages := helpPageProblems(t, RootCmd())
 	for _, p := range problems {
 		t.Error(p)
@@ -427,9 +325,6 @@ func TestDocSelectors_AttributesPathsResolveInSomeOutputMode(t *testing.T) {
 	}
 }
 
-// helpPageProblems checks every path through `attributes` in the help of the
-// command tree under root, each against the commands its page covers, and
-// returns the problems and how many paths it checked.
 func helpPageProblems(t *testing.T, root *cobra.Command) (problems []string, probed int) {
 	t.Helper()
 	for c, texts := range commandHelpTexts(root) {
@@ -450,8 +345,6 @@ func helpPageProblems(t *testing.T, root *cobra.Command) (problems []string, pro
 	return problems, probed
 }
 
-// TestDocSelectors_ProbeTellsBrokenFromWorking pins the probe on both sides, so
-// a probe that answered "broken" (or "fine") for everything cannot hide.
 func TestDocSelectors_ProbeTellsBrokenFromWorking(t *testing.T) {
 	one := func(line string) docexamples.Selector {
 		for _, s := range docexamples.Selectors("probe", 1, line) {
@@ -472,24 +365,21 @@ func TestDocSelectors_ProbeTellsBrokenFromWorking(t *testing.T) {
 	contactsGroup := runnableUnder(cmdAt("contacts"))
 	type probe struct {
 		line    string
-		context []*cobra.Command // the help page the line is on; nil for docs prose
+		context []*cobra.Command
 	}
 	broken := []probe{
-		{"the .attributes.contact_id field from 'mio contacts'", nil},              // MIO-3413 as shipped
-		{"mio contacts retrieve <id> -o plain --jq '.attributes.contact_id'", nil}, // its capture
-		{"mio contacts retrieve <id> --raw --jq '.attributes.contact_id'", nil},    // --raw needs .data
+		{"the .attributes.contact_id field from 'mio contacts'", nil},
+		{"mio contacts retrieve <id> -o plain --jq '.attributes.contact_id'", nil},
+		{"mio contacts retrieve <id> --raw --jq '.attributes.contact_id'", nil},
 		{"mio contacts list --jq '.[].attributes.contact_id'", nil},
 		{"filter client-side on .attributes.status", nil},
 		{`.attributes["contact_id"]`, nil},
-		{"the raw path .data.attributes.contact_id", nil}, // the right path, but --raw is never named
-		// #129 blind review: a one-resource path on a command that prints a list.
+		{"the raw path .data.attributes.contact_id", nil},
 		{"mio hubs list --raw -o plain --jq .data.attributes.slug", nil},
 		{"mio contacts list --raw --jq '.data.attributes.contact_id'", nil},
 		{"CID=$(mio contacts list --raw -o plain --jq .data.attributes.contact_id)", nil},
-		// …and on a group page, which covers `contacts list` too.
 		{".data.attributes.contact_id under --raw", contactsGroup},
 		{".data.attributes.contact_id under --raw", []*cobra.Command{cmdAt("contacts", "list")}},
-		// The line names only a list command.
 		{".data.attributes.contact_id under `mio contacts list --raw`", nil},
 	}
 	for _, p := range broken {
@@ -503,11 +393,10 @@ func TestDocSelectors_ProbeTellsBrokenFromWorking(t *testing.T) {
 		{"mio contacts list --raw --jq '.data[0].attributes.contact_id'", nil},
 		{"mio contacts list --raw --jq '.data[].attributes.contact_id'", nil},
 		{"mio hubs retrieve --raw --jq .data.attributes.settings.registration.enabled", nil},
-		{"mio contacts retrieve <id> --raw --jq '.[].attributes.contact_id'", nil}, // .[] over {"data": …}
+		{"mio contacts retrieve <id> --raw --jq '.[].attributes.contact_id'", nil},
 		{"mio contacts retrieve <id> --raw -o plain --jq .data.attributes.contact_id", nil},
 		{".data.attributes.contact_id under --raw", []*cobra.Command{cmdAt("contacts", "retrieve")}},
 		{".data[].attributes.contact_id under --raw", []*cobra.Command{cmdAt("contacts", "list")}},
-		// The line names the command, so the page's context does not apply.
 		{".data.attributes.contact_id under `mio contacts retrieve --raw`", contactsGroup},
 	}
 	for _, p := range working {
@@ -517,10 +406,6 @@ func TestDocSelectors_ProbeTellsBrokenFromWorking(t *testing.T) {
 		}
 	}
 
-	// The per-page pass, on a tree built here: a group whose page gives a
-	// one-resource --raw path, over a paged list verb and a retrieve verb. The
-	// path is wrong for the group's page and for the list verb's Short and flag,
-	// and right on the retrieve verb's page.
 	const onePath = "The id is .data.attributes.thing_id under --raw."
 	noop := func(*cobra.Command, []string) error { return nil }
 	fakeRoot := &cobra.Command{Use: "mio"}
@@ -547,11 +432,6 @@ func TestDocSelectors_ProbeTellsBrokenFromWorking(t *testing.T) {
 	}
 }
 
-// ─── the contact-id capture ─────────────────────────────────────────────────
-
-// The contact the stub serves, shaped as the local stack's
-// `mio contacts retrieve --raw` returned it. The team-contact id and the
-// global contact id differ, so a capture that reads the wrong one cannot pass.
 const (
 	fixtureTeamContactID    = "01a0d321-c31a-72d2-b8bb-6eeb9fd70e07"
 	fixtureGlobalContactID  = "01a0d321-c304-7332-801d-8e7d1cb5245c"
@@ -567,8 +447,6 @@ func contactResourceJSON(id, contactID, email string) string {
 		`"state":null,"timezone":null,"updated_at":"2026-09-24T11:16:40.346042Z"}}`, id, contactID, email)
 }
 
-// contactsStub serves the three contacts routes a capture can call: retrieve
-// and create answer one contact, list answers two.
 func contactsStub(t *testing.T) *httptest.Server {
 	t.Helper()
 	one := contactResourceJSON(fixtureTeamContactID, fixtureGlobalContactID, "pat@example.com")
@@ -593,21 +471,13 @@ func contactsStub(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// contactsCaptureRE finds a `mio contacts retrieve|create|list …` command up to
-// the end of its first --jq program, wherever it sits: a code line, a
-// `$( … )` capture, a backticked span in prose or a flag's usage.
 var contactsCaptureRE = regexp.MustCompile(
 	`mio contacts (?:retrieve|create|list)` +
 		`(?:[ \t]+(?:'[^'\n]*'|"[^"\n]*"|[^\s'"` + "`" + `)]+))*?` +
 		`[ \t]+--jq[ \t]+(?:'[^'\n]*'|"[^"\n]*"|[^\s'"` + "`" + `)]+)`)
 
-// placeholderWordRE is a positional the doc leaves for the reader to fill:
-// `<team-contact-id>`, `$ID`, `${ID}`.
 var placeholderWordRE = regexp.MustCompile(`^(?:<[^>]+>|\$[A-Za-z_{][A-Za-z0-9_}]*)$`)
 
-// contactIDCaptures returns the args (the words after `mio`) of every
-// `mio contacts … --jq <program>` in text whose program reads contact_id
-// (by jq's own parse tree, jqFieldReads from the MIO-4156 guard).
 func contactIDCaptures(t *testing.T, text string) [][]string {
 	t.Helper()
 	var out [][]string
@@ -633,11 +503,6 @@ func contactIDCaptures(t *testing.T, text string) [][]string {
 	return out
 }
 
-// requireWorkingContactIDCapture fails unless text shows at least one
-// `mio contacts … --jq …` capture of the global contact id, and every such
-// capture, RUN against the contacts stub, prints what a shell capture needs:
-// for retrieve/create exactly the global contact id and a newline; for list
-// every row's global contact id and no null.
 func requireWorkingContactIDCapture(t *testing.T, where, text string) {
 	t.Helper()
 	captures := contactIDCaptures(t, text)
@@ -677,8 +542,6 @@ func requireWorkingContactIDCapture(t *testing.T, where, text string) {
 	}
 }
 
-// memberVerbHelpPages are the verbs that route on the GLOBAL {contact_id}; each
-// must be among the pages TestContactIDHelp_EveryPageGivesAWorkingCapture checks.
 var memberVerbHelpPages = [][]string{
 	{"hub-memberships", "add"},
 	{"hub-memberships", "set-role"},
@@ -695,9 +558,6 @@ var memberVerbHelpPages = [][]string{
 	{"access-rules", "overrides", "create"},
 }
 
-// TestContactIDHelp_EveryPageGivesAWorkingCapture: every help page that
-// mentions the GLOBAL contact id — found by walking the real command tree, not
-// listed — must show a capture of it that works when run.
 func TestContactIDHelp_EveryPageGivesAWorkingCapture(t *testing.T) {
 	checked := map[string]bool{}
 	var walk func(c *cobra.Command)
@@ -706,7 +566,7 @@ func TestContactIDHelp_EveryPageGivesAWorkingCapture(t *testing.T) {
 			walk(sub)
 		}
 		if !c.HasParent() {
-			return // root
+			return
 		}
 		page := strings.Fields(c.CommandPath())[1:]
 		out := helpOutput(t, page...)

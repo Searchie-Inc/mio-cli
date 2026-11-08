@@ -1,19 +1,5 @@
 package cmd
 
-// products_prices_trial_test.go — MIO-4159: `mio products prices create`
-// carries --trial-period-days to the wire, and `prices update` deliberately
-// does not have it.
-//
-// Backend contract (mio-backend origin/main, app/products/schemas.py):
-//
-//	PriceCreateAttributes.trial_period_days: int | None = Field(default=None, ge=0, le=2147483647)
-//
-// with no type-dependent rule, and PriceUpdateAttributes (extra="forbid")
-// omits it: it is one of the six fields the service treats as immutable
-// (_PRICE_IMMUTABLE_FIELDS). The CLI is a conduit, so the oracle here is the
-// exact request body: the key is present, as a JSON number, exactly when the
-// flag was given, and the CLI adds no bound or type rule of its own.
-
 import (
 	"io"
 	"net/http"
@@ -33,8 +19,6 @@ type recordedPriceRequest struct {
 	Body   []byte
 }
 
-// newPriceRecordingServer records every request (method, path, body) and
-// answers each with the given status and a canned price document.
 func newPriceRecordingServer(t *testing.T, status int) (*httptest.Server, *[]recordedPriceRequest) {
 	t.Helper()
 	var (
@@ -54,24 +38,13 @@ func newPriceRecordingServer(t *testing.T, status int) (*httptest.Server, *[]rec
 	return srv, &got
 }
 
-// TestPricesCreate_TrialPeriodDays_ExactBody pins the whole request body of
-// `prices create` with and without --trial-period-days.
-//
-//   - set → "trial_period_days" is present as a JSON number (a string "7"
-//     would not deep-equal the number 7 in assertExactBody);
-//   - unset → the key is ABSENT, not 0 or null: the backend default is None,
-//     and a stored 0 is a different row;
-//   - 0 → sent as 0. The backend accepts 0 (ge=0), so a CLI that dropped it, or
-//     tested `v > 0` instead of Changed(), would silently diverge from the API;
-//   - -1 → sent. Rejecting it is the API's call (ge=0 → 422), not the CLI's;
-//   - one_time → sent. The API has no type-dependent rule for the field.
 func TestPricesCreate_TrialPeriodDays_ExactBody(t *testing.T) {
 	recurring := []string{"--amount", "999", "--currency", "usd", "--type", "recurring", "--interval", "month", "--interval-count", "1"}
 
 	cases := []struct {
 		name  string
 		args  []string
-		attrs string // the complete "attributes" object expected on the wire
+		attrs string
 	}{
 		{
 			name:  "set on a recurring price",
@@ -124,12 +97,6 @@ func TestPricesCreate_TrialPeriodDays_ExactBody(t *testing.T) {
 	}
 }
 
-// TestPricesUpdate_HasNoTrialPeriodDays pins the triage decision on MIO-4159:
-// trial length is immutable server-side (PriceUpdateAttributes forbids it and
-// the service lists it in _PRICE_IMMUTABLE_FIELDS), so `prices update` must not
-// offer a flag that can only ever produce a 422. The error must NAME the flag —
-// codeForExecuteErr maps every non-CLIError to ExitUsage, so an exit-code-only
-// check would pass on any usage failure.
 func TestPricesUpdate_HasNoTrialPeriodDays(t *testing.T) {
 	srv, got := newPriceRecordingServer(t, http.StatusOK)
 

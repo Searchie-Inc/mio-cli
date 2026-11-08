@@ -1,12 +1,5 @@
 package cmd
 
-// pages_catalog_test.go — the `mio pages catalog` group (MIO-2340): scaffold
-// node-trees from catalog template recipes (the tree/publish-door artifact) and
-// inspect the catalog (writable section types, recommended templates per page
-// type). Tests run with --offline so they exercise the embedded, digest-pinned
-// vendored catalog hermetically (no network, no cache writes); the live-fetch /
-// cache / digest paths are covered by internal/catalog + internal/client.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -17,9 +10,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// executeCLI runs the command tree in-process (like runContract) but returns the
-// raw error so a test can assert on the error MESSAGE — the SilenceErrors root
-// never writes it to the stderr buffer, so res.Stderr cannot carry it.
 func executeCLI(t *testing.T, env []string, args ...string) error {
 	t.Helper()
 	restore := overlayEnv(t, env)
@@ -36,8 +26,6 @@ func executeCLI(t *testing.T, env []string, args ...string) error {
 
 var uuidV7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
-// offlineEnv is a minimal env for catalog commands: no server is contacted when
-// --offline is passed, so the base URL is a sentinel that must never be dialed.
 func offlineEnv() []string {
 	return []string{"MIO_API_BASE_URL=http://catalog.invalid"}
 }
@@ -51,7 +39,6 @@ func parseTreeJSON(t *testing.T, s string) map[string]any {
 	return tree
 }
 
-// collectIDs walks a scaffolded tree collecting every node id (pre-order).
 func collectIDs(n map[string]any) []string {
 	var out []string
 	if id, ok := n["id"].(string); ok {
@@ -120,11 +107,6 @@ func TestCatalogScaffold_ValidVariant(t *testing.T) {
 }
 
 func TestCatalogScaffold_ScrollAliasResolvesToCompact(t *testing.T) {
-	// MIO-2681: "scroll" is a CLI-side discoverability alias for the compact
-	// template (picker label renamed "Compact" -> "Scroll" at 0.9.1; the id
-	// itself is a stored contract and stays "compact"). The scaffolded node's
-	// embedded "template" attribute — baked into the catalog recipe itself,
-	// not derived from what the caller typed — must read the real id.
 	res := runContract(t, offlineEnv(), "pages", "catalog", "scaffold", "--template", "scroll", "--offline")
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
@@ -133,7 +115,6 @@ func TestCatalogScaffold_ScrollAliasResolvesToCompact(t *testing.T) {
 	if node["template"] != "compact" {
 		t.Errorf(`scaffold --template scroll: node["template"] = %v, want "compact"`, node["template"])
 	}
-	// Same recipe as scaffolding by the real id directly.
 	direct := runContract(t, offlineEnv(), "pages", "catalog", "scaffold", "--template", "compact", "--offline")
 	if direct.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want 0; stderr=%q", direct.Code, direct.Stderr)
@@ -145,8 +126,6 @@ func TestCatalogScaffold_ScrollAliasResolvesToCompact(t *testing.T) {
 }
 
 func TestCatalogTemplates_DoesNotListScrollAlias(t *testing.T) {
-	// Listings show only the real catalog id — the alias is a lookup-time
-	// convenience, never a first-class id.
 	res := runContract(t, offlineEnv(), "pages", "catalog", "templates", "--offline", "--output", "json")
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
@@ -174,7 +153,6 @@ func TestCatalogScaffold_UnknownVariant_ExitUsage(t *testing.T) {
 	if codeForExecuteErr(err) != errs.ExitUsage {
 		t.Fatalf("exit = %d, want %d (ExitUsage); err=%v", codeForExecuteErr(err), errs.ExitUsage, err)
 	}
-	// The error should list the valid variants (hero has playlist, file).
 	if err == nil || !strings.Contains(err.Error(), "playlist") {
 		t.Errorf("error should list valid variants; got %v", err)
 	}
@@ -203,7 +181,6 @@ func TestCatalogSectionTypes_WritableOnly(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Stdout), &rows); err != nil {
 		t.Fatalf("stdout not a JSON array: %v\n%s", err, res.Stdout)
 	}
-	// testimonials flipped writable=false -> true in 0.13.0.
 	if len(rows) != 8 {
 		t.Errorf("writable section types = %d, want 8", len(rows))
 	}
@@ -216,12 +193,6 @@ func TestCatalogSectionTypes_WritableOnly(t *testing.T) {
 	if !ids["compact"] {
 		t.Error("compact (writable=true as of 0.10.0, MIO-2681) must appear in --writable-only output")
 	}
-	// Retired upstream in 0.11.0 (mio-page-catalog#19); the backend 422s writes
-	// naming them. This is the read path an agent inspects to decide what to
-	// author, and the one path that can still serve the VENDORED copy (--offline
-	// or a failed fetch), so a stale pin here hands an agent phantom options.
-	// Asserting absence by name — not just the count — is what makes a future
-	// re-pin regression name the culprit instead of reporting "7 != 8".
 	for _, retired := range []string{"cta", "text", "video"} {
 		if ids[retired] {
 			t.Errorf("retired section type %q must not appear in --writable-only output", retired)
@@ -234,9 +205,6 @@ func TestCatalogSectionTypes_AllTen(t *testing.T) {
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit = %d, want 0; stderr=%q", res.Code, res.Stderr)
 	}
-	// Check the count the name claims: this test previously asserted only that
-	// two ids were present, so the unfiltered listing could have drifted by any
-	// amount without failing.
 	var rows []map[string]any
 	if err := json.Unmarshal([]byte(res.Stdout), &rows); err != nil {
 		t.Fatalf("stdout not a JSON array: %v\n%s", err, res.Stdout)
@@ -258,8 +226,6 @@ func TestCatalogTemplates_ForPageType_RecommendedOrdered(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Stdout), &rows); err != nil {
 		t.Fatalf("stdout not a JSON array: %v\n%s", err, res.Stdout)
 	}
-	// First section template recommended for homepage is hero (order 10);
-	// content-card (applicablePageTypes: []) must not appear.
 	var sectionIDs []string
 	for _, r := range rows {
 		if r["kind"] == "section" {

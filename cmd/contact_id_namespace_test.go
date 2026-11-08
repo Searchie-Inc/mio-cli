@@ -1,18 +1,5 @@
 package cmd
 
-// contact_id_namespace_test.go — MIO-2504.
-//
-// Two server-side id namespaces exist: `mio contacts` surfaces the TEAM-contact
-// id as .id (routes bind {team_contact_id}), while the member-shaped verbs
-// (hub-memberships add/set-role/ban/unban/warn, activity contact, community
-// members ban/unban/warn, email enrollments create) route on the GLOBAL
-// {contact_id}. Piping the .id from `mio contacts` into a member verb 404s for a
-// live contact. These tests pin the two mitigations:
-//
-//   1. member-verb + contacts help explains the two ids, and
-//   2. a not-found (exit 4) from a member verb carries an actionable hint that
-//      redirects the user to the GLOBAL contact id.
-
 import (
 	"encoding/json"
 	"strings"
@@ -21,25 +8,12 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// ─── 404 hint (behavioural, subprocess) ──────────────────────────────────────
-
-// TestContract_MemberVerb404_HintsGlobalContactID: every member-shaped verb that
-// routes on the GLOBAL {contact_id} must, on a 404, append an actionable hint
-// that hands the user a capture of the global contact id from `mio contacts`
-// (not the .id) — and that capture is RUN, so it must actually print the id
-// (MIO-3413: the hint used to name .attributes.contact_id, which yields null
-// in every output mode). The hint keys off exit code 4, not a server message
-// string, so it survives divergent backend messages. Driven as a subprocess
-// because the JSON:API error envelope is written by main.go after os.Exit.
 func TestContract_MemberVerb404_HintsGlobalContactID(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Status: 404, Body: `{"errors":[{"status":"404","detail":"Membership Not Found"}]}`},
 	})
 	bin := buildBinary(t)
 
-	// The rest of each invocation, keyed by the verb. Every verb in
-	// memberVerbHelpPages must have one, so the 404 check cannot cover fewer
-	// verbs than the help check does (it covered 8 of the 13 before MIO-3413).
 	rest := map[string][]string{
 		"hub-memberships add":               {"contact_x"},
 		"hub-memberships set-role":          {"contact_x", "--role", "admin"},
@@ -72,11 +46,6 @@ func TestContract_MemberVerb404_HintsGlobalContactID(t *testing.T) {
 	if len(rest) != len(cases) {
 		t.Fatalf("%d 404 invocations for %d member verbs; keep them in step with memberVerbHelpPages", len(rest), len(cases))
 	}
-	// NOTE (MIO-3412): the achievements earn verbs are deliberately NOT in
-	// this list. A wrong contact id never produces a 404 on them (grant 422s,
-	// revoke 204s, restore 409s — verified against the backend service), so
-	// their 404 hint must not claim the contact id; their namespace guidance
-	// rides the grant 422 / restore 409 instead. See achievements_test.go.
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -105,15 +74,11 @@ func TestContract_MemberVerb404_HintsGlobalContactID(t *testing.T) {
 			if !strings.Contains(strings.ToLower(detail), "global contact id") {
 				t.Errorf("404 detail must hint the GLOBAL contact id; got %q", detail)
 			}
-			// MIO-3413: the hint must hand over a capture that WORKS — run it.
 			requireWorkingContactIDCapture(t, "the 404 hint of `mio "+tc.name+"`", detail)
 		})
 	}
 }
 
-// TestContract_MemberVerb_NonNotFoundError_NoHint: the hint must ONLY fire on a
-// not-found (exit 4). A different failure class (e.g. a 422) must pass through
-// unchanged so the hint never pollutes unrelated errors.
 func TestContract_MemberVerb_NonNotFoundError_NoHint(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Status: 422, Body: `{"errors":[{"status":"422","detail":"invalid role"}]}`},
@@ -128,10 +93,6 @@ func TestContract_MemberVerb_NonNotFoundError_NoHint(t *testing.T) {
 	}
 }
 
-// ─── help substrings ─────────────────────────────────────────────────────────
-
-// helpOutput drives `<args...> --help` in-process and returns the combined
-// stdout the user sees.
 func helpOutput(t *testing.T, args ...string) string {
 	t.Helper()
 	res := runContract(t, nil, append(args, "--help")...)
@@ -141,9 +102,6 @@ func helpOutput(t *testing.T, args ...string) string {
 	return res.Stdout
 }
 
-// TestContract_ContactsHelp_ExplainsIDNamespaces: `mio contacts create/retrieve/
-// list --help` must distinguish the TEAM-contact .id from the GLOBAL
-// .attributes.contact_id so users pipe the right one into member verbs.
 func TestContract_ContactsHelp_ExplainsIDNamespaces(t *testing.T) {
 	for _, verb := range []string{"create", "retrieve", "list"} {
 		out := strings.ToLower(helpOutput(t, "contacts", verb))
@@ -156,9 +114,6 @@ func TestContract_ContactsHelp_ExplainsIDNamespaces(t *testing.T) {
 	}
 }
 
-// TestContract_MemberVerbHelp_SaysGlobalContactID: every member-shaped verb's
-// help must state that its positional takes the GLOBAL contact id, not the
-// team-contact .id from `mio contacts`.
 func TestContract_MemberVerbHelp_SaysGlobalContactID(t *testing.T) {
 	for _, args := range memberVerbHelpPages {
 		out := strings.ToLower(helpOutput(t, args...))

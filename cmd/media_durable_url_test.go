@@ -1,14 +1,5 @@
 package cmd
 
-// media_durable_url_test.go — contract tests for `mio media files durable-url`
-// (MIO-2514). The command reads a file's durable_variants and emits each joined
-// with the REQUIRED ?hub_id= param, ready to inline into a page-tree image node;
-// --publish also POSTs a public hub_media row so the URL resolves for anon.
-//
-// ResolveHub short-circuits for id-shaped --hub values (hub_abc123), so no hub
-// resolve request fires — the only requests are the file GET and (with --publish)
-// the hub-media POST.
-
 import (
 	"encoding/json"
 	"net/http"
@@ -77,9 +68,6 @@ func TestMediaFilesDurableURL_NonImageErrors(t *testing.T) {
 	}
 }
 
-// ── helper-level tests (assert error message content, which the in-process
-//    contract harness does not surface) ────────────────────────────────────────
-
 func TestDurableVariants_NonImage(t *testing.T) {
 	if _, err := durableVariants("f_doc", map[string]any{"durable_variants": map[string]any{}}); err == nil || !strings.Contains(err.Error(), "image-only") {
 		t.Fatalf("empty durable_variants: want image-only error; got %v", err)
@@ -131,7 +119,6 @@ func TestMediaFilesDurableURL_PublishPostsPublicHubMedia(t *testing.T) {
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
 	}
-	// The last request is the publish POST (retrieve GET fired first).
 	if *method != http.MethodPost {
 		t.Errorf("last method=%q want POST (publish)", *method)
 	}

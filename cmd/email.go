@@ -1,19 +1,5 @@
 package cmd
 
-// email.go — email command group for the mio CLI.
-//
-// All routes are hub-scoped (base: /v1/hubs/{hub_id}/…).  The command tree is:
-//
-//	email drip-campaigns  create/list/retrieve/update/delete/activate/pause
-//	email steps           create/list/update/delete            (under a drip campaign)
-//	email templates       create/list/retrieve/update/delete/preview
-//	email config          set/get/delete/test
-//	email enrollments     create/list/exit/list-by-contact     (under a drip campaign / by contact)
-//	email stats           get
-//	email suppressions    list/create/lift                     (hub-scoped admin block list)
-//
-// Self-registered: init() attaches emailCmd to rootCmd. No other file is touched.
-
 import (
 	"fmt"
 	"net/url"
@@ -25,7 +11,6 @@ import (
 )
 
 func init() {
-	// drip-campaigns sub-commands
 	emailDripCampaignsCmd.AddCommand(
 		emailDripCreateCmd,
 		emailDripListCmd,
@@ -36,7 +21,6 @@ func init() {
 		emailDripPauseCmd,
 	)
 
-	// steps sub-commands (nested under drip-campaigns)
 	emailStepsCmd.AddCommand(
 		emailStepsCreateCmd,
 		emailStepsListCmd,
@@ -44,7 +28,6 @@ func init() {
 		emailStepsDeleteCmd,
 	)
 
-	// templates sub-commands
 	emailTemplatesCmd.AddCommand(
 		emailTemplatesCreateCmd,
 		emailTemplatesListCmd,
@@ -54,7 +37,6 @@ func init() {
 		emailTemplatesPreviewCmd,
 	)
 
-	// config sub-commands
 	emailConfigCmd.AddCommand(
 		emailConfigSetCmd,
 		emailConfigGetCmd,
@@ -62,7 +44,6 @@ func init() {
 		emailConfigTestCmd,
 	)
 
-	// enrollments sub-commands
 	emailEnrollmentsCmd.AddCommand(
 		emailEnrollmentsCreateCmd,
 		emailEnrollmentsListCmd,
@@ -70,19 +51,16 @@ func init() {
 		emailEnrollmentsListByContactCmd,
 	)
 
-	// stats sub-commands
 	emailStatsCmd.AddCommand(
 		emailStatsGetCmd,
 	)
 
-	// suppressions sub-commands
 	emailSuppressionsCmd.AddCommand(
 		emailSuppressionsListCmd,
 		emailSuppressionsCreateCmd,
 		emailSuppressionsLiftCmd,
 	)
 
-	// Attach all sub-groups to email root.
 	emailCmd.AddCommand(
 		emailDripCampaignsCmd,
 		emailStepsCmd,
@@ -93,11 +71,8 @@ func init() {
 		emailSuppressionsCmd,
 	)
 
-	// Self-register on root.
 	rootCmd.AddCommand(emailCmd)
 }
-
-// ---- root group -------------------------------------------------------------
 
 var emailCmd = &cobra.Command{
 	Use:   "email",
@@ -105,7 +80,6 @@ var emailCmd = &cobra.Command{
 	Long:  "Manage drip campaigns, email templates, email config, enrollments, and email stats for the active hub.",
 }
 
-// emailHubPath builds /v1/hubs/{hub_id}/{suffix}.
 func emailHubPath(hubID, suffix string) string {
 	base := fmt.Sprintf("/v1/hubs/%s", hubID)
 	if suffix != "" {
@@ -114,8 +88,6 @@ func emailHubPath(hubID, suffix string) string {
 	return base
 }
 
-// emailContext is the shared setup for all email sub-commands: resolve context,
-// require auth, and require a hub id.
 func emailContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -131,15 +103,12 @@ func emailContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	return c, hubID, nil
 }
 
-// ---- drip-campaigns ---------------------------------------------------------
-
 var emailDripCampaignsCmd = &cobra.Command{
 	Use:   "drip-campaigns",
 	Short: "Manage drip campaigns.",
 	Long:  "Create, list, retrieve, update, delete, activate, and pause drip campaigns for the active hub.",
 }
 
-// dripPath returns /v1/hubs/{hub_id}/drip-campaigns[/{id}].
 func dripPath(hubID, id string) string {
 	if id != "" {
 		return emailHubPath(hubID, "drip-campaigns/"+id)
@@ -165,7 +134,6 @@ var emailDripCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "status")
-		// Enrollment-mode flags.
 		setStringFlag(cmd, attrs, "enrollment-mode")
 		setStringFlag(cmd, attrs, "trigger-event-type")
 		setStringFlag(cmd, attrs, "segment-id")
@@ -243,7 +211,6 @@ var emailDripUpdateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
 		setStringFlag(cmd, attrs, "status")
-		// Enrollment-mode flags.
 		setStringFlag(cmd, attrs, "enrollment-mode")
 		setStringFlag(cmd, attrs, "trigger-event-type")
 		setStringFlag(cmd, attrs, "segment-id")
@@ -341,7 +308,6 @@ func init() {
 		cmd.Flags().String("name", "", "Drip campaign name.")
 		cmd.Flags().String("description", "", "Drip campaign description.")
 		cmd.Flags().String("status", "", "Drip campaign status (e.g. draft, active, paused).")
-		// Enrollment-mode flags — control how contacts enter the campaign.
 		cmd.Flags().String("enrollment-mode", "", "Enrollment trigger mode: event, segment, or both.")
 		cmd.Flags().String("trigger-event-type", "", "Event type that triggers enrollment when enrollment-mode is event or both.")
 		cmd.Flags().String("segment-id", "", "Segment whose members are auto-enrolled when enrollment-mode is segment or both.")
@@ -351,15 +317,12 @@ func init() {
 	addPaginationFlags(emailDripListCmd)
 }
 
-// ---- steps (nested under drip-campaigns) ------------------------------------
-
 var emailStepsCmd = &cobra.Command{
 	Use:   "steps",
 	Short: "Manage steps within a drip campaign.",
 	Long:  "Create, list, update, and delete steps nested under a drip campaign.",
 }
 
-// stepsPath returns /v1/hubs/{hub_id}/drip-campaigns/{campaign_id}/steps[/{step_id}].
 func stepsPath(hubID, campaignID, stepID string) string {
 	base := emailHubPath(hubID, "drip-campaigns/"+campaignID+"/steps")
 	if stepID != "" {
@@ -485,15 +448,12 @@ func init() {
 	addPaginationFlags(emailStepsListCmd)
 }
 
-// ---- templates --------------------------------------------------------------
-
 var emailTemplatesCmd = &cobra.Command{
 	Use:   "templates",
 	Short: "Manage email templates.",
 	Long:  "Create, list, retrieve, update, delete, and preview email templates for the active hub.",
 }
 
-// templatesPath returns /v1/hubs/{hub_id}/email-templates[/{id}].
 func templatesPath(hubID, id string) string {
 	if id != "" {
 		return emailHubPath(hubID, "email-templates/"+id)
@@ -516,10 +476,6 @@ var emailTemplatesCreateCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "subject")
-		// Content fields: the backend email_templates schema is mjml_source +
-		// plain_text (NOT a "body" attribute). --body therefore maps to
-		// mjml_source so it actually sets the rendered content; a bare "body"
-		// attribute is silently dropped by the backend (MIO-1238).
 		setMappedString(cmd, attrs, "body", "mjml_source")
 		setMappedString(cmd, attrs, "plain-text", "plain_text")
 		setStringFlag(cmd, attrs, "from-name")
@@ -595,10 +551,6 @@ var emailTemplatesUpdateCmd = &cobra.Command{
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "subject")
-		// Content fields: the backend email_templates schema is mjml_source +
-		// plain_text (NOT a "body" attribute). --body therefore maps to
-		// mjml_source so it actually sets the rendered content; a bare "body"
-		// attribute is silently dropped by the backend (MIO-1238).
 		setMappedString(cmd, attrs, "body", "mjml_source")
 		setMappedString(cmd, attrs, "plain-text", "plain_text")
 		setStringFlag(cmd, attrs, "from-name")
@@ -653,8 +605,6 @@ var emailTemplatesPreviewCmd = &cobra.Command{
 			return err
 		}
 
-		// The backend preview_email_template route binds no request body; it
-		// renders the stored template in a sandbox. Send no payload.
 		path := emailHubPath(hubID, "email-templates/"+args[0]+"/preview")
 		res, err := c.client.Action(c.ctx, "POST", path, nil)
 		if err != nil {
@@ -681,15 +631,12 @@ func init() {
 	addPaginationFlags(emailTemplatesListCmd)
 }
 
-// ---- config -----------------------------------------------------------------
-
 var emailConfigCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Manage hub email configuration.",
 	Long:  "Set, get, delete, and test the email sending configuration for the active hub.",
 }
 
-// configPath returns /v1/hubs/{hub_id}/email-config.
 func configPath(hubID string) string {
 	return emailHubPath(hubID, "email-config")
 }
@@ -706,9 +653,6 @@ var emailConfigSetCmd = &cobra.Command{
 			return err
 		}
 
-		// JSON:API envelope with the backend EmailConfigRequest field names
-		// (mail_*). put_email_config reads raw["data"]["attributes"], so a flat
-		// body lands as {} and 400s "Field required" on every field (MIO-2640).
 		attrs := map[string]any{}
 		setMappedString(cmd, attrs, "mail-host", "mail_host")
 		setMappedInt(cmd, attrs, "mail-port", "mail_port")
@@ -794,8 +738,6 @@ the SMTP error on failure.`,
 			return err
 		}
 
-		// The backend test_email_config route binds no request body; sending one
-		// (let alone an enveloped {to:…} with a path-derived type) is rejected.
 		path := emailHubPath(hubID, "email-config/test")
 		res, err := c.client.Action(c.ctx, "POST", path, nil)
 		if err != nil {
@@ -811,7 +753,6 @@ the SMTP error on failure.`,
 
 func init() {
 	for _, cmd := range []*cobra.Command{emailConfigSetCmd} {
-		// Flag names map to the backend EmailConfigRequest fields (mail_*).
 		cmd.Flags().String("mail-host", "", "SMTP server hostname.")
 		cmd.Flags().Int("mail-port", 0, "SMTP server port (e.g. 587, 465).")
 		cmd.Flags().String("mail-username", "", "SMTP authentication username.")
@@ -823,15 +764,12 @@ func init() {
 	}
 }
 
-// ---- enrollments ------------------------------------------------------------
-
 var emailEnrollmentsCmd = &cobra.Command{
 	Use:   "enrollments",
 	Short: "Manage drip campaign enrollments.",
 	Long:  "List and exit enrollments for contacts in a drip campaign.",
 }
 
-// enrollmentsPath returns /v1/hubs/{hub_id}/drip-campaigns/{campaign_id}/enrollments[/{enrollment_id}].
 func enrollmentsPath(hubID, campaignID, enrollmentID string) string {
 	base := emailHubPath(hubID, "drip-campaigns/"+campaignID+"/enrollments")
 	if enrollmentID != "" {
@@ -918,8 +856,6 @@ var emailEnrollmentsExitCmd = &cobra.Command{
 	},
 }
 
-// contactDripEnrollmentsPath returns /v1/contacts/{contact_id}/drip-enrollments.
-// This is a contact-scoped read endpoint — not hub-scoped.
 func contactDripEnrollmentsPath(contactID string) string {
 	return fmt.Sprintf("/v1/contacts/%s/drip-enrollments", contactID)
 }
@@ -959,8 +895,6 @@ func init() {
 	addPaginationFlags(emailEnrollmentsListCmd)
 	addPaginationFlags(emailEnrollmentsListByContactCmd)
 }
-
-// ---- stats ------------------------------------------------------------------
 
 var emailStatsCmd = &cobra.Command{
 	Use:   "stats",
@@ -1006,15 +940,12 @@ func init() {
 	emailStatsGetCmd.Flags().String("to", "", "End date for the stats window (ISO 8601, e.g. 2026-06-01).")
 }
 
-// ---- suppressions -----------------------------------------------------------
-
 var emailSuppressionsCmd = &cobra.Command{
 	Use:   "suppressions",
 	Short: "Manage the hub email-suppression list.",
 	Long:  "List, create (admin_block), and lift email suppressions for the active hub.",
 }
 
-// suppressionsPath returns /v1/hubs/{hub_id}/email-suppressions[/{id}].
 func suppressionsPath(hubID, id string) string {
 	if id != "" {
 		return emailHubPath(hubID, "email-suppressions/"+id)
@@ -1056,10 +987,6 @@ is lifted. The scope is always the hub and the reason is always admin_block.`,
 	Example: `  mio email suppressions create --email blocked@example.com`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// --email is required (cobra enforces its presence before RunE). An
-		// explicit empty/whitespace --email is a usage error too (the backend
-		// rejects it as EmailStr) — catch it here, before resolving auth, rather
-		// than round-tripping to a 422.
 		email := flagValue(cmd, "email")
 		if email == "" {
 			return errs.New(errs.ExitUsage, "--email must not be empty")
@@ -1070,8 +997,6 @@ is lifted. The scope is always the hub and the reason is always admin_block.`,
 			return err
 		}
 
-		// Enveloped POST: the backend HubCreateSuppressionData type is
-		// "email_suppressions" (derived from the email-suppressions tail).
 		attrs := map[string]any{"email_address": email}
 		res, err := c.client.Create(c.ctx, suppressionsPath(hubID, ""), attrs)
 		if err != nil {
@@ -1090,8 +1015,6 @@ to a bad recipient, so this requires --yes in non-interactive shells.`,
 	Example: `  mio email suppressions lift esp_abc123 --yes`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Gate the destructive op BEFORE resolving auth/hub so the --yes guard
-		// fires ahead of any hub name/slug resolution or auto-default HTTP call.
 		if err := confirmDestructive(cmd, fmt.Sprintf("Lift suppression %s (re-enable email delivery)?", args[0])); err != nil {
 			return err
 		}

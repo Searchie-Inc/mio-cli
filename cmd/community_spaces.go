@@ -1,9 +1,5 @@
 package cmd
 
-// community_spaces.go — shared flag→attribute mapping for `mio community spaces
-// create/update` (aligned to the backend Space schema) and the `spaces reorder`
-// command (MIO-2260).
-
 import (
 	"github.com/spf13/cobra"
 
@@ -15,30 +11,20 @@ var (
 	spacePostingPermissions = map[string]bool{"any_member": true, "admins_only": true, "admins_and_moderators": true, "segment": true}
 )
 
-// SpaceInput carries the resolved create/update space attributes, decoupled from
-// *cobra.Command so both the `community spaces` commands and the scaffold
-// (MIO-2543) can build the same write body. Each pointer is nil when the
-// corresponding flag was unset (preserving partial-update semantics); a non-nil
-// pointer carries the value to write.
 type SpaceInput struct {
 	Name              *string
 	Slug              *string
 	Description       *string
 	Icon              *string
 	Color             *string
-	SegmentID         *string // → segment_id
-	IsDefault         *bool   // → is_default
-	IsPinned          *bool   // → is_pinned
-	AccessLevel       *string // → access_level (validated enum)
-	PostingPermission *string // → posting_permission (validated enum)
-	Position          *int    // must be >= 0
+	SegmentID         *string
+	IsDefault         *bool
+	IsPinned          *bool
+	AccessLevel       *string
+	PostingPermission *string
+	Position          *int
 }
 
-// buildSpaceAttrs assembles the Space write body from s, using the backend Space
-// attribute keys. access_level and posting_permission are validated against their
-// enums; position must be >= 0. It is a pure builder: it takes data, not flags, so
-// the scaffold gets the same enum/range checks the command does. The old
-// is_private field is gone — access is governed by access_level.
 func buildSpaceAttrs(s SpaceInput) (map[string]any, error) {
 	attrs := map[string]any{}
 	if s.Name != nil {
@@ -86,10 +72,6 @@ func buildSpaceAttrs(s SpaceInput) (map[string]any, error) {
 	return attrs, nil
 }
 
-// setSpaceWriteAttrs reads the shared create/update space flags into a SpaceInput,
-// builds the write body with buildSpaceAttrs (the enum/range validation lives
-// there now), and copies the result into attrs. Shared by `spaces create` and
-// `spaces update`; behaviour is identical to the previous inline mapping.
 func setSpaceWriteAttrs(cmd *cobra.Command, attrs map[string]any) error {
 	built, err := buildSpaceAttrs(SpaceInput{
 		Name:              changedString(cmd, "name"),
@@ -137,8 +119,6 @@ var communitySpacesReorderCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// POST .../spaces/reorder with a bare {data:[{type,id}]} list; the backend
-		// takes position from the list order (ReorderEnvelope). Send raw.
 		col, err := c.client.ActionCollectionRaw(c.ctx, "POST",
 			spacesPath(teamID, hubID, "")+"/reorder", map[string]any{"data": data})
 		if err != nil {

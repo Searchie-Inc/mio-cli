@@ -11,10 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// TestScaffoldFromTemplate_SendsEnvelopeAndIdempotencyHeader verifies the full
-// wire contract of the W2b op (MIO-2573 §5.1): POST to the /api/v1-rewritten
-// path, the REQUIRED Idempotency-Key header, and a JSON:API envelope whose
-// data.type is "template_scaffolds" with the four snake_case attributes.
 func TestScaffoldFromTemplate_SendsEnvelopeAndIdempotencyHeader(t *testing.T) {
 	var gotMethod, gotPath, gotIdemKey string
 	var gotBody struct {
@@ -90,10 +86,6 @@ func TestScaffoldFromTemplate_SendsEnvelopeAndIdempotencyHeader(t *testing.T) {
 	}
 }
 
-// TestScaffoldFromTemplate_404IsExitNotFound: the backend ships the op DORMANT
-// (flag off → 404) and older backends lack the route entirely. The caller
-// probes for exactly this code to fall back to client-side apply, so a 404
-// must surface as ExitNotFound through the normal error path.
 func TestScaffoldFromTemplate_404IsExitNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -116,12 +108,6 @@ func TestScaffoldFromTemplate_404IsExitNotFound(t *testing.T) {
 	}
 }
 
-// TestScaffoldFromTemplate_405IsOpAbsent: on a backend WITHOUT the W2b route
-// the probe path can be SHADOWED by an existing GET route pattern
-// (/pages/{page_id_or_slug}), so FastAPI answers 405 Method Not Allowed — not
-// 404. That is the same "op absent, apply client-side" signal, so it must
-// surface as ExitNotFound exactly like the 404 probe miss (found live against
-// mio-backend main on :8001).
 func TestScaffoldFromTemplate_405IsOpAbsent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -146,8 +132,6 @@ func TestScaffoldFromTemplate_405IsOpAbsent(t *testing.T) {
 	}
 }
 
-// TestScaffoldFromTemplate_409IsExitUsage: a digest/page/fingerprint conflict
-// is an actionable caller mistake → ExitUsage, with the server detail intact.
 func TestScaffoldFromTemplate_409IsExitUsage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentTypeJSONAPI)
@@ -176,8 +160,6 @@ func TestScaffoldFromTemplate_409IsExitUsage(t *testing.T) {
 	}
 }
 
-// TestBaseURL_ReturnsConfiguredOrigin: New trims the trailing slash, and
-// BaseURL exposes the resulting origin (used to origin-scope the catalog cache).
 func TestBaseURL_ReturnsConfiguredOrigin(t *testing.T) {
 	if got := New("https://x.test/", "k").BaseURL(); got != "https://x.test" {
 		t.Errorf("BaseURL() = %q, want %q", got, "https://x.test")

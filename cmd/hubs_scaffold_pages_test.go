@@ -1,15 +1,5 @@
 package cmd
 
-// hubs_scaffold_pages_test.go — MIO-2672 Task 8: §5.1 per-boundary crash
-// recovery for the client-side pages apply.
-//
-// The pure decision table (TestPagesRecovery_DecisionTable) runs with NO
-// server: decideRecovery is a pure function over the provenance snapshot read
-// back from an existing page. The boundary tests then drive stepPages against
-// a scripted backend, one test per §5.1 recovery row, re-adding the
-// resume/OCC coverage the deleted TestStepHomepage_Resume* tests held (see
-// the supersession note in hubs_scaffold_test.go).
-
 import (
 	"bytes"
 	"encoding/json"
@@ -28,11 +18,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// TestPagesRecovery_DecisionTable pins the §5.1 recovery contract as a pure
-// table — every row, no HTTP. v1 narrowed claim: "untouched" is draft_version
-// equality only (the raw published tree is not client-readable), and a crash
-// after publish but before the marker PATCH leaves "pending"+draft-written,
-// which lands on conflict (see decideRecovery's narrowing note).
 func TestPagesRecovery_DecisionTable(t *testing.T) {
 	const ours = "app_ours"
 	cases := []struct {
@@ -63,9 +48,6 @@ func TestPagesRecovery_DecisionTable(t *testing.T) {
 	}
 }
 
-// TestProvenanceMarkerFields_TolerantGarbage: the marker parser must degrade
-// any missing/mis-shaped meta to zero values (appID "" → decideRecovery
-// conflict) and NEVER panic — the §5.1 tolerant-parsing hard rule.
 func TestProvenanceMarkerFields_TolerantGarbage(t *testing.T) {
 	for _, attrs := range []map[string]any{
 		nil,
@@ -81,22 +63,6 @@ func TestProvenanceMarkerFields_TolerantGarbage(t *testing.T) {
 	}
 }
 
-// ─── scripted backend for the per-boundary integration tests ─────────────────
-
-// recoveryBackend is a scripted pages backend for the §5.1 boundary tests:
-// seeded with the hub's existing pages (returned by every page-list GET) and
-// their current draft versions (tree GET → draft_version; a page absent from
-// draftVers 404s = no draft ever written). Every mutating request is recorded
-// so a test can assert exactly which pages were written — the §2.2
-// never-overwrite guarantee is a claim about ABSENT requests.
-//
-// The W2b op probe (MIO-2672 Task 9) is scripted separately: op POSTs are
-// answered by opHandler (nil → 404, the op-absent default every pre-Task-9
-// boundary test relies on to exercise the client-side path) and recorded in
-// opPosts/opBodies/opIdemKeys — NOT in mutations, which stays a count of
-// page-level writes only. Catalog GETs (the 409-refetch) serve catalogBody
-// (nil → 404, failing a Mutating resolve loudly). events logs the op/catalog
-// interleaving so a test can assert refetch-then-retry ordering.
 type recoveryBackend struct {
 	mu        sync.Mutex
 	pages     []map[string]any
@@ -104,41 +70,31 @@ type recoveryBackend struct {
 
 	listCalls    int
 	createdSlugs []string
-	createdAttrs map[string]map[string]any // slug → create body attrs
-	putIfMatch   map[string]string         // pageID → tree-PUT If-Match
-	putSeq       int                       // draft_version minted per PUT: 1, 2, 3…
-	pubIfMatch   map[string]string         // pageID → publish If-Match
-	patched      map[string]map[string]any // pageID → PATCH body attrs
-	mutations    int                       // every page-level POST/PUT/PATCH (op probes excluded)
+	createdAttrs map[string]map[string]any
+	putIfMatch   map[string]string
+	putSeq       int
+	pubIfMatch   map[string]string
+	patched      map[string]map[string]any
+	mutations    int
 
-	// W2b op-probe scripting + recording (Task 9). Configure before driving.
-	opHandler   func(w http.ResponseWriter, n int) // nth (1-based) op POST; nil → 404
+	opHandler   func(w http.ResponseWriter, n int)
 	opPosts     int
-	opBodies    []map[string]any // per-POST decoded data.attributes
-	opIdemKeys  []string         // per-POST Idempotency-Key header
-	catalogBody []byte           // served on GET …/page-builder/catalog; nil → 404
+	opBodies    []map[string]any
+	opIdemKeys  []string
+	catalogBody []byte
 	catalogGETs int
-	events      []string // ordered "op" / "catalog" log
+	events      []string
 
-	// MIO-4929: model the backend's homepage invariant (MIO-4427). When set, a
-	// page may only become the homepage once published: a create carrying
-	// is_homepage:true, or a PATCH setting it on a page never published, is
-	// answered 409 homepage_page_not_published and counted in homeRejects.
-	// pageEvents is the ordered wire log: "create:<slug>[+home]", "publish:<id>",
-	// "home:<id>" (a PATCH setting is_homepage).
 	enforceHomeNeedsPublish bool
 	homeRejects             int
 	publishedPages          map[string]bool
 	pageEvents              []string
 
-	// onPublish runs under the lock after a publish is recorded (a test uses
-	// it to make another page the homepage mid-run).
 	onPublish func(be *recoveryBackend)
 }
 
 const homeNotPublished409 = `{"errors":[{"status":"409","code":"homepage_page_not_published","detail":"homepage must be published"}]}`
 
-// pathPageID returns the {id} segment of …/pages/{id}[/tree|/publish].
 func pathPageID(path string) string {
 	segs := strings.Split(strings.Trim(path, "/"), "/")
 	for i, s := range segs {
@@ -167,22 +123,19 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		path := r.URL.Path
 		switch {
-		case r.Method == http.MethodPost && strings.HasSuffix(path, "/scaffold-from-template"): // W2b op probe
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/scaffold-from-template"):
 			be.opPosts++
 			be.events = append(be.events, "op")
 			body, _ := io.ReadAll(r.Body)
 			be.opBodies = append(be.opBodies, decodeHubAttrs(t, body))
 			be.opIdemKeys = append(be.opIdemKeys, r.Header.Get("Idempotency-Key"))
 			if be.opHandler == nil {
-				// Default: the op is ABSENT (dormant flag / older backend) — the
-				// probe 404s and stepPages falls back to the client-side loop the
-				// boundary tests exercise.
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte(`{"errors":[{"status":"404","detail":"Not Found"}]}`))
 				return
 			}
 			be.opHandler(w, be.opPosts)
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/page-builder/catalog"): // 409-refetch resolve
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/page-builder/catalog"):
 			be.catalogGETs++
 			be.events = append(be.events, "catalog")
 			if be.catalogBody == nil {
@@ -192,11 +145,11 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(be.catalogBody)
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/pages"): // recovery slug walk / homepage pre-check
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/pages"):
 			be.listCalls++
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": be.pages})
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/tree"): // recovery draft_version read
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/tree"):
 			dv, ok := be.draftVers[pathPageID(path)]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
@@ -215,7 +168,7 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"pp_1","type":"page-publishes","attributes":{}}}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(path, "/pages"): // create — id minted from the slug
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/pages"):
 			be.mutations++
 			body, _ := io.ReadAll(r.Body)
 			attrs := decodeHubAttrs(t, body)
@@ -255,7 +208,7 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 				}
 			}
 			if _, isHomeOnly := pa["is_homepage"]; !isHomeOnly || pa["meta"] != nil {
-				be.patched[pathPageID(path)] = pa // the marker PATCH; the home flip lives in pageEvents
+				be.patched[pathPageID(path)] = pa
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"pg_x","type":"pages","attributes":{}}}`))
@@ -268,9 +221,6 @@ func newRecoveryBackend(t *testing.T, existing []map[string]any, draftVers map[s
 	return srv, be
 }
 
-// seededPage builds one existing-page resource for the backend's list body: an
-// optional §5.1 marker lands under meta.template_provenance, exactly where the
-// recovery snapshot reads it.
 func seededPage(id, slug string, isHomepage bool, marker map[string]any) map[string]any {
 	attrs := map[string]any{"slug": slug}
 	if isHomepage {
@@ -282,8 +232,6 @@ func seededPage(id, slug string, isHomepage bool, marker map[string]any) map[str
 	return map[string]any{"id": id, "type": "pages", "attributes": attrs}
 }
 
-// ourMarker is a §5.1 marker carrying OUR applicationId for the fixture
-// identity (hub_1 + community) in the given provenance state.
 func ourMarker(state string) map[string]any {
 	return map[string]any{
 		"applicationId":   catalog.ApplicationID("hub_1", "community"),
@@ -294,16 +242,10 @@ func ourMarker(state string) map[string]any {
 	}
 }
 
-// driveStepPages runs stepPages over the full community fixture plan against
-// srvURL and returns the context (for homepage id/dv assertions) + the error.
-// sc.noteW is a *bytes.Buffer so tests can pin the operator notes (read it
-// back via stepNotes).
 func driveStepPages(t *testing.T, srvURL string) (*scaffoldContext, error) {
 	return driveStepPagesCfg(t, srvURL, nil)
 }
 
-// driveStepPagesCfg is driveStepPages with a pre-run context hook (op tests
-// set catalogOverride etc. before the step fires).
 func driveStepPagesCfg(t *testing.T, srvURL string, cfg func(*scaffoldContext)) (*scaffoldContext, error) {
 	t.Helper()
 	sc := newStepSC(client.New(srvURL, "k"), "hub_1", "acme")
@@ -316,7 +258,6 @@ func driveStepPagesCfg(t *testing.T, srvURL string, cfg func(*scaffoldContext)) 
 	return sc, stepPages(sc, &sc.hubTmpl)
 }
 
-// stepNotes returns the operator notes a driveStepPages run wrote.
 func stepNotes(sc *scaffoldContext) string {
 	b, _ := sc.noteW.(*bytes.Buffer)
 	if b == nil {
@@ -325,19 +266,10 @@ func stepNotes(sc *scaffoldContext) string {
 	return b.String()
 }
 
-// ─── per-boundary rows ────────────────────────────────────────────────────────
-
-// TestStepPages_ResumeAfterCreateBeforeDraft: a prior run crashed between the
-// homepage create and its draft PUT — the page exists at the manifest slug
-// with OUR "pending" marker and NO draft (tree GET 404). The re-run must NOT
-// create: it resumes the remaining sequence on the EXISTING id — tree PUT with
-// the first-set sentinel If-Match 0 (correct precisely because resumeFull only
-// fires at draft_version 0), publish with the PUT-returned version, marker
-// PATCH to "applied" — and the other pages proceed normally.
 func TestStepPages_ResumeAfterCreateBeforeDraft(t *testing.T) {
 	srv, be := newRecoveryBackend(t,
 		[]map[string]any{seededPage("pg_half", "homepage", true, ourMarker("pending"))},
-		nil) // pg_half absent from draftVers → tree GET 404 → no draft written
+		nil)
 
 	sc, err := driveStepPages(t, srv.URL)
 	if err != nil {
@@ -363,18 +295,11 @@ func TestStepPages_ResumeAfterCreateBeforeDraft(t *testing.T) {
 	if sc.homePageID != "pg_half" || sc.homeDraftVersion != 1 {
 		t.Errorf("context homepage = {%q %d}, want {pg_half 1} (the reused page)", sc.homePageID, sc.homeDraftVersion)
 	}
-	// Task-8 review minor: the resume is an OPERATOR-FACING note, pinned here so
-	// dropping the notef silently is a test failure, not a UX regression.
 	if notes := stepNotes(sc); !strings.Contains(notes, "resuming") {
 		t.Errorf("resume must emit an operator note containing %q; notes=%q", "resuming", notes)
 	}
 }
 
-// TestStepPages_ConflictAfterDraftWritten: ours + "pending" but a draft EXISTS
-// (draft_version 2) — a crash between draft PUT and marker PATCH is
-// indistinguishable from a user's first edit (§10.8), so the run refuses with
-// ExitUsage naming the page and the reason, having mutated NOTHING, and the
-// loop aborts.
 func TestStepPages_ConflictAfterDraftWritten(t *testing.T) {
 	srv, be := newRecoveryBackend(t,
 		[]map[string]any{seededPage("pg_half", "homepage", true, ourMarker("pending"))},
@@ -398,10 +323,6 @@ func TestStepPages_ConflictAfterDraftWritten(t *testing.T) {
 	}
 }
 
-// TestStepPages_NoopWhenAppliedUntouched: ours + "applied" + the current
-// draft_version equals the marker's appliedDraftVersion — the page converged
-// on a prior run. The re-run mutates NOTHING for it and CONTINUES the loop:
-// the remaining pages are created normally and the run exits success.
 func TestStepPages_NoopWhenAppliedUntouched(t *testing.T) {
 	marker := ourMarker("applied")
 	marker["appliedDraftVersion"] = 3
@@ -417,7 +338,6 @@ func TestStepPages_NoopWhenAppliedUntouched(t *testing.T) {
 	if !reflect.DeepEqual(be.createdSlugs, []string{"about", "faq"}) {
 		t.Errorf("created slugs = %v, want [about faq] — the loop must CONTINUE past the no-op page", be.createdSlugs)
 	}
-	// Task-8 review minor: the skip is an OPERATOR-FACING note, pinned here.
 	if notes := stepNotes(sc); !strings.Contains(notes, "already applied") {
 		t.Errorf("no-op must emit an operator note containing %q; notes=%q", "already applied", notes)
 	}
@@ -432,9 +352,6 @@ func TestStepPages_NoopWhenAppliedUntouched(t *testing.T) {
 	}
 }
 
-// TestStepPages_ConflictWhenAppliedEdited: ours + "applied" but the draft
-// moved since (5 vs the marker's 3) — the user edited the page after our
-// apply, so the run refuses (ExitUsage) without writing.
 func TestStepPages_ConflictWhenAppliedEdited(t *testing.T) {
 	marker := ourMarker("applied")
 	marker["appliedDraftVersion"] = 3
@@ -457,14 +374,9 @@ func TestStepPages_ConflictWhenAppliedEdited(t *testing.T) {
 	}
 }
 
-// TestStepPages_ForeignSlugConflict: a page WITHOUT our marker sits at a
-// manifest slug ("about") — never overwrite (§2.2). The homepage (before it in
-// plan order) applies fully; the conflict aborts the loop before "faq".
-// (Supersedes Task 7's TestStepPages_ExistingSlugConflicts — same scenario,
-// now the foreign-page row of decideRecovery.)
 func TestStepPages_ForeignSlugConflict(t *testing.T) {
 	srv, be := newRecoveryBackend(t,
-		[]map[string]any{seededPage("pg_conflict", "about", false, nil)}, // unmarked
+		[]map[string]any{seededPage("pg_conflict", "about", false, nil)},
 		nil)
 
 	_, err := driveStepPages(t, srv.URL)
@@ -483,21 +395,11 @@ func TestStepPages_ForeignSlugConflict(t *testing.T) {
 	if be.mutations != 5 {
 		t.Errorf("got %d mutating requests, want 5 (the homepage's create+PUT+publish+PATCH+is_homepage update only)", be.mutations)
 	}
-	// Slug walks: homepage + its foreign-homepage pre-check + the recheck right
-	// before is_homepage + about; the conflict aborts before faq is ever listed.
 	if be.listCalls != 4 {
 		t.Errorf("got %d page-list GETs, want 4 (homepage walk + pre-check + set-home recheck + about walk)", be.listCalls)
 	}
 }
 
-// TestStepPages_ForeignHomepageBlocksCreate: the manifest homepage slug is
-// FREE, but the hub already has an is_homepage page at ANOTHER slug —
-// create_page(is_homepage=true) would CLEAR it server-side, so the §5.1
-// pre-check conflicts BEFORE any create fires, naming the existing homepage's
-// id. This holds UNCONDITIONALLY: a foreign/unmarked homepage, and equally one
-// carrying OUR marker at an unexpected slug (reachable via a user slug rename
-// or a catalog-revision slug change — ApplicationID is hub+template only, so a
-// marker match does not prove the page is where this run expects it).
 func TestStepPages_ForeignHomepageBlocksCreate(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -534,11 +436,6 @@ func TestStepPages_ForeignHomepageBlocksCreate(t *testing.T) {
 	}
 }
 
-// TestStepPages_TokenedTitleInterpolatedAtCreate pins title interpolation at
-// the create seam (§4.3 location (b)): a PageRef title carrying {{hub_name}}
-// must arrive at the create POST fully substituted. (The fixture's titles are
-// token-free, so without this a dropped InterpolateTitle call would still pass
-// the main provenance test.)
 func TestStepPages_TokenedTitleInterpolatedAtCreate(t *testing.T) {
 	srv, be := newRecoveryBackend(t, nil, nil)
 
@@ -558,12 +455,6 @@ func TestStepPages_TokenedTitleInterpolatedAtCreate(t *testing.T) {
 	}
 }
 
-// ─── MIO-4929: the homepage becomes home only AFTER it is published ──────────
-
-// TestStepPages_HomepageIsSetAfterPublish: against a backend that enforces the
-// MIO-4427 invariant (409 homepage_page_not_published for a not-yet-published
-// homepage), the client-side loop must never carry is_homepage on the create,
-// and must flip is_homepage only after the homepage's publish.
 func TestStepPages_HomepageIsSetAfterPublish(t *testing.T) {
 	srv, be := newRecoveryBackend(t, nil, nil)
 	be.enforceHomeNeedsPublish = true
@@ -592,9 +483,6 @@ func TestStepPages_HomepageIsSetAfterPublish(t *testing.T) {
 	}
 }
 
-// TestStepPages_ResumeSetsHomepageOnAppliedButNotHome: a prior run published
-// and marked the homepage applied but died before the is_homepage update. The
-// re-run must finish exactly that step (no create, no tree PUT, no publish).
 func TestStepPages_ResumeSetsHomepageOnAppliedButNotHome(t *testing.T) {
 	marker := ourMarker("applied")
 	marker["appliedDraftVersion"] = 3
@@ -621,9 +509,6 @@ func TestStepPages_ResumeSetsHomepageOnAppliedButNotHome(t *testing.T) {
 	}
 }
 
-// TestStepPages_ResumeNotHomeRefusesToClobberForeignHomepage: our applied
-// homepage is not home but ANOTHER page is — setting ours would clear it, so
-// the run refuses without writing (§5.1 hazard semantics preserved).
 func TestStepPages_ResumeNotHomeRefusesToClobberForeignHomepage(t *testing.T) {
 	marker := ourMarker("applied")
 	marker["appliedDraftVersion"] = 3
@@ -641,9 +526,6 @@ func TestStepPages_ResumeNotHomeRefusesToClobberForeignHomepage(t *testing.T) {
 	}
 }
 
-// TestStepPages_HomepageClaimedDuringPublishIsNotClobbered: another page is
-// made the homepage between the up-front check and the final is_homepage
-// update. The run must exit 2 naming it and leave it home.
 func TestStepPages_HomepageClaimedDuringPublishIsNotClobbered(t *testing.T) {
 	srv, be := newRecoveryBackend(t, nil, nil)
 	be.onPublish = func(be *recoveryBackend) {

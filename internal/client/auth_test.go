@@ -12,10 +12,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// makeTestToken constructs a syntactically-valid but cryptographically unsigned
-// JWT (header.payload.fakesig) carrying the provided claims namespace payload.
-// The signature is a constant placeholder — TeamIDFromAccessToken does not
-// verify signatures, so this is sufficient for unit tests.
 func makeTestToken(t *testing.T, nsClaims map[string]any) string {
 	t.Helper()
 
@@ -55,7 +51,6 @@ func TestTeamIDFromAccessToken_ExtractsTeamID(t *testing.T) {
 }
 
 func TestTeamIDFromAccessToken_ReturnsEmptyWhenNoTeamID(t *testing.T) {
-	// Namespace present but team_id is null / absent.
 	token := makeTestToken(t, map[string]any{
 		"roles":      []string{},
 		"token_type": "access",
@@ -86,16 +81,6 @@ func TestTeamIDFromAccessToken_ReturnsEmptyForMalformedToken(t *testing.T) {
 	}
 }
 
-// MIO-2656 (codex review round 1): Login masks a failed sign-in with the
-// friendlier "invalid email or password". That mask used to key off
-// errs.CodeOf(err) == ExitAuth — but ExitAuth covers 401 AND 403, so a 403 on
-// the login route was both mislabelled ("invalid email or password" when the
-// credentials may have been perfectly correct) and stripped of its status,
-// leaving the envelope to fall back to "401" — the exact mis-mapping this
-// ticket exists to remove, at a second site.
-//
-// The mask is now narrowed to a true 401, and it carries that 401 explicitly so
-// the envelope reports it rather than deriving it.
 func TestLogin_401IsMaskedAndKeepsStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -118,10 +103,6 @@ func TestLogin_401IsMaskedAndKeepsStatus(t *testing.T) {
 	}
 }
 
-// A 403 on the login route is a DIFFERENT refusal from bad credentials (the
-// account is locked, SSO is mandatory, the origin is blocked...). It must keep
-// both the backend's own explanation and its own status, so an agent is not
-// told to retry with a different password for a door that no password opens.
 func TestLogin_403KeepsBackendDetailAndStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -136,7 +117,6 @@ func TestLogin_403KeepsBackendDetailAndStatus(t *testing.T) {
 	if got := errs.HTTPStatusOf(err); got != http.StatusForbidden {
 		t.Errorf("HTTPStatusOf = %d, want 403 — a 403 must not be reported as a 401", got)
 	}
-	// The exit code is unchanged: ExitCodeForStatus maps 401 and 403 alike.
 	if got := errs.CodeOf(err); got != errs.ExitAuth {
 		t.Errorf("exit code = %d, want %d (ExitAuth) — unchanged", got, errs.ExitAuth)
 	}
@@ -176,10 +156,6 @@ func TestSubjectFromAccessToken_ReturnsEmptyForMalformedToken(t *testing.T) {
 	}
 }
 
-// TestListTeams_CapturesOwnerID pins that ListTeams surfaces each team's
-// owner_id attribute on TeamInfo — the field MIO-3585's ownership check
-// (resolveOwnedTeamID) compares against the JWT's own `sub` claim to decide
-// which team the caller can actually mint an API key for.
 func TestListTeams_CapturesOwnerID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
@@ -207,7 +183,6 @@ func TestListTeams_CapturesOwnerID(t *testing.T) {
 }
 
 func TestTeamIDFromAccessToken_HandlesNullTeamID(t *testing.T) {
-	// team_id explicitly set to null (Python backend sets it to None for hub tokens).
 	token := makeTestToken(t, map[string]any{
 		"team_id":    nil,
 		"token_type": "access",

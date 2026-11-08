@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// got is a compact, comparable view of one extracted invocation.
 type got struct {
 	Line, EndLine int
 	Args          string
@@ -21,10 +20,6 @@ func view(invs []Invocation) []got {
 	return out
 }
 
-// TestFromScript_Shapes pins every doc shape the guard in cmd/doc_examples_test.go
-// relies on. Each case is a shape that appears in a shipped doc surface today (or
-// in the task that commissioned this parser); a regression here would make an
-// example silently unguarded, which the Uncovered check exists to prevent.
 func TestFromScript_Shapes(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -154,10 +149,6 @@ func TestFromScript_Shapes(t *testing.T) {
 	}
 }
 
-// TestFromScript_UncoveredMentionIsReported is the parser's own tripwire: a line
-// that visibly invokes mio but that the parser does not extract must be
-// reported, never silently dropped. The shape used here — mio as the argument
-// of an unknown wrapper — is one the parser deliberately does not follow.
 func TestFromScript_UncoveredMentionIsReported(t *testing.T) {
 	res := FromScript("x.md", 10, "true\nwatch -n5 mio contacts list\n")
 	if len(res.Invocations) != 0 {
@@ -168,9 +159,6 @@ func TestFromScript_UncoveredMentionIsReported(t *testing.T) {
 	}
 }
 
-// TestFromScript_UncoveredMentionBesideAnExtractedOne: coverage is per `mio`
-// word, not per line. An extracted invocation must not vouch for a second,
-// unfollowed one on the same line (codex review, MIO-4154 round 1).
 func TestFromScript_UncoveredMentionBesideAnExtractedOne(t *testing.T) {
 	res := FromScript("x.md", 1, "mio version; watch -n5 mio contacts list")
 	if len(res.Invocations) != 1 || strings.Join(res.Invocations[0].Args, " ") != "version" {
@@ -181,18 +169,12 @@ func TestFromScript_UncoveredMentionBesideAnExtractedOne(t *testing.T) {
 	}
 }
 
-// TestFromScript_TranscriptOutputMentionIsReported: one `$ ` prompt makes a
-// block a console transcript, and its unprompted lines are output, never parsed.
-// A `mio <word>` on such a line must still be REPORTED: otherwise a single
-// prompt line blinds the guard to every unprompted command in the same block,
-// and line 1 below, the exact MIO-4154 defect, would pass unseen (blind review).
-// A version banner (`mio 0.2.0`) names no command word and is not a mention.
 func TestFromScript_TranscriptOutputMentionIsReported(t *testing.T) {
 	res := FromScript("x.md", 1, strings.Join([]string{
-		`mio products create --name "Pro Plan"`, // 1: unprompted — reported
-		"$ mio version",                         // 2: prompt — extracted
-		"mio 0.2.0",                             // 3: output, no command word
-		"Publish it with: mio hubs update hub_1 --published", // 4: output naming mio — reported
+		`mio products create --name "Pro Plan"`,
+		"$ mio version",
+		"mio 0.2.0",
+		"Publish it with: mio hubs update hub_1 --published",
 	}, "\n"))
 	if g, want := view(res.Invocations), []got{{2, 2, "version", false}}; !reflect.DeepEqual(g, want) {
 		t.Errorf("invocations\n got %+v\nwant %+v", g, want)
@@ -209,43 +191,33 @@ func TestFromScript_TranscriptOutputMentionIsReported(t *testing.T) {
 	}
 }
 
-// TestFromMarkdown_BlockquoteFences: a fence inside a blockquote (`> ```sh`,
-// README's go-install note) is code like any other, so its invocations must be
-// extracted and its mentions covered (blind review, MIO-4154). The fence ends
-// where its container ends, two ways: a top-level fence straight after a quoted
-// one opens a new block instead of being swallowed (lines 12-16), and prose
-// straight after one is prose, not code (lines 17-19). Each half fails on its
-// own mutation; the second exists because the first alone passed with the
-// container-end check deleted (the stray backticks parsed as a substitution).
-// Lines 22-25: only the fence's OWN quote depth is stripped from its body, so a
-// `>` redirect at the start of a quoted line stays a redirect.
 func TestFromMarkdown_BlockquoteFences(t *testing.T) {
 	doc := strings.Join([]string{
-		"> **Note:** rename it:", // 1
-		"> ```sh",                // 2
-		`> mio products create --name "Pro Plan"`, // 3
-		">```",                  // 4: close, no space after >
-		"> > ```bash",           // 5: nested quote
-		"> > mio contacts list", // 6
-		"> > ```",               // 7
-		"  > - item:",           // 8: indented quote holding a list
-		">   ```sh",             // 9: list-indented fence in a quote
-		">   V=$(mio pages tree get <p> --jq .tree)", // 10
-		">   ```",                      // 11
-		"> ```sh",                      // 12: ended by its container ending
-		"> mio version",                // 13
-		"```sh",                        // 14: a NEW top-level fence
-		"mio hubs list",                // 15
-		"```",                          // 16
-		"> ```sh",                      // 17: also ended by its container ending,
-		"> mio contacts retrieve <id>", // 18
-		"prose: mio pages list",        // 19: here by prose, which is not read
-		"",                             // 20
-		"more prose",                   // 21
-		"> ```sh",                      // 22: only the fence's OWN depth is stripped,
-		`> mio pages tree get <p> --jq '{root: .tree}' \`, // 23
-		"> > tree.json", // 24: so this `>` stays a redirect
-		"> ```",         // 25
+		"> **Note:** rename it:",
+		"> ```sh",
+		`> mio products create --name "Pro Plan"`,
+		">```",
+		"> > ```bash",
+		"> > mio contacts list",
+		"> > ```",
+		"  > - item:",
+		">   ```sh",
+		">   V=$(mio pages tree get <p> --jq .tree)",
+		">   ```",
+		"> ```sh",
+		"> mio version",
+		"```sh",
+		"mio hubs list",
+		"```",
+		"> ```sh",
+		"> mio contacts retrieve <id>",
+		"prose: mio pages list",
+		"",
+		"more prose",
+		"> ```sh",
+		`> mio pages tree get <p> --jq '{root: .tree}' \`,
+		"> > tree.json",
+		"> ```",
 	}, "\n")
 	res := FromMarkdown("doc.md", doc)
 	want := []got{
@@ -265,27 +237,24 @@ func TestFromMarkdown_BlockquoteFences(t *testing.T) {
 	}
 }
 
-// TestFromMarkdown_FencesAndLineNumbers checks that only fenced code is read,
-// that line numbers are DOCUMENT lines (what a failure message names), and that
-// indented fences (inside list items) and ~~~ fences are handled.
 func TestFromMarkdown_FencesAndLineNumbers(t *testing.T) {
 	doc := strings.Join([]string{
-		"# Title",                              // 1
-		"Prose mentions `mio hubs list` here.", // 2
-		"```sh",                                // 3
-		"mio contacts list",                    // 4
-		"```",                                  // 5
-		"- item:",                              // 6
-		"  ```bash",                            // 7
-		"  V=$(mio pages tree get <p> \\",      // 8
-		"    --jq .draft_version)",             // 9
-		"  ```",                                // 10
-		"~~~",                                  // 11
-		"mio version",                          // 12
-		"~~~",                                  // 13
-		"```json",                              // 14
-		`{"note": "not a command"}`,            // 15
-		"```",                                  // 16
+		"# Title",
+		"Prose mentions `mio hubs list` here.",
+		"```sh",
+		"mio contacts list",
+		"```",
+		"- item:",
+		"  ```bash",
+		"  V=$(mio pages tree get <p> \\",
+		"    --jq .draft_version)",
+		"  ```",
+		"~~~",
+		"mio version",
+		"~~~",
+		"```json",
+		`{"note": "not a command"}`,
+		"```",
 	}, "\n")
 	res := FromMarkdown("doc.md", doc)
 	want := []got{

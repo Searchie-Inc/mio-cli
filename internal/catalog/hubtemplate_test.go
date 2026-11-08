@@ -1,12 +1,5 @@
 package catalog
 
-// hubtemplate_test.go — hubTemplates[] model invariants over the 2.1 artifact
-// (testdata/catalog-2.1.json, a byte-copy of mio-page-catalog@rev7). The digest
-// test is THE canonicalizer-parity gate for the live-fetch epic: if the Go
-// Digest over the 2.1 artifact stops matching its pinned meta.digest, every
-// downstream provenance marker (TreeDigest) is suspect — stop and escalate
-// rather than adjusting the canonicalizer.
-
 import (
 	"encoding/json"
 	"os"
@@ -17,8 +10,6 @@ import (
 	"unicode/utf8"
 )
 
-// pinned21Digest is meta.digest of the 2.1 artifact (schemaVersion 2.1.0,
-// catalogVersion 0.7.0, revision 7).
 const pinned21Digest = "sha256:ab30e06a03eb7040b53754d3afac4313872d1c9e8dfc0c5f9cec9d2b6903c5eb"
 
 func load21ForTest(t *testing.T) *Catalog {
@@ -102,9 +93,6 @@ func TestHubTemplateByID_Community(t *testing.T) {
 	if err := h.Validate(c); err != nil {
 		t.Errorf("Validate(community) = %v, want nil", err)
 	}
-	// The ratified 2.1 policies carry the "enabled" field, which the pre-2.1
-	// allow-list would have rejected — Validate must accept it. Pin that the
-	// fixture actually exercises it, so the positive case can never go vacuous.
 	if terms, _ := h.Policies["terms"].(map[string]any); terms == nil {
 		t.Error("community policies.terms is not an object — policy allow-list positive case is vacuous")
 	} else if _, ok := terms["enabled"]; !ok {
@@ -153,11 +141,8 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 			h.Policies["terms"] = "yes"
 		}},
 		{"unknown policy field", func(h *HubTemplate) {
-			// A typo (require_acceptence) must fail preflight, not degrade to a
-			// silent content:null reset PATCH.
 			h.Policies["terms"] = map[string]any{"require_acceptence": true}
 		}},
-		// community ships no playlists — construct them in the mutation.
 		{"missing playlist title", func(h *HubTemplate) {
 			h.Playlists = []TemplatePlaylist{{Title: "", Key: "welcome", Visibility: "public"}}
 		}},
@@ -173,9 +158,6 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 		{"bad playlist visibility", func(h *HubTemplate) {
 			h.Playlists = []TemplatePlaylist{{Title: "Welcome", Key: "welcome", Visibility: "everyone"}}
 		}},
-		// welcomePost (MIO-2558). community declares none, so construct one: the
-		// scaffold's welcome-post step runs LAST, so a bad ref discovered there
-		// would fail a run that has already written everything else.
 		{"welcomePost missing title", func(h *HubTemplate) {
 			h.WelcomePost = &TemplateWelcomePost{Space: h.Spaces[0].Slug, Title: ""}
 		}},
@@ -185,10 +167,6 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 		{"welcomePost space not in template", func(h *HubTemplate) {
 			h.WelcomePost = &TemplateWelcomePost{Space: "no-such-space", Title: "Welcome!"}
 		}},
-		// The endpoint's OWN reject conditions, mirrored from
-		// mio-backend app/community/discussion_text.py. Each of these would 422 at
-		// step 9 — after the hub, blobs, spaces, pages and publish have all been
-		// written — so preflight has to be the one that catches them.
 		{"welcomePost whitespace-only title", func(h *HubTemplate) {
 			h.WelcomePost = &TemplateWelcomePost{Space: h.Spaces[0].Slug, Title: "   "}
 		}},
@@ -198,16 +176,10 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 		{"welcomePost title over 280 code points", func(h *HubTemplate) {
 			h.WelcomePost = &TemplateWelcomePost{
 				Space: h.Spaces[0].Slug,
-				Title: strings.Repeat("é", DiscussionTitleMaxCP+1), // multi-BYTE, single code point each
+				Title: strings.Repeat("é", DiscussionTitleMaxCP+1),
 			}
 		}},
 		{"welcomePost over-cap title survives padding", func(h *HubTemplate) {
-			// Padding an already-over-cap title does not sneak it past the check.
-			// NOTE this case cannot discriminate stripped-vs-raw measurement and no
-			// reject case can: stripped length is always ≤ raw, so anything that is
-			// over the cap stripped is over it raw too. Only the ACCEPT side can tell
-			// them apart — TestHubTemplateWelcomePost_TitleLengthIsCodePointsNotBytes
-			// owns that, and this case is here for the plain behaviour only.
 			h.WelcomePost = &TemplateWelcomePost{
 				Space: h.Spaces[0].Slug,
 				Title: " " + strings.Repeat("a", DiscussionTitleMaxCP+1) + " ",
@@ -221,8 +193,6 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Fresh catalog per case: the mutations write through the HubTemplate's
-			// slices, whose backing arrays are shared with the catalog's copy.
 			c := load21ForTest(t)
 			h, ok := c.HubTemplateByID("community")
 			if !ok {
@@ -239,21 +209,6 @@ func TestHubTemplateValidate_Invariants(t *testing.T) {
 	}
 }
 
-// TestHubTemplateWelcomePost_TitleLengthIsCodePointsNotBytes is the ACCEPT side
-// of the 280 cap, and it is the only case that can tell the implementations
-// apart. A 281-character rejection passes under both `utf8.RuneCountInString`
-// and `len`, because a 281-é string is over the cap either way — so on its own it
-// pins nothing.
-//
-// These two must VALIDATE:
-//
-//   - 280 é = 280 code points but 560 BYTES. Green under a code-point count, red
-//     under len(). Python's len() and Pydantic's Field(max_length=280) both count
-//     code points, so a byte-based check here would reject templates the API
-//     accepts, with no other test noticing.
-//   - a title over the cap RAW but under it STRIPPED. Preflight measures what the
-//     scaffold will SEND (stepWelcomePost posts the trimmed title), so it must not
-//     be stricter than the endpoint about padding the request never carries.
 func TestHubTemplateWelcomePost_TitleLengthIsCodePointsNotBytes(t *testing.T) {
 	c := load21ForTest(t)
 	h, ok := c.HubTemplateByID("community")
@@ -277,12 +232,6 @@ func TestHubTemplateWelcomePost_TitleLengthIsCodePointsNotBytes(t *testing.T) {
 	}
 }
 
-// TestHubTemplateWelcomePost_ParseAndDefault pins the OPTIONAL welcomePost block
-// (MIO-2558): absent ⇒ nil (so the scaffold step no-ops, which is what every
-// shipped catalog gets — `community` at 0.14.1 declares no welcomePost), present
-// ⇒ parsed verbatim with is_published defaulting to the endpoint's own
-// server-side default of TRUE rather than the Go bool zero value (which would
-// scaffold an invisible draft).
 func TestHubTemplateWelcomePost_ParseAndDefault(t *testing.T) {
 	if h, ok := load21ForTest(t).HubTemplateByID("community"); !ok {
 		t.Fatal("HubTemplateByID(community) not found")
@@ -305,10 +254,6 @@ func TestHubTemplateWelcomePost_ParseAndDefault(t *testing.T) {
 			raw:  Node{"space": "general", "title": "Draft", "is_published": false},
 			want: TemplateWelcomePost{Space: "general", Title: "Draft", Published: false},
 		},
-		// A present-but-non-bool value must FAIL SAFE to the endpoint's default,
-		// not coerce to false: a comma-ok bool assertion turns each of these into
-		// `false`, scaffolding the invisible draft the default exists to prevent
-		// from a value that never said "draft".
 		{
 			name: "explicit null does not become a draft",
 			raw:  Node{"space": "general", "title": "Welcome!", "is_published": nil},
@@ -333,8 +278,6 @@ func TestHubTemplateWelcomePost_ParseAndDefault(t *testing.T) {
 }
 
 func TestApplicationID_MatchesBackendVector(t *testing.T) {
-	// Backend op computes sha256hex(hub_id + "\x1f" + hub_template_id); these
-	// vectors pin the CLI to the same bytes.
 	vectors := map[[2]string]string{
 		{"hub_1", "community"}:   "33a81a6cc6b3f247d36d4a2487307fbebbe931f8fdcef17125b86af123b5aee5",
 		{"hub_abc", "community"}: "21a8db36b1bb7a6a72926e17c62d40824533c5b9c5cac1b17a8502c8d0feaa7c",
@@ -357,7 +300,6 @@ func TestTreeDigest_StableAndPrefixed(t *testing.T) {
 			map[string]any{"kind": "field", "id": "f1"},
 		},
 	}
-	// Same tree, different literal key order.
 	b := map[string]any{
 		"children": []any{
 			map[string]any{"id": "f1", "kind": "field"},
@@ -382,7 +324,6 @@ func TestTreeDigest_StableAndPrefixed(t *testing.T) {
 	if da != db {
 		t.Errorf("TreeDigest is key-order sensitive: %q != %q", da, db)
 	}
-	// And repeated runs over the same value are stable.
 	da2, err := TreeDigest(a)
 	if err != nil {
 		t.Fatalf("TreeDigest(a) rerun: %v", err)
@@ -393,10 +334,6 @@ func TestTreeDigest_StableAndPrefixed(t *testing.T) {
 }
 
 func TestCloneNode_DeepCopies(t *testing.T) {
-	// nil in → nil out: Node is a map alias, so without an explicit guard a
-	// typed nil map would deep-clone into an allocated EMPTY map and break
-	// callers' "was there a blob at all?" nil checks (the stepBlobs
-	// navigation-wipe regression).
 	if CloneNode(nil) != nil {
 		t.Error("CloneNode(nil) must be nil, not an allocated empty map")
 	}
@@ -425,12 +362,6 @@ func TestCloneNode_DeepCopies(t *testing.T) {
 	}
 }
 
-// ─── MIO-3065: the vocabulary the starter hubTemplate is the first to use ─────
-
-// TestParseHubTemplate_IconAndDocuments: spaces[].icon and playlists[].
-// documents[] reach the typed model. Both were dropped SILENTLY before — the
-// parser is tolerant by design, so an unmodelled key is simply gone, and
-// nothing downstream can tell "the template said nothing" from "we ignored it".
 func TestParseHubTemplate_IconAndDocuments(t *testing.T) {
 	h := parseHubTemplate(Node{
 		"id": "starter",
@@ -467,15 +398,6 @@ func TestParseHubTemplate_IconAndDocuments(t *testing.T) {
 	}
 }
 
-// TestHubTemplateValidate_PlaylistVisibilityIsTheCreateEnum: playlists[].
-// visibility is validated against the enum it is SENT to — playlist CREATE
-// (public|unlisted|private) — not the hub-media publish enum
-// (members|private|public) it was checked against before.
-//
-// The two sets agree on public and private, so only the two values they
-// disagree on can tell the implementations apart. Both are asserted, and in
-// the direction that matters: "members" reaching apply meant a 422 AFTER the
-// hub, blobs, spaces, onboarding and policies were written.
 func TestHubTemplateValidate_PlaylistVisibilityIsTheCreateEnum(t *testing.T) {
 	c := load21ForTest(t)
 	base, ok := c.HubTemplateByID("community")
@@ -488,8 +410,8 @@ func TestHubTemplateValidate_PlaylistVisibilityIsTheCreateEnum(t *testing.T) {
 	}{
 		{"public", false},
 		{"private", false},
-		{"unlisted", false}, // accepted by CREATE; the OLD hub-media set rejected it
-		{"members", true},   // rejected by CREATE; the OLD hub-media set accepted it
+		{"unlisted", false},
+		{"members", true},
 		{"everyone", true},
 	} {
 		h := base
@@ -518,10 +440,6 @@ func TestHubTemplateValidate_DocumentNeedsATitle(t *testing.T) {
 	}
 }
 
-// TestHubTemplateValidate_PlaylistDataSourceKeyMustResolve: the FILL CONTRACT's
-// write-free half. A page template binding a playlist by a key no playlists[]
-// entry declares can never be filled, so the section would compile bound to the
-// empty string and the band render empty — caught before the hub exists.
 func TestHubTemplateValidate_PlaylistDataSourceKeyMustResolve(t *testing.T) {
 	bound := Node{
 		"kind": "stack",

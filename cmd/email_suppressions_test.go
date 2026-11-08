@@ -1,13 +1,5 @@
 package cmd
 
-// email_suppressions_test.go — contract tests for
-// `mio email suppressions list|create|lift` (MIO-2269).
-//
-// create: POST /v1/hubs/{hub}/email-suppressions — enveloped, JSON:API type
-//         "email_suppressions" (derived from the email-suppressions tail),
-//         attributes.email_address mapped from --email.
-// lift:   DELETE /v1/hubs/{hub}/email-suppressions/{id} — destructive (--yes).
-
 import (
 	"net/http"
 	"strings"
@@ -19,7 +11,6 @@ import (
 const suppressionBody = `{"data":{"id":"esp_1","type":"email_suppressions","attributes":{"email_address":"blocked@example.com","scope":"hub","reason":"admin_block","is_active":true,"suppressed_at":"2026-07-10T00:00:00Z"}}}`
 const suppressionListBody = `{"data":[{"id":"esp_1","type":"email_suppressions","attributes":{"email_address":"blocked@example.com","scope":"hub","reason":"admin_block","is_active":true,"suppressed_at":"2026-07-10T00:00:00Z"}}],"meta":{"has_more":false}}`
 
-// TestEmailSuppressionsList pins the list GET: method and hub-scoped path.
 func TestEmailSuppressionsList(t *testing.T) {
 	srv, gotMethod, gotPath, _, _ := captureAdminReq(t, http.StatusOK, suppressionListBody)
 
@@ -37,8 +28,6 @@ func TestEmailSuppressionsList(t *testing.T) {
 	}
 }
 
-// TestEmailSuppressionsCreate_Body pins the create POST: method, path, JSON:API
-// type "email_suppressions", and attributes.email_address from --email.
 func TestEmailSuppressionsCreate_Body(t *testing.T) {
 	srv, gotMethod, gotPath, _, gotBody := captureAdminReq(t, http.StatusCreated, suppressionBody)
 
@@ -66,8 +55,6 @@ func TestEmailSuppressionsCreate_Body(t *testing.T) {
 	}
 }
 
-// TestEmailSuppressionsCreate_MissingEmail pins that a missing --email exits
-// ExitUsage without firing any request.
 func TestEmailSuppressionsCreate_MissingEmail(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 
@@ -82,9 +69,6 @@ func TestEmailSuppressionsCreate_MissingEmail(t *testing.T) {
 	}
 }
 
-// TestEmailSuppressionsCreate_EmptyEmail pins that an explicit empty --email
-// exits ExitUsage without firing any request (the backend rejects it as
-// EmailStr; we catch it before context resolution).
 func TestEmailSuppressionsCreate_EmptyEmail(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 
@@ -100,8 +84,6 @@ func TestEmailSuppressionsCreate_EmptyEmail(t *testing.T) {
 	}
 }
 
-// TestEmailSuppressionsLift_WithYes pins the lift DELETE: method and path
-// (including the suppression id).
 func TestEmailSuppressionsLift_WithYes(t *testing.T) {
 	srv, gotMethod, gotPath, _, _ := captureAdminReq(t, http.StatusNoContent, "")
 
@@ -121,8 +103,6 @@ func TestEmailSuppressionsLift_WithYes(t *testing.T) {
 	}
 }
 
-// TestEmailSuppressionsLift_NoYes pins that lift without --yes exits
-// ExitNeedsConfir (5) without firing any request.
 func TestEmailSuppressionsLift_NoYes(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 
@@ -137,10 +117,6 @@ func TestEmailSuppressionsLift_NoYes(t *testing.T) {
 	}
 }
 
-// TestEmailSuppressionsLift_NoYes_GuardBeforeResolve pins that the --yes guard
-// fires BEFORE any hub name/slug resolution. With a hub SLUG (not a raw id),
-// context resolution would issue a hub-list HTTP call; the destructive guard
-// must short-circuit first, so no request is fired.
 func TestEmailSuppressionsLift_NoYes_GuardBeforeResolve(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 

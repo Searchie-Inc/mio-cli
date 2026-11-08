@@ -1,14 +1,5 @@
 package cmd
 
-// credential_store_test.go — MIO-2995: when the CLI cannot find or read a
-// stored API key it must say which credential store it consulted, `whoami`
-// must name the store a key came from, and `mio auth token` must hand the
-// stored key to a headless session exactly once, on stdout only.
-//
-// Every test here gives itself a fresh XDG_CONFIG_HOME, and TestMain pins the
-// keyring to the encrypted file backend, so nothing reads or writes the
-// developer's real ~/.config/mio, OS keychain or Secret Service.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -28,8 +19,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// isolatedStore points the config dir at a fresh temp dir, clears MIO_API_KEY
-// and returns the path of the file-keyring blob under it.
 func isolatedStore(t *testing.T) (cfgHome, blob string) {
 	t.Helper()
 	cfgHome = t.TempDir()
@@ -38,8 +27,6 @@ func isolatedStore(t *testing.T) (cfgHome, blob string) {
 	return cfgHome, filepath.Join(cfgHome, "mio", "keyring", "api-key")
 }
 
-// runCaptured is runContract that also returns the error Execute produced, so
-// a test can read the message main.go would render.
 func runCaptured(t *testing.T, env []string, args ...string) (contractResult, error) {
 	t.Helper()
 	restore := overlayEnv(t, env)
@@ -57,7 +44,6 @@ func runCaptured(t *testing.T, env []string, args ...string) (contractResult, er
 	return contractResult{Stdout: stdout.String(), Stderr: stderr.String(), Code: codeForExecuteErr(err)}, err
 }
 
-// noRequestServer fails the test if anything reaches it.
 func noRequestServer(t *testing.T) (*httptest.Server, *atomic.Bool) {
 	t.Helper()
 	var hit atomic.Bool
@@ -72,13 +58,6 @@ func noRequestServer(t *testing.T) (*httptest.Server, *atomic.Bool) {
 	return srv, &hit
 }
 
-// TestNoAPIKeyFound_NamesTheStoreItRead pins MIO-2995's diagnosis gap. The
-// release binaries keep the key in a FILE under the config dir, so a shell
-// whose XDG_CONFIG_HOME (or HOME) differs from the one `mio login` ran in finds
-// no key — which QA read as an intermittently failing macOS Keychain. The exit-3
-// message must name the store it looked in and the variable that chose it, so
-// that mismatch is visible in the error itself. The historical prefix is kept
-// verbatim: agents and docs match on it.
 func TestNoAPIKeyFound_NamesTheStoreItRead(t *testing.T) {
 	_, blob := isolatedStore(t)
 	srv, _ := noRequestServer(t)
@@ -100,10 +79,6 @@ func TestNoAPIKeyFound_NamesTheStoreItRead(t *testing.T) {
 	}
 }
 
-// TestWhoami_KeySourceNamesTheBackend: a stored key used to be reported as
-// key_source "keychain" whatever held it — on a release macOS binary that is
-// always the file keyring, and the wrong name sent MIO-2995's diagnosis after
-// Keychain ACLs. The flag / env labels are unchanged; agents branch on them.
 func TestWhoami_KeySourceNamesTheBackend(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -156,10 +131,6 @@ func TestWhoami_KeySourceNamesTheBackend(t *testing.T) {
 	})
 }
 
-// TestUnreadableStoredKey_ExitsAuthAndKeepsTheBlob: a blob that does not decode
-// — here the empty file a reader sees while an older mio rewrites it in place —
-// is an unusable credential (exit 3, re-authenticate), and the read must not
-// delete it. Before MIO-2995 this exited 1 with a bare JOSE parse error.
 func TestUnreadableStoredKey_ExitsAuthAndKeepsTheBlob(t *testing.T) {
 	_, blob := isolatedStore(t)
 	if err := config.SetAPIKey("mio_sk_live_about_to_be_unreadable"); err != nil {
@@ -182,10 +153,6 @@ func TestUnreadableStoredKey_ExitsAuthAndKeepsTheBlob(t *testing.T) {
 	}
 }
 
-// seedLegacyStoredKey writes a v0.1 blob at blob, the way a v0.1 install
-// (2026-06-01 .. 06-09) left it: the key encrypted under the passphrase v0.1
-// hardcoded ("mio-cli", published in this repo's history), with no per-install
-// key file beside it. It returns the blob's bytes and identity.
 func seedLegacyStoredKey(t *testing.T, blob string) ([]byte, os.FileInfo) {
 	t.Helper()
 	ring, err := keyring.Open(keyring.Config{
@@ -211,15 +178,6 @@ func seedLegacyStoredKey(t *testing.T, blob string) ([]byte, os.FileInfo) {
 	return data, info
 }
 
-// TestLegacyStoredKey_EveryCommandReportsItAndLeavesItInPlace: every command
-// that reads the stored key — the root key resolution every resource command
-// goes through, `whoami`, and `mio auth token` — reports a v0.1 blob as an
-// unusable credential (exit 3, naming the store and `mio login`) and leaves it
-// where it is, byte for byte (MIO-2995). No read path deletes, moves or
-// renames a stored credential; `mio login` replaces it
-// (TestLogin_ReplacesAnUnusableStoredKey). config's
-// TestLegacyBlob_EveryReadReportsItAndLeavesItInPlace covers the package-level
-// readers.
 func TestLegacyStoredKey_EveryCommandReportsItAndLeavesItInPlace(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -265,10 +223,6 @@ func TestLegacyStoredKey_EveryCommandReportsItAndLeavesItInPlace(t *testing.T) {
 	}
 }
 
-// unusableStoredKeys are the stored blobs every read reports as unusable (exit
-// 3) and leaves in place, so `mio login` and `mio register` must replace them:
-// one that does not decode (the empty file a reader sees while a mio from
-// v0.22.0 or earlier rewrites it in place), and a v0.1 legacy blob.
 var unusableStoredKeys = []struct {
 	name string
 	seed func(t *testing.T, blob string)
@@ -284,11 +238,6 @@ var unusableStoredKeys = []struct {
 	{"legacy blob", func(t *testing.T, blob string) { seedLegacyStoredKey(t, blob) }},
 }
 
-// TestLogin_ReplacesAnUnusableStoredKey: `mio login --email --password` reads
-// the store first, and used to ABORT (exit 1) on a blob that did not decode, so
-// the only way out was deleting the file by hand. It must treat an unusable
-// stored key like no key and overwrite it — a legacy blob included, now that
-// the read leaves one in place instead of deleting it.
 func TestLogin_ReplacesAnUnusableStoredKey(t *testing.T) {
 	token := makeLoginJWT(t, "team_owned")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -328,11 +277,6 @@ func TestLogin_ReplacesAnUnusableStoredKey(t *testing.T) {
 	}
 }
 
-// TestLogin_EnvKeyReplacesABlobItCannotRead pins the way out that `mio auth
-// token --help` documents for a blob the filesystem will not let mio read
-// (permission denied: exit 1, not a verdict on the key). `MIO_API_KEY=<key>
-// mio login` never reads the old blob, so it must write a fresh one over it,
-// back at 0600. (A password login reads the store first and cannot.)
 func TestLogin_EnvKeyReplacesABlobItCannotRead(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs POSIX file modes that bind the current user")
@@ -367,10 +311,6 @@ func TestLogin_EnvKeyReplacesABlobItCannotRead(t *testing.T) {
 	}
 }
 
-// TestRegister_ReplacesAnUnusableStoredKey: `mio register` reads the store
-// before minting, exactly like login, and must likewise treat an unusable
-// stored key — unreadable or legacy — as "no key" and overwrite it instead of
-// aborting with exit 1.
 func TestRegister_ReplacesAnUnusableStoredKey(t *testing.T) {
 	for _, s := range unusableStoredKeys {
 		t.Run(s.name, func(t *testing.T) {
@@ -396,10 +336,6 @@ func TestRegister_ReplacesAnUnusableStoredKey(t *testing.T) {
 	}
 }
 
-// TestAuthToken_PrintsTheStoredKeyAndNothingElse is the headless recovery path:
-// export the key once (authTokenExport), then stop touching the store.
-// stdout is exactly the key and a newline whatever --output says; the key
-// appears nowhere else; and no request is made (it must work offline).
 func TestAuthToken_PrintsTheStoredKeyAndNothingElse(t *testing.T) {
 	isolatedStore(t)
 	const key = "mio_sk_live_exported_once"
@@ -426,9 +362,6 @@ func TestAuthToken_PrintsTheStoredKeyAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestAuthToken_NoStoredKey: exit 3, NOTHING on stdout (so `$(mio auth token)`
-// captures an empty string rather than an error message), and the error names
-// the store it read.
 func TestAuthToken_NoStoredKey(t *testing.T) {
 	_, blob := isolatedStore(t)
 
@@ -444,10 +377,6 @@ func TestAuthToken_NoStoredKey(t *testing.T) {
 	}
 }
 
-// TestAuthToken_ReadsTheStoreNotTheEnvironment: the verb exports what `mio
-// login` stored. A MIO_API_KEY already in the environment is not echoed back
-// (that would make the verb a no-op exactly when a stale key is set); a
-// stderr note says the env var takes precedence, without printing either key.
 func TestAuthToken_ReadsTheStoreNotTheEnvironment(t *testing.T) {
 	isolatedStore(t)
 	const stored, env = "mio_sk_live_in_the_store", "mio_sk_live_in_the_env"
@@ -470,7 +399,6 @@ func TestAuthToken_ReadsTheStoreNotTheEnvironment(t *testing.T) {
 	}
 }
 
-// TestAuthToken_UnreadableStoredKey: exit 3, nothing on stdout, blob kept.
 func TestAuthToken_UnreadableStoredKey(t *testing.T) {
 	_, blob := isolatedStore(t)
 	if err := config.SetAPIKey("mio_sk_live_soon_unreadable"); err != nil {

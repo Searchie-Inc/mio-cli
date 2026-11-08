@@ -14,19 +14,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/version"
 )
 
-// MIO-4178: a skill installed with `mio skills install --project` lives in the
-// project (./.claude/skills/mio/SKILL.md or ./.codex/skills/mio/SKILL.md), and
-// `mio update` only ever refreshed the user-scope copy. QA's project copy sat
-// at 0.14.0 through three updates, its template list stopped at page-faq, and
-// the agent reading it concluded page-sales did not exist. Nothing said the
-// copy was stale; `mio update` even offered to install a skill "available"
-// one directory away from the stale one.
-//
-// Every test here runs in isolateSkillSandbox: HOME, USERPROFILE, CODEX_HOME,
-// XDG_CONFIG_HOME and the working directory are all temp dirs.
-
-// withSkillVersion sets the running CLI's version for one test. The skills
-// install warning compares versions, and a `go test` build is "dev".
 func withSkillVersion(t *testing.T, v string) {
 	t.Helper()
 	old := version.Version
@@ -42,9 +29,6 @@ func seedFile(t *testing.T, path, body string) string {
 	return body
 }
 
-// A managed, unmodified project copy at an older version is refreshed through
-// the same handoff to the NEW binary as the user scope — started in the
-// project root, so its relative ./.<agent> path lands on this file.
 func TestRefreshManagedSkills_RefreshesAStaleProjectCopy(t *testing.T) {
 	for _, target := range []string{"claude", "codex"} {
 		t.Run(target, func(t *testing.T) {
@@ -57,8 +41,6 @@ func TestRefreshManagedSkills_RefreshesAStaleProjectCopy(t *testing.T) {
 				if !loc.project || loc.target != target {
 					return nil
 				}
-				// Stand in for the new binary: `skills install --project` writes
-				// relative to the directory it is started in.
 				return writeSkillFile(projectSkillPath(loc.root, target), renderSkill("9.9.9"))
 			})
 
@@ -89,10 +71,6 @@ func TestRefreshManagedSkills_RefreshesAStaleProjectCopy(t *testing.T) {
 	}
 }
 
-// A hand-edited or unrecognised project copy is never modified. stderr names it
-// with the one command that rewrites THAT file: --project (or it rewrites the
-// user copy), --force (or it refuses), --target (or it acts on claude), run in
-// that project's directory.
 func TestRefreshManagedSkills_NeverTouchesAHandEditedProjectCopy(t *testing.T) {
 	seeds := map[string]func(t *testing.T, path string) string{
 		"managed but edited": func(t *testing.T, path string) string {
@@ -112,7 +90,6 @@ func TestRefreshManagedSkills_NeverTouchesAHandEditedProjectCopy(t *testing.T) {
 				stubRefreshExec(t, func(_ string, loc skillLocation) error {
 					if loc.project {
 						t.Errorf("the new binary must NOT be handed a hand-edited project copy: %+v", loc)
-						// Behave like the real child, which runs with --force.
 						return writeSkillFile(projectSkillPath(loc.root, loc.target), renderSkill("9.9.9"))
 					}
 					return nil
@@ -138,9 +115,6 @@ func TestRefreshManagedSkills_NeverTouchesAHandEditedProjectCopy(t *testing.T) {
 	}
 }
 
-// "A mio CLI agent skill is available — run 'mio skills install'" is false
-// when a project copy exists: following it installs a SECOND, user-level copy
-// and leaves the project one stale, which is exactly QA's state.
 func TestRefreshManagedSkills_NoInstallNudgeWhenOnlyAProjectCopyExists(t *testing.T) {
 	seeds := map[string]func(t *testing.T, path string){
 		"managed, already current": func(t *testing.T, path string) { seedManagedSkill(t, path, "0.23.0") },
@@ -154,7 +128,6 @@ func TestRefreshManagedSkills_NoInstallNudgeWhenOnlyAProjectCopyExists(t *testin
 			t.Run(target+"/"+name, func(t *testing.T) {
 				_, project := isolateSkillSandbox(t)
 				seed(t, projectSkillPath(project, target))
-				// The child succeeds and changes nothing: "already current".
 				stubRefreshExec(t, func(string, skillLocation) error { return nil })
 
 				var stdout, stderr bytes.Buffer
@@ -169,14 +142,11 @@ func TestRefreshManagedSkills_NoInstallNudgeWhenOnlyAProjectCopyExists(t *testin
 	}
 }
 
-// A refresh result is output; a file left alone is a warning. User scope and
-// project scope follow the same rule, so one run never splits its warnings
-// across both streams.
 func TestRefreshManagedSkills_WarningsGoToStderrResultsToStdout(t *testing.T) {
 	home, project := isolateSkillSandbox(t)
 	userClaude := claudeSkillPath(home)
 	seedManagedSkill(t, userClaude, "0.14.0")
-	userCodex := projectSkillPath(home, "codex") // CODEX_HOME is home/.codex
+	userCodex := projectSkillPath(home, "codex")
 	seedFile(t, userCodex, seedManagedSkill(t, userCodex, "0.14.0")+"\nedit\n")
 	projClaude := projectSkillPath(project, "claude")
 	seedFile(t, projClaude, "# mine\n")
@@ -207,9 +177,6 @@ func TestRefreshManagedSkills_WarningsGoToStderrResultsToStdout(t *testing.T) {
 	}
 }
 
-// Run from the home directory, ./.claude IS ~/.claude. That one file must be
-// handled once — not handed off twice, and not reported under two different
-// remediation commands.
 func TestRefreshManagedSkills_ProjectDirThatIsHomeIsHandledOnce(t *testing.T) {
 	for _, edited := range []bool{false, true} {
 		name := map[bool]string{false: "managed", true: "edited"}[edited]
@@ -241,11 +208,6 @@ func TestRefreshManagedSkills_ProjectDirThatIsHomeIsHandledOnce(t *testing.T) {
 	}
 }
 
-// ./.claude can BE ~/.claude without the two paths being spelled alike: run
-// from a symlink to $HOME (or, on Windows, a differently-cased path). The
-// textual comparison in sameSkillFile misses that and only os.SameFile catches
-// it; without it one file is handed off twice, or reported under two
-// remediation commands, one of them a --project one aimed at the user copy.
 func TestRefreshManagedSkills_HomeReachedThroughASymlinkIsHandledOnce(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlinks need privileges on windows, and os.Getwd ignores PWD there")
@@ -258,10 +220,8 @@ func TestRefreshManagedSkills_HomeReachedThroughASymlinkIsHandledOnce(t *testing
 			if err := os.Symlink(home, link); err != nil {
 				t.Skipf("cannot create a symlink here: %v", err)
 			}
-			t.Chdir(link) // sets PWD, which os.Getwd returns unresolved
+			t.Chdir(link)
 			path := claudeSkillPath(home)
-			// Precondition: the project path must be SPELLED through the link,
-			// or this probes the textual comparison instead of the aliasing.
 			if loc, err := skillLocationFor("claude", true); err != nil || loc.path == path {
 				t.Fatalf("precondition: want the project path spelled through %s, got %+v (err %v)", link, loc, err)
 			}
@@ -290,27 +250,17 @@ func TestRefreshManagedSkills_HomeReachedThroughASymlinkIsHandledOnce(t *testing
 	}
 }
 
-// Every line refreshManagedSkills prints goes to ONE stream, chosen by what it
-// says: a skill it refreshed, and the install nudge, are results on out; a
-// skill it did NOT refresh is a warning on errOut. README, llms.txt and
-// `mio update --help` promise the warning half ("a failure or a skipped
-// hand-edited file always prints a line, on stderr"). Each branch is its own
-// Fprintf, so each is probed here, in both scopes, with SEPARATE buffers — the
-// older tests pass one buffer for both writers and cannot tell them apart.
-//
-// Seeded on codex: `--force` alone defaults to claude, so only a codex copy
-// tells a correct `--target <t>` from a hardcoded one.
 func TestRefreshManagedSkills_EveryBranchPrintsOnItsOwnStream(t *testing.T) {
 	const bin = "/opt/mio/bin/mio"
 	type branch struct {
 		name      string
-		needsMode bool                            // relies on mode bits, which root and windows ignore
-		seed      func(t *testing.T, path string) // the one skill file in play
-		newBin    string                          // "" = the updater reported no binary
-		child     func(path string) error         // the stubbed new binary; nil = must not run
-		result    bool                            // a result (stdout), not a warning (stderr)
-		want      []string                        // on the chosen stream
-		notWant   []string                        // on neither stream
+		needsMode bool
+		seed      func(t *testing.T, path string)
+		newBin    string
+		child     func(path string) error
+		result    bool
+		want      []string
+		notWant   []string
 	}
 	managed := func(t *testing.T, path string) { seedManagedSkill(t, path, "0.14.0") }
 	branches := []branch{
@@ -331,8 +281,6 @@ func TestRefreshManagedSkills_EveryBranchPrintsOnItsOwnStream(t *testing.T) {
 		{name: "read-back fails", needsMode: true, seed: managed, newBin: bin,
 			child: func(path string) error { return os.Chmod(path, 0o000) },
 			want:  []string{"could not read it back"}},
-		// Following a --force remediation replaces the file, so the line must
-		// say so — and must not call a file mio never wrote "edited locally".
 		{name: "managed but edited", newBin: bin,
 			seed: func(t *testing.T, path string) { seedFile(t, path, seedManagedSkill(t, path, "0.14.0")+"\nedit\n") },
 			want: []string{"edited locally", "overwrites your edits"}},
@@ -354,7 +302,7 @@ func TestRefreshManagedSkills_EveryBranchPrintsOnItsOwnStream(t *testing.T) {
 					t.Skip("mode 0o000 does not make a file unreadable for root or on windows")
 				}
 				home, project := isolateSkillSandbox(t)
-				path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName) // CODEX_HOME
+				path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
 				label := "Codex"
 				fix := "'mio skills install --force --target codex'"
 				if scope == "project" {
@@ -375,8 +323,6 @@ func TestRefreshManagedSkills_EveryBranchPrintsOnItsOwnStream(t *testing.T) {
 				refreshManagedSkills(&stdout, &stderr, b.newBin)
 
 				chosen, other, chosenName, otherName := &stderr, &stdout, "stderr", "stdout"
-				// A warning names the file as "<label> skill at <path>" plus the one
-				// command that rewrites THAT file; a result as "for <label> at <path>".
 				must := append([]string{label + " skill at " + path, fix}, b.want...)
 				if b.result {
 					chosen, other, chosenName, otherName = &stdout, &stderr, "stdout", "stderr"
@@ -409,9 +355,6 @@ func TestRefreshManagedSkills_EveryBranchPrintsOnItsOwnStream(t *testing.T) {
 	})
 }
 
-// The streams above hold only if `mio update` hands refreshManagedSkills its
-// OWN stdout and stderr. Driven through the real command with separate
-// buffers, once where the refresh runs and once where it cannot.
 func TestUpdateCommand_SkillResultsOnStdoutWarningsOnStderr(t *testing.T) {
 	for _, binaryInstalled := range []bool{true, false} {
 		name := map[bool]string{true: "new binary found", false: "new binary missing"}[binaryInstalled]
@@ -422,7 +365,7 @@ func TestUpdateCommand_SkillResultsOnStdoutWarningsOnStderr(t *testing.T) {
 			t.Cleanup(func() { selfUpdateRunner = oldRunner })
 			selfUpdateRunner = func(_ context.Context, opts updateOptions, _, _ io.Writer) error {
 				if !binaryInstalled {
-					return nil // the installer "succeeded" but wrote no binary
+					return nil
 				}
 				bin := filepath.Join(opts.Prefix, "mio")
 				if runtime.GOOS == "windows" {
@@ -443,7 +386,6 @@ func TestUpdateCommand_SkillResultsOnStdoutWarningsOnStderr(t *testing.T) {
 				t.Fatalf("update: %v", err)
 			}
 
-			// The hand-edited project copy is a warning either way.
 			if !strings.Contains(stderr, projCodex) || !strings.Contains(stderr, "edited locally") {
 				t.Errorf("`mio update` must warn about %s on stderr; stderr=%q", projCodex, stderr)
 			}
@@ -469,19 +411,15 @@ func TestUpdateCommand_SkillResultsOnStdoutWarningsOnStderr(t *testing.T) {
 	}
 }
 
-// `mio skills install` for one scope says so when the OTHER scope holds an
-// older managed copy for the same agent — QA ran `mio skills install` (user
-// scope) and was never told the project copy their agent actually read was
-// nine releases behind.
 func TestSkillsInstall_WarnsAboutAnOlderCopyInTheOtherScope(t *testing.T) {
 	type tc struct {
 		name       string
 		args       []string
 		target     string
-		otherIsPrj bool   // the stale copy is the project one
-		otherVer   string // version stamped on the other copy
-		edited     bool   // the other copy was hand-edited
-		wantCmd    string // "" = no warning expected
+		otherIsPrj bool
+		otherVer   string
+		edited     bool
+		wantCmd    string
 	}
 	cases := []tc{
 		{"user install, stale project copy", []string{"skills", "install"}, "claude", true, "0.14.0", false,
@@ -503,7 +441,7 @@ func TestSkillsInstall_WarnsAboutAnOlderCopyInTheOtherScope(t *testing.T) {
 			withSkillVersion(t, "0.23.0")
 			other := projectSkillPath(project, c.target)
 			if !c.otherIsPrj {
-				other = projectSkillPath(home, c.target) // ~/.claude, or CODEX_HOME=home/.codex
+				other = projectSkillPath(home, c.target)
 			}
 			seedManagedSkill(t, other, c.otherVer)
 			if c.edited {
@@ -511,8 +449,6 @@ func TestSkillsInstall_WarnsAboutAnOlderCopyInTheOtherScope(t *testing.T) {
 			}
 			before := readFile(t, other)
 
-			// Twice: the first run installs, the second is "already up to date".
-			// Both must warn.
 			for run := 1; run <= 2; run++ {
 				stdout, stderr, err := runSkills(t, c.args...)
 				if err != nil {
@@ -549,18 +485,18 @@ func TestSkillVersionOlder(t *testing.T) {
 		want       bool
 	}{
 		{"0.14.0", "0.23.0", true},
-		{"0.9.0", "0.10.0", true}, // numeric, not lexical
+		{"0.9.0", "0.10.0", true},
 		{"0.23.0", "0.23.0", false},
 		{"0.24.0", "0.23.0", false},
 		{"1.0.0", "0.99.99", false},
 		{"v0.14.0", "0.23.0", true},
 		{"0.14.0", "v0.23.0", true},
-		{"0.23.0-rc.1", "0.23.0", true}, // a pre-release precedes its release
+		{"0.23.0-rc.1", "0.23.0", true},
 		{"0.23.0", "0.23.0-rc.1", false},
 		{"0.23.0-rc.1", "0.23.0-rc.2", true},
-		{"0.23.0-rc.9", "0.23.0-rc.10", true}, // identifiers compare numerically
+		{"0.23.0-rc.9", "0.23.0-rc.10", true},
 		{"0.23.0-rc.10", "0.23.0-rc.9", false},
-		{"dev", "0.23.0", false}, // not comparable: never claim "older"
+		{"dev", "0.23.0", false},
 		{"0.14.0", "dev", false},
 		{"", "0.23.0", false},
 		{"0.14", "0.23.0", false},
@@ -572,10 +508,6 @@ func TestSkillVersionOlder(t *testing.T) {
 	}
 }
 
-// The sandbox guard itself: TestMain's skillPathResolved hook must refuse a
-// skill path outside the temp root or inside the checkout, and must stay quiet
-// inside isolateSkillSandbox. Deliberately NOT sandboxed until the last case —
-// resolving a path touches nothing, and the panic fires before any caller can.
 func TestSkillPathGuard_RefusesARealLocation(t *testing.T) {
 	expectPanic := func(t *testing.T, target string, project bool) {
 		t.Helper()

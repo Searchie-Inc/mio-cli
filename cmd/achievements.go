@@ -1,104 +1,5 @@
 package cmd
 
-// achievements.go implements the `mio achievements` command group — the
-// team-scoped ADMIN surface of the achievements module (MIO-3054 Phase 1,
-// CLI parity MIO-3412).
-//
-// Routes (mio-backend app/achievements/admin_router.py, prefix
-// /api/teams/{team_id}):
-//
-//	create           POST    /achievements
-//	list             GET     /achievements
-//	retrieve         GET     /achievements/{id}
-//	update           PATCH   /achievements/{id}
-//	archive          DELETE  /achievements/{id}                                   (204)
-//	offerings list   GET     /hubs/{hub_id}/achievements
-//	offerings attach POST    /hubs/{hub_id}/achievements
-//	offerings detach DELETE  /hubs/{hub_id}/achievements/{achievement_id}         (204)
-//	rule set         PUT     /hubs/{hub_id}/achievements/{achievement_id}/rule    (200 preview meta-only / 200 recompile / 201 new bind)
-//	rule delete      DELETE  /hubs/{hub_id}/achievements/{achievement_id}/rule    (204)
-//	grant            POST    /hubs/{hub_id}/members/{contact_id}/achievements     (201 new / 200 repeat)
-//	revoke           DELETE  /hubs/{hub_id}/members/{contact_id}/achievements/{achievement_id}  (204; ?reason= query)
-//	restore          POST    /hubs/{hub_id}/members/{contact_id}/achievements/{achievement_id}/restore
-//	override         POST    /hubs/{hub_id}/members/{contact_id}/achievements/{achievement_id}/override  (201 new / 200 repeat)
-//
-// RULE (MIO-3372/MIO-3662): a badge does not award anyone until its rule is
-// compiled AND persisted via "rule set --confirm" — creating the definition
-// (award_mode "rule") and attaching it to a hub via "offerings attach" are
-// both necessary but NOT sufficient. There is deliberately no team-scoped
-// variant of PUT/DELETE .../rule; it is hub-scoped only and 404s otherwise.
-// "rule set" without --confirm PREVIEWS ONLY (nothing persisted, response is
-// meta-only: meta.preview_count / meta.preview_count_is_lower_bound) —
-// --confirm is what actually persists the rule and its compiled segment.
-// PUT/DELETE .../rule additionally require the backend's OWN
-// ACHIEVEMENTS_RULES_ENABLED kill switch (assert_achievement_rules_enabled,
-// app/achievements/feature_flag.py) on top of the two SPLIT gates below — a
-// third, independent flag collapsing into the SAME generic 404.
-//
-// OVERRIDE (MIO-3376 2a-7/MIO-3662): the deterministic, synchronous way to
-// prove a "rule" badge actually awards — the automatic engine (SegmentJoined
-// fast path / backfill worker / sweeper) is background-only and has no HTTP
-// route to trigger, so QA/support has no other CLI-reachable way to force a
-// specific award. override is the mirror image of grant: grant requires
-// award_mode="manual" (422s achievement_award_mode_invalid on "rule"),
-// override requires award_mode="rule" (422s the same code on "manual") AND a
-// rule already bound via "rule set --confirm" (404 achievement_rule_not_found
-// otherwise). --reason is REQUIRED here (AuditReason, min_length=1 after
-// whitespace-strip) — unlike grant/revoke/restore's optional --reason.
-//
-// AUTH: every route above requires the TEAM principal (require_team_owner on
-// the backend) — a plain team API key works, so this group uses the standard
-// newContext + requireAuth + requireTeam boilerplate. The MEMBER-facing reads
-// (/api/hubs/{hub_id}/achievements etc., app/achievements/router.py) require a
-// contact identity instead and are deliberately NOT covered here — same
-// boundary as `mio events` (MIO-3173), see that file's package doc comment.
-//
-// FEATURE GATES — the gate model is SPLIT (app/achievements/feature_flag.py):
-// the team-scoped DEFINITION routes (create/list/retrieve/update/archive) are
-// gated on the global ACHIEVEMENTS_ENABLED setting ONLY — they have no hub in
-// the path and never read the per-hub flag. The hub-scoped OFFERING and EARN
-// routes additionally require the per-hub
-// `hub.settings.achievements.enabled is True` flag. A closed gate 404s with
-// one generic message (deliberately indistinguishable from a missing hub), so
-// `mio achievements *` exits 4 — that is the backend's answer, not a CLI
-// defect. The per-hub flag is set with:
-//
-//	mio hubs update <hub> --settings-json '{"achievements":{"enabled":true}}'
-//
-// (`achievements` is on the API's settings allowlist, and the CLI checks its
-// sub-keys — see hubs_blob_keys.go; the merge is read-modify-write so sibling
-// settings survive.)
-//
-// JSON:API write envelope types (app/achievements/schemas.py Literals):
-// definitions self-derive "achievements" from the path; the hub-offering and
-// earn writes need the typeOverrides entries {"hubs/achievements":
-// "achievement_hubs"} and {"members/achievements": "achievement_earns"} in
-// internal/client/client.go, plus "achievements" in knownCollections. The
-// restore path (.../achievements/{id}/restore) resolves through the SAME
-// members/achievements override because "restore" is deliberately not a known
-// collection token (the transcript/revert precedent), and override
-// (.../achievements/{id}/override) resolves the SAME way for the SAME
-// reason — verified, not assumed, by a dedicated TestResourceTypeFromPath
-// case, since a missing knownCollections entry misresolves SILENTLY (proven
-// by the "rule" token below, which does need one). PUT/DELETE .../rule needs
-// its OWN entry, {"achievements/rule": "achievement_rules"} plus "rule" in
-// knownCollections — without "rule" as a token the tail silently misresolves
-// through the hubs/achievements override instead (see
-// internal/client/client_test.go TestResourceTypeFromPath).
-//
-// revoke's optional reason travels as a QUERY parameter (?reason=…, backend
-// alias for revoke_reason) on a body-less DELETE — client.DeleteWithQuery.
-// restore's envelope is REQUIRED by the backend even when restore_reason is
-// omitted, so the CLI always sends a non-nil (possibly empty) attributes map.
-//
-// rule set's confirm=false response is META-ONLY (no `data` member — see
-// AchievementRulePreviewResponse), so it is decoded with client.ActionRaw,
-// not the ordinary resource decoder (same class as automations
-// fire-event/test, MIO-2503/MIO-2554: the resource decoder errors "response
-// had no `data` member" on every successful preview). confirm=true responses
-// DO carry `data` (a full achievement_rules resource, 201 new bind / 200
-// recompile) and go through the ordinary client.Action + c.render path.
-
 import (
 	"fmt"
 	"net/url"
@@ -111,7 +12,6 @@ import (
 )
 
 func init() {
-	// achievements <action>
 	achievementsCmd.AddCommand(
 		achievementsCreateCmd,
 		achievementsListCmd,
@@ -124,7 +24,6 @@ func init() {
 		achievementsOverrideCmd,
 	)
 
-	// achievements offerings <action>  (which achievements a hub offers)
 	achievementsOfferingsCmd.AddCommand(
 		achievementsOfferingsListCmd,
 		achievementsOfferingsAttachCmd,
@@ -132,18 +31,14 @@ func init() {
 	)
 	achievementsCmd.AddCommand(achievementsOfferingsCmd)
 
-	// achievements rule <action>  (compile/bind/preview and unbind a hub's rule)
 	achievementsRuleCmd.AddCommand(
 		achievementsRuleSetCmd,
 		achievementsRuleDeleteCmd,
 	)
 	achievementsCmd.AddCommand(achievementsRuleCmd)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(achievementsCmd)
 }
-
-// ---- achievements group -----------------------------------------------------
 
 var achievementsCmd = &cobra.Command{
 	Use:   "achievements",
@@ -167,7 +62,6 @@ Definitions are team-scoped; offerings and awards are additionally hub-scoped
   mio achievements grant ach_abc123 --hub hub_123 --contact-id ct_456`,
 }
 
-// achievementsPath returns /api/teams/{team_id}/achievements[/{id}].
 func achievementsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/achievements", teamID)
 	if id != "" {
@@ -176,8 +70,6 @@ func achievementsPath(teamID, id string) string {
 	return base
 }
 
-// achievementsOfferingsPath returns
-// /api/teams/{team_id}/hubs/{hub_id}/achievements[/{achievement_id}].
 func achievementsOfferingsPath(teamID, hubID, achievementID string) string {
 	base := fmt.Sprintf("/api/teams/%s/hubs/%s/achievements", teamID, hubID)
 	if achievementID != "" {
@@ -186,18 +78,10 @@ func achievementsOfferingsPath(teamID, hubID, achievementID string) string {
 	return base
 }
 
-// achievementsRulePath returns
-// /api/teams/{team_id}/hubs/{hub_id}/achievements/{achievement_id}/rule —
-// ALWAYS hub-scoped (there is no team-scoped variant; it 404s). Built on top
-// of achievementsOfferingsPath so the hub scoping is correct by construction,
-// not by convention (MIO-3662: the gap this command closes was found because
-// a hand-rolled request hit the team-scoped shape instead).
 func achievementsRulePath(teamID, hubID, achievementID string) string {
 	return achievementsOfferingsPath(teamID, hubID, achievementID) + "/rule"
 }
 
-// achievementsEarnPath returns
-// /api/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/achievements[/{achievement_id}].
 func achievementsEarnPath(teamID, hubID, contactID, achievementID string) string {
 	base := fmt.Sprintf("/api/teams/%s/hubs/%s/members/%s/achievements", teamID, hubID, contactID)
 	if achievementID != "" {
@@ -206,8 +90,6 @@ func achievementsEarnPath(teamID, hubID, contactID, achievementID string) string
 	return base
 }
 
-// achievementsContext is the shared boilerplate for team-scoped achievements
-// sub-commands: context, auth, team.
 func achievementsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -223,8 +105,6 @@ func achievementsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	return c, teamID, nil
 }
 
-// achievementsHubContext additionally resolves the hub scope (offerings and
-// earn verbs).
 func achievementsHubContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	c, teamID, err := achievementsContext(cmd)
 	if err != nil {
@@ -236,23 +116,6 @@ func achievementsHubContext(cmd *cobra.Command) (*cmdContext, string, string, er
 	}
 	return c, teamID, hubID, nil
 }
-
-// Earn-verb error hints — STATUS-KEYED and verb-aware, because the backend's
-// answer shapes differ per verb and a wrong contact id NEVER produces a 404
-// (verified against app/achievements/{admin_router,service}.py, and flagged
-// by the blind review on PR #109 — the earlier 404-only contact-id hint had
-// zero recall):
-//
-//	wrong contact id on grant   → 422 achievement_membership_required
-//	wrong contact id on revoke  → 204 (idempotent no-op — success!)
-//	wrong contact id on restore → 409 achievement_not_revoked ("No earn exists")
-//
-// The 404 hint therefore names only the causes a 404 CAN have (gates,
-// achievement, hub containment) and explicitly says the contact id is not
-// among them; the namespace guidance rides the grant 422 and restore 409
-// instead, and revoke's success message carries its own idempotency
-// disclosure. Hints key off errs.HTTPStatusOf — the transport status — never
-// off backend message strings.
 
 const achievementsEarn404Hint = "this 404 is ambiguous by design; it can mean " +
 	"(a) the achievements feature is off — the global ACHIEVEMENTS_ENABLED " +
@@ -276,12 +139,6 @@ const achievementsRestore409Hint = "if this 409 says no earn exists and you beli
 	"produces exactly that symptom (" + achievementsContactCapture + "). " +
 	"If the earn exists but is not currently revoked, there is nothing to restore"
 
-// hintAchievementsEarnErr appends the status-appropriate hint above to an
-// earn-verb error, preserving the transport status (and therefore the exit
-// code). verb is "grant", "revoke" or "restore". Any other error (or nil)
-// passes through untouched. The hint wraps err (%w), so the API's error
-// document — code, title, meta.request_id — stays in the chain for the stderr
-// envelope (MIO-3912).
 func hintAchievementsEarnErr(verb string, err error) error {
 	if err == nil {
 		return err
@@ -305,9 +162,6 @@ func hintAchievementsEarnErr(verb string, err error) error {
 	return errs.NewHTTP(errs.HTTPStatusOf(err), "%w\nhint: %s", err, hint)
 }
 
-// requireContactID reads the required --contact-id flag for the earn verbs.
-// Its presence is enforced by cobra (markFlagsRequired in init); an empty value
-// is rejected here.
 func requireContactID(cmd *cobra.Command) (string, error) {
 	v, err := cmd.Flags().GetString("contact-id")
 	if err != nil {
@@ -319,16 +173,7 @@ func requireContactID(cmd *cobra.Command) (string, error) {
 	return v, nil
 }
 
-// requireOverrideReason reads the required --reason flag for 'override'.
-// Unlike grant/revoke/restore's optional --reason, override's is REQUIRED
-// and audited (AchievementOverrideAttributes.reason: AuditReason) — the
-// backend 422s a missing, empty, OR whitespace-only value (AuditReason strips
-// whitespace before its min_length=1 check runs). Validating the blank case
-// client-side is worth it here specifically because the server's rule is
-// unambiguous: there is no reading of "   " that the backend would ever
-// accept, so rejecting it locally saves a guaranteed round trip.
 func requireOverrideReason(cmd *cobra.Command) (string, error) {
-	// Presence is enforced by cobra (markFlagsRequired in init).
 	v, err := cmd.Flags().GetString("reason")
 	if err != nil {
 		return "", errs.Wrap(errs.ExitGeneric, err)
@@ -339,11 +184,6 @@ func requireOverrideReason(cmd *cobra.Command) (string, error) {
 	return v, nil
 }
 
-// applyGrantAwardReason sets attrs["award_reason"] for grant, iff --reason was
-// given. The backend request schema types award_reason as Literal["manual"]
-// (MIO-3488) and 422s ("Input should be manual") on anything else, so a
-// non-"manual" value is rejected here before any request is sent rather than
-// forwarded to a guaranteed 422.
 func applyGrantAwardReason(cmd *cobra.Command, attrs map[string]any) error {
 	if !cmd.Flags().Changed("reason") {
 		return nil
@@ -359,33 +199,6 @@ func applyGrantAwardReason(cmd *cobra.Command, attrs map[string]any) error {
 	return nil
 }
 
-// achievementsScalarFlags is the SINGLE vocabulary of create/update flags
-// whose wire attribute key is plain attrKey(name) (kebab -> snake, e.g.
-// --award-mode -> award_mode) and whose value, when the operator sets it, is
-// copied through unchanged by one of the set*Flag helpers (flags.go).
-//
-// This table drives BOTH directions: setAchievementAttrs walks it to copy a
-// VALUE when the flag is set, and achievementsClearAttrKey (--clear,
-// update-only — MIO-3685) walks the SAME table to validate a field name and
-// resolve its wire key when NULLING it instead. A flag added here is
-// therefore automatically both settable and clearable, with no second,
-// independently maintained list for --clear to fall out of sync with.
-//
-// rule-type/rule-criteria (MIO-3372/MIO-3662): the backend's write schemas
-// type these as plain strings, NOT an OpenAPI enum (schemas.py: "Plain
-// strings/ints, no OpenAPI enum ... mirrors category's STATED CONTRACT
-// precedent"). The CLI does not hard-validate them client-side either — the
-// currently-accepted values are named in the flag help as information, not
-// as a client-enforced closed list; app/achievements/rules.py
-// (validate_rule_pieces) is the actual authority and 422s precisely.
-//
-// --rule-content-node-ids (list-valued — see achievementsClearableExtraFlags
-// below) and --appearance-json (wire key "appearance", NOT
-// attrKey("appearance-json") == "appearance_json" — a whole-object
-// passthrough, not a scalar) do not fit this table's plain copy-through
-// shape and are handled in their own blocks in setAchievementAttrs; the
-// latter is therefore also NOT a --clear target (see
-// achievementsClearAttrKey).
 var achievementsScalarFlags = []struct {
 	name string
 	set  func(cmd *cobra.Command, attrs map[string]any, name string)
@@ -404,24 +217,8 @@ var achievementsScalarFlags = []struct {
 	{"email-notification-enabled", setBoolFlag},
 }
 
-// achievementsClearableExtraFlags are --clear targets that are NOT in
-// achievementsScalarFlags because setAchievementAttrs reads their VALUE a
-// different way (rule-content-node-ids is list-valued, read explicitly
-// below), but whose wire attribute key is still plain attrKey(name) — so
-// --clear can null them by the same rule as everything in the table above.
 var achievementsClearableExtraFlags = []string{"rule-content-node-ids"}
 
-// achievementsClearAttrKey resolves a --clear field name (as the operator
-// typed it, e.g. "rule-type") to its wire attribute key ("rule_type"), or
-// ok=false when --clear does not recognize that name. It is the ONLY place
-// --clear's field vocabulary is decided, and that vocabulary is exactly
-// achievementsScalarFlags plus achievementsClearableExtraFlags — the same
-// names setAchievementAttrs already knows how to copy a value for. This
-// deliberately does not know or care which of these fields the BACKEND
-// considers nullable: that is app/achievements/schemas.py's call, not the
-// CLI's, and it 422s precisely (rule_pieces_not_allowed and friends) when a
-// null is one it won't accept. The check here catches a typo in the CLI's
-// OWN flag vocabulary before any request fires — a different, narrower job.
 func achievementsClearAttrKey(name string) (string, bool) {
 	for _, f := range achievementsScalarFlags {
 		if f.name == name {
@@ -436,17 +233,6 @@ func achievementsClearAttrKey(name string) (string, bool) {
 	return "", false
 }
 
-// achievementsParseClearFlag validates update's repeatable --clear flag and
-// returns the wire attribute keys to null, or nil if --clear was not given.
-// Everything here runs BEFORE any request fires (ExitUsage on failure, no
-// partial validation left to the server) — mirrors hubs.go's --unset
-// (parseUnsetFlag): repeatable AND comma-separated, blank entries rejected.
-//
-// Two things are usage errors specific to --clear:
-//   - an unknown field name (typo) — see achievementsClearAttrKey;
-//   - a field that is BOTH set (--<field> <value>) and cleared (--clear
-//     <field>) in the same invocation — ambiguous intent, not resolved by
-//     picking a "last flag wins" order.
 func achievementsParseClearFlag(cmd *cobra.Command) ([]string, error) {
 	if !cmd.Flags().Changed("clear") {
 		return nil, nil
@@ -483,26 +269,6 @@ func achievementsParseClearFlag(cmd *cobra.Command) ([]string, error) {
 	return wireKeys, nil
 }
 
-// setAchievementAttrs copies every changed create/update flag into attrs. Only
-// flags the user actually set are copied (the set*Flag helpers no-op on an
-// unset flag), so a PATCH stays a partial update and no field is ever sent as
-// an explicit null — UNLESS the operator named it with --clear (update only;
-// achievementsParseClearFlag), which is the one deliberate exception: that
-// flag's entire purpose is to send an explicit null. --appearance-json is
-// forwarded WHOLESALE as the `appearance` object — the backend validates
-// shape/icon/colors strictly (extra=forbid), and the CLI is a conduit, not a
-// second validator.
-//
-// --rule-content-node-ids is the one rule-piece flag that isn't a plain
-// setIntFlag/setStringFlag copy: it needs the slice read explicitly so a
-// blank entry can be rejected before it silently ships a SHORTER list than
-// the caller named (same shape as content.go's --playlist-id, MIO-3074). The
-// mutual exclusivity between --rule-content-node-ids and --rule-threshold,
-// and the count/duplicate checks, are deliberately NOT re-validated here —
-// app/achievements/rules.py::validate_rule_pieces is the single source of
-// truth for that combination and already 422s each violation precisely
-// (rule_threshold_conflicts_with_content_ids, rule_content_node_ids_invalid);
-// duplicating it here would just drift.
 func setAchievementAttrs(cmd *cobra.Command, attrs map[string]any) error {
 	for _, f := range achievementsScalarFlags {
 		f.set(cmd, attrs, f.name)
@@ -522,9 +288,6 @@ func setAchievementAttrs(cmd *cobra.Command, attrs map[string]any) error {
 			}
 			cleaned = append(cleaned, id)
 		}
-		// A real []string, NOT a joined string — it must serialize as a JSON
-		// array on the wire (the backend reads rule_content_node_ids as
-		// list[str]; a comma-joined string would be one bad id, not a list).
 		attrs["rule_content_node_ids"] = cleaned
 	}
 
@@ -545,8 +308,6 @@ func setAchievementAttrs(cmd *cobra.Command, attrs map[string]any) error {
 	}
 	return nil
 }
-
-// ---- create -----------------------------------------------------------------
 
 var achievementsCreateCmd = &cobra.Command{
 	Use:   "create",
@@ -579,9 +340,6 @@ the badge still does not award anyone until 'mio achievements rule set
 			return err
 		}
 
-		// --title is the only backend-required create attribute; cobra
-		// enforces it before RunE (markFlagsRequired in init).
-
 		attrs := map[string]any{}
 		if err := setAchievementAttrs(cmd, attrs); err != nil {
 			return err
@@ -594,8 +352,6 @@ the badge still does not award anyone until 'mio achievements rule set
 		return c.render(cmd, res)
 	},
 }
-
-// ---- list -------------------------------------------------------------------
 
 var achievementsListCmd = &cobra.Command{
 	Use:   "list",
@@ -632,8 +388,6 @@ filter[category]); values are forwarded verbatim.`,
 	},
 }
 
-// ---- retrieve ---------------------------------------------------------------
-
 var achievementsRetrieveCmd = &cobra.Command{
 	Use:     "retrieve <id>",
 	Short:   "Retrieve an achievement definition by id.",
@@ -653,8 +407,6 @@ var achievementsRetrieveCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- update -----------------------------------------------------------------
 
 var achievementsUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
@@ -710,19 +462,6 @@ a usage error.`,
 	},
 }
 
-// achievementsUpdateRulePiecesHint fires on the backend's
-// rule_pieces_not_allowed 422 (app/achievements/schemas.py) — the exact dead
-// end MIO-3685 exists to fix: flipping award_mode away from "rule" while the
-// badge still carries any rule piece. See hintAchievementsUpdateErr for why
-// this is keyed on the error CODE rather than the bare HTTP status.
-//
-// The backend hardcodes this error's source.pointer to
-// /data/attributes/rule_type regardless of which piece is actually left
-// over (a known, pre-existing backend quirk this CLI does not fix), so on a
-// PARTIAL clear the pointer can name a field the operator already cleared
-// successfully. This hint deliberately never echoes that pointer and instead
-// names the whole rule-piece set, so it stays correct no matter which field
-// the pointer blames.
 const achievementsUpdateRulePiecesHint = "a badge can't move away from award_mode \"rule\" while it " +
 	"still carries any rule piece. Clear every rule piece it currently has in the SAME command with " +
 	"the repeatable --clear flag, e.g.: --award-mode manual --clear rule-type --clear rule-criteria " +
@@ -731,25 +470,12 @@ const achievementsUpdateRulePiecesHint = "a badge can't move away from award_mod
 	"of which piece is actually left over — that pointer is not reliable here, so clear every rule " +
 	"piece the badge has, not just the one it names"
 
-// hintAchievementsUpdateErr appends achievementsUpdateRulePiecesHint to an
-// update error carrying the rule_pieces_not_allowed JSON:API error code,
-// preserving the transport status (and therefore the exit code). Keyed on
-// the CODE via client.HasAPIErrorCode rather than the bare HTTP status
-// (unlike hintAchievementsEarnErr's grant/revoke/restore hints): update's
-// 422 can come from several unrelated validation failures
-// (validate_rule_pieces alone raises more than this one code), and only
-// rule_pieces_not_allowed has this fix. Any other error (or nil) passes
-// through untouched. The hint wraps err (%w) so the code it is keyed on — and
-// the rest of the API's error document — still reaches the stderr envelope
-// (MIO-3912).
 func hintAchievementsUpdateErr(err error) error {
 	if err == nil || !client.HasAPIErrorCode(err, "rule_pieces_not_allowed") {
 		return err
 	}
 	return errs.NewHTTP(errs.HTTPStatusOf(err), "%w\nhint: %s", err, achievementsUpdateRulePiecesHint)
 }
-
-// ---- archive ----------------------------------------------------------------
 
 var achievementsArchiveCmd = &cobra.Command{
 	Use:   "archive <id>",
@@ -778,8 +504,6 @@ the command exits 5 before it changes anything.`,
 		return nil
 	},
 }
-
-// ---- offerings sub-resource (which achievements a hub offers) ---------------
 
 var achievementsOfferingsCmd = &cobra.Command{
 	Use:   "offerings",
@@ -861,8 +585,6 @@ there; the definition itself and any existing earns are unaffected.
 	},
 }
 
-// ---- rule sub-resource (compile / bind / preview / unbind, MIO-3372/MIO-3662) ----
-
 var achievementsRuleCmd = &cobra.Command{
 	Use:   "rule",
 	Short: "Compile, persist, and unbind an achievement's award rule.",
@@ -924,11 +646,6 @@ notifications. Default false: they earn the badge silently.`,
 			return errs.Wrap(errs.ExitGeneric, ferr)
 		}
 
-		// confirm/notify_on_backfill are ALWAYS sent explicitly, unlike the
-		// Changed()-gated partial-update flags elsewhere in this file: this PUT
-		// is a control call, not a partial patch, and the whole point of the
-		// safe default is that it must be unmissable on the wire — not merely
-		// relied on as a server-side default the CLI happens to agree with.
 		attrs := map[string]any{
 			"confirm":            confirm,
 			"notify_on_backfill": notifyOnBackfill,
@@ -937,9 +654,6 @@ notifications. Default false: they earn the badge silently.`,
 		path := achievementsRulePath(teamID, hubID, args[0])
 
 		if !confirm {
-			// confirm=false is a META-ONLY response (no `data` member) — see the
-			// package doc comment for why this goes through ActionRaw rather
-			// than the ordinary resource decode.
 			raw, rerr := c.client.ActionRaw(c.ctx, client.StyleEnvelope, "PUT", path, attrs)
 			if rerr != nil {
 				return rerr
@@ -947,9 +661,6 @@ notifications. Default false: they earn the badge silently.`,
 			return printAchievementRulePreview(cmd, args[0], hubID, raw)
 		}
 
-		// confirm=true: 201 on a new bind, 200 on a re-PUT recompile — both
-		// carry a full achievement_rules resource, so the ordinary resource
-		// decode applies regardless of which status came back.
 		res, aerr := c.client.Action(c.ctx, "PUT", path, attrs)
 		if aerr != nil {
 			return aerr
@@ -962,21 +673,12 @@ notifications. Default false: they earn the badge silently.`,
 	},
 }
 
-// printAchievementRulePreview renders a confirm=false PUT .../rule response
-// in plain words rather than dumping the raw meta object. The operator's
-// actual question is "how many members would this award right now?", and the
-// answer must say, unmissably, that nothing was persisted and how to change
-// that — the whole reason this command exists is that a preview silently
-// read as a completed bind once already (MIO-3662).
 func printAchievementRulePreview(cmd *cobra.Command, achievementID, hubID string, raw map[string]any) error {
 	meta, _ := raw["meta"].(map[string]any)
 	count, isLowerBound := achievementRulePreviewCount(meta)
 
 	countPhrase := fmt.Sprintf("%d", count)
 	if isLowerBound {
-		// preview_count_is_lower_bound=true means the true count is AT LEAST
-		// this many (the estimate is capped) — printing it as exact would
-		// misrepresent an estimate as a precise figure.
 		countPhrase = fmt.Sprintf("at least %d", count)
 	}
 
@@ -987,12 +689,6 @@ func printAchievementRulePreview(cmd *cobra.Command, achievementID, hubID string
 	return nil
 }
 
-// achievementRulePreviewCount extracts meta.preview_count and
-// meta.preview_count_is_lower_bound from a confirm=false PUT .../rule
-// response (AchievementRulePreviewMeta). JSON numbers decode as float64 in a
-// map[string]any, hence the explicit conversion. A missing/malformed field
-// defaults to zero/false rather than erroring the whole preview out — the
-// count is informational, not something a partial decode should hard-fail.
 func achievementRulePreviewCount(meta map[string]any) (count int, isLowerBound bool) {
 	if v, ok := meta["preview_count"].(float64); ok {
 		count = int(v)
@@ -1037,8 +733,6 @@ Hub-scoped: --hub is required (or a configured current_hub).
 		return nil
 	},
 }
-
-// ---- grant / revoke / restore (manual earns) --------------------------------
 
 var achievementsGrantCmd = &cobra.Command{
 	Use:   "grant <achievement_id>",
@@ -1118,10 +812,6 @@ Reversible via 'mio achievements restore'.
 		if err := c.client.DeleteWithQuery(c.ctx, achievementsEarnPath(teamID, hubID, contactID, args[0]), query); err != nil {
 			return hintAchievementsEarnErr("revoke", err)
 		}
-		// 204 is idempotent server-side: a nonexistent earn — including a
-		// contact id in the wrong namespace — answers the same 204 as a real
-		// revoke, so this message must not claim an earn was revoked (blind
-		// review, PR #109).
 		fmt.Fprintf(cmd.OutOrStdout(),
 			"Revoke accepted for achievement %s, contact %s. Note: the API is idempotent — "+
 				"204 does not confirm a live earn existed (a nonexistent earn, an already-revoked "+
@@ -1150,10 +840,6 @@ an accidental revoke. Restoring an earn that is not revoked is a 409.
 			return err
 		}
 
-		// The backend REQUIRES the JSON:API envelope on restore even when
-		// restore_reason is omitted (AchievementRestoreEnvelope is a required
-		// body param), so attrs must be non-nil — a nil body would send no
-		// envelope at all and 422.
 		attrs := map[string]any{}
 		setMappedString(cmd, attrs, "reason", "restore_reason")
 
@@ -1212,13 +898,6 @@ rejected before any request is sent.`,
 
 		attrs := map[string]any{"reason": reason}
 
-		// Deliberately NOT routed through hintAchievementsEarnErr: that hint
-		// set is scoped to grant/revoke/restore (see its own doc comment) and
-		// its 404 text does not mention achievement_rule_not_found — reusing
-		// it here would attach a hint that is wrong for override's most
-		// interesting 404 case. The Long help above covers all three of
-		// override's distinguishing failure modes (wrong award_mode, no
-		// bound rule, already-revoked) instead.
 		path := achievementsEarnPath(teamID, hubID, contactID, args[0]) + "/override"
 		res, err := c.client.Action(c.ctx, "POST", path, attrs)
 		if err != nil {
@@ -1228,17 +907,10 @@ rejected before any request is sent.`,
 	},
 }
 
-// ---- flag registration -------------------------------------------------------
-
 func init() {
-	// Attribute flags for create/update.
 	for _, cmd := range []*cobra.Command{achievementsCreateCmd, achievementsUpdateCmd} {
 		cmd.Flags().String("title", "", "Badge title.")
 		cmd.Flags().String("description", "", "Badge description.")
-		// Rule mode has been live in production for every hub since MIO-3372 —
-		// this help used to say "Phase 1 grants require: manual", which is now
-		// stale and actively misleading to someone trying to build a rule
-		// badge (MIO-3662).
 		cmd.Flags().String("award-mode", "", "How the badge is awarded: \"manual\" (grant/revoke/restore only — see 'mio achievements grant') or \"rule\" (auto-awarded once its rule is compiled). A \"rule\" badge additionally needs the --rule-* flags below AND 'mio achievements rule set --confirm' per hub offering before it can award anyone — see 'mio achievements rule --help'.")
 		cmd.Flags().String("category", "", "Free-form category label.")
 		cmd.Flags().Int("points", 0, "Points awarded with the badge (>= 0).")
@@ -1247,10 +919,6 @@ func init() {
 		cmd.Flags().Bool("email-notification-enabled", true, "Email the member when the badge is earned.")
 		cmd.Flags().String("appearance-json", "", "Badge appearance as a JSON object (inline or @file): shape, icon, emoji, text, image_src, color, fill_color, content_color.")
 
-		// Rule pieces (MIO-3372/MIO-3662): only meaningful when
-		// --award-mode=rule (a manual badge must carry none of them — the
-		// backend 422s rule_pieces_not_allowed otherwise; the CLI does not
-		// duplicate that check, the 422 already names it precisely).
 		cmd.Flags().String("rule-type", "", "Rule category, required for --award-mode=rule. Currently accepted by the backend: milestone (other recognized-but-not-yet-available values 422 with rule_type_not_available: challenge, streak, community). The backend is authoritative and carries no OpenAPI enum for this field — this list is informational, not enforced by the CLI, and can change.")
 		cmd.Flags().String("rule-criteria", "", "What the rule measures, scoped by --rule-type. Currently accepted for rule-type=milestone: completed-content, time-since-joining, number-of-searches, unique-logins. Informational only, same caveat as --rule-type — not enforced by the CLI.")
 		cmd.Flags().Int("rule-threshold", 0, "How many times/units of --rule-criteria must be met (>= 1). Required for a milestone rule UNLESS --rule-content-node-ids is set — the two are MUTUALLY EXCLUSIVE (a content-scoped rule always means \"complete every picked item\"); sending both 422s server-side (rule_threshold_conflicts_with_content_ids), the CLI does not block it client-side.")
@@ -1259,25 +927,16 @@ func init() {
 	}
 	markFlagsRequired(achievementsCreateCmd, "title")
 
-	// --clear (MIO-3685, update only): the general null-clearing mechanism —
-	// see achievementsScalarFlags/achievementsClearAttrKey for how its
-	// vocabulary is derived so it can't drift from what setAchievementAttrs
-	// already knows how to set.
 	achievementsUpdateCmd.Flags().StringArray("clear", nil, "Null out a field instead of setting it, e.g. --clear rule-type. Repeatable and comma-separated. Valid targets: title, description, award-mode, category, rule-type, rule-criteria, points, rule-threshold, rule-window-days, is-secret, is-active, email-notification-enabled, rule-content-node-ids. Setting a field with --<field> and clearing it with --clear in the same command is a usage error. This only validates that the name is one the CLI knows how to null — whether the backend actually accepts null for a given field is its own call (it 422s the ones it won't accept, e.g. rule_pieces_not_allowed until every rule piece is cleared).")
 
-	// Pagination + filters on the lists.
 	addPaginationFlags(achievementsListCmd)
 	achievementsListCmd.Flags().String("award-mode", "", "Filter by award mode (filter[award_mode]).")
 	achievementsListCmd.Flags().String("category", "", "Filter by category (filter[category]).")
 	addPaginationFlags(achievementsOfferingsListCmd)
 
-	// Rule set: confirm (persist vs preview) + notify-on-backfill.
 	achievementsRuleSetCmd.Flags().Bool("confirm", false, "Persist the compiled rule and its segment. Without this flag the call PREVIEWS ONLY — nothing is saved (default).")
 	achievementsRuleSetCmd.Flags().Bool("notify-on-backfill", false, "Send award notifications to the pre-existing qualifying (\"backfill\") cohort when persisting. Default false: they earn the badge silently.")
 
-	// Earn verbs: contact scope + a per-verb reason (the four backends treat
-	// it differently, so the help must not share one claim — Jay-r review,
-	// PR #109).
 	for _, cmd := range []*cobra.Command{achievementsGrantCmd, achievementsRevokeCmd, achievementsRestoreCmd, achievementsOverrideCmd} {
 		cmd.Flags().String("contact-id", "", "GLOBAL contact id of the hub member — capture with `mio contacts retrieve <team-contact-id> -o plain --jq .contact_id` (the flattened contact_id field, NOT the row's .id). Required.")
 		markFlagsRequired(cmd, "contact-id")

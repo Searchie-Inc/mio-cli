@@ -1,14 +1,5 @@
 package cmd
 
-// tags.go implements the `mio tags` command group.
-//
-// Routes (see docs/internal/api-surface.md "tags"):
-//
-//	tags CRUD  /api/teams/{team_id}/tags[/{id}]
-//	assign     POST /api/teams/{team_id}/contacts/{tcid}/tags
-//	assign-bulk POST /api/teams/{team_id}/contacts/{tcid}/tags/bulk
-//	remove     DELETE /api/teams/{team_id}/contacts/{tcid}/tags/{tag_id}
-
 import (
 	"fmt"
 	"net/http"
@@ -21,7 +12,6 @@ import (
 )
 
 func init() {
-	// tags <action>
 	tagsCmd.AddCommand(
 		tagsCreateCmd,
 		tagsListCmd,
@@ -33,11 +23,8 @@ func init() {
 		tagsRemoveCmd,
 	)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(tagsCmd)
 }
-
-// ---- tags group -------------------------------------------------------------
 
 var tagsCmd = &cobra.Command{
 	Use:   "tags",
@@ -45,7 +32,6 @@ var tagsCmd = &cobra.Command{
 	Long:  "Create, list, retrieve, update, delete, and assign tags for the active team.",
 }
 
-// tagsPath returns /api/teams/{team_id}/tags[/{id}].
 func tagsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/tags", teamID)
 	if id != "" {
@@ -54,7 +40,6 @@ func tagsPath(teamID, id string) string {
 	return base
 }
 
-// contactTagsPath returns /api/teams/{team_id}/contacts/{tcid}/tags[/{tag_id}].
 func contactTagsPath(teamID, contactID, tagID string) string {
 	base := fmt.Sprintf("/api/teams/%s/contacts/%s/tags", teamID, contactID)
 	if tagID != "" {
@@ -264,12 +249,6 @@ by --tag-id <id> OR --tag <name-or-id> (a name/slug is resolved to its id).`,
 			return errs.New(errs.ExitUsage, "nothing to assign: set --tag <name-or-id> or --tag-id <id>")
 		}
 
-		// The assign endpoint returns the refreshed contact tag list as a
-		// JSON:API COLLECTION (`data: [...]`, HTTP 201), so it must be decoded
-		// with the collection decoder — decoding it as a single resource fails
-		// with "cannot unmarshal array into Go struct field singleDoc.data"
-		// (MIO-2495). ActionCollection envelopes the body identically to Create
-		// (type "tag_assignments" derived from the path).
 		attrs := map[string]any{"tag_id": tagID}
 		col, err := c.client.ActionCollection(c.ctx, http.MethodPost, contactTagsPath(teamID, contactID, ""), attrs)
 		if err != nil {
@@ -302,9 +281,6 @@ var tagsAssignBulkCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "nothing to assign: set --tag-ids")
 		}
 		rawIDs, _ := cmd.Flags().GetString("tag-ids")
-		// The backend BulkAssign schema expects tag_ids as a LIST[str], so split
-		// the comma-separated --tag-ids value into an array rather than sending
-		// the raw comma-joined string (the MIO-2552 body-shape bug).
 		ids := make([]string, 0)
 		for _, part := range strings.Split(rawIDs, ",") {
 			if id := strings.TrimSpace(part); id != "" {
@@ -315,12 +291,6 @@ var tagsAssignBulkCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "nothing to assign: --tag-ids must contain at least one tag id")
 		}
 
-		// The bulk endpoint returns the refreshed contact tag list as a JSON:API
-		// COLLECTION (`data: [...]`), so it must be decoded with the collection
-		// decoder — decoding it as a single resource fails with "cannot unmarshal
-		// array into Go struct field singleDoc.data" (the same decode-error class
-		// as MIO-2495, fixed there for single assign). ActionCollection envelopes
-		// the body like Create (type "tag_assignments" derived from the path).
 		attrs := map[string]any{"tag_ids": ids}
 		col, err := c.client.ActionCollection(c.ctx, http.MethodPost, contactTagsPath(teamID, args[0], "")+"/bulk", attrs)
 		if err != nil {
@@ -379,10 +349,6 @@ to skip the confirmation prompt in non-interactive environments.`,
 	},
 }
 
-// resolveContactArg determines the team-contact id for a tags command from
-// EITHER the positional argument at index argIdx (a raw id) OR the --email flag
-// (resolved via the server-side email filter). Exactly one source must be
-// provided; supplying both, or neither, is a usage error.
 func resolveContactArg(c *cmdContext, cmd *cobra.Command, teamID string, args []string, argIdx int) (string, error) {
 	hasPos := len(args) > argIdx && args[argIdx] != ""
 	email := flagValue(cmd, "email")
@@ -402,9 +368,6 @@ func resolveContactArg(c *cmdContext, cmd *cobra.Command, teamID string, args []
 	}
 }
 
-// resolveTagFlag returns the tag id from --tag (name-or-id, resolved) or
-// --tag-id (raw id). Supplying both is a usage error; supplying neither yields
-// an empty string so the caller can emit a command-specific message.
 func resolveTagFlag(c *cmdContext, cmd *cobra.Command, teamID string) (string, error) {
 	tagName := flagValue(cmd, "tag")
 	tagID := flagValue(cmd, "tag-id")
@@ -421,8 +384,6 @@ func resolveTagFlag(c *cmdContext, cmd *cobra.Command, teamID string) (string, e
 	return tagID, nil
 }
 
-// resolveTagArgOrFlag returns the tag id from the positional at argIdx (a raw
-// id, the legacy two-positional form) or, failing that, from --tag/--tag-id.
 func resolveTagArgOrFlag(c *cmdContext, cmd *cobra.Command, teamID string, args []string, argIdx int) (string, error) {
 	if len(args) > argIdx && args[argIdx] != "" {
 		if flagValue(cmd, "tag") != "" || flagValue(cmd, "tag-id") != "" {
@@ -434,7 +395,6 @@ func resolveTagArgOrFlag(c *cmdContext, cmd *cobra.Command, teamID string, args 
 }
 
 func init() {
-	// Attribute flags for create/update.
 	for _, cmd := range []*cobra.Command{tagsCreateCmd, tagsUpdateCmd} {
 		cmd.Flags().String("name", "", "Tag name.")
 		cmd.Flags().String("slug", "", "Tag slug (lowercase alphanumeric, hyphens, underscores). Required on create.")
@@ -444,18 +404,12 @@ func init() {
 	markFlagsRequired(tagsCreateCmd, "name", "slug")
 	addPaginationFlags(tagsListCmd)
 
-	// assign flags. --tag accepts a tag name/slug OR id (resolved); --tag-id is
-	// the raw-id form kept for back-compat. --email identifies the contact by
-	// address instead of the positional contact id.
 	tagsAssignCmd.Flags().String("tag-id", "", "Raw id of the tag to assign (alternative to --tag).")
 	tagsAssignCmd.Flags().String("tag", "", "Tag name, slug, or id to assign to the contact.")
 	tagsAssignCmd.Flags().String("email", "", "Contact email address (alternative to the contact id positional).")
 
-	// remove flags mirror assign: --tag (name-or-id) and --email identify the
-	// tag and contact without raw-id positionals.
 	tagsRemoveCmd.Flags().String("tag", "", "Tag name, slug, or id to remove (alternative to the tag id positional).")
 	tagsRemoveCmd.Flags().String("email", "", "Contact email address (alternative to the contact id positional).")
 
-	// assign-bulk flags.
 	tagsAssignBulkCmd.Flags().String("tag-ids", "", "Comma-separated list of tag IDs to assign to the contact.")
 }

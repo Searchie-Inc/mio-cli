@@ -6,11 +6,10 @@ import (
 	"testing"
 )
 
-// selView is a compact, comparable view of one extracted selector.
 type selView struct {
 	Line  int
 	Path  string
-	Steps string // "k" per field, "[]" per index step, joined by "·"
+	Steps string
 }
 
 func viewSelectors(sels []Selector) []selView {
@@ -29,11 +28,6 @@ func viewSelectors(sels []Selector) []selView {
 	return out
 }
 
-// TestSelectors_Shapes pins what counts as a selector. Each case is a shape
-// that appears on a doc surface or help page: the MIO-3413 prose form, a code
-// span, a --jq program, a capture, raw-envelope paths, and the prose that must
-// NOT read as a path (abbreviations, file names, a dotted body path with no
-// leading dot).
 func TestSelectors_Shapes(t *testing.T) {
 	cases := []struct {
 		name string
@@ -92,8 +86,6 @@ func TestSelectors_Shapes(t *testing.T) {
 	}
 }
 
-// TestSelectors_LineNumbersAndReads: line numbers are offset by firstLine, and
-// Reads sees a field at any step but never an index step.
 func TestSelectors_LineNumbersAndReads(t *testing.T) {
 	sels := Selectors("f.go", 40, "first\nsecond .attributes.contact_id\nthird .[0]")
 	if len(sels) != 2 || sels[0].Line != 41 || sels[1].Line != 42 {

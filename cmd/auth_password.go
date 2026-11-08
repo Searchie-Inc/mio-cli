@@ -1,31 +1,5 @@
 package cmd
 
-// auth_password.go — `mio auth forgot-password` and `mio auth reset-password`
-// (MIO-4286).
-//
-// The two halves of the platform-user password reset MIO-3571 added to the
-// API (POST /api/auth/forgot and POST /api/auth/reset). A CLI-only user has no
-// browser flow to recover a lost password with, so both live here, next to
-// `auth token`: recovery never needs the admin UI.
-//
-//	mio auth forgot-password --email you@example.com
-//	mio auth reset-password --token 'https://…/reset-password#<token>'
-//	mio login
-//
-// The emailed link carries the single-use, one-hour token in its URL
-// FRAGMENT (`…/reset-password#<token>`), so reset-password takes either the
-// bare token or the whole pasted link and reads the part after `#`.
-//
-// The new password is never taken on argv: a `--password` flag would land it
-// in shell history and `ps`. On a terminal it is prompted for twice and never
-// echoed; headless, it is read from MIO_PASSWORD — the same variable `mio
-// login` and `mio register` take a password from — so the reset and the login
-// that follows can share one exported secret.
-//
-// Both routes are unauthenticated and are called WITHOUT a key on purpose,
-// even when one is stored or exported: the user running them may hold exactly
-// the stale or revoked key they are trying to get past.
-
 import (
 	"bufio"
 	"fmt"
@@ -40,29 +14,15 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// authPasswordRouteHint is appended when the API has no password-reset route:
-// a 404 (FastAPI's plain `{"detail":"Not Found"}`) or a 405 from a backend
-// deployed before mio-backend MIO-3571. Without it an agent reads exit 4 as
-// "the resource does not exist", which is true of the route, not of the
-// account, and there is nothing else in the answer to say which.
 const authPasswordRouteHint = "this API has no password-reset route (it lands with mio-backend MIO-3571); " +
 	"check `mio version` and the API you are pointed at (`mio whoami` prints api_base)"
 
-// authForgotPasswordNotConfiguredHint explains the one 500 this route answers
-// by design (raised before any lookup, so identical for every address): the
-// deployment has no reset landing page configured. Exit 7 otherwise reads as
-// "transient, retry with backoff", which never fixes a missing setting.
 const authForgotPasswordNotConfiguredHint = "on this route a 500 is the API saying password reset is not configured on that deployment " +
 	"(no reset landing page set), not a transient failure: report it, retrying will not help"
 
-// authResetPasswordExpiredHint explains the 410 (`password_reset_expired`),
-// which the API answers alike for an unknown, expired (one hour) or
-// already-used token, so the user is told all three and the way out.
 const authResetPasswordExpiredHint = "the reset link expired (they last one hour), was already used, or is not one this API issued: " +
 	"request a fresh one with `mio auth forgot-password --email <addr>` (redeeming a link expires every other one)"
 
-// authResetPasswordRejectedHint explains the 422: the API's own detail names
-// the field (`/password`: under 8 characters), the hint says what to do.
 const authResetPasswordRejectedHint = "the API rejected the new password: it must be at least 8 characters; " +
 	"the token must be the value after `#` in the emailed link (or the whole link)"
 
@@ -147,16 +107,6 @@ Failures, in the API's words plus a hint:
 	RunE: runAuthResetPassword,
 }
 
-// authPasswordClient builds the unauthenticated client both commands use:
-// the resolved API base, and deliberately NO key (see the file comment).
-//
-// It resolves Anonymous so the credential store is NEVER READ, not merely
-// ignored: a locked-out session may hold a blob mio cannot read at all
-// (permission denied, an I/O error), which every ordinary command reports as
-// exit 1 before any request — and these two commands are the way out of
-// exactly that state (TestAuthPassword_NeverReadsTheCredentialStore).
-// --api-key is left out of the overrides for the same reason: nothing the
-// caller holds is sent.
 func authPasswordClient() (*client.Client, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -177,10 +127,6 @@ func authPasswordClient() (*client.Client, error) {
 func runAuthForgotPassword(cmd *cobra.Command, _ []string) error {
 	email := strings.TrimSpace(flagValue(cmd, "email"))
 	if email == "" {
-		// Prompt only on a terminal (gated on the stderr stream, where the
-		// prompt goes, like register: under `go test` os.Stdin is /dev/null,
-		// which isTTY would take for a terminal). Off one, exit 2 with no
-		// request.
 		if !isTTY(cmd.ErrOrStderr()) {
 			return errs.New(errs.ExitUsage, "forgot-password needs --email when not run interactively")
 		}
@@ -205,8 +151,6 @@ func runAuthForgotPassword(cmd *cobra.Command, _ []string) error {
 		}
 		return err
 	}
-	// Neutral on purpose: the API never says whether the address has an
-	// account, and neither does this.
 	fmt.Fprintf(cmd.OutOrStdout(),
 		"If an account exists for %s, a password reset email is on its way. "+
 			"Its link is valid for one hour and works once.\n"+
@@ -253,15 +197,6 @@ func runAuthResetPassword(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// resetTokenFromArg turns the --token value — the bare token, or the whole
-// emailed link — into the token the API takes. The link carries the token as
-// its URL FRAGMENT (`…/reset-password#<token>`; the backend puts it there so
-// it never reaches a server log or a Referer header), so a value containing
-// `#` yields what follows the first `#`. A link with no fragment, or an empty
-// one, is a usage error before any request: the API would answer the same
-// 410 it answers a wrong token, which would send the user back to
-// forgot-password for a link that was fine — a mail client or browser
-// stripped the fragment, and the fix is to copy the link from the email.
 func resetTokenFromArg(arg string) (string, error) {
 	raw := strings.TrimSpace(arg)
 	if raw == "" {
@@ -280,10 +215,6 @@ func resetTokenFromArg(arg string) (string, error) {
 	return raw, nil
 }
 
-// promptNewPassword reads the new password twice on a terminal (unechoed,
-// via readSecret) and requires the two to match. Both reads share ONE reader
-// so a piped or scripted stdin is consumed line by line — the same
-// shared-reader rule promptRegistration follows. It performs no network I/O.
 func promptNewPassword(cmd *cobra.Command, reader *bufio.Reader) (string, error) {
 	fmt.Fprint(cmd.ErrOrStderr(), "New password: ")
 	password, err := readSecret(cmd, reader)

@@ -1,15 +1,5 @@
 package cmd
 
-// hubs_scaffold_builders_test.go — direct unit tests for the reusable hub blob
-// builders extracted from the `hubs` command RunEs so a future scaffold command
-// can drive the same logic without a *cobra.Command (MIO-2543).
-//
-// These exercise the pure functions against a real httptest server, capturing
-// the write body the builder produces. They complement — they do NOT replace —
-// the command-level contract tests in hubs_update_blobs_test.go and
-// hubs_authoring_test.go, which remain the behaviour-preserving guard for
-// `mio hubs update`.
-
 import (
 	"bytes"
 	"context"
@@ -24,13 +14,8 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// sbPtr returns a pointer to v, for populating the builder input structs (whose
-// pointer fields distinguish "flag unset" from "flag set to the zero value").
 func sbPtr[T any](v T) *T { return &v }
 
-// applyHubBlobsServer answers a GET retrieve with getBody and captures the
-// subsequent PATCH body, returning a client pointed at it. Used to unit-test
-// applyHubBlobs' read-modify-write directly (no cobra command involved).
 func applyHubBlobsServer(t *testing.T, getBody string) (*client.Client, *[]byte) {
 	t.Helper()
 	var patchBody []byte
@@ -46,9 +31,6 @@ func applyHubBlobsServer(t *testing.T, getBody string) (*client.Client, *[]byte)
 	return client.New(srv.URL, "k"), &patchBody
 }
 
-// TestApplyHubBlobs_BrandingRMWPreservesSiblings verifies the core read-modify-
-// write contract: a partial branding patch deep-merges onto the hub's current
-// branding, so untouched sibling keys survive (not a wholesale replace).
 func TestApplyHubBlobs_BrandingRMWPreservesSiblings(t *testing.T) {
 	const body = `{"data":{"id":"hub_abc123","type":"hubs","attributes":{"title":"H","slug":"h","branding":{"primary":"#111","logo_url":"old"}}}}`
 	cl, patchBody := applyHubBlobsServer(t, body)
@@ -79,8 +61,6 @@ func TestApplyHubBlobs_BrandingRMWPreservesSiblings(t *testing.T) {
 	}
 }
 
-// TestApplyHubBlobs_UnsetRemovesKey verifies an --unset-style dotted path deletes
-// a nested key from the retrieved blob while preserving its sibling.
 func TestApplyHubBlobs_UnsetRemovesKey(t *testing.T) {
 	const body = `{"data":{"id":"hub_abc123","type":"hubs","attributes":{"title":"H","slug":"h","settings":{"header":{"color":"#000","menuLayout":"tabs"}}}}}`
 	cl, patchBody := applyHubBlobsServer(t, body)
@@ -109,10 +89,6 @@ func TestApplyHubBlobs_UnsetRemovesKey(t *testing.T) {
 	}
 }
 
-// TestApplyHubBlobs_DoesNotMutateBase verifies the pure-builder contract the
-// scaffold caller relies on: applyHubBlobs never mutates the caller's Base map
-// (nor its nested maps), even when an --unset descends into a blob the caller
-// staged in Base. The removal is applied on a copy that goes to the PATCH.
 func TestApplyHubBlobs_DoesNotMutateBase(t *testing.T) {
 	const body = `{"data":{"id":"hub_abc123","type":"hubs","attributes":{"title":"H","slug":"h"}}}`
 	cl, patchBody := applyHubBlobsServer(t, body)
@@ -132,7 +108,6 @@ func TestApplyHubBlobs_DoesNotMutateBase(t *testing.T) {
 		t.Fatalf("applyHubBlobs returned error: %v", err)
 	}
 
-	// The caller's Base and its nested maps must be byte-for-byte untouched.
 	s, _ := base["settings"].(map[string]any)
 	header, _ := s["header"].(map[string]any)
 	if header["color"] != "#000" {
@@ -142,7 +117,6 @@ func TestApplyHubBlobs_DoesNotMutateBase(t *testing.T) {
 		t.Errorf("Base settings.header = %v, want both original keys intact (Base must not be mutated)", header)
 	}
 
-	// ...while the PATCH (built on the copy) does reflect the removal.
 	attrs := decodeHubAttrs(t, *patchBody)
 	ps, _ := attrs["settings"].(map[string]any)
 	ph, ok := ps["header"].(map[string]any)
@@ -154,11 +128,6 @@ func TestApplyHubBlobs_DoesNotMutateBase(t *testing.T) {
 	}
 }
 
-// TestApplyHubBlobs_NavigationHrefScopedToLiveSlug exercises the hub-scoped href
-// validation that now lives inside applyHubBlobs: with the slug NOT known up
-// front (SlugKnown false), the hub is retrieved and every hub-relative type:"url"
-// href must start with "/{slug}". A scoped href passes and the nav is PATCHed; a
-// mismatched one errors and fires no PATCH.
 func TestApplyHubBlobs_NavigationHrefScopedToLiveSlug(t *testing.T) {
 	const body = `{"data":{"id":"hub_abc123","type":"hubs","attributes":{"title":"H","slug":"demo"}}}`
 
@@ -196,14 +165,6 @@ func TestApplyHubBlobs_NavigationHrefScopedToLiveSlug(t *testing.T) {
 	})
 }
 
-// ─── buildHubCreateAttrs (Task 3) ────────────────────────────────────────────
-
-// TestBuildHubCreateAttrs_ComposesBlobsAndOverrides verifies the pure create
-// builder layers the typed-column base, the presentation blobs and the logo/
-// favicon overrides into one POST body — with --logo-url/--favicon-url merging
-// into (not clobbering) --branding-json — and, crucially, never mutates the
-// caller's Base or Branding maps (the pure-builder contract the scaffold relies
-// on to reuse a template across hubs).
 func TestBuildHubCreateAttrs_ComposesBlobsAndOverrides(t *testing.T) {
 	base := map[string]any{"title": "My Community", "slug": "my-community", "is_private": false}
 	branding := map[string]any{"primary": "#6747E3"}
@@ -221,11 +182,9 @@ func TestBuildHubCreateAttrs_ComposesBlobsAndOverrides(t *testing.T) {
 		t.Fatalf("buildHubCreateAttrs returned error: %v", err)
 	}
 
-	// Typed columns pass through.
 	if attrs["title"] != "My Community" || attrs["slug"] != "my-community" || attrs["is_private"] != false {
 		t.Errorf("typed columns not carried through; attrs=%v", attrs)
 	}
-	// Branding composes: --branding-json key survives, logo/favicon merged in.
 	b, ok := attrs["branding"].(map[string]any)
 	if !ok {
 		t.Fatalf("branding absent or not an object; attrs=%v", attrs)
@@ -243,7 +202,6 @@ func TestBuildHubCreateAttrs_ComposesBlobsAndOverrides(t *testing.T) {
 		t.Errorf("known keys must not warn; warn=%q", warn.String())
 	}
 
-	// Pure-builder contract: the caller's Base and Branding are untouched.
 	if _, leaked := base["branding"]; leaked {
 		t.Errorf("Base must not gain a branding key (must not be mutated); base=%v", base)
 	}
@@ -255,9 +213,6 @@ func TestBuildHubCreateAttrs_ComposesBlobsAndOverrides(t *testing.T) {
 	}
 }
 
-// TestBuildHubCreateAttrs_EmptyRejected verifies an empty create (no base, no
-// blobs, no overrides) is a usage error — the same "nothing to create" guard the
-// command enforces, now owned by the pure builder.
 func TestBuildHubCreateAttrs_EmptyRejected(t *testing.T) {
 	var warn bytes.Buffer
 	_, err := buildHubCreateAttrs(hubCreateParams{}, &warn)
@@ -269,9 +224,6 @@ func TestBuildHubCreateAttrs_EmptyRejected(t *testing.T) {
 	}
 }
 
-// TestBuildHubCreateAttrs_StrictRejectsUnknownBrandingKey verifies Strict turns
-// an unknown blob key into a usage error (rather than a warning), matching the
-// command's --strict-keys behaviour.
 func TestBuildHubCreateAttrs_StrictRejectsUnknownBrandingKey(t *testing.T) {
 	var warn bytes.Buffer
 	_, err := buildHubCreateAttrs(hubCreateParams{
@@ -287,10 +239,6 @@ func TestBuildHubCreateAttrs_StrictRejectsUnknownBrandingKey(t *testing.T) {
 	}
 }
 
-// TestBuildHubCreateAttrs_NavigationHrefScopedToSlug verifies the create-path
-// navigation validation the builder owns: a hub-relative href must start with
-// "/{slug}" (the --slug value carried in Base, known up front on create), so a
-// scoped href passes and a mismatched one errors.
 func TestBuildHubCreateAttrs_NavigationHrefScopedToSlug(t *testing.T) {
 	scoped := map[string]any{"header": []any{
 		map[string]any{"type": "url", "label": "About", "href": "/demo/about"},
@@ -314,12 +262,6 @@ func TestBuildHubCreateAttrs_NavigationHrefScopedToSlug(t *testing.T) {
 	}
 }
 
-// ─── publishedStateAttrs (Task 4) ────────────────────────────────────────────
-
-// TestPublishedStateAttrs_InvertsToIsPrivate verifies the single source of truth
-// for the published→is_private inversion both `hubs update` and the scaffold
-// publish step share: published=true → is_private=false (and vice versa), and
-// "published" is never emitted (it is not a writable attribute).
 func TestPublishedStateAttrs_InvertsToIsPrivate(t *testing.T) {
 	for _, tc := range []struct {
 		published   bool
@@ -341,10 +283,6 @@ func TestPublishedStateAttrs_InvertsToIsPrivate(t *testing.T) {
 	}
 }
 
-// ─── applyHubPolicies (Task 5) ───────────────────────────────────────────────
-
-// applyHubPoliciesServer captures the PATCH body a policies write produces and
-// returns a client pointed at it (no cobra command involved).
 func applyHubPoliciesServer(t *testing.T) (*client.Client, *[]byte) {
 	t.Helper()
 	var patchBody []byte
@@ -360,8 +298,6 @@ func applyHubPoliciesServer(t *testing.T) (*client.Client, *[]byte) {
 	return client.New(srv.URL, "k"), &patchBody
 }
 
-// TestApplyHubPolicies_SetsContent verifies a content write sends policy_type +
-// the content string + require_acceptance when provided.
 func TestApplyHubPolicies_SetsContent(t *testing.T) {
 	cl, patchBody := applyHubPoliciesServer(t)
 	content := "# Terms of Service"
@@ -388,9 +324,6 @@ func TestApplyHubPolicies_SetsContent(t *testing.T) {
 	}
 }
 
-// TestApplyHubPolicies_ResetSendsNullContent verifies a nil Content pointer sends
-// content: JSON null (present but null, not absent) — the reset-to-default path —
-// and omits require_acceptance when not provided.
 func TestApplyHubPolicies_ResetSendsNullContent(t *testing.T) {
 	cl, patchBody := applyHubPoliciesServer(t)
 
@@ -399,7 +332,6 @@ func TestApplyHubPolicies_ResetSendsNullContent(t *testing.T) {
 		t.Fatalf("applyHubPolicies returned error: %v", err)
 	}
 
-	// Decode raw so null is distinguishable from absent.
 	var doc struct {
 		Data struct {
 			Attributes map[string]json.RawMessage `json:"attributes"`
@@ -419,11 +351,6 @@ func TestApplyHubPolicies_ResetSendsNullContent(t *testing.T) {
 	}
 }
 
-// ─── buildSpaceAttrs (Task 6) ────────────────────────────────────────────────
-
-// TestBuildSpaceAttrs_MapsFieldsAndKeys verifies the space builder maps every set
-// field onto its backend attribute key (segment_id/is_default/is_pinned/
-// access_level/posting_permission), and omits fields whose pointer is nil.
 func TestBuildSpaceAttrs_MapsFieldsAndKeys(t *testing.T) {
 	attrs, err := buildSpaceAttrs(SpaceInput{
 		Name:              sbPtr("General"),
@@ -454,15 +381,11 @@ func TestBuildSpaceAttrs_MapsFieldsAndKeys(t *testing.T) {
 			t.Errorf("attrs[%q] = %v, want %v", k, attrs[k], v)
 		}
 	}
-	// A nil pointer must be omitted, not written as a zero value.
 	if _, err := buildSpaceAttrs(SpaceInput{Name: sbPtr("Only")}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-// TestBuildSpaceAttrs_ValidatesEnumsAndPosition verifies the enum/range checks the
-// builder keeps (so the scaffold caller gets them too): a bad access_level,
-// posting_permission, or negative position each returns ExitUsage.
 func TestBuildSpaceAttrs_ValidatesEnumsAndPosition(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -484,10 +407,6 @@ func TestBuildSpaceAttrs_ValidatesEnumsAndPosition(t *testing.T) {
 	}
 }
 
-// ─── buildPageAttrs (Task 7) ─────────────────────────────────────────────────
-
-// TestBuildPageAttrs_MapsFieldsAndBlobs verifies the page builder maps --is-home
-// to is_homepage, passes settings/meta through as objects, and omits nil fields.
 func TestBuildPageAttrs_MapsFieldsAndBlobs(t *testing.T) {
 	settings := map[string]any{"theme": "dark"}
 	meta := map[string]any{"seo": true}
@@ -523,8 +442,6 @@ func TestBuildPageAttrs_MapsFieldsAndBlobs(t *testing.T) {
 	}
 }
 
-// TestBuildPageAttrs_ValidatesPrivacyAndPosition verifies the privacy enum + the
-// position >= 0 check the builder keeps for the scaffold caller.
 func TestBuildPageAttrs_ValidatesPrivacyAndPosition(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -545,10 +462,6 @@ func TestBuildPageAttrs_ValidatesPrivacyAndPosition(t *testing.T) {
 	}
 }
 
-// ─── buildHubMediaPublishAttrs (Task 8) ──────────────────────────────────────
-
-// TestBuildHubMediaPublishAttrs_SetsProvided verifies a valid visibility, an RFC3339
-// published_at (formatted from the time.Time), and a position are all set.
 func TestBuildHubMediaPublishAttrs_SetsProvided(t *testing.T) {
 	when := time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
 	pos := 3
@@ -567,9 +480,6 @@ func TestBuildHubMediaPublishAttrs_SetsProvided(t *testing.T) {
 	}
 }
 
-// TestBuildHubMediaPublishAttrs_OmitsSentinels verifies the "omit" sentinels: an
-// empty visibility, a zero time, and a nil position produce an empty map (the
-// command path relies on this to preserve "only set when flag changed").
 func TestBuildHubMediaPublishAttrs_OmitsSentinels(t *testing.T) {
 	attrs, err := buildHubMediaPublishAttrs("", time.Time{}, nil)
 	if err != nil {
@@ -580,8 +490,6 @@ func TestBuildHubMediaPublishAttrs_OmitsSentinels(t *testing.T) {
 	}
 }
 
-// TestBuildHubMediaPublishAttrs_Validates verifies a bad visibility and a negative
-// position each return ExitUsage.
 func TestBuildHubMediaPublishAttrs_Validates(t *testing.T) {
 	if _, err := buildHubMediaPublishAttrs("everyone", time.Time{}, nil); err == nil {
 		t.Error("a bad visibility must error")
@@ -596,10 +504,6 @@ func TestBuildHubMediaPublishAttrs_Validates(t *testing.T) {
 	}
 }
 
-// ─── buildAttrDefCreateAttrs + buildHubConfigAttrs (Task 9) ───────────────────
-
-// TestBuildAttrDefCreateAttrs_MapsFieldTypeToType verifies --field-type maps to the
-// backend "type" key (NOT field_type) and the other fields carry through.
 func TestBuildAttrDefCreateAttrs_MapsFieldTypeToType(t *testing.T) {
 	attrs, err := buildAttrDefCreateAttrs(AttrDefInput{
 		Name:              sbPtr("Company"),
@@ -625,8 +529,6 @@ func TestBuildAttrDefCreateAttrs_MapsFieldTypeToType(t *testing.T) {
 	}
 }
 
-// TestBuildAttrDefCreateAttrs_RejectsBadFieldType verifies the NEW client-side
-// field-type enum validation (MIO-2543): an out-of-enum value returns ExitUsage.
 func TestBuildAttrDefCreateAttrs_RejectsBadFieldType(t *testing.T) {
 	_, err := buildAttrDefCreateAttrs(AttrDefInput{
 		Name: sbPtr("X"), Slug: sbPtr("x"), FieldType: sbPtr("select"),
@@ -639,9 +541,6 @@ func TestBuildAttrDefCreateAttrs_RejectsBadFieldType(t *testing.T) {
 	}
 }
 
-// TestBuildHubConfigAttrs_IncludesDefinitionIDAndBools verifies the create builder
-// puts the definition id in the body (MIO-2502) and maps the bool flags; unset
-// bools are omitted.
 func TestBuildHubConfigAttrs_IncludesDefinitionIDAndBools(t *testing.T) {
 	attrs := buildHubConfigAttrs("attr_abc123", HubConfigInput{
 		IsInProfile:  sbPtr(true),
@@ -654,7 +553,6 @@ func TestBuildHubConfigAttrs_IncludesDefinitionIDAndBools(t *testing.T) {
 	if attrs["is_in_profile"] != true || attrs["is_required"] != false || attrs["is_searchable"] != true {
 		t.Errorf("bool flags not mapped; attrs=%v", attrs)
 	}
-	// Unset bools must be omitted (partial-update semantics).
 	for _, k := range []string{"is_in_onboarding", "is_read_only"} {
 		if _, has := attrs[k]; has {
 			t.Errorf("%s must be omitted when unset; attrs=%v", k, attrs)
@@ -662,10 +560,6 @@ func TestBuildHubConfigAttrs_IncludesDefinitionIDAndBools(t *testing.T) {
 	}
 }
 
-// ─── buildPlaylistCreateAttrs (Task 10) ──────────────────────────────────────
-
-// TestBuildPlaylistCreateAttrs_MapsFields verifies title/description/visibility map
-// through and --hub-id maps to hub_id; unset fields are omitted.
 func TestBuildPlaylistCreateAttrs_MapsFields(t *testing.T) {
 	attrs := buildPlaylistCreateAttrs(PlaylistInput{
 		Title:      sbPtr("Course Videos"),
@@ -681,7 +575,6 @@ func TestBuildPlaylistCreateAttrs_MapsFields(t *testing.T) {
 	if _, leaked := attrs["hub-id"]; leaked {
 		t.Errorf("hub-id (wrong key) must not be present; attrs=%v", attrs)
 	}
-	// --description unset → omitted.
 	if _, has := attrs["description"]; has {
 		t.Errorf("description must be omitted when unset; attrs=%v", attrs)
 	}

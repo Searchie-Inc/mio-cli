@@ -1,40 +1,3 @@
-// Package cmd — contract_test.go
-//
-// Golden contract suite for the mio CLI.
-//
-// PURPOSE: pin the externally-observable behaviour of the CLI BEFORE any
-// UX-rejig changes land, so regressions fail loudly instead of silently.
-// Every assertion in this file encodes a CONTRACT that agents, CI scripts,
-// and downstream tooling depend on. Do NOT change any assertion without a
-// deliberate, reviewed decision.
-//
-// STRUCTURE
-//
-//   - TestContract_ExitCodes_*         — process exit codes per scenario
-//   - TestContract_JSON_*              — default (non-TTY) JSON output shapes
-//   - TestContract_Raw_*               — --raw envelope preservation
-//   - TestContract_JQ_*                — --jq filter behaviour
-//   - TestContract_OutputFormats_*     — --output table|plain shapes
-//   - TestContract_Destructive_*       — --yes / non-TTY guard behaviour
-//   - TestContract_ErrorEnvelope_*     — stderr JSON:API error shape (subprocess)
-//   - TestContract_TTY_*               — TTY vs non-TTY branching
-//
-// CONTRACT-BUG(P0) annotations mark places where the CURRENT behaviour is a
-// known bug that the P0 UX rejig will intentionally fix. Each annotation names
-// the new expected behaviour so it is easy to flip the assertion.
-//
-// HOW COMMANDS ARE DRIVEN
-//
-// Commands are driven in-process via the real cobra command tree (RootCmd())
-// with captured *bytes.Buffer for stdout/stderr and a httptest.Server injected
-// via --api-base. Team scope is injected via the --team persistent flag.
-// MIO_API_KEY is set via env var. The MIO_API_BASE_URL env var (not MIO_API_BASE)
-// is what config.go reads for the API base override.
-//
-// A small number of tests (TestContract_ErrorEnvelope_*) drive the real binary
-// via os/exec because the JSON:API error envelope is written by main.go to
-// os.Stderr after os.Exit — only a subprocess can capture it.
-
 package cmd
 
 import (
@@ -56,30 +19,18 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// ─── in-process driver ────────────────────────────────────────────────────────
-
-// contractResult holds the captured outputs of a single in-process invocation.
 type contractResult struct {
 	Stdout string
 	Stderr string
 	Code   int
 }
 
-// runContract executes the cobra command tree in-process with the given args,
-// overlays env vars for the duration of the call, and returns captured
-// stdout/stderr and the exit code (via the same logic as main.go).
-//
-// It resets the global persistent flags to their zero values before each
-// execution so that flag state from a prior test cannot bleed into this one.
-// The rootCmd is a package-level singleton; without this reset, a test that
-// sets --output yaml would leave flags.output="yaml" for every subsequent test.
 func runContract(t *testing.T, env []string, args ...string) contractResult {
 	t.Helper()
 
 	restore := overlayEnv(t, env)
 	defer restore()
 
-	// Reset the global flags struct so prior test invocations don't bleed over.
 	resetGlobalFlags()
 
 	root := RootCmd()
@@ -97,33 +48,14 @@ func runContract(t *testing.T, env []string, args ...string) contractResult {
 	}
 }
 
-// resetGlobalFlags resets the package-level flags variable to its zero value so
-// tests that set --output/--jq/--raw/--yes/--team/--hub/--api-key/--api-base do
-// not contaminate subsequent tests. The rootCmd is a singleton; without this
-// reset flag state persists across tests in the same process.
-//
-// It also resets every PER-COMMAND leaf flag back to its registered default and
-// clears its Changed bit by walking the command tree. cobra registers leaf flags
-// (e.g. `tags assign --tag`) once on the singleton command, so a value set by
-// one test would otherwise bleed into the next — exactly the kind of cross-test
-// contamination this helper exists to prevent. The real `mio` binary forks a
-// fresh process per invocation, so this only mirrors production isolation.
 func resetGlobalFlags() {
 	flags = globalFlags{}
 	resetCommandFlags(rootCmd)
 }
 
-// resetCommandFlags restores every flag on cmd (and its subcommands) to its
-// default value and clears the Changed bit, so leaf-flag state from a prior
-// in-process invocation cannot leak into the next one.
 func resetCommandFlags(cmd *cobra.Command) {
 	reset := func(fs *pflag.FlagSet) {
 		fs.VisitAll(func(f *pflag.Flag) {
-			// Slice flags (StringArray/StringSlice) cannot be reset with
-			// Set(DefValue): Set APPENDS to a stringArray, so Set("[]") leaves a
-			// literal "[]" element behind and later user values append to it. Reset
-			// them through the SliceValue interface instead. All slice flags in this
-			// CLI default to empty, so Replace(nil) restores the registered default.
 			if sv, ok := f.Value.(pflag.SliceValue); ok {
 				_ = sv.Replace(nil)
 				f.Changed = false
@@ -140,9 +72,6 @@ func resetCommandFlags(cmd *cobra.Command) {
 	}
 }
 
-// overlayEnv sets key=value pairs on the process environment for the duration
-// of the test and returns a cleanup function that restores the original values.
-// A pair whose value is empty causes the key to be unset.
 func overlayEnv(t *testing.T, pairs []string) func() {
 	t.Helper()
 	prev := make(map[string]string)
@@ -172,10 +101,6 @@ func overlayEnv(t *testing.T, pairs []string) func() {
 	}
 }
 
-// ─── mock HTTP server ──────────────────────────────────────────────────────────
-
-// mockHandler describes a single canned HTTP response.
-// Method="" matches any method; PathPfx="" matches any path; first match wins.
 type mockHandler struct {
 	Method  string
 	PathPfx string
@@ -183,8 +108,6 @@ type mockHandler struct {
 	Body    string
 }
 
-// newMockServer starts an httptest.Server dispatching to the first matching
-// handler. Unmatched requests return a 404 JSON:API body.
 func newMockServer(t *testing.T, handlers []mockHandler) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -208,9 +131,6 @@ func newMockServer(t *testing.T, handlers []mockHandler) *httptest.Server {
 	return srv
 }
 
-// baseEnv returns the env vars needed for API-hitting commands.
-// MIO_API_BASE_URL is the env var the config package reads (not MIO_API_BASE).
-// The team scope is passed as a --team flag via withTeam.
 func baseEnv(apiBase string) []string {
 	return []string{
 		"MIO_API_KEY=test-key-contract",
@@ -218,14 +138,9 @@ func baseEnv(apiBase string) []string {
 	}
 }
 
-// withTeam prepends the --team flag to the given command args, allowing
-// in-process tests to inject a team scope without writing a config file.
-// Usage: runContract(t, baseEnv(srv.URL), withTeam("t_team1", "contacts", "list")...)
 func withTeam(teamID string, args ...string) []string {
 	return append([]string{"--team", teamID}, args...)
 }
-
-// ─── testdata helpers ──────────────────────────────────────────────────────────
 
 func mustReadTestdata(t *testing.T, name string) string {
 	t.Helper()
@@ -235,8 +150,6 @@ func mustReadTestdata(t *testing.T, name string) string {
 	}
 	return string(b)
 }
-
-// ─── string / slice helpers ────────────────────────────────────────────────────
 
 func nonEmptyLines(s string) []string {
 	var out []string
@@ -257,20 +170,14 @@ func indexContaining(lines []string, substr string) int {
 	return -1
 }
 
-// ─── subprocess helpers ────────────────────────────────────────────────────────
-
-// buildBinary compiles the mio binary into a temp dir and returns its path.
-// Used only by TestContract_ErrorEnvelope_* which capture the JSON:API envelope
-// written by main.go's os.Exit path.
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "mio")
 	if runtime.GOOS == "windows" {
-		bin += ".exe" // exec.Command will not run an extensionless file there
+		bin += ".exe"
 	}
 
-	// go test runs in the package dir, cmd/; the module root is its parent.
 	cmdDir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -286,29 +193,11 @@ func buildBinary(t *testing.T) string {
 	return bin
 }
 
-// childKeyringTag is the build tag that compiles cmd/childbinary_keyring.go
-// into a mio binary a test runs as a child process: it pins that binary to
-// the encrypted file keyring and adds the hidden childBackendsCmd reporting
-// the backends it may open. Release and plain `go build` binaries never
-// carry it.
 const (
 	childKeyringTag  = "mio_test_file_keyring"
 	childBackendsCmd = "__test-keyring-backends"
 )
 
-// requireChildOnFileKeyring fails the test unless the child binary at bin may
-// open ONLY the file keyring. TestMain's config.UseFileBackendOnly pins this
-// test process, but a child is a fresh process with the default backend list:
-// on a macOS cgo build, on Windows, or on a Linux desktop it would read the
-// developer's real Keychain, Credential Manager or Secret Service whatever HOME
-// runBinary gives it, because none of those stores is found through HOME (the
-// Secret Service's session bus is found from the uid, /run/user/<uid>/bus).
-// TestContract_ErrorEnvelope_Shape runs the child with no MIO_API_KEY and the
-// production default API base, so it would send that key there.
-//
-// The child's own list is the oracle, not the build command: a runner with no
-// OS store falls back to the file keyring whether or not the child is pinned,
-// so no behaviour of the child tells the two apart there.
 func requireChildOnFileKeyring(t *testing.T, bin string) {
 	t.Helper()
 	probe := exec.Command(bin, childBackendsCmd)
@@ -326,10 +215,6 @@ func requireChildOnFileKeyring(t *testing.T, bin string) {
 	}
 }
 
-// TestBuildBinary_ChildReadsOnlyAnIsolatedFileKeyring: the child binary every
-// subprocess test runs may open only the file keyring (checked inside
-// buildBinary itself, so no test can run an unpinned child), and the store it
-// actually reads is the file under the temp home runBinary gives it.
 func TestBuildBinary_ChildReadsOnlyAnIsolatedFileKeyring(t *testing.T) {
 	bin := buildBinary(t)
 	requireChildOnFileKeyring(t, bin)
@@ -347,7 +232,7 @@ func TestBuildBinary_ChildReadsOnlyAnIsolatedFileKeyring(t *testing.T) {
 		t.Fatalf("auth token stderr is not a JSON:API error envelope (%v): %q", err, stderr)
 	}
 	detail := envelope.Errors[0].Detail
-	homeVar := "HOME" // the variable os.UserHomeDir reads, which configDir names
+	homeVar := "HOME"
 	if runtime.GOOS == "windows" {
 		homeVar = "USERPROFILE"
 	}
@@ -357,10 +242,6 @@ func TestBuildBinary_ChildReadsOnlyAnIsolatedFileKeyring(t *testing.T) {
 	}
 }
 
-// childBaseEnv is the environment every child mio starts from: PATH, and home
-// pointing at home under every name os.UserHomeDir reads (HOME on Unix,
-// USERPROFILE on Windows), so the child's config dir and file keyring resolve
-// under home on every platform. XDG_CONFIG_HOME is left unset.
 func childBaseEnv(home string) []string {
 	return []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -369,12 +250,10 @@ func childBaseEnv(home string) []string {
 	}
 }
 
-// runBinary executes the compiled mio binary with the given env vars and args,
-// returning stdout, stderr, and process exit code.
 func runBinary(t *testing.T, bin string, envPairs []string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 
-	env := childBaseEnv(t.TempDir()) // isolate config files and the file keyring
+	env := childBaseEnv(t.TempDir())
 	for _, kv := range envPairs {
 		k, v, _ := strings.Cut(kv, "=")
 		if v != "" {
@@ -393,14 +272,6 @@ func runBinary(t *testing.T, bin string, envPairs []string, args ...string) (std
 	return outBuf.String(), errBuf.String(), cmd.ProcessState.ExitCode()
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Exit code contracts
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// TestContract_ExitCodes_Success: a well-formed command with a 200 API
-// response exits 0.
-//
-// CONTRACT: success → exit 0
 func TestContract_ExitCodes_Success(t *testing.T) {
 	body := mustReadTestdata(t, "list_response.json")
 	srv := newMockServer(t, []mockHandler{{Status: 200, Body: body}})
@@ -413,10 +284,6 @@ func TestContract_ExitCodes_Success(t *testing.T) {
 	}
 }
 
-// TestContract_ExitCodes_UnknownFlag: an unrecognised flag on a leaf command
-// exits 2.
-//
-// CONTRACT: unknown flag → exit 2 (ExitUsage)
 func TestContract_ExitCodes_UnknownFlag(t *testing.T) {
 	res := runContract(t, nil, "version", "--definitely-not-a-real-flag")
 	if res.Code != errs.ExitUsage {
@@ -425,13 +292,7 @@ func TestContract_ExitCodes_UnknownFlag(t *testing.T) {
 	}
 }
 
-// TestContract_ExitCodes_MissingRequiredFlagSemantics: calling a command with
-// insufficient flags triggers the command's own usage error (exit 2).
-//
-// CONTRACT: insufficient user-facing required fields → exit 2 (ExitUsage)
 func TestContract_ExitCodes_MissingRequiredFlagSemantics(t *testing.T) {
-	// contacts create requires at least --email; no flags → "nothing to create"
-	// error returned as ExitUsage from RunE.
 	srv := newMockServer(t, nil)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "contacts", "create")...)
@@ -441,11 +302,7 @@ func TestContract_ExitCodes_MissingRequiredFlagSemantics(t *testing.T) {
 	}
 }
 
-// TestContract_ExitCodes_WrongArgCount: wrong positional argument count exits 2.
-//
-// CONTRACT: wrong arg count → exit 2 (ExitUsage)
 func TestContract_ExitCodes_WrongArgCount(t *testing.T) {
-	// contacts retrieve expects exactly 1 arg.
 	res := runContract(t, nil, "contacts", "retrieve")
 	if res.Code != errs.ExitUsage {
 		t.Errorf("CONTRACT: wrong-arg-count exit code = %d, want %d (ExitUsage)",
@@ -453,9 +310,6 @@ func TestContract_ExitCodes_WrongArgCount(t *testing.T) {
 	}
 }
 
-// TestContract_ExitCodes_UnknownRootCommand: an unknown command at root exits 2.
-//
-// CONTRACT: unknown root command → exit 2 (ExitUsage)
 func TestContract_ExitCodes_UnknownRootCommand(t *testing.T) {
 	res := runContract(t, nil, "frobnicate-this-does-not-exist")
 	if res.Code != errs.ExitUsage {
@@ -464,34 +318,20 @@ func TestContract_ExitCodes_UnknownRootCommand(t *testing.T) {
 	}
 }
 
-// TestContract_ExitCodes_UnknownSubcommandOnResourceGroup: unknown subcommand
-// on a resource group (e.g. `mio contacts frobnicate`).
-//
-// CONTRACT (P0-FIXED): an unknown subcommand on a resource group exits 2
-// (ExitUsage). Previously this was exit 0 — cobra treated a group-only command
-// with no RunE as a successful no-op when it received unrecognised args, which
-// silently swallowed typos. The P0 rejig attaches a RunE guard to every group
-// command (see attachGroupGuards in root.go) so unknown/missing subcommands now
-// return ExitUsage and print usage to stderr.
 func TestContract_ExitCodes_UnknownSubcommandOnResourceGroup(t *testing.T) {
 	res := runContract(t, nil, "contacts", "frobnicate-unknown-subcommand")
 	if res.Code != errs.ExitUsage {
 		t.Errorf("CONTRACT: unknown-subcommand-on-group exit code = %d, want %d (ExitUsage)",
 			res.Code, errs.ExitUsage)
 	}
-	// The error path must not contaminate stdout — usage goes to stderr only.
 	if strings.TrimSpace(res.Stdout) != "" {
 		t.Errorf("CONTRACT: unknown-subcommand-on-group must produce no stdout; got: %q", res.Stdout)
 	}
 }
 
-// TestContract_ExitCodes_NoCredentials: commands requiring auth exit 3 when
-// no API key is configured.
-//
-// CONTRACT: no API key → exit 3 (ExitAuth)
 func TestContract_ExitCodes_NoCredentials(t *testing.T) {
 	restore := overlayEnv(t, []string{
-		"MIO_API_KEY=", // unset
+		"MIO_API_KEY=",
 	})
 	defer restore()
 	os.Unsetenv("MIO_API_KEY") //nolint:errcheck
@@ -512,9 +352,6 @@ func TestContract_ExitCodes_NoCredentials(t *testing.T) {
 	}
 }
 
-// TestContract_ExitCodes_NotFound: a 404 API response exits 4.
-//
-// CONTRACT: 404 API response → exit 4 (ExitNotFound)
 func TestContract_ExitCodes_NotFound(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Status: 404, Body: `{"errors":[{"status":"404","detail":"contact not found"}]}`},
@@ -528,12 +365,8 @@ func TestContract_ExitCodes_NotFound(t *testing.T) {
 	}
 }
 
-// TestContract_ExitCodes_NonTTYDestructiveWithoutYes: destructive command in
-// non-TTY without --yes exits 5.
-//
-// CONTRACT: non-TTY destructive without --yes → exit 5 (ExitNeedsConfir)
 func TestContract_ExitCodes_NonTTYDestructiveWithoutYes(t *testing.T) {
-	srv := newMockServer(t, nil) // DELETE must NOT be called
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "contacts", "delete", "ctt_any")...)
@@ -543,10 +376,6 @@ func TestContract_ExitCodes_NonTTYDestructiveWithoutYes(t *testing.T) {
 	}
 }
 
-// TestContract_ExitCodes_NonTTYDestructiveWithYes: --yes bypasses the guard
-// and the command proceeds (exit 0).
-//
-// CONTRACT: non-TTY destructive with --yes → exit 0 (ExitOK)
 func TestContract_ExitCodes_NonTTYDestructiveWithYes(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Method: "DELETE", PathPfx: "/api/v1/teams/", Status: 204, Body: ""},
@@ -560,14 +389,6 @@ func TestContract_ExitCodes_NonTTYDestructiveWithYes(t *testing.T) {
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Default JSON output shape contracts
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// TestContract_JSON_ListIsArray: the default JSON output of a list command is
-// a bare JSON array of flat objects — NOT a JSON:API envelope.
-//
-// CONTRACT: list JSON → bare array [{"id":...,"type":...,...}, ...]
 func TestContract_JSON_ListIsArray(t *testing.T) {
 	body := mustReadTestdata(t, "list_response.json")
 	srv := newMockServer(t, []mockHandler{{Status: 200, Body: body}})
@@ -603,22 +424,15 @@ func TestContract_JSON_ListIsArray(t *testing.T) {
 		if _, hasType := obj["type"]; !hasType {
 			t.Errorf("CONTRACT: list[%d] missing 'type'", i)
 		}
-		// Attributes must be flattened to top-level — no nested "attributes" key.
 		if _, hasAttrs := obj["attributes"]; hasAttrs {
 			t.Errorf("CONTRACT: list[%d] must NOT have nested 'attributes' (must be flattened)", i)
 		}
-		// A known attribute promoted to top-level.
 		if _, hasEmail := obj["email"]; !hasEmail {
 			t.Errorf("CONTRACT: list[%d] missing top-level 'email' (not flattened)", i)
 		}
 	}
 }
 
-// TestContract_JSON_RetrieveIsFlatObject: the default JSON output of a
-// retrieve command is a single flat object (id + type + attributes merged) —
-// NOT a JSON:API {"data":...} envelope.
-//
-// CONTRACT: retrieve JSON → flat object {"id":...,"type":...,...}
 func TestContract_JSON_RetrieveIsFlatObject(t *testing.T) {
 	body := mustReadTestdata(t, "retrieve_response.json")
 	srv := newMockServer(t, []mockHandler{{Status: 200, Body: body}})
@@ -655,19 +469,10 @@ func TestContract_JSON_RetrieveIsFlatObject(t *testing.T) {
 	}
 }
 
-// TestContract_JSON_NonTTYDefaultIsJSON: off a TTY (in-process buffer), the
-// default output format is JSON, not table.
-//
-// CONTRACT: non-TTY list default → JSON array (not table text)
-//
-// CONTRACT-BUG(P0): the P0 rejig must NOT change the non-TTY default format.
-// If the rejig introduces a new non-TTY default (e.g. "agent" format), update
-// this test explicitly.
 func TestContract_JSON_NonTTYDefaultIsJSON(t *testing.T) {
 	body := mustReadTestdata(t, "list_response.json")
 	srv := newMockServer(t, []mockHandler{{Status: 200, Body: body}})
 
-	// No --output flag: format inferred from isTTY, which returns false for buffer.
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "contacts", "list")...)
 	if res.Code != errs.ExitOK {
@@ -683,14 +488,6 @@ func TestContract_JSON_NonTTYDefaultIsJSON(t *testing.T) {
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// --raw envelope contracts
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// TestContract_Raw_RetrievePreservesEnvelope: --raw on retrieve emits the full
-// JSON:API envelope including links, included, and meta.
-//
-// CONTRACT: --raw retrieve → full JSON:API envelope (data + links + included + meta)
 func TestContract_Raw_RetrievePreservesEnvelope(t *testing.T) {
 	body := mustReadTestdata(t, "retrieve_response.json")
 	srv := newMockServer(t, []mockHandler{{Status: 200, Body: body}})
@@ -708,10 +505,6 @@ func TestContract_Raw_RetrievePreservesEnvelope(t *testing.T) {
 	}
 }
 
-// TestContract_Raw_ListPreservesEnvelope: --raw on list emits the full JSON:API
-// collection envelope.
-//
-// CONTRACT: --raw list → full JSON:API collection envelope (data + meta + links)
 func TestContract_Raw_ListPreservesEnvelope(t *testing.T) {
 	body := mustReadTestdata(t, "list_response.json")
 	srv := newMockServer(t, []mockHandler{{Status: 200, Body: body}})
@@ -729,14 +522,6 @@ func TestContract_Raw_ListPreservesEnvelope(t *testing.T) {
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// --jq filter contracts
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// TestContract_JQ_ListIDs: --jq '.[].id' on a list extracts the id of every
-// resource into a JSON array.
-//
-// CONTRACT: list + --jq '.[].id' → JSON array of id strings
 func TestContract_JQ_ListIDs(t *testing.T) {
 	body := mustReadTestdata(t, "list_response.json")
 	srv := newMockServer(t, []mockHandler{{Status: 200, Body: body}})
@@ -769,10 +554,6 @@ func TestContract_JQ_ListIDs(t *testing.T) {
 	}
 }
 
-// TestContract_JQ_SingleFieldRetrieve: --jq '.email' on a retrieve returns
-// the field value as a JSON string.
-//
-// CONTRACT: retrieve + --jq '.field' → JSON value of that field
 func TestContract_JQ_SingleFieldRetrieve(t *testing.T) {
 	body := mustReadTestdata(t, "retrieve_response.json")
 	srv := newMockServer(t, []mockHandler{{Status: 200, Body: body}})
@@ -789,15 +570,6 @@ func TestContract_JQ_SingleFieldRetrieve(t *testing.T) {
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// --output format contracts
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// TestContract_OutputFormats_TableList: --output table on a list command
-// produces an all-caps header row (ID first, TYPE second, rest alpha) followed
-// by data rows.
-//
-// CONTRACT: --output table list → uppercase header (ID TYPE ...) + data rows
 func TestContract_OutputFormats_TableList(t *testing.T) {
 	body := mustReadTestdata(t, "list_response.json")
 	srv := newMockServer(t, []mockHandler{{Status: 200, Body: body}})
@@ -823,15 +595,11 @@ func TestContract_OutputFormats_TableList(t *testing.T) {
 	if header != strings.ToUpper(header) {
 		t.Errorf("CONTRACT: table header must be all-uppercase; got %q", header)
 	}
-	if len(lines) < 3 { // header + 2 data rows
+	if len(lines) < 3 {
 		t.Errorf("CONTRACT: table expected ≥3 lines (header + 2 rows); got %d", len(lines))
 	}
 }
 
-// TestContract_OutputFormats_PlainRetrieve: --output plain on a retrieve
-// command produces key=value lines sorted alphabetically.
-//
-// CONTRACT: --output plain retrieve → sorted key=value lines, one per field
 func TestContract_OutputFormats_PlainRetrieve(t *testing.T) {
 	body := mustReadTestdata(t, "retrieve_response.json")
 	srv := newMockServer(t, []mockHandler{{Status: 200, Body: body}})
@@ -860,7 +628,6 @@ func TestContract_OutputFormats_PlainRetrieve(t *testing.T) {
 		t.Errorf("CONTRACT: plain output missing 'email=alice@example.com'; got:\n%s", res.Stdout)
 	}
 
-	// Lines must be alphabetically sorted: email < id < type.
 	emailIdx := indexContaining(lines, "email=")
 	idIdx := indexContaining(lines, "id=")
 	typeIdx := indexContaining(lines, "type=")
@@ -872,16 +639,8 @@ func TestContract_OutputFormats_PlainRetrieve(t *testing.T) {
 	}
 }
 
-// TestContract_OutputFormats_InvalidFormat: an unrecognised --output value
-// exits 2 (ExitUsage).
-//
-// CONTRACT: unknown --output value → exit 2 (ExitUsage)
-//
-// Note: --output is validated in newContext (resolveFormat), which is only
-// called by resource commands — not by `version`. We therefore use `contacts
-// list` with a mock server; the format validation fires before any API call.
 func TestContract_OutputFormats_InvalidFormat(t *testing.T) {
-	srv := newMockServer(t, nil) // no request expected; format check fires first
+	srv := newMockServer(t, nil)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--output", "yaml", "contacts", "list")...)
 	if res.Code != errs.ExitUsage {
@@ -890,14 +649,6 @@ func TestContract_OutputFormats_InvalidFormat(t *testing.T) {
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Destructive-operation contracts
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// TestContract_Destructive_NonTTYNoYes_StdoutEmpty: a destructive command
-// refused for missing --yes must produce NO stdout.
-//
-// CONTRACT: destructive without --yes → stdout empty (operation was refused)
 func TestContract_Destructive_NonTTYNoYes_StdoutEmpty(t *testing.T) {
 	srv := newMockServer(t, nil)
 
@@ -912,10 +663,6 @@ func TestContract_Destructive_NonTTYNoYes_StdoutEmpty(t *testing.T) {
 	}
 }
 
-// TestContract_Destructive_WithYes_DeleteCalled: --yes causes DELETE to be
-// sent to the API.
-//
-// CONTRACT: destructive with --yes → DELETE called, exit 0
 func TestContract_Destructive_WithYes_DeleteCalled(t *testing.T) {
 	deleteCalled := false
 
@@ -940,23 +687,6 @@ func TestContract_Destructive_WithYes_DeleteCalled(t *testing.T) {
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// teams switch stdout-purity contract
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// TestContract_TeamsSwitch_StdoutMachineClean: `teams switch <id> --output json`
-// off a TTY must emit ONLY the rendered payload on stdout — no human prose. The
-// "Switched to team …" confirmation is a TTY-only nicety and must live on
-// stderr, never stdout, or it would corrupt the JSON an agent parses (and break
-// any downstream --jq pipe).
-//
-// CONTRACT: teams switch --output json (non-TTY) → stdout is valid JSON only
-//
-// Two server shapes are exercised: an endpoint that returns a resource body
-// (stdout must be exactly that JSON object) and one that returns 204 No Content
-// (stdout must be empty, per the existing no-body convention). In both cases the
-// config write + hub clear happens regardless; we sandbox it via XDG_CONFIG_HOME
-// so the test never touches the developer's real config file.
 func TestContract_TeamsSwitch_StdoutMachineClean(t *testing.T) {
 	t.Run("with-body", func(t *testing.T) {
 		body := `{"data":{"id":"t_new","type":"teams","attributes":{"name":"New Team"}}}`
@@ -971,7 +701,6 @@ func TestContract_TeamsSwitch_StdoutMachineClean(t *testing.T) {
 			t.Fatalf("command failed (code %d): %s", res.Code, res.Stderr)
 		}
 
-		// stdout must be a single valid JSON value with NO leading/trailing prose.
 		var parsed any
 		if err := json.Unmarshal([]byte(res.Stdout), &parsed); err != nil {
 			t.Fatalf("CONTRACT: teams switch --output json stdout is not pure JSON: %v\nstdout=%q",
@@ -984,7 +713,6 @@ func TestContract_TeamsSwitch_StdoutMachineClean(t *testing.T) {
 		if obj["id"] != "t_new" {
 			t.Errorf("CONTRACT: teams switch stdout id = %v, want t_new", obj["id"])
 		}
-		// The human confirmation must NOT appear on stdout.
 		if strings.Contains(res.Stdout, "Switched to team") {
 			t.Errorf("CONTRACT: human confirmation leaked into stdout: %q", res.Stdout)
 		}
@@ -1002,9 +730,6 @@ func TestContract_TeamsSwitch_StdoutMachineClean(t *testing.T) {
 			t.Fatalf("command failed (code %d): %s", res.Code, res.Stderr)
 		}
 
-		// No body from the server → stdout empty (no prose). The confirmation,
-		// if any, is on stderr and only on a TTY (the test buffer is non-TTY, so
-		// there should be no confirmation at all here).
 		if strings.TrimSpace(res.Stdout) != "" {
 			t.Errorf("CONTRACT: teams switch (no body) must produce empty stdout; got: %q", res.Stdout)
 		}
@@ -1014,28 +739,11 @@ func TestContract_TeamsSwitch_StdoutMachineClean(t *testing.T) {
 	})
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Error-envelope shape contracts (subprocess)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// TestContract_ErrorEnvelope_Shape drives the real binary to pin the exact
-// JSON:API error envelope shape written to stderr on any error.
-//
-// CONTRACT: any error → JSON:API envelope on stderr:
-//
-//	{"errors":[{"status":"<http-ish>","detail":"<msg>","meta":{"exit_code":<n>}}]}
-//
-// CONTRACT-BUG(P0): the P0 rejig will add a TTY-aware branch: on a real
-// terminal the error may be formatted as human-friendly text instead. The
-// NON-TTY path (piped stderr) must remain a JSON:API envelope. This test runs
-// piped — it pins the non-TTY path and requires NO change when the TTY branch
-// is added.
 func TestContract_ErrorEnvelope_Shape(t *testing.T) {
 	bin := buildBinary(t)
 
-	// No MIO_API_KEY → ExitAuth
 	_, stderr, exitCode := runBinary(t, bin, []string{
-		"MIO_TEAM_IS_NOT_A_REAL_VAR=t_team1", // team injected via --team flag
+		"MIO_TEAM_IS_NOT_A_REAL_VAR=t_team1",
 	}, "--team", "t_team1", "contacts", "list")
 
 	raw := strings.TrimSpace(stderr)
@@ -1075,10 +783,6 @@ func TestContract_ErrorEnvelope_Shape(t *testing.T) {
 	}
 }
 
-// TestContract_ErrorEnvelope_404 pins that a 404 API response produces a
-// JSON:API error envelope on stderr with status "404" and process exit code 4.
-//
-// CONTRACT: 404 API response → JSON envelope on stderr with status "404", exit 4
 func TestContract_ErrorEnvelope_404(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Status: 404, Body: `{"errors":[{"status":"404","detail":"contact not found"}]}`},
@@ -1111,20 +815,14 @@ func TestContract_ErrorEnvelope_404(t *testing.T) {
 	}
 }
 
-// TestContract_ErrorEnvelope_NonTTYDestructiveNoYes pins that refusing a
-// destructive command produces a JSON:API envelope on stderr with status "412"
-// (ExitNeedsConfir maps to 412) and exit code 5.
-//
-// CONTRACT: non-TTY destructive without --yes → stderr JSON status "412", exit 5
 func TestContract_ErrorEnvelope_NonTTYDestructiveNoYes(t *testing.T) {
-	srv := newMockServer(t, nil) // DELETE must not be reached
+	srv := newMockServer(t, nil)
 
 	bin := buildBinary(t)
 	_, stderr, exitCode := runBinary(t, bin, []string{
 		"MIO_API_KEY=test-key",
 		"MIO_API_BASE_URL=" + srv.URL,
 	}, "--team", "t_team1", "contacts", "delete", "ctt_any")
-	// No --yes → ExitNeedsConfir=5
 
 	if exitCode != errs.ExitNeedsConfir {
 		t.Errorf("CONTRACT: non-TTY-no-yes exit code = %d, want %d (ExitNeedsConfir=5)",
@@ -1148,23 +846,6 @@ func TestContract_ErrorEnvelope_NonTTYDestructiveNoYes(t *testing.T) {
 	}
 }
 
-// TestContract_ErrorEnvelope_RealHTTPStatus pins that the envelope's `status`
-// member reports the status the API ACTUALLY returned — not one reconstructed
-// from the exit code (MIO-2656).
-//
-// errs.ExitCodeForStatus is deliberately many-to-one (401 and 403 both →
-// ExitAuth; 400, 409 and 422 all → ExitUsage), so deriving `status` back out of
-// the exit code cannot be anything but lossy. Before the fix the CLI reported a
-// 403 as "401", and a 409 or a 422 as "400". Agents branch on this member —
-// 403-vs-401 decides whether re-authenticating can help, 409-vs-422 decides
-// whether retrying can help — so a rewritten status is a broken contract.
-//
-// Each case ALSO asserts the process exit code, because the coarse exit-code
-// contract is intentional and must not move: precise status + coarse exit code
-// is the correct end state, and an exit code that shifted here would mean the
-// fix had overreached.
-//
-// CONTRACT: errors[0].status == the API's real HTTP status; exit codes unchanged.
 func TestContract_ErrorEnvelope_RealHTTPStatus(t *testing.T) {
 	bin := buildBinary(t)
 
@@ -1176,62 +857,39 @@ func TestContract_ErrorEnvelope_RealHTTPStatus(t *testing.T) {
 		wantExit   int
 	}{
 		{
-			// The five team-security command trees reject API-key principals by
-			// design (MIO-2599: "Team-security stays JWT-only, permanently"), so
-			// a real 403 is a normal, expected answer here. The bug was never
-			// the 403 — it was the CLI relabelling it "401" and thereby telling
-			// an agent that re-authenticating might help, when nothing about a
-			// different API key can ever satisfy a JWT-only route.
 			name:       "403 Forbidden is not reported as 401",
 			httpStatus: 403,
 			body:       `{"errors":[{"status":"403","detail":"API key principals cannot manage API keys"}]}`,
 			wantStatus: "403",
-			wantExit:   errs.ExitAuth, // 3 — unchanged
+			wantExit:   errs.ExitAuth,
 		},
 		{
-			// 409 says "the request was fine; the world is not in the state it
-			// needs to be in" — the caller may be able to retry after fixing
-			// state. Reporting "400" says "your request was malformed", which
-			// tells the agent to stop and rewrite the command instead.
 			name:       "409 Conflict is not reported as 400",
 			httpStatus: 409,
 			body:       `{"errors":[{"status":"409","detail":"Email 'a@b.c' is already registered."}]}`,
 			wantStatus: "409",
-			wantExit:   errs.ExitUsage, // 2 — unchanged
+			wantExit:   errs.ExitUsage,
 		},
 		{
-			// 422 (well-formed request, semantically rejected) vs 400
-			// (malformed) is the distinction this CLI's faithful-conduit rubric
-			// turns on: it is the difference between "the API considered your
-			// input and said no" and "the API could not parse you at all".
 			name:       "422 Unprocessable is not reported as 400",
 			httpStatus: 422,
 			body:       `{"errors":[{"status":"422","detail":"String should have at least 8 characters"}]}`,
 			wantStatus: "422",
-			wantExit:   errs.ExitUsage, // 2 — unchanged
+			wantExit:   errs.ExitUsage,
 		},
 		{
-			// Beyond the three cases the ticket names, the same de-collapsing
-			// applies to every status that shared an exit code. 5xx all mapped
-			// to ExitServer and so all reported "500"; a 503 now says 503, which
-			// is the difference between "the app blew up" and "the app is not
-			// accepting traffic right now" (the latter is worth retrying).
 			name:       "5xx variants no longer all report 500",
 			httpStatus: 503,
 			body:       `{"errors":[{"status":"503","detail":"Service temporarily unavailable"}]}`,
 			wantStatus: "503",
-			wantExit:   errs.ExitServer, // 7 — unchanged
+			wantExit:   errs.ExitServer,
 		},
 		{
-			// The "other 4xx" bucket (405, 415, …) mapped to ExitGeneric, which
-			// exitToStatus had no case for — so it fell through to the default
-			// and reported a CLIENT error as "500". That was the worst of the
-			// lot: it pointed the agent at the backend for its own mistake.
 			name:       "other 4xx no longer reports 500",
 			httpStatus: 405,
 			body:       `{"errors":[{"status":"405","detail":"Method Not Allowed"}]}`,
 			wantStatus: "405",
-			wantExit:   errs.ExitGeneric, // 1 — unchanged
+			wantExit:   errs.ExitGeneric,
 		},
 	}
 
@@ -1267,8 +925,6 @@ func TestContract_ErrorEnvelope_RealHTTPStatus(t *testing.T) {
 				t.Errorf("CONTRACT: HTTP %d → errors[0].status = %q, want %q; stderr=%q",
 					tc.httpStatus, e.Status, tc.wantStatus, raw)
 			}
-			// The exit code is echoed in the envelope AND is the process exit
-			// code; both must still be the pre-fix value.
 			if got, ok := e.Meta["exit_code"].(float64); !ok || int(got) != tc.wantExit {
 				t.Errorf("CONTRACT: HTTP %d → meta.exit_code = %v, want %d; stderr=%q",
 					tc.httpStatus, e.Meta["exit_code"], tc.wantExit, raw)
@@ -1277,8 +933,6 @@ func TestContract_ErrorEnvelope_RealHTTPStatus(t *testing.T) {
 				t.Errorf("CONTRACT: HTTP %d → process exit code = %d, want %d; stderr=%q",
 					tc.httpStatus, exitCode, tc.wantExit, raw)
 			}
-			// The API's message must still survive into detail — carrying the
-			// status must not cost us the body.
 			if e.Detail == "" {
 				t.Errorf("CONTRACT: HTTP %d → errors[0].detail empty; stderr=%q", tc.httpStatus, raw)
 			}
@@ -1286,21 +940,9 @@ func TestContract_ErrorEnvelope_RealHTTPStatus(t *testing.T) {
 	}
 }
 
-// TestContract_ErrorEnvelope_LocalErrorKeepsDerivedStatus pins the FALLBACK arm
-// of MIO-2656: an error that never reached the network has no HTTP status to
-// report, so the envelope keeps the historical exit-code-derived value rather
-// than omitting the member or emitting "0".
-//
-// Here the failure is "no API key" — a purely local precondition — and "401"
-// remains the honest description of it. This is what keeps the fix backward
-// compatible for every non-HTTP failure path.
-//
-// CONTRACT: local (non-HTTP) error → status still derived from the exit code.
 func TestContract_ErrorEnvelope_LocalErrorKeepsDerivedStatus(t *testing.T) {
 	bin := buildBinary(t)
 
-	// A bad flag is rejected by cobra before any request is built, so no HTTP
-	// status can exist. ExitUsage → "400".
 	_, stderr, exitCode := runBinary(t, bin, nil,
 		"version", "--definitely-not-a-real-flag")
 
@@ -1326,13 +968,6 @@ func TestContract_ErrorEnvelope_LocalErrorKeepsDerivedStatus(t *testing.T) {
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TTY vs non-TTY contracts
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// TestContract_TTY_ErrorNotInStdout: errors must not bleed into stdout.
-//
-// CONTRACT: on error, stdout is empty; error goes to stderr only
 func TestContract_TTY_ErrorNotInStdout(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Status: 404, Body: `{"errors":[{"status":"404","detail":"not found"}]}`},

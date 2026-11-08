@@ -1,29 +1,5 @@
 package cmd
 
-// auth.go — `mio auth token` (MIO-2995).
-//
-// Prints the API key `mio login` stored, and nothing else, so a headless
-// session can export it ONCE and stop touching the credential store:
-//
-//	MIO_API_KEY="$(mio auth token)"
-//	export MIO_API_KEY
-//
-// (two statements on purpose — see authTokenExport).
-//
-// It is the `gh auth token` shape on purpose — that is the verb agents already
-// reach for. It lives in its own `auth` group rather than on an existing
-// command because every existing home is wrong for it: `api-keys` manages
-// SERVER-side keys and promises the secret is never re-exposed after create;
-// `whoami` needs the network and renders a JSON document; `config` is
-// documented as never holding the key; and a bare root-level `token` would
-// squat a generic name next to the JWT access token `login` also handles.
-// login/logout/register/whoami stay at the root — moving them would break
-// every script that calls them.
-//
-// Before this there was no non-interactive way out: the key sits in an
-// encrypted file (or an OS store whose ACL admits only the mio binary), so no
-// shell tool can read it back.
-
 import (
 	"fmt"
 	"os"
@@ -35,13 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// authTokenExport is THE documented way to export the stored key, and every
-// doc surface must use it or authTokenExportOneLine (pinned by
-// TestAuthTokenExportIdiom_EveryDocUsesIt). It is two statements on purpose:
-// `export MIO_API_KEY="$(…)"` returns export's own status, 0, so `set -e`
-// never sees auth token's exit 3 and the script runs on with an EMPTY key
-// exported; `MIO_API_KEY="$(…)" && export …` hides the 3 from `set -e` too.
-// TestAuthTokenExportIdiom_StopsASetEScript runs both forms under bash.
 const (
 	authTokenExport        = "MIO_API_KEY=\"$(mio auth token)\"\nexport MIO_API_KEY"
 	authTokenExportOneLine = `MIO_API_KEY="$(mio auth token)"; export MIO_API_KEY`
@@ -117,7 +86,6 @@ the same way.`,
 	},
 }
 
-// indentHelp indents every line of a shell snippet for a help text block.
 func indentHelp(snippet string) string {
 	return "  " + strings.ReplaceAll(snippet, "\n", "\n  ")
 }

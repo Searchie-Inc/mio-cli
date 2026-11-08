@@ -1,16 +1,5 @@
 package cmd
 
-// activity.go implements the `mio activity` command group.
-//
-// All activity routes are hub-scoped admin reads — no create/update/delete
-// operations exist on this surface. Both commands require a resolved team id
-// and hub id (--hub or config current_hub).
-//
-// Routes (see docs/internal/api-surface.md "activity"):
-//
-//	contact     GET /api/teams/{team_id}/hubs/{hub_id}/activity/contacts/{contact_id}
-//	top-engaged GET /api/teams/{team_id}/hubs/{hub_id}/activity/top-engaged
-
 import (
 	"fmt"
 	"net/url"
@@ -24,11 +13,8 @@ func init() {
 		activityTopEngagedCmd,
 	)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(activityCmd)
 }
-
-// ---- activity group ---------------------------------------------------------
 
 var activityCmd = &cobra.Command{
 	Use:   "activity",
@@ -36,12 +22,9 @@ var activityCmd = &cobra.Command{
 	Long:  "Read activity data for a hub: per-contact history and top-engaged contact rankings.",
 }
 
-// activityBasePath returns /api/teams/{team_id}/hubs/{hub_id}/activity.
 func activityBasePath(teamID, hubID string) string {
 	return fmt.Sprintf("/api/teams/%s/hubs/%s/activity", teamID, hubID)
 }
-
-// ---- activity contact -------------------------------------------------------
 
 var activityContactCmd = &cobra.Command{
 	Use:   "contact <contact_id>",
@@ -78,8 +61,6 @@ Requires --hub (or a configured current hub) and --team (or a configured current
 	},
 }
 
-// ---- activity top-engaged ---------------------------------------------------
-
 var activityTopEngagedCmd = &cobra.Command{
 	Use:   "top-engaged",
 	Short: "List the top-engaged contacts in a hub.",
@@ -114,8 +95,6 @@ Requires --hub (or a configured current hub) and --team (or a configured current
 	},
 }
 
-// activityContext is the shared boilerplate for activity subcommands: build the
-// context, require auth, and resolve both the team id and hub id.
 func activityContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {

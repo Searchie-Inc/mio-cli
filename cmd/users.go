@@ -1,18 +1,5 @@
 package cmd
 
-// users.go implements the `mio users` command group.
-//
-// Routes (see docs/internal/api-surface.md "users"):
-//
-//	me       GET  /api/users/me
-//	list     GET  /api/users
-//	retrieve GET  /api/users/{id}
-//	update   PATCH /api/users/{id}
-//
-// Users are not team-scoped or hub-scoped — paths are flat under /api/users.
-// There is no create or delete in the users surface (accounts are provisioned
-// via auth/register and cannot be deleted through this API).
-
 import (
 	"net/url"
 
@@ -33,15 +20,12 @@ func init() {
 	rootCmd.AddCommand(usersCmd)
 }
 
-// ---- users group ------------------------------------------------------------
-
 var usersCmd = &cobra.Command{
 	Use:   "users",
 	Short: "Manage users.",
 	Long:  "Retrieve and update users. Use 'mio users me' to inspect the authenticated user.",
 }
 
-// usersPath returns /api/users[/{id}].
 func usersPath(id string) string {
 	const base = "/api/users"
 	if id != "" {
@@ -49,8 +33,6 @@ func usersPath(id string) string {
 	}
 	return base
 }
-
-// ---- me ---------------------------------------------------------------------
 
 var usersMeCmd = &cobra.Command{
 	Use:   "me",
@@ -80,8 +62,6 @@ Equivalent to GET /api/users/me.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- list -------------------------------------------------------------------
 
 var usersListCmd = &cobra.Command{
 	Use:   "list",
@@ -115,8 +95,6 @@ Equivalent to GET /api/users.`,
 	},
 }
 
-// ---- retrieve ---------------------------------------------------------------
-
 var usersRetrieveCmd = &cobra.Command{
 	Use:   "retrieve <id>",
 	Short: "Retrieve a user by id.",
@@ -141,8 +119,6 @@ Equivalent to GET /api/users/{id}.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- update -----------------------------------------------------------------
 
 var usersUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
@@ -171,8 +147,6 @@ Equivalent to PATCH /api/users/{id}.`,
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
-		// Flat body: the route documents a plain UserUpdate model (first_name,
-		// last_name, is_active), not a JSON:API envelope.
 		res, err := c.client.UpdateWith(c.ctx, client.StyleFlat, usersPath(args[0]), attrs)
 		if err != nil {
 			return err
@@ -182,10 +156,8 @@ Equivalent to PATCH /api/users/{id}.`,
 }
 
 func init() {
-	// Pagination flags for list.
 	addPaginationFlags(usersListCmd)
 
-	// Attribute flags for update.
 	usersUpdateCmd.Flags().String("first-name", "", "User's first name.")
 	usersUpdateCmd.Flags().String("last-name", "", "User's last name.")
 }

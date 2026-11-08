@@ -11,19 +11,6 @@ import (
 	"testing"
 )
 
-// The agent-skill side of `mio update` (MIO-2874, MIO-2875).
-//
-// The skill file is what an agent reads to learn the CLI's surface, so a skill
-// that disagrees with the binary beside it advertises verbs the binary does not
-// have — and the failures look like CLI bugs rather than version skew.
-//
-// The load-bearing constraint: skillBody is //go:embed-ed, so the running
-// process only ever holds ITS OWN version's content. It therefore cannot write a
-// correct skill for a version it just installed, and must delegate to the new
-// binary. Re-stamping the old body with the new version string would produce a
-// file that lies about which verbs exist AND carries a matching content hash —
-// no mismatch signal at all.
-
 func seedManagedSkill(t *testing.T, path, ver string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -43,23 +30,12 @@ func claudeSkillPath(home string) string {
 	return filepath.Join(home, ".claude", "skills", skillDirName, skillFileName)
 }
 
-// isolateSkillHome sandboxes a skill test and returns its HOME. See
-// isolateSkillSandbox.
 func isolateSkillHome(t *testing.T) string {
 	t.Helper()
 	home, _ := isolateSkillSandbox(t)
 	return home
 }
 
-// isolateSkillSandbox moves EVERY location a skill can be read from or written
-// to into temp dirs: HOME and USERPROFILE (the user scope, and where
-// os.UserHomeDir looks on each OS), CODEX_HOME (the Codex user scope), and
-// XDG_CONFIG_HOME, and it changes the working directory to an empty temp
-// project dir — the project scope is ./.claude and ./.codex relative to it
-// (MIO-4178). It returns the home and the project dir, symlinks resolved so a
-// path a test builds compares equal to one the code under test reports.
-// TestMain's skillPathResolved hook panics on any skill path outside the temp
-// root, so a test that skips this fails instead of touching a real skill.
 func isolateSkillSandbox(t *testing.T) (home, project string) {
 	t.Helper()
 	home = resolvedTempDir(t)
@@ -81,8 +57,6 @@ func resolvedTempDir(t *testing.T) string {
 	return dir
 }
 
-// projectSkillPath is where `mio skills install --project --target <target>`
-// writes, for a project rooted at dir.
 func projectSkillPath(dir, target string) string {
 	return filepath.Join(dir, "."+target, "skills", skillDirName, skillFileName)
 }
@@ -104,8 +78,6 @@ func stubRefreshExec(t *testing.T, fn func(bin string, loc skillLocation) error)
 	return calls
 }
 
-// MIO-2874: the refresh must be performed BY the newly installed binary, not by
-// the running one re-stamping its own embedded body.
 func TestRefreshManagedSkills_DelegatesToTheNewBinary(t *testing.T) {
 	home := isolateSkillHome(t)
 	path := claudeSkillPath(home)
@@ -116,7 +88,6 @@ func TestRefreshManagedSkills_DelegatesToTheNewBinary(t *testing.T) {
 		if loc.target != "claude" || loc.project {
 			return nil
 		}
-		// Stand in for the new binary writing its own content.
 		return writeSkillFile(path, "---\nname: mio\n"+skillVersionKey+": 9.9.9\n"+
 			skillHashKey+": deadbeef\n---\nNEW BINARY CONTENT\n")
 	})
@@ -149,7 +120,6 @@ func TestRefreshManagedSkills_DelegatesToTheNewBinary(t *testing.T) {
 	}
 }
 
-// MIO-2875: a file the user owns is never replaced, and they are told.
 func TestRefreshManagedSkills_NeverTouchesAUserOwnedFile(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -214,7 +184,6 @@ func TestRefreshManagedSkills_NeverTouchesAUserOwnedFile(t *testing.T) {
 	}
 }
 
-// MIO-2875: the skill lives outside any --prefix, so the path must be named.
 func TestRefreshManagedSkills_AnnouncesThePathOutsidePrefix(t *testing.T) {
 	home := isolateSkillHome(t)
 	path := claudeSkillPath(home)
@@ -235,20 +204,14 @@ func TestRefreshManagedSkills_AnnouncesThePathOutsidePrefix(t *testing.T) {
 	}
 }
 
-// A refresh that cannot happen must say so, not leave a silently stale skill.
 func TestRefreshManagedSkills_ReportsWhenItCannotRefresh(t *testing.T) {
-	// Seeded on CODEX deliberately: `mio skills install --force` defaults to
-	// --target claude, so a remediation printed about the codex skill that omits
-	// --target is worse than useless — it reports success for claude, leaves the
-	// codex file stale, and OVERWRITES a hand-edited claude skill if one exists.
-	// Seeding claude here would let that ship green.
 	t.Run("no usable new binary", func(t *testing.T) {
 		home := isolateSkillHome(t)
 		path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
 		before := seedManagedSkill(t, path, "0.12.1")
 
 		var out bytes.Buffer
-		refreshManagedSkills(&out, &out, "") // updater could not report a binary
+		refreshManagedSkills(&out, &out, "")
 
 		after, _ := os.ReadFile(path)
 		if string(after) != before {
@@ -286,11 +249,6 @@ func headLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-// The production handoff argv is the load-bearing line of MIO-2874, and every
-// other test in this file stubs it out — so a typo'd subcommand, or a dropped
-// --target that makes the codex refresh rewrite the claude file, would ship with
-// the suite fully green. This one exercises the REAL skillRefreshExec against a
-// real built binary. It is the only oracle that argv has.
 func TestSkillRefreshExec_RealBinaryArgv(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a binary")
@@ -308,8 +266,6 @@ func TestSkillRefreshExec_RealBinaryArgv(t *testing.T) {
 	}
 	requireChildOnFileKeyring(t, bin)
 
-	// Both scopes (MIO-4178): the project handoff must carry --project, or the
-	// child rewrites the user copy (already fresh) and this one stays at 0.0.1.
 	home, project := isolateSkillSandbox(t)
 	claude := claudeSkillPath(home)
 	codex := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
@@ -320,7 +276,7 @@ func TestSkillRefreshExec_RealBinaryArgv(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	refreshManagedSkills(&out, &out, bin) // real exec, no stub
+	refreshManagedSkills(&out, &out, bin)
 
 	all := map[string]string{"claude": claude, "codex": codex, "claude (project)": projClaude, "codex (project)": projCodex}
 	for label, p := range all {
@@ -338,9 +294,6 @@ func TestSkillRefreshExec_RealBinaryArgv(t *testing.T) {
 		}
 	}
 
-	// The project handoff must also run IN the project root it classified, not
-	// wherever the child happens to inherit a cwd from: resolve in the project,
-	// move the cwd away, then hand off.
 	for _, p := range []string{projClaude, projCodex} {
 		seedManagedSkill(t, p, "0.0.1")
 	}
@@ -369,11 +322,6 @@ func repoRoot(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
-// A failure path must never follow "could not refresh the skill at <path>" with
-// "a skill is available — run 'mio skills install'". The second line is false:
-// the skill IS installed, at the path just named. Introduced by dropping the
-// counter that tracked "a managed install exists" independently of whether the
-// refresh succeeded.
 func assertNoInstallNudge(t *testing.T, out string) {
 	t.Helper()
 	if strings.Contains(out, "run 'mio skills install' to add it") {
@@ -381,10 +329,6 @@ func assertNoInstallNudge(t *testing.T, out string) {
 	}
 }
 
-// installedBinaryPath decides WHICH binary writes the skill, so a defect here
-// hands the refresh to the wrong mio and reports its version as installed. It
-// had no test at all until this case: reverting the fix left the whole suite
-// green while restoring a live bug.
 func TestInstalledBinaryPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("binary name and PATH semantics differ on windows")
@@ -429,15 +373,11 @@ func TestInstalledBinaryPath(t *testing.T) {
 	})
 }
 
-// The already-current case must be quiet about refreshing but must NOT look like
-// "nothing is installed" — it is the commonest outcome of all (re-running an
-// update you already have).
 func TestRefreshManagedSkills_AlreadyCurrentIsQuietButNotAlarming(t *testing.T) {
 	home := isolateSkillHome(t)
 	path := claudeSkillPath(home)
 	seedManagedSkill(t, path, "0.12.1")
 
-	// Child succeeds and changes nothing.
 	stubRefreshExec(t, func(_ string, _ skillLocation) error { return nil })
 
 	var out bytes.Buffer
@@ -449,15 +389,12 @@ func TestRefreshManagedSkills_AlreadyCurrentIsQuietButNotAlarming(t *testing.T) 
 	assertNoInstallNudge(t, out.String())
 }
 
-// A hand-edited file must be reported even when ANOTHER target refreshed or was
-// already current — otherwise the combination is silent and the user never
-// learns their edited skill was skipped.
 func TestRefreshManagedSkills_ReportsHandEditedAlongsideAHealthyTarget(t *testing.T) {
 	home := isolateSkillHome(t)
 	claude := claudeSkillPath(home)
 	codex := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
 
-	seedManagedSkill(t, claude, "0.12.1") // healthy, will be "already current"
+	seedManagedSkill(t, claude, "0.12.1")
 	edited := seedManagedSkill(t, codex, "0.12.1") + "\n<!-- mine -->\n"
 	if err := os.WriteFile(codex, []byte(edited), 0o644); err != nil {
 		t.Fatalf("seed edited: %v", err)
@@ -468,11 +405,6 @@ func TestRefreshManagedSkills_ReportsHandEditedAlongsideAHealthyTarget(t *testin
 	var out bytes.Buffer
 	refreshManagedSkills(&out, &out, "/opt/mio/bin/mio")
 
-	// Presence is not enough — the remediation must be USABLE. `mio skills
-	// install --force` defaults to --target claude, so a bare suggestion printed
-	// about the codex skill reports "already up to date" for claude and leaves
-	// the edited file untouched (and, when only codex is installed, creates a
-	// claude skill the user never had).
 	got := out.String()
 	if !strings.Contains(got, "edited locally") {
 		t.Fatalf("a hand-edited skill must be reported even when another target is healthy; got: %q", got)
@@ -488,17 +420,11 @@ func TestRefreshManagedSkills_ReportsHandEditedAlongsideAHealthyTarget(t *testin
 	}
 }
 
-// An unreadable skill file is not "not installed" — a file is there, it just
-// could not be classified. Staying silent (or claiming none is installed) is the
-// same false report assertNoInstallNudge exists to prevent.
 func TestRefreshManagedSkills_ReportsAnUnreadableSkill(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores mode bits")
 	}
 	home := isolateSkillHome(t)
-	// CODEX, not claude: `--force` defaults to claude, so a probe seeded on
-	// claude is satisfied by both the correct `--target %s` and a hardcoded
-	// `--target claude`. Verified — that hardcode ships the whole suite green.
 	path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
 	seedManagedSkill(t, path, "0.12.1")
 	if err := os.Chmod(path, 0o000); err != nil {
@@ -516,12 +442,6 @@ func TestRefreshManagedSkills_ReportsAnUnreadableSkill(t *testing.T) {
 	assertNoInstallNudge(t, out.String())
 }
 
-// Every remediation this function prints must name the target it is about.
-// `mio skills install --force` defaults to --target claude: printed about the
-// Codex skill it reports success for Claude and fixes nothing, and where a
-// hand-edited Claude skill exists it destroys it. Measured — following the bare
-// form removed a sentinel from a hand-edited file. So a target-less remediation
-// is a data-loss bug, not a wording nit.
 func assertTargetedRemediation(t *testing.T, out, target, path string) {
 	t.Helper()
 	if !strings.Contains(out, "--target "+target) {
@@ -532,16 +452,11 @@ func assertTargetedRemediation(t *testing.T, out, target, path string) {
 	}
 }
 
-// The child can report success and still leave a file we cannot read back. That
-// path used to `continue` silently — and because `installed` was already counted,
-// the run printed NOTHING AT ALL, breaking the guarantee README and llms.txt both
-// state: a failure always prints a line.
 func TestRefreshManagedSkills_ReportsAFailedReadBack(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores mode bits")
 	}
 	home := isolateSkillHome(t)
-	// Codex, so a hardcoded --target claude cannot satisfy the assertion.
 	path := filepath.Join(home, ".codex", "skills", skillDirName, skillFileName)
 	seedManagedSkill(t, path, "0.12.1")
 	stubRefreshExec(t, func(_ string, _ skillLocation) error { return os.Chmod(path, 0o000) })

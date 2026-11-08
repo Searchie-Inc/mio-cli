@@ -1,25 +1,5 @@
 package cmd
 
-// hubs_blob_keys_test.go — contract tests for the best-effort key validation of
-// the hub presentation blobs (--branding-json / --settings-json / --meta-json)
-// on `mio hubs create` and `mio hubs update` (MIO-2515, MIO-4171).
-//
-// Contract pinned here:
-//   branding / meta — the API stores their keys as sent (branding checks only
-//   the VALUES of keys ending in _url), so a typo is saved and does nothing:
-//     default (no --strict-keys): an unknown key WARNS on stderr and the
-//       request still fires — warn, don't block
-//     --strict-keys: an unknown key is a usage error (ExitUsage) with NO HTTP
-//       request fired (validation runs before auth/retrieve)
-//   settings (MIO-4171) — the API enforces its OWN allowlist (MIO-3334): an
-//     unknown top-level key, or an unknown sub-key of policies/registration/
-//     email/auth, is a 422 naming it. So the CLI checks none of that, with or
-//     without --strict-keys: the key reaches the API and the API's verdict is
-//     the one the caller sees. The one settings check left is the sub-keys of
-//     settings.achievements, which the API stores as sent.
-//   each blob's message says what the API does with THAT blob's keys
-//   the warning goes to STDERR only, never stdout, so --output json/yaml is safe
-
 import (
 	"bytes"
 	"encoding/json"
@@ -34,9 +14,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// firedAnyServer starts a server that flips *fired on ANY request and answers
-// with hubWithBlobsBody, used to assert that a strict-mode rejection fires no
-// HTTP request at all (no retrieve, no PATCH/POST).
 func firedAnyServer(t *testing.T) (*httptest.Server, *bool) {
 	t.Helper()
 	fired := false
@@ -50,12 +27,6 @@ func firedAnyServer(t *testing.T) (*httptest.Server, *bool) {
 	return srv, &fired
 }
 
-// TestHubsUpdate_UnknownKeyWarnsByDefault verifies an unknown top-level meta key
-// warns on stderr (naming the blob.key) yet still exits ExitOK and fires the
-// PATCH — the API stores meta keys as sent, so the CLI warns rather than
-// blocking. (A settings key used to be the example here; since MIO-3334 the API
-// rejects an unknown settings key itself — see
-// TestHubsUpdate_SettingsKeysAreTheAPIsToCheck.)
 func TestHubsUpdate_UnknownKeyWarnsByDefault(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -79,9 +50,6 @@ func TestHubsUpdate_UnknownKeyWarnsByDefault(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_UnknownKeyStrictRejectsNoRequest verifies --strict-keys turns an
-// unknown branding key into a usage error that fires NO HTTP request (no
-// retrieve, no PATCH).
 func TestHubsUpdate_UnknownKeyStrictRejectsNoRequest(t *testing.T) {
 	srv, fired := firedAnyServer(t)
 
@@ -100,9 +68,6 @@ func TestHubsUpdate_UnknownKeyStrictRejectsNoRequest(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_KnownKeysNoWarning verifies known keys — including nested keys
-// under the stable settings sections (registration.enabled) and known branding/
-// meta keys — produce no warning and exit ExitOK.
 func TestHubsUpdate_KnownKeysNoWarning(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -125,10 +90,6 @@ func TestHubsUpdate_KnownKeysNoWarning(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_MetaDirectMessagesAccepted (MIO-2612) verifies `directMessages`
-// is an accepted --meta-json feature-guard key: it no longer warns "unknown key",
-// and it passes under --strict-keys (which rejects an unknown key with no request
-// before this fix). directMessages is a real portal flag (MIO-2579).
 func TestHubsUpdate_MetaDirectMessagesAccepted(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -150,11 +111,6 @@ func TestHubsUpdate_MetaDirectMessagesAccepted(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_UnknownNestedKeyStrictRejects verifies the one nested settings
-// check the CLI still makes: a misspelled settings.achievements sub-key — which
-// the API stores as sent, because its own nested allowlist deliberately stops at
-// policies/registration/email/auth — is a usage error with no request under
-// --strict-keys.
 func TestHubsUpdate_UnknownNestedKeyStrictRejects(t *testing.T) {
 	srv, fired := firedAnyServer(t)
 
@@ -173,8 +129,6 @@ func TestHubsUpdate_UnknownNestedKeyStrictRejects(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_UnknownKeyWarnsByDefault verifies the create path mirror: an
-// unknown meta key warns on stderr yet the POST still fires.
 func TestHubsCreate_UnknownKeyWarnsByDefault(t *testing.T) {
 	srv, gotMethod, _, _ := captureHubRequest(t, http.StatusCreated)
 
@@ -196,8 +150,6 @@ func TestHubsCreate_UnknownKeyWarnsByDefault(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_UnknownKeyStrictRejectsNoRequest verifies --strict-keys on
-// create rejects an unknown meta key with ExitUsage and no POST.
 func TestHubsCreate_UnknownKeyStrictRejectsNoRequest(t *testing.T) {
 	srv, fired := firedFlagHubServer(t, http.StatusCreated)
 
@@ -217,9 +169,6 @@ func TestHubsCreate_UnknownKeyStrictRejectsNoRequest(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_LogoURLDoesNotTripKeyValidation verifies the --logo-url merge
-// into branding (logo_url) is a known key, so it does not produce a spurious
-// warning even under --strict-keys.
 func TestHubsCreate_LogoURLDoesNotTripKeyValidation(t *testing.T) {
 	srv, gotMethod, _, _ := captureHubRequest(t, http.StatusCreated)
 
@@ -242,11 +191,6 @@ func TestHubsCreate_LogoURLDoesNotTripKeyValidation(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_AuthLogoURLIsKnownBrandingKey (MIO-3464) verifies the
-// canonical login/register-panel logo key auth_logo_url (MIO-3354) is on the
-// branding allowlist, so authoring it does not warn (and does not error under
-// --strict-keys) the way it did when only the deprecated alias
-// custom_login_logo_url was listed.
 func TestHubsCreate_AuthLogoURLIsKnownBrandingKey(t *testing.T) {
 	srv, gotMethod, _, _ := captureHubRequest(t, http.StatusCreated)
 
@@ -269,13 +213,6 @@ func TestHubsCreate_AuthLogoURLIsKnownBrandingKey(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_AchievementsSettingsKeyAccepted (MIO-3412) verifies
-// `achievements` is an accepted --settings-json key — it is the per-hub gate
-// for the achievements module (backend reads
-// hub.settings.achievements.enabled IS TRUE, app/achievements/feature_flag.py).
-// It must pass under --strict-keys, produce no unknown-key warning, and the
-// PATCH must carry settings.achievements.enabled=true after the
-// read-modify-write merge.
 func TestHubsUpdate_AchievementsSettingsKeyAccepted(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -315,11 +252,6 @@ func TestHubsUpdate_AchievementsSettingsKeyAccepted(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_AchievementsUnknownNestedKeyWarns verifies the achievements
-// section is deep-validated: a misspelled sub-key (settings.achievements.enabld)
-// warns by name in default mode. The API stores it as sent, and its per-hub gate
-// reads exactly `enabled` (the hub is opted out only by the literal false), so
-// `{"enabld":false}` is saved and leaves achievements on.
 func TestHubsUpdate_AchievementsUnknownNestedKeyWarns(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -340,26 +272,6 @@ func TestHubsUpdate_AchievementsUnknownNestedKeyWarns(t *testing.T) {
 	}
 }
 
-// settingsDeferCases are --settings-json inputs whose verdict belongs to the API
-// since MIO-3334, each chosen because the CLI's old hand-kept copy of the API's
-// allowlist got it WRONG in one direction or the other (MIO-4171):
-//   - keys the API ACCEPTS that the old list flagged, and that --strict-keys
-//     blocked with no request (the list had fallen 7 top-level and 2 email
-//     sub-keys behind the server);
-//   - keys the API REJECTS, where the CLI warned "stored verbatim" and then the
-//     API answered 422 — two contradicting messages on one call.
-//
-// Either way the CLI's correct behaviour is the same: send the key, say nothing
-// of its own. The expected outcomes are not a second list — they are what the
-// live API answered (mio-backend app/hubs/validation.py validate_settings; see
-// the MIO-4171 PR for the recorded run).
-//
-// Every level the API validates itself — the top level and each of
-// policies/registration/email/auth — has a REJECT-side probe: a key no allowlist
-// would list. Only that shape fails for ANY client-side copy of that level,
-// including an up-to-date one; an accept-side probe catches only a stale copy
-// (MIO-4171 blind review: with policies/auth/email probed accept-side or not at
-// all, re-adding a mirror of any of the three kept the suite green).
 var settingsDeferCases = []struct {
 	name, settings, key string
 }{
@@ -372,20 +284,10 @@ var settingsDeferCases = []struct {
 	{"auth sub-key the API rejects", `{"auth":{"qa_probe":[]}}`, "auth"},
 }
 
-// TestHubsUpdate_SettingsKeysAreTheAPIsToCheck (MIO-4171): the CLI no longer
-// keeps a client-side copy of the API's settings allowlist. With or without
-// --strict-keys, a settings key the old copy got wrong reaches the PATCH, and
-// the CLI prints no key warning of its own about it.
 func TestHubsUpdate_SettingsKeysAreTheAPIsToCheck(t *testing.T) {
 	for _, tc := range settingsDeferCases {
 		for _, strict := range []bool{false, true} {
 			if strict && tc.key == "policies" {
-				// On update, settings.policies has a check of its own (MIO-2811:
-				// the API accepts the key there and discards it), and --strict-keys
-				// makes it an error before any key check runs — so this one pairing
-				// cannot show whether the CLI checks policies' SUB-keys. The
-				// non-strict run below and the create mirror (which runs with
-				// --strict-keys) do.
 				continue
 			}
 			name := tc.name
@@ -421,7 +323,6 @@ func TestHubsUpdate_SettingsKeysAreTheAPIsToCheck(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_SettingsKeysAreTheAPIsToCheck is the create-path mirror.
 func TestHubsCreate_SettingsKeysAreTheAPIsToCheck(t *testing.T) {
 	for _, tc := range settingsDeferCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -450,15 +351,10 @@ func TestHubsCreate_SettingsKeysAreTheAPIsToCheck(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_UnknownSettingsKeySurfacesTheAPIs422 is the ticket's own
-// repro: `--settings-json '{"qa_probe":{"x":1}}'` used to print "It is stored
-// verbatim" and then exit 2 on the API's 422 — two messages contradicting each
-// other on one call. The API's rejection must now be the only verdict.
 func TestHubsUpdate_UnknownSettingsKeySurfacesTheAPIs422(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		if r.Method == http.MethodPatch {
-			// The live API's answer, recorded against :8000 (MIO-4171).
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			_, _ = w.Write([]byte(`{"errors":[{"status":"422","detail":"Value error, hub settings has unsupported key(s): ['qa_probe']","source":{"pointer":"/data/attributes/settings/qa_probe"}}]}`))
 			return
@@ -485,10 +381,6 @@ func TestHubsUpdate_UnknownSettingsKeySurfacesTheAPIs422(t *testing.T) {
 	}
 }
 
-// runWithErr runs the command tree in-process and returns BOTH its stderr and
-// the error it returned: the SilenceErrors root never writes the error to the
-// stderr buffer, and these tests need what the CLI warned as well as what it
-// failed with.
 func runWithErr(t *testing.T, env []string, args ...string) (string, error) {
 	t.Helper()
 	restore := overlayEnv(t, env)
@@ -504,16 +396,10 @@ func runWithErr(t *testing.T, env []string, args ...string) (string, error) {
 	return stderr.String(), err
 }
 
-// TestBlobKeyMessages_EachBlobSaysWhatTheAPIDoes (MIO-4171): the unknown-key
-// warning and the --strict-keys error used to share ONE sentence — "stored
-// verbatim ... no server-side validation" — for all three blobs, which stopped
-// being true for settings when the API grew its own allowlist. Each blob now
-// says what the API does with ITS keys, in both modes, and never borrows
-// another blob's sentence.
 func TestBlobKeyMessages_EachBlobSaysWhatTheAPIDoes(t *testing.T) {
 	type blobCase struct {
 		blob, flag, value, key string
-		says                   []string // what THIS blob's message must say
+		says                   []string
 	}
 	cases := []blobCase{
 		{"branding", "--branding-json", `{"primry":"#ffffff"}`, "branding.primry",
@@ -568,32 +454,14 @@ func TestBlobKeyMessages_EachBlobSaysWhatTheAPIDoes(t *testing.T) {
 	}
 }
 
-// settingsSectionProbes are the settings sections the help test below sends to
-// each command: every top-level key the API's own allowlist accepts
-// (_SETTINGS_TOP_LEVEL_KEYS, mio-backend app/hubs/validation.py, origin/main
-// 85baccb6), plus one it does not. They are INPUTS, not an oracle — what the CLI
-// does with each is measured, not listed.
 var settingsSectionProbes = []string{
 	"registration", "policies", "header", "menu", "email", "auth", "customCss",
 	"background", "appearance", "language", "footer", "achievements",
 	"speaker_diarization", "moderation", "word_boost", "playlistHero",
 	"discussionsBanner", "buttonColors",
-	"qa_probe", // a top-level key the API rejects
+	"qa_probe",
 }
 
-// TestHubsSettingsHelp_NamesExactlyTheChecksEachCommandMakes (MIO-4171 blind
-// review): the --strict-keys and --settings-json help of `hubs create` and `hubs
-// update` say which settings keys the CLI itself checks — and an agent reading
-// an exit 2 needs that to tell the CLI's check from the API's 422. The two
-// commands do not check the same things (update also stops settings.policies,
-// MIO-2811, which the API discards there), so a help string true of one command
-// copied onto the other is false. It was: "It checks no other --settings-json
-// key" was registered on both, and on update it is not true.
-//
-// The oracle is the wire. For each section, send `{"<section>":{"qa_probe":1}}`
-// with --strict-keys and record whether the CLI stopped it client-side (exit 2,
-// no request). Both help strings of that command must then name every section
-// it stopped as settings.<section>, and name no section it let through.
 func TestHubsSettingsHelp_NamesExactlyTheChecksEachCommandMakes(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -623,11 +491,6 @@ func TestHubsSettingsHelp_NamesExactlyTheChecksEachCommandMakes(t *testing.T) {
 				if f == nil {
 					t.Fatalf("hubs %s has no --%s flag", c.name, flag)
 				}
-				// pflag renders the first backquoted span of a usage string as
-				// the flag's value name, so naming a command in backquotes here
-				// prints `--strict-keys mio hubs policies` — a bool flag that
-				// reads as if it took an argument. (The first cut of this fix
-				// did exactly that; the live run's --help caught it.)
 				wantVar := map[string]string{"strict-keys": "", "settings-json": "string"}[flag]
 				if varName, _ := pflag.UnquoteUsage(f); varName != wantVar {
 					t.Errorf("hubs %s --%s renders its value name as %q, want %q: a backquoted span in the help becomes the value name; help=%q",

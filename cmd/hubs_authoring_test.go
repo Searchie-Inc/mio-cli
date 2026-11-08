@@ -1,15 +1,5 @@
 package cmd
 
-// hubs_authoring_test.go — contract tests for the hubs authoring batch:
-//   MIO-2516  hubs update --registration-enabled + retrieve surfaces the state
-//   MIO-2517  hubs update --unset <dotted.path> (deletable blob keys)
-//   MIO-2521  hubs create echoes private/published state (derived + stderr hint)
-//   MIO-2522  hubs create/update --favicon-url (branding.favicon_url)
-//
-// Reuses the create/update test harness in hubs_create_test.go and
-// hubs_update_blobs_test.go (captureHubRequest, decodeHubAttrs, rmwServer,
-// hubWithBlobsBody) plus the runContract/withTeam/baseEnv driver.
-
 import (
 	"encoding/json"
 	"io"
@@ -21,10 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// hubRespServer replies to every request with the given JSON:API body and
-// captures the body of the first POST/PATCH it sees. It serves both the RMW GET
-// (retrieve) and the following PATCH in update flows, and the POST in create
-// flows, so a single fixture drives read-modify-write assertions.
 func hubRespServer(t *testing.T, body string) (*httptest.Server, *[]byte) {
 	t.Helper()
 	var writeBody []byte
@@ -40,10 +26,6 @@ func hubRespServer(t *testing.T, body string) (*httptest.Server, *[]byte) {
 	return srv, &writeBody
 }
 
-// ─── MIO-2522: --favicon-url ─────────────────────────────────────────────────
-
-// TestHubsCreate_FaviconURLNested verifies --favicon-url maps to
-// attributes.branding.favicon_url and never appears at the top level.
 func TestHubsCreate_FaviconURLNested(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -70,8 +52,6 @@ func TestHubsCreate_FaviconURLNested(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_FaviconAndLogoCompose verifies --favicon-url and --logo-url
-// both land in the same branding object (neither clobbers the other).
 func TestHubsCreate_FaviconAndLogoCompose(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -99,8 +79,6 @@ func TestHubsCreate_FaviconAndLogoCompose(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_FaviconURLMergesRMW verifies --favicon-url merges into the
-// hub's current branding (read-modify-write), keeping sibling branding keys.
 func TestHubsUpdate_FaviconURLMergesRMW(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -129,10 +107,6 @@ func TestHubsUpdate_FaviconURLMergesRMW(t *testing.T) {
 	}
 }
 
-// ─── MIO-2516: --registration-enabled + retrieve surface ─────────────────────
-
-// TestHubsUpdate_RegistrationEnabledTrue verifies --registration-enabled sets
-// settings.registration.enabled=true via RMW, preserving sibling settings keys.
 func TestHubsUpdate_RegistrationEnabledTrue(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -157,7 +131,6 @@ func TestHubsUpdate_RegistrationEnabledTrue(t *testing.T) {
 	if reg["enabled"] != true {
 		t.Errorf("settings.registration.enabled = %v, want true", reg["enabled"])
 	}
-	// Sibling settings.* key must survive (no clobber).
 	header, ok := s["header"].(map[string]any)
 	if !ok {
 		t.Fatalf("settings.header must be preserved; settings=%v", s)
@@ -167,8 +140,6 @@ func TestHubsUpdate_RegistrationEnabledTrue(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_RegistrationEnabledFalse verifies --registration-enabled=false
-// sends settings.registration.enabled=false (distinguished from unset).
 func TestHubsUpdate_RegistrationEnabledFalse(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -192,8 +163,6 @@ func TestHubsUpdate_RegistrationEnabledFalse(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_RegistrationEnabledPreservesSiblingRegistrationKeys verifies
-// that setting enabled does NOT clobber other settings.registration.* keys.
 func TestHubsUpdate_RegistrationEnabledPreservesSiblingRegistrationKeys(t *testing.T) {
 	const body = `{
 		"data": {
@@ -230,8 +199,6 @@ func TestHubsUpdate_RegistrationEnabledPreservesSiblingRegistrationKeys(t *testi
 	}
 }
 
-// TestHubsRetrieve_SurfacesRegistrationEnabledTrue verifies retrieve injects a
-// derived registration_enabled=true when settings.registration.enabled is true.
 func TestHubsRetrieve_SurfacesRegistrationEnabledTrue(t *testing.T) {
 	const body = `{
 		"data": {
@@ -260,8 +227,6 @@ func TestHubsRetrieve_SurfacesRegistrationEnabledTrue(t *testing.T) {
 	}
 }
 
-// TestHubsRetrieve_SurfacesRegistrationEnabledFailClosed verifies the derived
-// registration_enabled is false (fail-closed) when the key is absent.
 func TestHubsRetrieve_SurfacesRegistrationEnabledFailClosed(t *testing.T) {
 	const body = `{
 		"data": {
@@ -290,10 +255,6 @@ func TestHubsRetrieve_SurfacesRegistrationEnabledFailClosed(t *testing.T) {
 	}
 }
 
-// ─── MIO-2517: --unset ───────────────────────────────────────────────────────
-
-// TestHubsUpdate_UnsetRemovesNestedSettingsKey verifies --unset removes a nested
-// leaf, keeps the nested sibling, and touches no other blob.
 func TestHubsUpdate_UnsetRemovesNestedSettingsKey(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -321,7 +282,6 @@ func TestHubsUpdate_UnsetRemovesNestedSettingsKey(t *testing.T) {
 	if header["menuLayout"] != "tabs" {
 		t.Errorf("settings.header.menuLayout = %v, want preserved 'tabs'", header["menuLayout"])
 	}
-	// Untouched blobs must not be sent at all (partial update).
 	if _, has := attrs["branding"]; has {
 		t.Errorf("branding must be absent (untouched blob); attrs=%v", attrs)
 	}
@@ -330,8 +290,6 @@ func TestHubsUpdate_UnsetRemovesNestedSettingsKey(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_UnsetRemovesTopLevelBrandingKey verifies --unset removes a
-// top-level blob key while keeping siblings.
 func TestHubsUpdate_UnsetRemovesTopLevelBrandingKey(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -357,8 +315,6 @@ func TestHubsUpdate_UnsetRemovesTopLevelBrandingKey(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_UnsetCommaListMultipleBlobs verifies a single comma-separated
-// --unset removes keys across multiple blobs.
 func TestHubsUpdate_UnsetCommaListMultipleBlobs(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -389,8 +345,6 @@ func TestHubsUpdate_UnsetCommaListMultipleBlobs(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_UnsetWinsOverMergeSameCommand verifies the documented order:
-// an --unset in the same command wins over a --settings-json merge.
 func TestHubsUpdate_UnsetWinsOverMergeSameCommand(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -418,8 +372,6 @@ func TestHubsUpdate_UnsetWinsOverMergeSameCommand(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_UnsetUnknownBlobNoRequest verifies an unknown blob prefix exits
-// ExitUsage before any HTTP request.
 func TestHubsUpdate_UnsetUnknownBlobNoRequest(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -443,8 +395,6 @@ func TestHubsUpdate_UnsetUnknownBlobNoRequest(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_UnsetBareBlobNoRequest verifies a bare blob name (no key) is a
-// usage error firing no request.
 func TestHubsUpdate_UnsetBareBlobNoRequest(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -468,8 +418,6 @@ func TestHubsUpdate_UnsetBareBlobNoRequest(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_UnsetEmptyNoRequest verifies a blank --unset value is a usage
-// error firing no request.
 func TestHubsUpdate_UnsetEmptyNoRequest(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -493,10 +441,6 @@ func TestHubsUpdate_UnsetEmptyNoRequest(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_UnsetTrailingCommaNoRequest verifies a blank entry INSIDE a
-// comma-list (e.g. a stray trailing comma "settings.header.color,") is a usage
-// error firing no request — the blank must not be silently dropped so the valid
-// part proceeds.
 func TestHubsUpdate_UnsetTrailingCommaNoRequest(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -520,9 +464,6 @@ func TestHubsUpdate_UnsetTrailingCommaNoRequest(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_RMWRequestSequence asserts the read-modify-write path issues
-// exactly one GET (retrieve) then one PATCH (update) to the SAME hub resource —
-// catching a regression that adds an extra GET or targets the wrong PATCH path.
 func TestHubsUpdate_RMWRequestSequence(t *testing.T) {
 	var seq []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -557,10 +498,6 @@ func TestHubsUpdate_RMWRequestSequence(t *testing.T) {
 	}
 }
 
-// ─── MIO-2521: create discoverability (state + hint) ─────────────────────────
-
-// TestHubsCreate_SurfacesPublishedDerivedPrivate verifies create injects a
-// derived published=false when the created hub is private.
 func TestHubsCreate_SurfacesPublishedDerivedPrivate(t *testing.T) {
 	const body = `{
 		"data": {
@@ -586,9 +523,6 @@ func TestHubsCreate_SurfacesPublishedDerivedPrivate(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_NoHintInJSONMode verifies the discoverability hint does NOT fire
-// in json mode (the test harness default is non-TTY → json), keeping stdout pure
-// and stderr free of the hint.
 func TestHubsCreate_NoHintInJSONMode(t *testing.T) {
 	srv, _, _, _ := captureHubRequest(t, http.StatusCreated)
 
@@ -601,15 +535,12 @@ func TestHubsCreate_NoHintInJSONMode(t *testing.T) {
 	if strings.Contains(res.Stderr, "Publish it with") || strings.Contains(res.Stderr, "Created hub") {
 		t.Errorf("no create hint should appear in json mode; stderr=%q", res.Stderr)
 	}
-	// stdout must remain valid JSON (not corrupted by any hint).
 	var out map[string]any
 	if err := json.Unmarshal([]byte(res.Stdout), &out); err != nil {
 		t.Fatalf("stdout is not valid JSON: %v; stdout=%q", err, res.Stdout)
 	}
 }
 
-// TestHubsCreate_HintOnStderrTableModePrivate verifies that in table (human)
-// mode a private hub prints the publish hint on stderr, not stdout.
 func TestHubsCreate_HintOnStderrTableModePrivate(t *testing.T) {
 	const body = `{
 		"data": {
@@ -638,29 +569,11 @@ func TestHubsCreate_HintOnStderrTableModePrivate(t *testing.T) {
 	if !strings.Contains(res.Stderr, "my-slug") {
 		t.Errorf("stderr should surface the slug as the best-available reference; stderr=%q", res.Stderr)
 	}
-	// The hint must be on stderr only, never stdout.
 	if strings.Contains(res.Stdout, "Publish it with") {
 		t.Errorf("the publish hint must not appear on stdout; stdout=%q", res.Stdout)
 	}
 }
 
-// ─── MIO-2991: `hubs list` must inject the same derived fields as retrieve ───
-//
-// list shipped without injectHubDerivedState while retrieve/create/update all
-// had it, so a caller enumerating hubs read registration_enabled and published
-// as null. Because registration_enabled is FAIL-CLOSED, an absent value is
-// indistinguishable from a genuine false — the gap reads as "registration is off
-// everywhere" rather than as an error. There is no server-side fallback: the API
-// has no registration_enabled field at all.
-//
-// Asserts on a MULTI-ITEM response deliberately, to catch a per-item loop that
-// only touches Data[0] — which a single-item fixture cannot.
-//
-// It does NOT catch ranging by value over Collection.Data: Attributes is a
-// map[string]any, so a copied Resource shares the same underlying map and the
-// by-value form works. Verified by mutation — it passes the whole suite. Said
-// explicitly because an earlier draft of this comment claimed otherwise, and a
-// reader would have trusted a guard that does not exist.
 func TestHubsList_SurfacesDerivedStateOnEveryItem(t *testing.T) {
 	const body = `{
 		"data": [
@@ -688,8 +601,6 @@ func TestHubsList_SurfacesDerivedStateOnEveryItem(t *testing.T) {
 	if len(out) != 3 {
 		t.Fatalf("rendered %d hubs, want 3", len(out))
 	}
-	// Every item must carry BOTH derived fields — never absent, which is what a
-	// consumer reads as null.
 	for i, h := range out {
 		if _, ok := h["registration_enabled"]; !ok {
 			t.Errorf("hub %d has no registration_enabled — a caller reads null, which is indistinguishable from a genuine false", i)
@@ -698,8 +609,6 @@ func TestHubsList_SurfacesDerivedStateOnEveryItem(t *testing.T) {
 			t.Errorf("hub %d has no published", i)
 		}
 	}
-	// And the values must be right, not merely present — the LAST item matters
-	// most: it is the one a Data[0]-only fix would miss.
 	if out[0]["registration_enabled"] != true || out[0]["published"] != true {
 		t.Errorf("hub_1: got registration_enabled=%v published=%v, want true/true", out[0]["registration_enabled"], out[0]["published"])
 	}
@@ -711,8 +620,6 @@ func TestHubsList_SurfacesDerivedStateOnEveryItem(t *testing.T) {
 	}
 }
 
-// --raw deliberately bypasses the derived fields on every path (documented at
-// cmd/hubs.go). The list fix must not change that.
 func TestHubsList_RawBypassesDerivedState(t *testing.T) {
 	const body = `{"data":[{"id":"hub_1","type":"hubs","attributes":{
 		"title":"A","slug":"a","is_private":false,

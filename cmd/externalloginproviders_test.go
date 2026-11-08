@@ -1,25 +1,11 @@
 package cmd
 
-// externalloginproviders_test.go — wire-body and contract tests for
-// `mio external-login-providers`.
-//
-// Tests pin:
-//   - Correct JSON:API data.type value ("external_login_providers")
-//   - Exact wire bodies for create (first-party + generic provider flavours)
-//   - Required-flag validation (--kind, --display-name, --client-id,
-//     --client-secret on create)
-//   - Partial-update (PATCH) semantics: only changed flags are sent
-//   - Destructive-guard behaviour on delete
-//   - --claim-map JSON-object parsing
-
 import (
 	"net/http"
 	"testing"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
-
-// ─── fixtures ─────────────────────────────────────────────────────────────────
 
 const minimalExternalLoginProviderBody = `{
 	"data":{
@@ -51,12 +37,6 @@ const genericOIDCProviderBody = `{
 	}
 }`
 
-// ─── create: Google (first-party) ─────────────────────────────────────────────
-
-// TestExternalLoginProviders_Create_GoogleExactBody pins the EXACT wire body
-// for `mio external-login-providers create --kind google`.
-//
-// CONTRACT: data.type = "external_login_providers"; only changed attrs sent.
 func TestExternalLoginProviders_Create_GoogleExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalExternalLoginProviderBody)
 
@@ -84,10 +64,6 @@ func TestExternalLoginProviders_Create_GoogleExactBody(t *testing.T) {
 	}`)
 }
 
-// TestExternalLoginProviders_Create_GenericOIDCWithDiscoveryURL pins the wire
-// body when creating a generic_oidc provider using --discovery-url.
-//
-// CONTRACT: discovery_url and scopes must be present in attributes.
 func TestExternalLoginProviders_Create_GenericOIDCWithDiscoveryURL(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, genericOIDCProviderBody)
 
@@ -119,8 +95,6 @@ func TestExternalLoginProviders_Create_GenericOIDCWithDiscoveryURL(t *testing.T)
 	}`)
 }
 
-// TestExternalLoginProviders_Create_WithClaimMap pins that --claim-map is
-// decoded as a JSON object and serialized into attributes.claim_map.
 func TestExternalLoginProviders_Create_WithClaimMap(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, genericOIDCProviderBody)
 
@@ -154,8 +128,6 @@ func TestExternalLoginProviders_Create_WithClaimMap(t *testing.T) {
 	}`)
 }
 
-// TestExternalLoginProviders_Create_WithSlug pins that --slug is forwarded
-// when provided.
 func TestExternalLoginProviders_Create_WithSlug(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalExternalLoginProviderBody)
 
@@ -185,8 +157,6 @@ func TestExternalLoginProviders_Create_WithSlug(t *testing.T) {
 	}`)
 }
 
-// TestExternalLoginProviders_Create_RequiredFlags pins that both --kind and
-// --display-name are required client-side.
 func TestExternalLoginProviders_Create_RequiredFlags(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -210,11 +180,6 @@ func TestExternalLoginProviders_Create_RequiredFlags(t *testing.T) {
 	}
 }
 
-// TestExternalLoginProviders_Create_RequiresClientCredentials pins that
-// --client-id and --client-secret are required client-side for every provider
-// kind, and that a blank value is rejected the same as an omitted flag. The
-// backend requires both on create (no kind legitimately omits them), so create
-// must NOT fire an incomplete request.
 func TestExternalLoginProviders_Create_RequiresClientCredentials(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -240,8 +205,6 @@ func TestExternalLoginProviders_Create_RequiresClientCredentials(t *testing.T) {
 	}
 }
 
-// TestExternalLoginProviders_Create_InvalidClaimMapJSON pins that a non-JSON
-// --claim-map value exits with ExitUsage and fires no request.
 func TestExternalLoginProviders_Create_InvalidClaimMapJSON(t *testing.T) {
 	srv, fired := newNoRequestServer(t, minimalExternalLoginProviderBody)
 
@@ -261,9 +224,6 @@ func TestExternalLoginProviders_Create_InvalidClaimMapJSON(t *testing.T) {
 	}
 }
 
-// TestExternalLoginProviders_Create_NullClaimMapRejected pins that --claim-map
-// null (valid JSON, but a null rather than an object) is rejected with
-// ExitUsage and fires no request — a JSON OBJECT is required, not null.
 func TestExternalLoginProviders_Create_NullClaimMapRejected(t *testing.T) {
 	srv, fired := newNoRequestServer(t, minimalExternalLoginProviderBody)
 
@@ -283,9 +243,6 @@ func TestExternalLoginProviders_Create_NullClaimMapRejected(t *testing.T) {
 	}
 }
 
-// TestExternalLoginProviders_Update_NullClaimMapRejected pins that update also
-// rejects --claim-map null (the same setJSONObjectFlag guard) with ExitUsage and
-// fires no request.
 func TestExternalLoginProviders_Update_NullClaimMapRejected(t *testing.T) {
 	srv, fired := newNoRequestServer(t, minimalExternalLoginProviderBody)
 
@@ -301,10 +258,6 @@ func TestExternalLoginProviders_Update_NullClaimMapRejected(t *testing.T) {
 	}
 }
 
-// ─── list / retrieve ──────────────────────────────────────────────────────────
-
-// TestExternalLoginProviders_List_CallsCorrectPath verifies the list command
-// hits the right team-scoped collection URL.
 func TestExternalLoginProviders_List_CallsCorrectPath(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{
 		Method:  "GET",
@@ -320,8 +273,6 @@ func TestExternalLoginProviders_List_CallsCorrectPath(t *testing.T) {
 	}
 }
 
-// TestExternalLoginProviders_Retrieve_CallsCorrectPath verifies the retrieve
-// command appends the id to the collection path.
 func TestExternalLoginProviders_Retrieve_CallsCorrectPath(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{
 		Method:  "GET",
@@ -337,10 +288,6 @@ func TestExternalLoginProviders_Retrieve_CallsCorrectPath(t *testing.T) {
 	}
 }
 
-// ─── update ───────────────────────────────────────────────────────────────────
-
-// TestExternalLoginProviders_Update_PartialBody pins PATCH semantics: only
-// the flags that were set are serialized (display-name only in this case).
 func TestExternalLoginProviders_Update_PartialBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusOK, minimalExternalLoginProviderBody)
 
@@ -362,8 +309,6 @@ func TestExternalLoginProviders_Update_PartialBody(t *testing.T) {
 	}`)
 }
 
-// TestExternalLoginProviders_Update_EnabledFalse pins that --enabled=false
-// sends "enabled": false in the attributes map.
 func TestExternalLoginProviders_Update_EnabledFalse(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusOK, minimalExternalLoginProviderBody)
 
@@ -385,8 +330,6 @@ func TestExternalLoginProviders_Update_EnabledFalse(t *testing.T) {
 	}`)
 }
 
-// TestExternalLoginProviders_Update_NothingToUpdate pins that calling update
-// with no flags set exits with ExitUsage and fires no request.
 func TestExternalLoginProviders_Update_NothingToUpdate(t *testing.T) {
 	srv, fired := newNoRequestServer(t, minimalExternalLoginProviderBody)
 
@@ -400,8 +343,6 @@ func TestExternalLoginProviders_Update_NothingToUpdate(t *testing.T) {
 	}
 }
 
-// TestExternalLoginProviders_Update_RotateSecret pins that --client-secret
-// on update serializes client_secret into the PATCH body.
 func TestExternalLoginProviders_Update_RotateSecret(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusOK, minimalExternalLoginProviderBody)
 
@@ -423,11 +364,8 @@ func TestExternalLoginProviders_Update_RotateSecret(t *testing.T) {
 	}`)
 }
 
-// ─── delete ───────────────────────────────────────────────────────────────────
-
-// TestExternalLoginProviders_Delete_NonTTYWithoutYes pins the non-TTY guard.
 func TestExternalLoginProviders_Delete_NonTTYWithoutYes(t *testing.T) {
-	srv := newMockServer(t, nil) // DELETE must NOT be called
+	srv := newMockServer(t, nil)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "external-login-providers", "delete", "elp_abc123")...)
 	if res.Code != errs.ExitNeedsConfir {
@@ -435,8 +373,6 @@ func TestExternalLoginProviders_Delete_NonTTYWithoutYes(t *testing.T) {
 	}
 }
 
-// TestExternalLoginProviders_Delete_WithYes pins that --yes bypasses the guard
-// and the DELETE is sent to the correct path.
 func TestExternalLoginProviders_Delete_WithYes(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Method: "DELETE", PathPfx: "/api/v1/teams/t_team1/external-login-providers/elp_abc123", Status: 204, Body: ""},

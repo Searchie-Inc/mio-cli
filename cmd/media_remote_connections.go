@@ -134,7 +134,6 @@ var remoteImportCmd = &cobra.Command{Use: "import <connection_id>", Short: "Impo
 			ids = append(ids, strings.TrimSpace(id))
 		}
 	}
-	// The API is authoritative; mirror its batch constraints to name the flags before a round trip.
 	if len(ids) == 0 || len(ids) > 50 {
 		return errs.New(errs.ExitUsage, "--external-id/--external-ids require 1 to 50 distinct ids")
 	}

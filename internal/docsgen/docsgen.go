@@ -1,36 +1,3 @@
-// Package docsgen renders the machine-derivable parts of the agent skill
-// (cmd/skills/content/mio-skill.md) from the embedded page-builder catalog.
-//
-// WHY THIS EXISTS
-// The skill has to tell an authoring agent the node-kind settings vocabulary and
-// the surface/background/gradient enums, because the API accepts an unknown
-// property with a 200 and the renderer then drops the node silently — there is no
-// error to debug from. Until catalog 0.14.0 that content had no machine-readable
-// source (`settingsSchema` was empty and 0 of the nodeKinds declared settings), so
-// it was hand-written prose. MIO-2685 re-pinned the embedded catalog to 0.14.1,
-// which ships a populated `settingsSchema`: 24 `kind:<nodeKind>` entries plus the
-// shared `surface`/`background`/`gradient`/`structural` shapes, each property typed
-// with its enum and default.
-//
-// Hand-maintaining a transcription of that is not viable — the catalog moved three
-// minor versions in about a day (0.12.0 → 0.13.0 → 0.14.0 → 0.14.1), and the first
-// bump this repo took immediately falsified two hand-written lists (`quote` and the
-// `testimonials` template). So the doc carries GENERATED blocks, delimited by
-//
-//	<!-- catalog-gen:<name> -->
-//	…generated markdown…
-//	<!-- /catalog-gen -->
-//
-// `go generate ./...` rewrites every block from the embedded catalog, and
-// TestSkillDocIsGeneratedFromCatalog byte-compares the checked-in doc against a
-// fresh render, so a catalog bump that changes a property, enum value or default
-// fails the build with "run go generate ./..." instead of rotting quietly.
-//
-// WHAT IS DELIBERATELY *NOT* GENERATED
-// Anything the catalog does not know: which kinds carry a top-level `value` (that
-// is mio-hub's `LeafKind`, in another repo), the nav-icon sprite names, the hub
-// branding key map, and the whole workflow/trap narrative. Those stay hand-written
-// and are called out as such in the doc.
 package docsgen
 
 import (
@@ -43,9 +10,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 )
 
-// BlockNames are the generated block names, in the order a reader meets them in
-// the skill. Render always returns exactly this set; the drift test uses it to
-// detect a block that was deleted from (or invented in) the markdown.
 var BlockNames = []string{
 	"node-kinds",
 	"section-types",
@@ -63,105 +27,33 @@ var BlockNames = []string{
 	"surface-visibility",
 }
 
-// The vocabulary this renderer knows how to read.
-//
-// WHY: the drift test's oracle IS this generator, so anything Render silently
-// ignores is invisible to the byte-comparison — `go generate` writes the lossy
-// output and the test still passes. Every map below therefore backs an assertion
-// (assertSchemaFullyConsumed), not just a lookup.
-//
-// EXACTLY WHAT IS AND IS NOT COVERED — an earlier version of this comment claimed
-// Render "asserts it consumed every key it was handed", which was itself an
-// overclaim of the kind this file exists to prevent. The truth:
-//
-//	COVERED (unknown value ⇒ generation fails):
-//	  - settingsSchema top-level keys (must be kind:* or shared:*)
-//	  - a kind:* entry's TIERS (knownKindTiers — `_note` is accepted here and not
-//	    rendered; it is a tier key, not a property key)
-//	  - a shared:* entry's own TOP-LEVEL fields (knownSharedEntryKeys)
-//	  - a property spec's keys, recursively through `properties` AND `items`
-//	  - a `shape` REFERENCE target (shapeRefTargets) and, separately, every
-//	    shared:* shape's own NAME (documentedShapes)
-//	  - nodeKinds entry FIELDS (knownNodeKindKeys — `renderFallback` is accepted
-//	    here and not rendered; it is a nodeKinds key, not a property key)
-//
-//	RENDERED (appears in the docs): type, enum, default, properties, shape,
-//	  freeform, items, deprecated. TestRenderedPropKeysActuallyRender probes EVERY
-//	  member of renderedPropKeys, so a key cannot be whitelisted without a
-//	  rendering — that gap is what let `items` and `deprecated` sit accepted but
-//	  invisible.
-//
-//	DELIBERATELY IGNORED — PROPERTY keys accepted and never rendered, listed
-//	separately so the distinction is visible rather than buried in one permissive
-//	whitelist:
-//	  - description: catalog prose. The generated blocks carry names, types, enums
-//	    and defaults; the prose is long, reworded often, and would triple the doc.
-//	    The catalog remains the place to read it.
-//	  - tier: only meaningful inside shared:structural, whose rendering already
-//	    groups by the equivalent sections.
-//
-//	NOT COVERED — stated so the list above is not read as a blanket guarantee:
-//	  - the catalog outside nodeKinds/settingsSchema: templates[],
-//	    pageTemplates[], sectionTypes[], nestingRules, profiles. Those feed the id
-//	    lists, the surface-declaring set and the page-template outline/complete/
-//	    system split; a new FIELD on them is unused rather than mis-documented.
-//	  - the VALUES inside a rendered key (an enum member's spelling, a default's
-//	    type). Those flow through to the output, so the byte-comparison catches a
-//	    change; nothing asserts they are sane.
 var (
 	knownKindTiers = map[string]bool{"core": true, "presentational": true, "_note": true}
 
-	// renderedPropKeys are emitted into the docs by specSuffix / valuesCell.
 	renderedPropKeys = map[string]bool{
 		"type": true, "enum": true, "default": true, "properties": true,
 		"shape": true, "freeform": true, "items": true, "deprecated": true,
 	}
-	// ignoredPropKeys are accepted and deliberately not rendered (see above).
 	ignoredPropKeys = map[string]bool{"description": true, "tier": true}
 
-	// TWO SHAPE CONTRACTS, deliberately separate. Collapsing them into one map (as
-	// an earlier version did) relaxed the reference check the moment `structural`
-	// was added for the other purpose: `shape:"structural"` started printing
-	// `*object → shared:structural*`, a pointer to a section that does not exist —
-	// the exact dangling pointer that check was written to prevent.
-	//
-	// documentedShapes: shared:* entries this generator documents SOMEWHERE, so a
-	// brand-new shape nobody references is not dropped in silence. `structural` is
-	// here because it is rendered inside surface-properties. `action` and
-	// `textTheme` (catalog 0.19.0-0.23.0 range: MIO-3926 button/content-card/image
-	// action, then the shared text-theme ink control for text/headline/button/
-	// divider) and `visibility` (MIO-4182: promoted out of shared:surface.visibility's
-	// inline properties into its own referenceable shape, now reachable both nested
-	// under shared:surface.visibility — back-compat — and as the new unconditional
-	// top-level shared:structural.visibility) each get their own block below.
 	documentedShapes = map[string]bool{
 		"surface": true, "background": true, "gradient": true, "structural": true,
 		"action": true, "textTheme": true, "visibility": true,
 	}
-	// shapeRefTargets: shapes a `shape:` reference may point AT, i.e. those with a
-	// section a reader can actually follow. `structural` has none of its own.
 	shapeRefTargets = map[string]bool{
 		"surface": true, "background": true, "gradient": true,
 		"action": true, "textTheme": true, "visibility": true,
 	}
 
-	// knownNodeKindKeys are the nodeKinds entry fields this generator understands.
 	knownNodeKindKeys = map[string]bool{"childRules": true, "renderFallback": true}
 
-	// knownSharedEntryKeys are the TOP-LEVEL fields of a shared:* entry. Without
-	// this the shared branch read only `properties`, so a future
-	// `shared:surface.variants` would be dropped with no error — the same silent
-	// path already closed for nodeKinds, one level up.
 	knownSharedEntryKeys = map[string]bool{
 		"type": true, "description": true, "properties": true,
 	}
 )
 
-// blockRe matches one generated block and captures its name and current body.
 var blockRe = regexp.MustCompile(`(?s)<!-- catalog-gen:([a-z-]+) -->\n(.*?)<!-- /catalog-gen -->`)
 
-// Render builds every generated block body from cat. Bodies end with a newline so
-// the closing marker always starts its own line.
 func Render(cat *catalog.Catalog) (map[string]string, error) {
 	raw := cat.Raw()
 
@@ -174,8 +66,6 @@ func Render(cat *catalog.Catalog) (map[string]string, error) {
 		return nil, err
 	}
 
-	// Fail before rendering anything if the catalog carries settings vocabulary this
-	// generator would silently drop (see knownKindTiers above).
 	if err := assertSchemaFullyConsumed(kinds, schema); err != nil {
 		return nil, err
 	}
@@ -262,10 +152,6 @@ func Render(cat *catalog.Catalog) (map[string]string, error) {
 	return out, nil
 }
 
-// Apply replaces the body of every generated block in doc with the rendered one,
-// leaving all hand-written prose untouched. It errors when the markdown and
-// BlockNames disagree, so a renamed or dropped marker is a hard failure rather
-// than a silently un-generated section.
 func Apply(doc string, blocks map[string]string) (string, error) {
 	seen := map[string]bool{}
 	var applyErr error
@@ -296,13 +182,7 @@ func Apply(doc string, blocks map[string]string) (string, error) {
 	return out, nil
 }
 
-// assertSchemaFullyConsumed refuses to generate when the catalog declares settings
-// vocabulary this renderer does not read. Without it, a new tier / property key /
-// shared shape is dropped from the docs with no error and the drift test still
-// passes, because the test compares the doc against THIS renderer's output.
 func assertSchemaFullyConsumed(kinds, schema map[string]any) error {
-	// nodeKinds first — renderNodeKinds reads only childRules, so a new field there
-	// would change nothing in the docs and raise nothing.
 	for _, kind := range sortedKeys(kinds) {
 		m, ok := kinds[kind].(map[string]any)
 		if !ok {
@@ -342,8 +222,6 @@ func assertSchemaFullyConsumed(kinds, schema map[string]any) error {
 				}
 			}
 		case strings.HasPrefix(key, "shared:"):
-			// The reference direction alone is not enough: a brand-new shared shape
-			// that nothing references yet would render no block and raise nothing.
 			shape := strings.TrimPrefix(key, "shared:")
 			if !documentedShapes[shape] {
 				return fmt.Errorf("docsgen: settingsSchema declares shared shape %q, which this generator documents nowhere — it would be dropped in silence. Add a block for it (BlockNames + Render) or render it inside an existing one, then list it in documentedShapes", key)
@@ -367,8 +245,6 @@ func assertSchemaFullyConsumed(kinds, schema map[string]any) error {
 	return nil
 }
 
-// assertPropsConsumed checks one property map: every property key must be one this
-// renderer reads, and a `shape` reference must point at a shape we actually render.
 func assertPropsConsumed(where string, props map[string]any) error {
 	for _, name := range sortedKeys(props) {
 		spec, ok := props[name].(map[string]any)
@@ -389,8 +265,6 @@ func assertPropsConsumed(where string, props map[string]any) error {
 				return err
 			}
 		}
-		// `items` is a property spec in its own right and is now RENDERED
-		// (itemsWord), so its keys need the same consumption check as any other.
 		if items, has := spec["items"].(map[string]any); has {
 			if err := assertPropsConsumed(where+"."+name, map[string]any{"items": items}); err != nil {
 				return err
@@ -400,12 +274,6 @@ func assertPropsConsumed(where string, props map[string]any) error {
 	return nil
 }
 
-// surfaceDeclaringTemplates returns the ids of every templates[]/pageTemplates[]
-// entry that DECLARES a `surface` property. Presence opts in — even `{}` — and
-// absence opts out. This mirrors mio-hub's generated
-// src/lib/page-tree/catalog/surface-manifest.ts (SURFACE_TEMPLATE_IDS), which is
-// derived from this same catalog by the same rule, so the set is machine-derivable
-// rather than a hand-counted list. Order follows the catalog's own array order.
 func surfaceDeclaringTemplates(raw map[string]any) ([]string, error) {
 	var out []string
 	for _, group := range []string{"templates", "pageTemplates"} {
@@ -434,8 +302,6 @@ func surfaceDeclaringTemplates(raw map[string]any) ([]string, error) {
 	return out, nil
 }
 
-// renderNodeKinds lists every node kind, split by childRules so the
-// container/childless divide is derived rather than asserted.
 func renderNodeKinds(kinds map[string]any) string {
 	var containers, childless []string
 	for name, v := range kinds {
@@ -457,10 +323,6 @@ func renderNodeKinds(kinds map[string]any) string {
 	return b.String()
 }
 
-// renderNodeSettings emits one entry per kind: its child rule, then its `core` and
-// `presentational` settings with type, enum and default. Properties are listed
-// alphabetically — Go maps lose the catalog's declaration order, so alphabetical
-// is the only stable choice.
 func renderNodeSettings(kinds, schema map[string]any) string {
 	names := make([]string, 0, len(kinds))
 	for name := range kinds {
@@ -500,8 +362,6 @@ func renderNodeSettings(kinds, schema map[string]any) string {
 	return b.String()
 }
 
-// renderSurfaceProperties emits the shared `surface` shape plus the additive
-// `structural` keys the validator unions onto every kind.
 func renderSurfaceProperties(schema map[string]any) (string, error) {
 	surface, err := shapeProperties(schema, "shared:surface")
 	if err != nil {
@@ -515,15 +375,11 @@ func renderSurfaceProperties(schema map[string]any) (string, error) {
 	var b strings.Builder
 	b.WriteString("`settings.surface` accepts these keys, all optional — an omitted key means\n\"no override\", and this is the complete set the resolver reads:\n\n")
 	b.WriteString(propsBullets(surface))
-	// The count is DERIVED, not spelled: a hardcoded "three" beside a generated
-	// list is the same rot this file exists to prevent.
 	fmt.Fprintf(&b, "\nPlus %d key(s) the validator unions onto **every** node's settings, whatever its kind:\n\n", len(structural))
 	b.WriteString(propsBullets(structural))
 	return b.String(), nil
 }
 
-// renderSharedShape emits one shared shape (background, gradient) as a property
-// table: the discriminant enum first, then the per-variant fields.
 func renderSharedShape(schema map[string]any, key string) (string, error) {
 	props, err := shapeProperties(schema, key)
 	if err != nil {
@@ -538,7 +394,6 @@ func renderSharedShape(schema map[string]any, key string) (string, error) {
 	return b.String(), nil
 }
 
-// propsInline renders a property map as a single `·`-separated line.
 func propsInline(props map[string]any) string {
 	names := sortedKeys(props)
 	parts := make([]string, 0, len(names))
@@ -549,7 +404,6 @@ func propsInline(props map[string]any) string {
 	return strings.Join(parts, " · ")
 }
 
-// propsBullets renders a property map as one bullet per property.
 func propsBullets(props map[string]any) string {
 	var b strings.Builder
 	for _, name := range sortedKeys(props) {
@@ -559,7 +413,6 @@ func propsBullets(props map[string]any) string {
 	return b.String()
 }
 
-// specSuffix renders a property's type, enum and default compactly.
 func specSuffix(spec map[string]any) string {
 	parts := []string{typeWord(spec)}
 	if items := itemsWord(spec); items != "" {
@@ -583,9 +436,6 @@ func specSuffix(spec map[string]any) string {
 	return strings.Join(parts, " ")
 }
 
-// itemsWord renders an array property's element type, so an array does not
-// document as a bare *array* (catalog 0.14.1's `accordion.defaultExpanded` is the
-// live case).
 func itemsWord(spec map[string]any) string {
 	items, ok := spec["items"].(map[string]any)
 	if !ok {
@@ -601,8 +451,6 @@ func itemsWord(spec map[string]any) string {
 	return "of *" + inner + "*"
 }
 
-// deprecatedWord flags a deprecated property. Documenting one as live is a real
-// harm — an author wires it up and it stops working on the next frontend release.
 func deprecatedWord(spec map[string]any) string {
 	switch t := spec["deprecated"].(type) {
 	case bool:
@@ -618,7 +466,6 @@ func deprecatedWord(spec map[string]any) string {
 	return ""
 }
 
-// typeWord renders a property's declared type, resolving a `shape` reference.
 func typeWord(spec map[string]any) string {
 	t, _ := spec["type"].(string)
 	if shape, ok := spec["shape"].(string); ok && shape != "" {
@@ -630,7 +477,6 @@ func typeWord(spec map[string]any) string {
 	return "*" + t + "*"
 }
 
-// enumValues joins a property's enum with `|`.
 func enumValues(spec map[string]any) string {
 	vals, ok := spec["enum"].([]any)
 	if !ok || len(vals) == 0 {
@@ -643,7 +489,6 @@ func enumValues(spec map[string]any) string {
 	return strings.Join(out, "|")
 }
 
-// nestedKeys lists an inline object property's own keys.
 func nestedKeys(spec map[string]any) string {
 	props, ok := spec["properties"].(map[string]any)
 	if !ok || len(props) == 0 {
@@ -652,10 +497,6 @@ func nestedKeys(spec map[string]any) string {
 	return strings.Join(sortedKeys(props), ", ")
 }
 
-// valuesCell is the table cell for a shared-shape property: enum and/or default.
-// Enum members are joined with `|`, which is the GFM column separator, so the
-// separators are escaped — an unescaped pipe inside a backtick span still splits
-// the cell and silently mangles the table.
 func valuesCell(spec map[string]any) string {
 	var parts []string
 	if items := itemsWord(spec); items != "" {
@@ -682,25 +523,6 @@ func valuesCell(spec map[string]any) string {
 	return strings.Join(parts, " · ")
 }
 
-// renderPageTemplateKinds splits the page templates three ways by reading each
-// recipe:
-//
-//   - a SYSTEM page has root children and none of them carries a section
-//     `template`. The hub routes these pages in code, and their root children
-//     are fixed regions, not sections: mio-hub's page-tree README ("The section
-//     contract") lists exactly these templates as its code-routed scaffolds.
-//     Copy on a system page is a region placeholder, so this test comes first.
-//   - an OUTLINE carries no copy (no node with a non-empty `value`): every
-//     value is the author's to write, and a templated section may arrive as a
-//     bare stub.
-//   - any other page is COMPLETE: finished sections with placeholder copy.
-//
-// The skill used to call every page template an outline, which was wrong for
-// page-sales. The first fix split them on copy alone, which filed
-// page-file-detail (three slot placeholders around a locked file-player) under
-// "finished sections" (blind review of #137). The block names the catalog
-// version, because the backend an agent scaffolds against may serve a
-// different set of templates.
 func renderPageTemplateKinds(version string, pages []catalog.Template) string {
 	var outlines, complete, system []string
 	for _, t := range pages {
@@ -719,10 +541,6 @@ func renderPageTemplateKinds(version string, pages []catalog.Template) string {
 		"\nSystem pages — routed by the hub itself, with fixed regions instead of sections; fill in their values and add no sections:\n\n" + inlineList(system)
 }
 
-// isSystemPage reports whether a page starter has root children and none of
-// them carries a section `template` (a non-empty string). The auth brand panel
-// is a fixed system region, not a page section. A root with no
-// children at all (page-generic) is a blank content page, not a system page.
 func isSystemPage(root map[string]any) bool {
 	kids, _ := root["children"].([]any)
 	if len(kids) == 0 {
@@ -738,8 +556,6 @@ func isSystemPage(root map[string]any) bool {
 	return true
 }
 
-// nodeCarriesCopy reports whether node or any descendant has a `value` an
-// author would edit: present and not null, "", {} or [].
 func nodeCarriesCopy(node map[string]any) bool {
 	switch v := node["value"].(type) {
 	case nil:
@@ -767,7 +583,6 @@ func nodeCarriesCopy(node map[string]any) bool {
 	return false
 }
 
-// inlineList renders ids as a wrapped `·`-separated backticked list.
 func inlineList(ids []string) string {
 	if len(ids) == 0 {
 		return "*(none)*\n"
@@ -792,8 +607,6 @@ func inlineList(ids []string) string {
 	return b.String()
 }
 
-// scalar renders a JSON scalar the way the catalog spells it (json.Number keeps
-// `2` from becoming `2.0`).
 func scalar(v any) string {
 	switch t := v.(type) {
 	case string:
@@ -821,7 +634,6 @@ func sortedKeys(m map[string]any) []string {
 	return out
 }
 
-// objectOf reads a required top-level catalog object.
 func objectOf(raw map[string]any, key string) (map[string]any, error) {
 	v, ok := raw[key].(map[string]any)
 	if !ok {
@@ -833,7 +645,6 @@ func objectOf(raw map[string]any, key string) (map[string]any, error) {
 	return v, nil
 }
 
-// shapeProperties reads a shared shape's `properties` map.
 func shapeProperties(schema map[string]any, key string) (map[string]any, error) {
 	entry, ok := schema[key].(map[string]any)
 	if !ok {
@@ -846,7 +657,6 @@ func shapeProperties(schema map[string]any, key string) (map[string]any, error) 
 	return props, nil
 }
 
-// objectField reads a string field off an `any` that should be an object.
 func objectField(v any, key string) (string, bool) {
 	m, ok := v.(map[string]any)
 	if !ok {

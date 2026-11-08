@@ -1,29 +1,5 @@
 package cmd
 
-// externalloginproviders.go implements the `mio external-login-providers`
-// command group.
-//
-// Routes (team-owner admin surface):
-//
-//	create   POST   /api/teams/{team_id}/external-login-providers
-//	list     GET    /api/teams/{team_id}/external-login-providers
-//	retrieve GET    /api/teams/{team_id}/external-login-providers/{id}
-//	update   PATCH  /api/teams/{team_id}/external-login-providers/{id}
-//	delete   DELETE /api/teams/{team_id}/external-login-providers/{id}
-//
-// JSON:API resource type: "external_login_providers"
-//
-// NOTE: client_secret is write-only — it is never returned by the server.
-// The read-only `client_secret_set` boolean and `callback_url` fields are
-// populated in every GET response.
-//
-// Generic OIDC/OAuth2 providers (generic_oidc, generic_oauth2) accept the
-// extra flags --issuer, --discovery-url, --token-url, --userinfo-url,
-// --authorize-url, --jwks-uri, --scopes, and --claim-map. These flags are
-// silently ignored by the server for the first-party providers (google,
-// facebook) that have built-in configs — but passing them for non-generic
-// providers is still a client-side usage error (validate server-side).
-
 import (
 	"encoding/json"
 	"fmt"
@@ -46,10 +22,6 @@ func init() {
 	rootCmd.AddCommand(externalLoginProvidersCmd)
 }
 
-// ── path helper ───────────────────────────────────────────────────────────────
-
-// externalLoginProvidersPath returns
-// /api/teams/{team_id}/external-login-providers[/{id}].
 func externalLoginProvidersPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/external-login-providers", teamID)
 	if id != "" {
@@ -57,8 +29,6 @@ func externalLoginProvidersPath(teamID, id string) string {
 	}
 	return base
 }
-
-// ── group ─────────────────────────────────────────────────────────────────────
 
 var externalLoginProvidersCmd = &cobra.Command{
 	Use:   "external-login-providers",
@@ -74,8 +44,6 @@ Use --client-secret on create or update to set or rotate it. After creation
 the read-only client_secret_set field indicates whether a secret is stored,
 and callback_url gives the redirect URI to register with your provider.`,
 }
-
-// ── create ────────────────────────────────────────────────────────────────────
 
 var externalLoginProvidersCreateCmd = &cobra.Command{
 	Use:   "create",
@@ -138,7 +106,6 @@ names to mio contact fields, e.g.
 		setStringFlag(cmd, attrs, "client-id")
 		setStringFlag(cmd, attrs, "client-secret")
 
-		// Generic provider flags.
 		setStringFlag(cmd, attrs, "issuer")
 		setStringFlag(cmd, attrs, "discovery-url")
 		setStringFlag(cmd, attrs, "authorize-url")
@@ -151,11 +118,6 @@ names to mio contact fields, e.g.
 			return err
 		}
 
-		// --kind, --display-name, --client-id, and --client-secret are required
-		// client-side. The backend requires client_id and client_secret on create
-		// for EVERY provider kind (google, facebook, generic_oidc, generic_oauth2)
-		// — there is no kind that legitimately omits them — so we enforce both
-		// up-front rather than letting an incomplete request reach the server.
 		if v, _ := attrs["kind"].(string); strings.TrimSpace(v) == "" {
 			return errs.New(errs.ExitUsage, "--kind is required (google|facebook|generic_oidc|generic_oauth2)")
 		}
@@ -176,8 +138,6 @@ names to mio contact fields, e.g.
 		return c.render(cmd, res)
 	},
 }
-
-// ── list ──────────────────────────────────────────────────────────────────────
 
 var externalLoginProvidersListCmd = &cobra.Command{
 	Use:   "list",
@@ -211,8 +171,6 @@ var externalLoginProvidersListCmd = &cobra.Command{
 	},
 }
 
-// ── retrieve ──────────────────────────────────────────────────────────────────
-
 var externalLoginProvidersRetrieveCmd = &cobra.Command{
 	Use:     "retrieve <id>",
 	Short:   "Retrieve an external login provider by id.",
@@ -239,8 +197,6 @@ var externalLoginProvidersRetrieveCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ── update ────────────────────────────────────────────────────────────────────
 
 var externalLoginProvidersUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
@@ -280,7 +236,6 @@ disable the provider without deleting it.`,
 		setStringFlag(cmd, attrs, "client-secret")
 		setBoolFlag(cmd, attrs, "enabled")
 
-		// Generic provider flags.
 		setStringFlag(cmd, attrs, "issuer")
 		setStringFlag(cmd, attrs, "discovery-url")
 		setStringFlag(cmd, attrs, "authorize-url")
@@ -304,8 +259,6 @@ disable the provider without deleting it.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ── delete ────────────────────────────────────────────────────────────────────
 
 var externalLoginProvidersDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
@@ -346,17 +299,13 @@ non-interactive environments.`,
 	},
 }
 
-// ── flag registration ─────────────────────────────────────────────────────────
-
 func init() {
-	// create flags
 	externalLoginProvidersCreateCmd.Flags().String("kind", "", "Provider kind: google|facebook|generic_oidc|generic_oauth2. (required)")
 	externalLoginProvidersCreateCmd.Flags().String("slug", "", "URL-safe slug for the provider (auto-derived from display-name if omitted).")
 	externalLoginProvidersCreateCmd.Flags().String("display-name", "", "Human-readable label shown on the login button. (required)")
 	externalLoginProvidersCreateCmd.Flags().String("client-id", "", "OAuth2 client ID registered with the identity provider. (required)")
 	externalLoginProvidersCreateCmd.Flags().String("client-secret", "", "OAuth2 client secret registered with the identity provider (write-only). (required)")
 
-	// Generic provider flags — create
 	externalLoginProvidersCreateCmd.Flags().String("issuer", "", "Issuer URL (generic_oidc / generic_oauth2 only).")
 	externalLoginProvidersCreateCmd.Flags().String("discovery-url", "", "OIDC discovery document URL. When set the backend auto-populates endpoints (generic_oidc only).")
 	externalLoginProvidersCreateCmd.Flags().String("authorize-url", "", "Authorization endpoint URL (generic_oidc / generic_oauth2 only).")
@@ -366,13 +315,11 @@ func init() {
 	externalLoginProvidersCreateCmd.Flags().String("scopes", "", "Space-separated OAuth2 scopes to request (generic_oidc / generic_oauth2 only).")
 	externalLoginProvidersCreateCmd.Flags().String("claim-map", "", "JSON object mapping IdP claim names to mio contact fields, e.g. '{\"given_name\":\"first_name\"}'.")
 
-	// update flags — same set minus --kind/--slug (cannot be changed post-create)
 	externalLoginProvidersUpdateCmd.Flags().String("display-name", "", "New human-readable label shown on the login button.")
 	externalLoginProvidersUpdateCmd.Flags().String("client-id", "", "New OAuth2 client ID.")
 	externalLoginProvidersUpdateCmd.Flags().String("client-secret", "", "New OAuth2 client secret (rotates the stored secret; write-only).")
 	externalLoginProvidersUpdateCmd.Flags().Bool("enabled", false, "Enable (true) or disable (false) the provider.")
 
-	// Generic provider flags — update
 	externalLoginProvidersUpdateCmd.Flags().String("issuer", "", "Issuer URL (generic_oidc / generic_oauth2 only).")
 	externalLoginProvidersUpdateCmd.Flags().String("discovery-url", "", "OIDC discovery document URL (generic_oidc only).")
 	externalLoginProvidersUpdateCmd.Flags().String("authorize-url", "", "Authorization endpoint URL (generic_oidc / generic_oauth2 only).")
@@ -382,15 +329,9 @@ func init() {
 	externalLoginProvidersUpdateCmd.Flags().String("scopes", "", "Space-separated OAuth2 scopes to request (generic_oidc / generic_oauth2 only).")
 	externalLoginProvidersUpdateCmd.Flags().String("claim-map", "", "JSON object mapping IdP claim names to mio contact fields.")
 
-	// list pagination
 	addPaginationFlags(externalLoginProvidersListCmd)
 }
 
-// ── local helpers ─────────────────────────────────────────────────────────────
-
-// setJSONObjectFlag parses a JSON-object string flag into attrs[name] iff it
-// was set by the user. The value must be a valid JSON object; an error is
-// returned if set but invalid.
 func setJSONObjectFlag(cmd *cobra.Command, attrs map[string]any, name string) error {
 	if !cmd.Flags().Changed(name) {
 		return nil
@@ -403,9 +344,6 @@ func setJSONObjectFlag(cmd *cobra.Command, attrs map[string]any, name string) er
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return errs.New(errs.ExitUsage, "--%s must be a valid JSON object: %s", name, err)
 	}
-	// json.Unmarshal accepts the literal `null` for a map and leaves parsed nil.
-	// A JSON object is required here, so reject null explicitly rather than sending
-	// an empty/nil attribute to the server.
 	if parsed == nil {
 		return errs.New(errs.ExitUsage, "--%s must be a JSON object, not null", name)
 	}

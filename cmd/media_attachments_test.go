@@ -1,9 +1,5 @@
 package cmd
 
-// media_attachments_test.go — contract tests for the `mio media attachments`
-// admin command group (MIO-2289). Team-scoped attachment admin surface:
-// list (with media_id/target filters), show, update (position/role), delete.
-
 import (
 	"encoding/json"
 	"net/http"
@@ -96,7 +92,6 @@ func TestAttachmentsUpdate_Body(t *testing.T) {
 	if attrs["role"] != "thumbnail" {
 		t.Errorf("role=%v want thumbnail", attrs["role"])
 	}
-	// AttachmentUpdateRequest requires data.id in the body (backend 400s otherwise).
 	var doc struct {
 		Data struct {
 			ID string `json:"id"`

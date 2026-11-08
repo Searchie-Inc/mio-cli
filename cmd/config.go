@@ -13,24 +13,11 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// configUUIDRe matches a canonical UUID (any version, e.g. the UUIDv7 ids the
-// backend issues). current_team / current_hub must be a UUID; a slug or prefixed
-// test id (t_team1) is rejected at the setter.
 var configUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// validateConfigValue checks the value shape for a known config key so a bogus
-// value is rejected here (exit 2) instead of persisting verbatim and failing far
-// away with a cryptic error on a later command (MIO-2646). Unknown keys pass
-// through (the caller's switch rejects them). This guards the CLI's OWN local
-// state — the --team/--hub flags stay faithful conduits the API validates.
 func validateConfigValue(key, value string) error {
 	switch key {
 	case "api_base":
-		// The client builds request URLs by textual append (baseURL + "/api/v1/…"),
-		// so api_base must be a plain scheme://host[:port][/path] base. Any '?' or '#'
-		// — even a bare delimiter like "https://host?" (url.ForceQuery, empty RawQuery)
-		// or "https://host#" (empty Fragment) — would turn appended paths into
-		// query/fragment text, so reject those characters outright before parsing.
 		if strings.ContainsAny(value, "?#") {
 			return errs.New(errs.ExitUsage, "invalid api_base %q: must be a plain http(s) base URL (scheme://host[:port]), with no query or fragment", value)
 		}
@@ -46,10 +33,6 @@ func validateConfigValue(key, value string) error {
 	return nil
 }
 
-// configKeys are the writable config keys exposed via `mio config set/get`.
-// They match the TOML field names in config.Config exactly so that scripting
-// with `mio config get <key>` produces the same key names as the file on disk.
-// Keep this list and the configValues / configSetCmd switch in sync.
 var configKeys = []string{"current_team", "current_hub", "api_base"}
 
 func init() {

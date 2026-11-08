@@ -1,21 +1,10 @@
 package catalog
 
-// datasource_test.go — the playlist FILL CONTRACT (MIO-3065). Its oracle is the
-// TREE the scaffold would PUT: a bound node must carry the created id at
-// dataSource.id, because that is the value mio-backend's page compiler reads to
-// derive (model_type, model_id). Asserting anything less — that the function was
-// called, that a map was consulted — would pass over a tree that still ships the
-// catalog's empty id.
-
 import (
 	"reflect"
 	"testing"
 )
 
-// bandTree is a two-level tree shaped like the starter homepage's Getting
-// Started band: the section node itself carries a playlist dataSource, and so
-// does a descendant two levels down (the scroll rail). A one-level walker would
-// bind the first and silently miss the second, which is why the nesting is here.
 func bandTree() Node {
 	return Node{
 		"kind": "stack",
@@ -41,9 +30,6 @@ func bandTree() Node {
 	}
 }
 
-// dataSourceIDsForKey collects the dataSource.id of every playlist node in the
-// tree, in walk order — read back off the TREE, not off the function's return
-// value, so a function that counted bindings without writing them fails here.
 func dataSourceIDsForKey(n Node) []string {
 	var ids []string
 	forEachPlaylistDataSource(n, func(ds map[string]any, _ string) {
@@ -73,8 +59,6 @@ func TestBindPlaylistDataSources_UnresolvedKeyIsReportedAndLeavesTheTreeAlone(t 
 	if bound != 0 {
 		t.Errorf("bound = %d, want 0 — no playlist was created for this key", bound)
 	}
-	// Deduplicated: two nodes name the same key, and reporting it twice would
-	// read as two separate problems.
 	if !reflect.DeepEqual(unresolved, []string{"getting-started"}) {
 		t.Errorf("unresolved = %v, want [getting-started] exactly once", unresolved)
 	}
@@ -83,9 +67,6 @@ func TestBindPlaylistDataSources_UnresolvedKeyIsReportedAndLeavesTheTreeAlone(t 
 	}
 }
 
-// A dataSource with a real id and no key is NOT part of this contract: the
-// author bound it directly. Rewriting it would silently repoint a hand-authored
-// binding at a template playlist.
 func TestBindPlaylistDataSources_LeavesKeylessAndNonPlaylistBindingsAlone(t *testing.T) {
 	tree := Node{
 		"kind": "stack",

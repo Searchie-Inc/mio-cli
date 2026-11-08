@@ -1,23 +1,5 @@
 package cmd
 
-// teams.go — `mio teams` command group.
-//
-// Implements every command listed in docs/internal/api-surface.md "## teams":
-//
-//	teams create/list/retrieve/update/delete
-//	teams switch <id>
-//	teams members list/add/remove
-//
-// Routes:
-//
-//	teams:   CRUD /api/teams[/{id}]
-//	switch:  POST /api/teams/{id}/switch
-//	members: GET/POST/DELETE /api/teams/{id}/members[/{user_id}]
-//
-// Note: these routes are NOT nested under a team-scoped prefix — they operate
-// on the /api/teams collection directly. The {id} is always a positional argument,
-// not the resolved context team id.
-
 import (
 	"fmt"
 	"net/url"
@@ -29,7 +11,6 @@ import (
 )
 
 func init() {
-	// teams <action>
 	teamsCmd.AddCommand(
 		teamsCreateCmd,
 		teamsListCmd,
@@ -39,7 +20,6 @@ func init() {
 		teamsSwitchCmd,
 	)
 
-	// teams members <action>  (nested sub-resource)
 	teamsMembersCmd.AddCommand(
 		teamsMembersListCmd,
 		teamsMembersAddCmd,
@@ -47,11 +27,8 @@ func init() {
 	)
 	teamsCmd.AddCommand(teamsMembersCmd)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(teamsCmd)
 }
-
-// ---- teams group ------------------------------------------------------------
 
 var teamsCmd = &cobra.Command{
 	Use:   "teams",
@@ -59,7 +36,6 @@ var teamsCmd = &cobra.Command{
 	Long:  "Create, list, retrieve, update, delete and switch between teams. Also manage team membership.",
 }
 
-// teamsPath returns /api/teams[/{id}].
 func teamsPath(id string) string {
 	if id != "" {
 		return "/api/teams/" + id
@@ -98,9 +74,6 @@ POST /api/v1/auth/login returns) as the credential for this one call with
 			return err
 		}
 
-		// --name and --slug are required (cobra refuses the command without
-		// them), and --subdomain has already been folded into --slug by
-		// applyTeamsSubdomainAlias, so these are the only two keys sent.
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "slug")
@@ -113,19 +86,6 @@ POST /api/v1/auth/login returns) as the credential for this one call with
 	},
 }
 
-// applyTeamsSubdomainAlias folds the deprecated --subdomain onto --slug. It is
-// the create command's PreRunE, which cobra runs BEFORE its required-flag check,
-// so `--subdomain acme` alone satisfies the required --slug. It runs before any
-// credential lookup or request, so a conflict is a usage error that sends
-// nothing.
-//
-// This is an explicit mapping rather than a flag normalize func (the shape
-// contacts uses for --first_name) because a normalize func makes both spellings
-// the same flag, where a second value silently wins; here `--slug a
-// --subdomain b` must be refused, and --subdomain must say it is deprecated.
-// The notice goes to stderr so a JSON stdout stays parseable. (cobra's own
-// MarkDeprecated is not used: it prints through OutOrStderr, which resolves to
-// the command's OUTPUT writer whenever one is set, as the in-process tests do.)
 func applyTeamsSubdomainAlias(cmd *cobra.Command, _ []string) error {
 	fs := cmd.Flags()
 	if !fs.Changed("subdomain") {
@@ -281,11 +241,6 @@ To set the local team context WITHOUT a server-side switch, use
 			return err
 		}
 
-		// Server-side switch succeeded — now update the LOCAL context so
-		// subsequent team-scoped commands target the new team. Clear the
-		// current hub because hubs are team-scoped: a hub from the old team is
-		// not valid under the new one. This is intentionally a separate concern
-		// from `mio config set current_team`, which is local-only and does not POST.
 		cfg, cerr := config.Load()
 		if cerr != nil {
 			return errs.Wrap(errs.ExitGeneric, cerr)
@@ -296,19 +251,11 @@ To set the local team context WITHOUT a server-side switch, use
 			return errs.Wrap(errs.ExitGeneric, serr)
 		}
 
-		// The human confirmation goes to STDERR and only when stderr is a TTY,
-		// so stdout stays machine-clean: in non-TTY `--output json` mode stdout
-		// must contain exactly the rendered payload (or nothing), never prose.
-		// Printing to stderr here (before render) is safe because stderr is not
-		// the parsed channel and a later render error still surfaces correctly.
 		if isTTY(cmd.ErrOrStderr()) {
 			fmt.Fprintf(cmd.ErrOrStderr(),
 				"Switched to team %s (updated local context; cleared current hub).\n", args[0])
 		}
 
-		// Render the server response (if any) as the SOLE stdout payload. When
-		// the switch endpoint returns no body, stdout stays empty per the
-		// existing no-body convention.
 		if res != nil {
 			return c.render(cmd, res)
 		}
@@ -317,9 +264,6 @@ To set the local team context WITHOUT a server-side switch, use
 }
 
 func init() {
-	// Attribute flags for teams create/update. They mirror the API's write
-	// schemas (mio-backend app/teams/schemas.py): TeamCreate takes name + slug,
-	// TeamUpdate takes name only, and both forbid any other field (MIO-3830).
 	for _, cmd := range []*cobra.Command{teamsCreateCmd, teamsUpdateCmd} {
 		cmd.Flags().String("name", "", "Team display name.")
 	}
@@ -332,15 +276,12 @@ func init() {
 	addPaginationFlags(teamsListCmd)
 }
 
-// ---- teams members sub-resource ---------------------------------------------
-
 var teamsMembersCmd = &cobra.Command{
 	Use:   "members",
 	Short: "Manage team membership.",
 	Long:  "List, add, and remove members from a team.",
 }
 
-// teamsMembersPath returns /api/teams/{id}/members[/{user_id}].
 func teamsMembersPath(teamID, userID string) string {
 	base := fmt.Sprintf("/api/teams/%s/members", teamID)
 	if userID != "" {
@@ -436,7 +377,6 @@ var teamsMembersRemoveCmd = &cobra.Command{
 }
 
 func init() {
-	// Attribute flags for members add.
 	teamsMembersAddCmd.Flags().String("user-id", "", "User id to add to the team.")
 	teamsMembersAddCmd.Flags().String("role-id", "", "Role id to assign to the new member (optional).")
 	addPaginationFlags(teamsMembersListCmd)

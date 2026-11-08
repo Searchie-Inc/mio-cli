@@ -1,17 +1,5 @@
 package cmd
 
-// apikeys.go implements the `mio api-keys` command group.
-//
-// Routes (see docs/internal/api-surface.md "api-keys"):
-//
-//	create   POST   /api/teams/{team_id}/api-keys           {name, expires_at?}
-//	list     GET    /api/teams/{team_id}/api-keys
-//	retrieve GET    /api/teams/{team_id}/api-keys/{id}
-//	delete   DELETE /api/teams/{team_id}/api-keys/{id}      (revoke, destructive)
-//
-// The secret is returned by the server only on create; subsequent retrieves
-// will not re-expose it. All routes are team-scoped; no hub context is needed.
-
 import (
 	"fmt"
 	"net/url"
@@ -35,8 +23,6 @@ func init() {
 	rootCmd.AddCommand(apikeysCmd)
 }
 
-// ---- api-keys group ---------------------------------------------------------
-
 var apikeysCmd = &cobra.Command{
 	Use:   "api-keys",
 	Short: "Manage API keys for the active team.",
@@ -46,7 +32,6 @@ The secret value is returned only once at creation time. Store it immediately â€
 subsequent retrieve and list calls will not re-expose the secret.`,
 }
 
-// apikeysPath returns /api/teams/{team_id}/api-keys[/{id}].
 func apikeysPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/api-keys", teamID)
 	if id != "" {
@@ -54,8 +39,6 @@ func apikeysPath(teamID, id string) string {
 	}
 	return base
 }
-
-// ---- create -----------------------------------------------------------------
 
 var apikeysCreateCmd = &cobra.Command{
 	Use:   "create",
@@ -92,15 +75,12 @@ including the stored one, is refused with 403 (exit 3).`,
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
-		// expires-at (kebab flag name) maps to expires_at (JSON:API attribute key).
 		if cmd.Flags().Changed("expires-at") {
 			if v, err2 := cmd.Flags().GetString("expires-at"); err2 == nil {
 				attrs["expires_at"] = v
 			}
 		}
 
-		// Permission flags: sent only when the flag was passed (a flag the user
-		// did not set must never reach the body â€” PATCH/partial semantics).
 		setBoolFlag(cmd, attrs, "can-moderate")
 		setBoolFlag(cmd, attrs, "can-author-events")
 
@@ -108,8 +88,6 @@ including the stored one, is refused with 403 (exit 3).`,
 			return errs.New(errs.ExitUsage, "nothing to create: set at least --name")
 		}
 
-		// Flat body: the backend ApiKeyCreateRequest schema is a plain pydantic
-		// model ({name, scopes?, expires_at?}), not a JSON:API envelope.
 		res, err := c.client.CreateWith(c.ctx, client.StyleFlat, apikeysPath(teamID, ""), attrs)
 		if err != nil {
 			return err
@@ -117,8 +95,6 @@ including the stored one, is refused with 403 (exit 3).`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- list -------------------------------------------------------------------
 
 var apikeysListCmd = &cobra.Command{
 	Use:   "list",
@@ -152,8 +128,6 @@ var apikeysListCmd = &cobra.Command{
 	},
 }
 
-// ---- retrieve ---------------------------------------------------------------
-
 var apikeysRetrieveCmd = &cobra.Command{
 	Use:     "retrieve <id>",
 	Short:   "Retrieve an API key by id.",
@@ -180,8 +154,6 @@ var apikeysRetrieveCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- update (permission flags) ----------------------------------------------
 
 var apikeysUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
@@ -222,7 +194,6 @@ one, is refused with 403 (exit 3). Find a key's id with 'mio api-keys list'.`,
 		if err != nil {
 			return err
 		}
-		// Flat body, like create: the backend accepts a flat object here.
 		res, err := c.client.UpdateWith(c.ctx, client.StyleFlat, apikeysPath(teamID, args[0]), attrs)
 		if err != nil {
 			return err
@@ -230,8 +201,6 @@ one, is refused with 403 (exit 3). Find a key's id with 'mio api-keys list'.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- delete (revoke) --------------------------------------------------------
 
 var apikeysDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
@@ -273,7 +242,6 @@ non-interactive environments.`,
 }
 
 func init() {
-	// Attribute flags for create.
 	apikeysCreateCmd.Flags().String("name", "", "Human-readable name for the API key.")
 	apikeysCreateCmd.Flags().String("expires-at", "", "Expiry timestamp in RFC 3339 format (e.g. 2027-01-01T00:00:00Z). Omit for a non-expiring key.")
 	apikeysCreateCmd.Flags().Bool("can-moderate", false, "Let the key use the member-moderation endpoints (default false).")
@@ -281,6 +249,5 @@ func init() {
 	apikeysUpdateCmd.Flags().Bool("can-moderate", false, "Set the can_moderate flag (=false to revoke).")
 	apikeysUpdateCmd.Flags().Bool("can-author-events", false, "Set the can_author_events flag (=false to revoke).")
 
-	// Pagination flags for list.
 	addPaginationFlags(apikeysListCmd)
 }

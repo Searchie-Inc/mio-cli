@@ -1,15 +1,5 @@
 package cmd
 
-// webhookendpoints.go implements the `mio webhook-endpoints` command group for
-// managing outbound webhook endpoint registrations within a hub.
-// Hub-scoped: every command requires a resolved hub id and team id.
-//
-// Routes (see docs/internal/api-surface.md "webhook-endpoints"):
-//
-//	create POST   /api/teams/{team_id}/hubs/{hub_id}/webhook-endpoints
-//	list   GET    /api/teams/{team_id}/hubs/{hub_id}/webhook-endpoints
-//	delete DELETE /api/teams/{team_id}/hubs/{hub_id}/webhook-endpoints/{id}
-
 import (
 	"fmt"
 	"net/url"
@@ -21,18 +11,14 @@ import (
 )
 
 func init() {
-	// webhook-endpoints <action>
 	webhookEndpointsCmd.AddCommand(
 		webhookEndpointsCreateCmd,
 		webhookEndpointsListCmd,
 		webhookEndpointsDeleteCmd,
 	)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(webhookEndpointsCmd)
 }
-
-// ---- webhook-endpoints group ------------------------------------------------
 
 var webhookEndpointsCmd = &cobra.Command{
 	Use:   "webhook-endpoints",
@@ -40,13 +26,10 @@ var webhookEndpointsCmd = &cobra.Command{
 	Long:  "Create, list, and delete outbound webhook endpoint registrations for a hub. Hub-scoped: --hub is required.",
 }
 
-// webhookEndpointsBase returns the collection path for webhook endpoints.
-// /api/teams/{team_id}/hubs/{hub_id}/webhook-endpoints
 func webhookEndpointsBase(teamID, hubID string) string {
 	return fmt.Sprintf("/api/teams/%s/hubs/%s/webhook-endpoints", teamID, hubID)
 }
 
-// webhookEndpointsPath returns …/webhook-endpoints[/{id}].
 func webhookEndpointsPath(teamID, hubID, id string) string {
 	base := webhookEndpointsBase(teamID, hubID)
 	if id != "" {
@@ -55,9 +38,6 @@ func webhookEndpointsPath(teamID, hubID, id string) string {
 	return base
 }
 
-// webhookEndpointsContext is the shared boilerplate for webhook-endpoints
-// sub-commands: builds the context, requires auth, and resolves both team id
-// and hub id.
 func webhookEndpointsContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -76,8 +56,6 @@ func webhookEndpointsContext(cmd *cobra.Command) (*cmdContext, string, string, e
 	}
 	return c, teamID, hubID, nil
 }
-
-// ---- create -----------------------------------------------------------------
 
 var webhookEndpointsCreateCmd = &cobra.Command{
 	Use:   "create",
@@ -112,8 +90,6 @@ var webhookEndpointsCreateCmd = &cobra.Command{
 	},
 }
 
-// ---- list -------------------------------------------------------------------
-
 var webhookEndpointsListCmd = &cobra.Command{
 	Use:     "list",
 	Short:   "List webhook endpoints.",
@@ -136,8 +112,6 @@ var webhookEndpointsListCmd = &cobra.Command{
 		return c.render(cmd, col)
 	},
 }
-
-// ---- delete -----------------------------------------------------------------
 
 var webhookEndpointsDeleteCmd = &cobra.Command{
 	Use:     "delete <id>",
@@ -163,15 +137,10 @@ var webhookEndpointsDeleteCmd = &cobra.Command{
 	},
 }
 
-// ---- flag registration ------------------------------------------------------
-
 func init() {
-	// create flags.
 	webhookEndpointsCreateCmd.Flags().String("name", "", "Webhook endpoint name.")
 	webhookEndpointsCreateCmd.Flags().String("target-url", "", "Destination URL that receives the webhook POST.")
-	// signing-secret is write-only: the backend never returns it after creation.
 	webhookEndpointsCreateCmd.Flags().String("signing-secret", "", "Optional signing secret used to verify webhook payloads (write-only; never returned by the API).")
 
-	// pagination on list.
 	addPaginationFlags(webhookEndpointsListCmd)
 }

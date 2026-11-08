@@ -9,10 +9,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// MIO-2264: `hub-memberships list` → GET .../members (admin list, all statuses),
-// backed by the MIO-2284 backend route. Pagination via --limit/--after; optional
-// --filter-status (active|banned|soft_banned|left), validated client-side.
-
 func TestHubMembershipsList_PathAndQuery(t *testing.T) {
 	var gotMethod, gotPath, gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +45,7 @@ func TestHubMembershipsList_RejectsInvalidStatusBeforeContext(t *testing.T) {
 
 	res := runContract(t, baseEnv(srv.URL),
 		"hub-memberships", "list",
-		"--team", "acme-name", // NOT id-shaped → would trigger team resolution if reached
+		"--team", "acme-name",
 		"--hub", "hub_123",
 		"--filter-status", "bogus")
 

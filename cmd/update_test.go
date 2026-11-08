@@ -14,10 +14,6 @@ import (
 
 func TestUpdateCommandInvokesInstallerWithPrefixAndVersion(t *testing.T) {
 	resetGlobalFlags()
-	// update now runs refreshManagedSkills after a (mocked) successful update.
-	// Sandbox HOME, CODEX_HOME AND the working directory (the project scope,
-	// MIO-4178) so the test can never touch — let alone refresh — a real
-	// managed skill install in the developer's or CI home, or in this repo.
 	isolateSkillSandbox(t)
 	oldRunner := selfUpdateRunner
 	t.Cleanup(func() { selfUpdateRunner = oldRunner })
@@ -61,10 +57,6 @@ func TestUpdateCommandDefaultsPrefixToExecutableDir(t *testing.T) {
 	}
 }
 
-// The exit-code contract reaches the update command too: a deterministic local
-// input error from the native (Windows) updater must exit 2, while an untyped
-// failure — everything the Unix install-script path can return — stays generic
-// exit 1. Codex review round 2.
 func TestUpdateCommandPreservesATypedExitCode(t *testing.T) {
 	resetGlobalFlags()
 	isolateSkillSandbox(t)

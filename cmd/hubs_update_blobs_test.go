@@ -1,9 +1,5 @@
 package cmd
 
-// hubs_update_blobs_test.go — contract tests for the read-modify-write update
-// of the hub's whole-blob JSONB fields via `mio hubs update --branding-json /
-// --settings-json / --meta-json` and the unblocked `--logo-url` (MIO-2256).
-
 import (
 	"io"
 	"net/http"
@@ -13,9 +9,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// hubWithBlobsBody is the GET-retrieve response for RMW tests: a hub that
-// already has branding/settings/meta with sibling keys that must survive a
-// partial update.
 const hubWithBlobsBody = `{
 	"data": {
 		"id": "hub_abc123",
@@ -29,8 +22,6 @@ const hubWithBlobsBody = `{
 	}
 }`
 
-// rmwServer answers the GET retrieve with hubWithBlobsBody and captures the
-// subsequent PATCH body.
 func rmwServer(t *testing.T) (*httptest.Server, *[]byte) {
 	t.Helper()
 	var patchBody []byte
@@ -46,8 +37,6 @@ func rmwServer(t *testing.T) (*httptest.Server, *[]byte) {
 	return srv, &patchBody
 }
 
-// TestHubsUpdate_BrandingJSONDeepMerges verifies --branding-json merges into the
-// hub's current branding (keeping untouched sibling keys) rather than replacing.
 func TestHubsUpdate_BrandingJSONDeepMerges(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -76,8 +65,6 @@ func TestHubsUpdate_BrandingJSONDeepMerges(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_LogoURLMergesRMW verifies --logo-url now works on update
-// (MIO-901 unblocked): it merges into the current branding, keeping siblings.
 func TestHubsUpdate_LogoURLMergesRMW(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -103,8 +90,6 @@ func TestHubsUpdate_LogoURLMergesRMW(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_SettingsDeepMergeNested verifies a nested settings edit merges
-// into the existing nested object rather than replacing it.
 func TestHubsUpdate_SettingsDeepMergeNested(t *testing.T) {
 	srv, patchBody := rmwServer(t)
 
@@ -131,8 +116,6 @@ func TestHubsUpdate_SettingsDeepMergeNested(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_InvalidBrandingJSONNoRequest verifies malformed --branding-json
-// exits ExitUsage before any HTTP request (no retrieve, no PATCH).
 func TestHubsUpdate_InvalidBrandingJSONNoRequest(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

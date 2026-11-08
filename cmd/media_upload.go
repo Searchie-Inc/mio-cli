@@ -1,21 +1,5 @@
 package cmd
 
-// media_upload.go — media ingest commands (MIO-2267):
-//
-//	files upload <path>       create → presigned S3 PUT → finalize, or multipart
-//	                          (init → parts → complete → finalize)
-//	files replace <id> <path> replace init → PUT → replace finalize, or multipart
-//	                          (init → parts → terminal complete)
-//	files finalize <id>       POST /api/teams/{team}/files/{id}/finalize
-//	files transcode <id>      POST /api/teams/{team}/files/{id}/transcode  (202)
-//	files register-synthetic  POST /api/admin/teams/{team}/files/synthetic (MIO-2285)
-//
-// upload and replace pick their path with useMultipart: multipart when
-// --multipart is set or the file is larger than autoMultipartThreshold, one
-// presigned PUT otherwise. Every help surface that states the threshold renders
-// it from the constant (MIO-4155). All routes are team-scoped and accept the
-// CLI's team-owner API key.
-
 import (
 	"fmt"
 	"io"
@@ -32,43 +16,22 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// syntheticAssetKinds is the asset_kind enum the synthetic-file route accepts.
 var syntheticAssetKinds = map[string]bool{"document": true, "pdf": true}
 
 const (
-	// autoMultipartThreshold is the size above which `files upload` and
-	// `files replace` switch to multipart automatically (single-part presigned PUT
-	// handles up to 5 GB, so this is well within S3 limits — it's about chunking,
-	// not a cap). The help is rendered from it, so changing it here changes what
-	// --help says. The hand-maintained doc lines are held to it by two tests:
-	// TestMultipartThreshold_EverySurfaceStatesIt ("above N MB", and the
-	// --part-size-mb default and minimum) and
-	// TestMultipartThreshold_StatedBoundaryIsTheWire (the "N bytes" figure, and
-	// where a file of exactly N bytes goes, checked against the wire).
-	autoMultipartThreshold = 100 * 1024 * 1024 // 100 MB
-	// minPartSizeMB is S3's minimum multipart part size (all parts but the last).
-	minPartSizeMB = 5
-	// defaultPartSizeMB is the --part-size-mb default for upload and replace.
-	defaultPartSizeMB = 16
+	autoMultipartThreshold = 100 * 1024 * 1024
+	minPartSizeMB          = 5
+	defaultPartSizeMB      = 16
 )
 
-// useMultipart is THE dispatch rule for upload and replace: multipart when forced
-// with --multipart or when the file is larger than autoMultipartThreshold, one
-// presigned PUT otherwise. A file of exactly the threshold goes single-part.
 func useMultipart(force bool, size int64) bool {
 	return force || size > autoMultipartThreshold
 }
 
-// multipartThresholdMB renders autoMultipartThreshold in the unit --part-size-mb
-// uses (1 MB = 1024*1024 bytes), e.g. "100 MB".
 func multipartThresholdMB() string {
 	return fmt.Sprintf("%d MB", autoMultipartThreshold/(1024*1024))
 }
 
-// uploadMultipartHelp and replaceMultipartHelp are the multipart paragraphs of
-// upload's and replace's --help, rendered from the constants so the help cannot
-// state a threshold, default or minimum the command does not use (MIO-4155:
-// upload's help said "Single-part upload only" while dispatching multipart).
 func uploadMultipartHelp() string {
 	return fmt.Sprintf(`Multipart is automatic above %[1]s: a file larger than %[2]d bytes is sent in
 parts (S3 multipart: init, presign and PUT each part, complete, then finalize);
@@ -90,9 +53,6 @@ multipart path.`,
 		multipartThresholdMB(), autoMultipartThreshold, defaultPartSizeMB, minPartSizeMB)
 }
 
-// addWaitFlags registers --wait and --timeout. upload and replace both call it
-// and both run waitForFileReady, so the two commands cannot state different
-// wait semantics or defaults (MIO-4172).
 func addWaitFlags(c *cobra.Command) {
 	c.Flags().Bool("wait", false,
 		"Wait until the file finishes processing (upload/transcode READY). For video, waits ~30s "+
@@ -138,16 +98,10 @@ func init() {
 	mediaFilesRegisterSyntheticCmd.Flags().String("description", "", "Optional description.")
 }
 
-// syntheticFilesPath returns /api/admin/teams/{team}/files/synthetic.
 func syntheticFilesPath(teamID string) string {
 	return fmt.Sprintf("/api/admin/teams/%s/files/synthetic", teamID)
 }
 
-// SyntheticFileInput is the register-synthetic write body as data (MIO-3065).
-// Title is required; every pointer field is sent only when non-nil, so an
-// omitted one keeps the endpoint's own default (asset_kind "document",
-// visibility "private", mime_type application/octet-stream, original_filename =
-// title). Same unset-means-omit convention as SpaceInput/PlaylistInput.
 type SyntheticFileInput struct {
 	Title            string
 	AssetKind        *string
@@ -157,13 +111,6 @@ type SyntheticFileInput struct {
 	Description      *string
 }
 
-// buildSyntheticFileAttrs assembles the synthetic-file register body from s and
-// applies the two checks the CLI can make without a request: a title (the
-// endpoint's own min_length 1) and, when asset_kind is given, one the endpoint
-// accepts. A pure builder — it takes data, not flags — so the SCAFFOLD's
-// playlist documents get exactly the checks `files register-synthetic` does,
-// the arrangement buildSpaceAttrs / buildPageAttrs / buildPlaylistCreateAttrs
-// already have.
 func buildSyntheticFileAttrs(s SyntheticFileInput) (map[string]any, error) {
 	if s.Title == "" {
 		return nil, errs.New(errs.ExitUsage, "--title is required")
@@ -188,8 +135,6 @@ func buildSyntheticFileAttrs(s SyntheticFileInput) (map[string]any, error) {
 	}
 	return attrs, nil
 }
-
-// ---- upload -----------------------------------------------------------------
 
 var mediaFilesUploadCmd = &cobra.Command{
 	Use:   "upload <path>",
@@ -219,7 +164,6 @@ members). See the media-workflow guide's visibility section.`,
   mio media files upload ./report.pdf --folder-id folder_abc --wait`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate the file BEFORE resolving auth/team so a bad path fires no request.
 		path := args[0]
 		fi, err := os.Stat(path)
 		if err != nil {
@@ -262,14 +206,12 @@ members). See the media-workflow guide's visibility section.`,
 			return err
 		}
 
-		// Optional: place in a folder (create does not accept folder_id).
 		if folderID := flagValue(cmd, "folder-id"); folderID != "" {
 			if res, err = c.client.UpdateWithID(c.ctx, filesPath(teamID, fileID), fileID, map[string]any{"folder_id": folderID}); err != nil {
 				return err
 			}
 		}
 
-		// Optional: block until processing reaches READY.
 		if wait, _ := cmd.Flags().GetBool("wait"); wait {
 			timeout, _ := cmd.Flags().GetDuration("timeout")
 			if res, err = waitForFileReady(c, cmd.ErrOrStderr(), teamID, fileID, "", timeout); err != nil {
@@ -279,8 +221,6 @@ members). See the media-workflow guide's visibility section.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- replace ----------------------------------------------------------------
 
 var mediaFilesReplaceCmd = &cobra.Command{
 	Use:   "replace <file_id> <path>",
@@ -307,7 +247,6 @@ often already READY; the old media's statuses, FAILED included, are not counted.
   mio media files replace file_abc123 ./recut.mp4 --wait --timeout 15m`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate the file BEFORE resolving auth/team so a bad path fires no request.
 		fileID, path := args[0], args[1]
 		fi, err := os.Stat(path)
 		if err != nil {
@@ -350,8 +289,6 @@ often already READY; the old media's statuses, FAILED included, are not counted.
 			return err
 		}
 
-		// Optional: block until the REPLACEMENT is processed — not whatever media
-		// the file pointed at when the first poll landed.
 		if wait, _ := cmd.Flags().GetBool("wait"); wait {
 			timeout, _ := cmd.Flags().GetDuration("timeout")
 			if res, err = waitForFileReady(c, cmd.ErrOrStderr(), teamID, fileID, replacementID, timeout); err != nil {
@@ -362,15 +299,11 @@ often already READY; the old media's statuses, FAILED included, are not counted.
 	},
 }
 
-// replaceInitPath returns /api/teams/{team}/files/{id}/replace.
 func replaceInitPath(teamID, fileID string) string { return filesPath(teamID, fileID) + "/replace" }
 
-// replaceFinalizePath returns /api/teams/{team}/files/{id}/replace/{replacement_media_id}/finalize.
 func replaceFinalizePath(teamID, fileID, replacementID string) string {
 	return fmt.Sprintf("%s/replace/%s/finalize", filesPath(teamID, fileID), replacementID)
 }
-
-// ---- finalize ---------------------------------------------------------------
 
 var mediaFilesFinalizeCmd = &cobra.Command{
 	Use:     "finalize <file_id>",
@@ -391,8 +324,6 @@ var mediaFilesFinalizeCmd = &cobra.Command{
 	},
 }
 
-// ---- transcode --------------------------------------------------------------
-
 var mediaFilesTranscodeCmd = &cobra.Command{
 	Use:     "transcode <file_id>",
 	Short:   "(Re)trigger transcoding for a video file.",
@@ -411,8 +342,6 @@ var mediaFilesTranscodeCmd = &cobra.Command{
 		return renderFileOrFetch(cmd, c, teamID, args[0], res)
 	},
 }
-
-// ---- register-synthetic -----------------------------------------------------
 
 var mediaFilesRegisterSyntheticCmd = &cobra.Command{
 	Use:   "register-synthetic",
@@ -434,8 +363,6 @@ transcode-wait checks) actually read.`,
   mio media files register-synthetic --title "Add your first lesson" --mime-type text/markdown --description "A placeholder lesson."`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate before resolving auth/team so a bad flag fires no request. The
-		// checks and the omit-if-unchanged mapping both live in the shared builder.
 		attrs, berr := buildSyntheticFileAttrs(SyntheticFileInput{
 			Title:            flagValue(cmd, "title"),
 			AssetKind:        changedString(cmd, "asset-kind"),
@@ -460,10 +387,6 @@ transcode-wait checks) actually read.`,
 	},
 }
 
-// ---- upload helpers ---------------------------------------------------------
-
-// uploadSinglePart runs the single presigned-PUT flow: create → PUT → finalize.
-// Returns the file id and the finalized resource.
 func uploadSinglePart(c *cmdContext, teamID, path, title, mimeType string, size int64) (string, *client.Resource, error) {
 	created, err := c.client.Create(c.ctx, filesPath(teamID, ""), map[string]any{
 		"title":      title,
@@ -490,9 +413,6 @@ func uploadSinglePart(c *cmdContext, teamID, path, title, mimeType string, size 
 	return created.ID, res, err
 }
 
-// uploadMultipart runs the chunked flow: init → per-part presign+PUT+ETag →
-// complete → finalize. Any failure aborts the multipart upload so no orphaned
-// upload is left behind.
 func uploadMultipart(c *cmdContext, teamID, path, title, mimeType string, size, partSize int64) (string, *client.Resource, error) {
 	created, err := c.client.Create(c.ctx, multipartInitPath(teamID), map[string]any{
 		"title":      title,
@@ -524,13 +444,11 @@ func uploadMultipart(c *cmdContext, teamID, path, title, mimeType string, size, 
 		return fileID, nil, err
 	}
 
-	// Complete assembles the object (flat {parts:[…]} body, not a JSON:API envelope).
 	if _, err := c.client.ActionWith(c.ctx, client.StyleFlat, http.MethodPost,
 		multipartCompletePath(teamID, fileID, uploadID), map[string]any{"parts": parts}); err != nil {
 		abort()
 		return fileID, nil, err
 	}
-	// Finalize is shared with single-part: HEAD-check + flip READY + emit event.
 	res, err := c.client.Action(c.ctx, http.MethodPost, filesPath(teamID, fileID)+"/finalize", nil)
 	if err != nil {
 		return fileID, nil, err
@@ -541,11 +459,8 @@ func uploadMultipart(c *cmdContext, teamID, path, title, mimeType string, size, 
 	return fileID, res, err
 }
 
-// multipartInitPath returns /api/teams/{team}/files/multipart.
 func multipartInitPath(teamID string) string { return filesPath(teamID, "") + "/multipart" }
 
-// multipartUploadPath returns /api/teams/{team}/files/{id}/multipart/{upload_id}
-// (the abort target and the base for parts/complete).
 func multipartUploadPath(teamID, fileID, uploadID string) string {
 	return fmt.Sprintf("%s/multipart/%s", filesPath(teamID, fileID), uploadID)
 }
@@ -558,10 +473,6 @@ func multipartCompletePath(teamID, fileID, uploadID string) string {
 	return multipartUploadPath(teamID, fileID, uploadID) + "/complete"
 }
 
-// streamParts uploads the open file in partSize chunks: it POSTs partPathFor(n)
-// to presign each part, PUTs the chunk, and collects {part_number, etag}. Shared
-// by upload-multipart and replace-multipart (the only difference is the part
-// path). Callers own init/complete/finalize and any abort.
 func streamParts(c *cmdContext, f *os.File, partSize int64, mimeType string, partPathFor func(partNumber int) string) ([]map[string]any, error) {
 	buf := make([]byte, partSize)
 	parts := make([]map[string]any, 0)
@@ -598,10 +509,6 @@ func streamParts(c *cmdContext, f *os.File, partSize int64, mimeType string, par
 	return parts, nil
 }
 
-// replaceSinglePart runs the single presigned-PUT replace flow: init → PUT →
-// replace/finalize (atomic relink). Returns the replacement's media id (the init
-// resource's id — the media the file points at once the relink commits) and the
-// relinked file resource.
 func replaceSinglePart(c *cmdContext, teamID, fileID, path, filename, mimeType string, size int64) (string, *client.Resource, error) {
 	repl, err := c.client.Create(c.ctx, replaceInitPath(teamID, fileID), map[string]any{
 		"original_filename": filename,
@@ -622,11 +529,6 @@ func replaceSinglePart(c *cmdContext, teamID, fileID, path, filename, mimeType s
 	return repl.ID, res, err
 }
 
-// replaceMultipart runs the chunked replace flow: init → per-part → terminal
-// complete, which relinks the file itself (no separate replace/finalize). There
-// is no replace-multipart abort route, so a failure just surfaces (the backend
-// reaps the pending replacement). Returns the replacement's media id and the
-// relinked file resource, as replaceSinglePart does.
 func replaceMultipart(c *cmdContext, teamID, fileID, path, filename, mimeType string, size, partSize int64) (string, *client.Resource, error) {
 	repl, err := c.client.Create(c.ctx, replaceMultipartInitPath(teamID, fileID), map[string]any{
 		"original_filename": filename,
@@ -654,20 +556,15 @@ func replaceMultipart(c *cmdContext, teamID, fileID, path, filename, mimeType st
 	if err != nil {
 		return replID, nil, err
 	}
-	// Unlike upload-multipart, the replace-multipart complete is TERMINAL: it
-	// relinks the file and returns the updated file resource (no separate
-	// finalize — calling one 404s the already-consumed replacement).
 	res, err := c.client.ActionWith(c.ctx, client.StyleFlat, http.MethodPost,
 		replaceMultipartCompletePath(teamID, fileID, replID, uploadID), map[string]any{"parts": parts})
 	return replID, res, err
 }
 
-// replaceMultipartInitPath returns /api/teams/{team}/files/{id}/replace/multipart.
 func replaceMultipartInitPath(teamID, fileID string) string {
 	return replaceInitPath(teamID, fileID) + "/multipart"
 }
 
-// replaceMultipartBase returns .../files/{id}/replace/{replacement_media_id}/multipart/{upload_id}.
 func replaceMultipartBase(teamID, fileID, replID, uploadID string) string {
 	return fmt.Sprintf("%s/replace/%s/multipart/%s", filesPath(teamID, fileID), replID, uploadID)
 }
@@ -680,10 +577,6 @@ func replaceMultipartCompletePath(teamID, fileID, replID, uploadID string) strin
 	return replaceMultipartBase(teamID, fileID, replID, uploadID) + "/complete"
 }
 
-// ---- helpers ----------------------------------------------------------------
-
-// renderFileOrFetch renders res, or retrieves the file first if the action
-// returned no body (some action routes reply 202 with an empty body).
 func renderFileOrFetch(cmd *cobra.Command, c *cmdContext, teamID, fileID string, res *client.Resource) error {
 	if res == nil {
 		var err error
@@ -694,9 +587,6 @@ func renderFileOrFetch(cmd *cobra.Command, c *cmdContext, teamID, fileID string,
 	return c.render(cmd, res)
 }
 
-// sniffMime resolves a file's content type from its extension, falling back to
-// content sniffing, then application/octet-stream. Any "; charset=…" suffix is
-// stripped so the value fits the backend's mime_type field.
 func sniffMime(path string) string {
 	if ext := filepath.Ext(path); ext != "" {
 		if ct := mime.TypeByExtension(ext); ct != "" {
@@ -720,93 +610,27 @@ func trimMediaType(ct string) string {
 	return strings.TrimSpace(ct)
 }
 
-// mediaPollInterval is the gap between status polls. A var, not a const, so
-// tests can drive the real loop without wall-clock sleeps.
 var mediaPollInterval = 2 * time.Second
 
-// transcodeStartGrace bounds how long --wait will sit on a VIDEO whose
-// status_transcode is still null, waiting for the transcode to be enqueued.
-//
-// It exists because null cannot be read as one thing (MIO-3001). The backend's
-// finalize sets status_upload=READY and EMITS MediaUploaded; a best-effort
-// handler enqueues the transcode job, and only that job sets status_transcode.
-// So a freshly finalized video reads null for a moment — but on a backend with
-// FEATURE_MEDIA_VIDEO_ENABLED off (its default, and production's setting until
-// P10) that handler returns early and the status stays null FOREVER. Waiting for
-// it unconditionally would burn the whole --timeout and then fail, turning every
-// production video upload from a fast success into a slow failure.
-//
-// The grace covers in-process dispatch plus the queue pickup, normally
-// sub-second, so this is ~2 orders of magnitude of headroom while keeping the
-// cost on a video-disabled backend small and bounded.
 var transcodeStartGrace = 30 * time.Second
 
-// transcribeSettled reports whether status_transcribe has reached a state that
-// will not change again.
-//
-// The same two-meanings trap as status_transcode, one field over: "" is "no
-// transcription applies", but READY is NOT the only terminal value. mio-backend
-// sets NOT_APPLICABLE ("READY" if words else "NOT_APPLICABLE",
-// app/media/admin_router.py) — the NORMAL outcome for a video with no speech —
-// and REJECTED (app/media/transcription_service.py). Waiting for those to become
-// READY burns the entire --timeout and then exits 1 on a fully successful
-// upload: the exact "fast success becomes a slow failure" shape this command was
-// fixed to stop producing.
-//
-// FAILED is deliberately absent: it is terminal too, but the caller reports it as
-// an error before reaching here. PENDING is the only in-flight value the backend
-// actually writes for this field — PROCESSING appears only in design docs — so it
-// is the case that matters when narrowing this set.
-//
-// (MIO-2571's "null means not applicable" reading is intended and unchanged; this
-// is about non-null terminal values, which is a different question.)
 func transcribeSettled(tr string) bool {
 	switch tr {
 	case "", "READY", "NOT_APPLICABLE", "REJECTED":
 		return true
 	}
-	return false // PENDING / PROCESSING — still moving
+	return false
 }
 
-// awaitsTranscode reports whether a null status_transcode on THIS file means
-// "not enqueued yet" rather than "not applicable".
-//
-// It keys off mime_type because that is what the API exposes: asset_kind — the
-// field the backend itself branches on — is internal and never serialized. The
-// two agree exactly, since _asset_kind_from_mime maps mime.startswith("video/")
-// onto "video" (app/media/service.py).
 func awaitsTranscode(res *client.Resource) (waits, kindKnown bool) {
 	mime := strings.ToLower(resAttrString(res, "mime_type"))
 	return strings.HasPrefix(mime, "video/"), mime != ""
 }
 
-// waitForFileReady polls the file until upload/transcode/transcribe all reach a
-// terminal READY (or errors on FAILED / a --timeout).
-//
-// A null status_transcode is treated as "nothing to wait for" for every asset
-// kind but video, and for video only once transcodeStartGrace has elapsed
-// without a transcode appearing — in which case it warns and returns rather than
-// failing, because the upload itself genuinely succeeded.
-//
-// wantMediaID is "" for upload. replace passes the replacement's media id
-// (MIO-4172): until the file reports that media_id, a poll describes the media
-// being REPLACED and is not evaluated at all. mio-backend commits the relink
-// after the response is sent (get_db commits in a yield dependency that FastAPI
-// exits once the response has gone out), so the first poll can still see the
-// old media — usually already READY, and sometimes FAILED, which is why the
-// replace was made. Evaluating it would either return the pre-replace file with
-// exit 0 or fail on the old media's status, and a READY read of it would open
-// the transcode window before the new transcode could be enqueued.
 func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID, wantMediaID string, timeout time.Duration) (*client.Resource, error) {
 	start := time.Now()
 	deadline := start.Add(timeout)
-	// The transcode window opens when the UPLOAD is done, not when the command
-	// started: a slow upload would otherwise consume the transcode's grace before
-	// the transcode could possibly have been enqueued.
 	var windowStart, windowEnd time.Time
-	// Separate flags: one shared `warned` let an early unknown-mime note suppress
-	// the give-up note for a later poll's video, returning silently with an
-	// untranscoded file — the original bug wearing a different hat.
 	warnedUnknownKind, warnedGaveUp := false, false
 
 	for {
@@ -834,14 +658,7 @@ func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID, wantMediaID st
 				statusOr(up), statusOr(tc), statusOr(tr))
 		}
 
-		// Open the transcode window on the first READY observation, bounded by the
-		// caller's own deadline so a --timeout shorter than the grace still wins.
 		if up == "READY" && windowEnd.IsZero() {
-			// time.Until is NEGATIVE once the deadline has passed (a --timeout
-			// shorter than the upload itself). That needs no clamp: a windowEnd in
-			// the past simply means "give up on the transcode now", which is
-			// correct, and the give-up message reports time ELAPSED rather than
-			// this planned figure, so a negative value can never reach an operator.
 			windowStart = time.Now()
 			windowEnd = windowStart.Add(min(transcodeStartGrace, time.Until(deadline)))
 		}
@@ -851,14 +668,6 @@ func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID, wantMediaID st
 			waits, kindKnown := awaitsTranscode(res)
 			switch {
 			case !kindKnown:
-				// No mime_type to classify by. DEFENSIVE: the media column is NOT
-				// NULL, so a real backend cannot serve this — but the published
-				// OpenAPI declares mime_type nullable and not required, so the
-				// contract we are handed permits it.
-				//
-				// Do not wait — but say so, because
-				// silence here is indistinguishable from "this kind never
-				// transcodes" and the file may well be an untranscoded video.
 				if !warnedUnknownKind {
 					fmt.Fprintf(w, "warning: this file reports no mime_type, so whether it transcodes "+
 						"cannot be determined; returning without waiting. Check with "+
@@ -867,19 +676,8 @@ func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID, wantMediaID st
 				}
 				transcodeDone = true
 			case !waits:
-				transcodeDone = true // this asset kind never transcodes
+				transcodeDone = true
 			case !windowEnd.IsZero() && time.Now().After(windowEnd):
-				// Give up on the transcode, not on the upload. Exit 0 with a loud
-				// note: failing here would break every video upload on a backend
-				// with video processing disabled, where the file is nonetheless
-				// stored and usable.
-				//
-				// The reported duration is what was ACTUALLY waited — measured,
-				// not planned. Printing the constant would have a caller who
-				// passed --timeout 3s diagnose a disabled backend from a wait
-				// that never gave the queue a chance; printing the planned window
-				// would still be wrong by up to one poll interval, and negative
-				// when --timeout was already spent on the upload.
 				if !warnedGaveUp {
 					fmt.Fprintf(w, "warning: transcoding had not started for this video after %s — "+
 						"returning with status_transcode unset. The file is stored and usable, but it is NOT transcoded: "+
@@ -904,8 +702,6 @@ func waitForFileReady(c *cmdContext, w io.Writer, teamID, fileID, wantMediaID st
 	}
 }
 
-// pollPause waits one mediaPollInterval, or returns early with the command
-// context's error.
 func pollPause(c *cmdContext) error {
 	select {
 	case <-c.ctx.Done():

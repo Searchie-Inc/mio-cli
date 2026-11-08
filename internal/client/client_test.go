@@ -16,7 +16,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// newTestClient returns a client pointed at the given test server.
 func newTestClient(srv *httptest.Server, key string) *Client {
 	return New(srv.URL, key, WithHTTPClient(srv.Client()))
 }
@@ -47,10 +46,6 @@ func TestClient_SetsAuthAndContentHeaders(t *testing.T) {
 	}
 }
 
-// TestClient_NoBodyPostSetsContentType ensures that a no-body POST (action
-// endpoint like /publish, /activate, /deactivate) still carries
-// Content-Type: application/vnd.api+json as required by the backend's
-// require_jsonapi_content_type middleware (MIO-1115).
 func TestClient_NoBodyPostSetsContentType(t *testing.T) {
 	var gotCT, gotMethod string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +57,6 @@ func TestClient_NoBodyPostSetsContentType(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv, "k")
-	// Action with nil body simulates /automations/{id}/publish (no request body).
 	_, _ = c.ActionWithHeaders(context.Background(), StyleEnvelope, "POST", "/api/v1/teams/t1/automations/a1/publish", nil, nil)
 	if gotMethod != "POST" {
 		t.Fatalf("method = %q, want POST", gotMethod)
@@ -90,8 +84,6 @@ func TestClient_WrapsAttributesInEnvelope(t *testing.T) {
 	}
 }
 
-// TestClient_ErrorMapping verifies each HTTP status maps to the correct exit
-// code and that a JSON:API errors array message is surfaced.
 func TestClient_ErrorMapping(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -113,8 +105,6 @@ func TestClient_ErrorMapping(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				// For 429 set Retry-After: 0 so the retry loop does not sleep
-				// between attempts and the test stays fast.
 				if tc.status == http.StatusTooManyRequests {
 					w.Header().Set("Retry-After", "0")
 				}
@@ -150,9 +140,6 @@ func TestClient_DeleteSuccess(t *testing.T) {
 	}
 }
 
-// TestClient_DeleteWithQuerySendsQuery verifies DeleteWithQuery URL-encodes
-// and sends the query string on a body-less DELETE (the achievements revoke
-// ?reason= contract, MIO-3412).
 func TestClient_DeleteWithQuerySendsQuery(t *testing.T) {
 	var gotQuery, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -255,14 +242,14 @@ func TestClient_LoginUsesPlainJSON(t *testing.T) {
 
 func TestExitCodeForStatus(t *testing.T) {
 	cases := map[int]int{
-		200: errs.ExitGeneric, // not called on 2xx in practice; default branch
+		200: errs.ExitGeneric,
 		400: errs.ExitUsage,
 		401: errs.ExitAuth,
 		403: errs.ExitAuth,
 		404: errs.ExitNotFound,
-		405: errs.ExitGeneric, // other 4xx stays generic
+		405: errs.ExitGeneric,
 		409: errs.ExitUsage,
-		415: errs.ExitGeneric, // other 4xx stays generic
+		415: errs.ExitGeneric,
 		422: errs.ExitUsage,
 		429: errs.ExitRateLimited,
 		500: errs.ExitServer,
@@ -275,9 +262,6 @@ func TestExitCodeForStatus(t *testing.T) {
 	}
 }
 
-// TestResourceTypeFromPath verifies the JSON:API `type` derivation, including
-// the override cases where the backend type differs from the URL collection
-// segment (verified against mio-backend schemas).
 func TestResourceTypeFromPath(t *testing.T) {
 	cases := []struct {
 		path string
@@ -287,7 +271,6 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/files/f1/chapters", "file_chapters"},
 		{"/api/teams/t1/files/f1/chapters/import", "file_chapters"},
 		{"/api/teams/t1/files/f1/chapters/auto", "file_chapters"},
-		// Simple: type == last collection segment.
 		{"/api/teams/t1/remote-connections", "remote_connections"},
 		{"/api/teams/t1/remote-connections/c1", "remote_connections"},
 		{"/api/teams/t1/remote-connections/c1/import", "remote_imports"},
@@ -301,12 +284,7 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/tags", "tags"},
 		{"/api/teams/t1/hubs/h1/pages", "pages"},
 		{"/api/teams/t1/hubs/h1/pages/pg1/sections", "sections"},
-		// W2b one-step template scaffold op (MIO-2573 §5.1): the action segment
-		// maps to "template_scaffolds" via the pages/scaffold-from-template
-		// override, not the bare "pages" collection.
 		{"/api/teams/t1/hubs/h1/pages/scaffold-from-template", "template_scaffolds"},
-		// Overrides: backend type != URL segment.
-		// All type values are snake_case per MIO-636 (backend cutover 2026-06-04).
 		{"/api/teams/t1/segments", "segment"},
 		{"/api/teams/t1/segments/s1", "segment"},
 		{"/api/teams/t1/segments/search", "segment_search"},
@@ -315,108 +293,56 @@ func TestResourceTypeFromPath(t *testing.T) {
 		{"/api/teams/t1/hubs/h1/content", "content_nodes"},
 		{"/api/teams/t1/hubs/h1/content/n1", "content_nodes"},
 		{"/api/teams/t1/products/p1/deliverables", "product_deliverables"},
-		// Contextual collisions on the same trailing segment.
 		{"/api/teams/t1/coupons/co1/products", "coupon_products"},
 		{"/api/teams/t1/hubs/h1/products", "hub_product_displays"},
 		{"/api/teams/t1/hubs/h1/prices", "hub_price_displays"},
-		// contact-attributes family.
 		{"/api/teams/t1/contact-attributes", "contact_attribute_definitions"},
 		{"/api/teams/t1/contact-attributes/d1/options", "contact_attribute_options"},
-		// email family.
 		{"/v1/hubs/h1/drip-campaigns", "drip_campaigns"},
 		{"/v1/hubs/h1/drip-campaigns/dc1/steps", "drip_steps"},
 		{"/v1/hubs/h1/drip-campaigns/dc1/steps/st1", "drip_steps"},
 		{"/v1/hubs/h1/email-templates", "email_templates"},
-		// tag assignment.
 		{"/api/teams/t1/contacts/c1/tags", "tag_assignments"},
-		// page sections under a page.
 		{"/api/teams/t1/hubs/h1/pages/pg1/sections/sec1", "sections"},
-		// hub-config: contact-attributes under a hub != team-level definitions.
 		{"/api/teams/t1/hubs/h1/contact-attributes", "contact_attribute_hub_configs"},
 		{"/api/teams/t1/hubs/h1/contact-attributes/d1", "contact_attribute_hub_configs"},
-		// content reorder action keeps the content_nodes type.
 		{"/api/teams/t1/hubs/h1/content/reorder", "content_nodes"},
-		// checkout action routes with non-segment envelope types.
 		{"/api/teams/t1/hubs/h1/payments/pay1/refund", "refunds"},
 		{"/api/teams/t1/payment-accounts/onboarding-link", "onboarding_links"},
-		// team members write resource.
 		{"/api/teams/t1/members", "team_members"},
-		// Community admin spaces + discussions (MIO-811). The discussions
-		// COLLECTION row also covers the MIO-2262 admin welcome-post create
-		// (`community discussions create`, MIO-2808): its backend envelope
-		// DiscussionCreateResourceData pins type Literal["discussions"], which is
-		// exactly what the bare segment derives — so that path needs NO
-		// typeOverride, and this row is the regression guard that keeps it that way
-		// (a future hubs/discussions override would break the create with a 422).
 		{"/api/admin/teams/t1/hubs/h1/spaces", "spaces"},
 		{"/api/admin/teams/t1/hubs/h1/spaces/sp1", "spaces"},
 		{"/api/admin/teams/t1/hubs/h1/discussions", "discussions"},
 		{"/api/admin/teams/t1/hubs/h1/discussions/d1", "discussions"},
-		// Community moderation report-reasons (MIO-2265): hyphenated segment →
-		// snake_case type "report_reasons" on both create and update paths.
 		{"/api/admin/teams/t1/hubs/h1/report-reasons", "report_reasons"},
 		{"/api/admin/teams/t1/hubs/h1/report-reasons/rr1", "report_reasons"},
-		// Media transcript edit/revert (MIO-2289): singular "transcript" segment →
-		// "transcripts" type; "revert" stays opaque so it resolves to transcript.
 		{"/api/teams/t1/media/m1/transcript", "transcripts"},
 		{"/api/teams/t1/media/m1/transcript/revert", "transcripts"},
-		// Media file content-replace init (MIO-2423): "replace" → file_replacements.
 		{"/api/teams/t1/files/f1/replace", "file_replacements"},
-		// Playlist cover set (MIO-2289): hyphenated create collection → "attachments".
 		{"/api/teams/t1/attachments", "attachments"},
 		{"/api/teams/t1/attachments/att1", "attachments"},
 		{"/api/teams/t1/playlist-cover-attachments", "attachments"},
 		{"/api/teams/t1/file-thumbnail-attachments", "attachments"},
-		// Hub branding attach (MIO-3465): hyphenated create collection → "attachments".
 		{"/api/teams/t1/hub-branding-attachments", "attachments"},
-		// Media files, folders, playlists (MIO-811).
 		{"/api/teams/t1/files", "files"},
 		{"/api/teams/t1/files/f1", "files"},
 		{"/api/teams/t1/folders", "folders"},
 		{"/api/teams/t1/folders/fo1", "folders"},
 		{"/api/teams/t1/playlists", "playlists"},
 		{"/api/teams/t1/playlists/pl1", "playlists"},
-		// Playlist item verbs (MIO-2513): add (POST .../items) and reorder
-		// (PATCH .../items/{item_id}) derive "playlist_items" via the
-		// playlists/items typeOverride, not the "playlists" parent type.
 		{"/api/teams/t1/playlists/pl1/items", "playlist_items"},
 		{"/api/teams/t1/playlists/pl1/items/it1", "playlist_items"},
-		// Long-tail admin bundle (MIO-2269): hub policy gate, redirect-origin
-		// allowlist, and hub-scoped email suppressions. Each URL segment differs
-		// from its backend JSON:API type Literal.
 		{"/api/teams/t1/hubs/h1/policies/gate", "hub_policy_gate"},
 		{"/api/teams/t1/hubs/h1/redirect-origins", "hub_redirect_origin_allowlists"},
 		{"/v1/hubs/h1/email-suppressions", "email_suppressions"},
 		{"/v1/hubs/h1/email-suppressions/esp1", "email_suppressions"},
-		// Achievements admin surface (MIO-3054/MIO-3412). Definitions
-		// self-derive; the hub-offering attach and the earn writes carry
-		// different backend Literals than the shared "achievements" URL
-		// segment. The restore action path resolves through the SAME
-		// members/achievements override because "restore" is deliberately
-		// not a known collection token.
 		{"/api/teams/t1/achievements", "achievements"},
 		{"/api/teams/t1/achievements/a1", "achievements"},
 		{"/api/teams/t1/hubs/h1/achievements", "achievement_hubs"},
 		{"/api/teams/t1/hubs/h1/members/c1/achievements", "achievement_earns"},
 		{"/api/teams/t1/hubs/h1/members/c1/achievements/a1/restore", "achievement_earns"},
-		// Audited override grant (MIO-3376 2a-7/MIO-3662): "override" is
-		// deliberately not a known collection token either, same reasoning as
-		// "restore" — verified here rather than assumed, since a missing
-		// knownCollections entry misresolves SILENTLY (see the "rule" case
-		// above, which genuinely does need one).
 		{"/api/teams/t1/hubs/h1/members/c1/achievements/a1/override", "achievement_earns"},
-		// Achievement rule compile/bind/preview (MIO-3662): "rule" must be a
-		// known token or this tail silently misresolves to "hubs/achievements"
-		// -> "achievement_hubs" instead of "achievement_rules".
 		{"/api/teams/t1/hubs/h1/achievements/a1/rule", "achievement_rules"},
-		// Content nodes (MIO-3074). The reconcile heal op POSTs to
-		// .../content/reconcile, but that tail is AMBIGUOUS: the backend
-		// resolves a node by slug/legacy-hash as well as by id, so
-		// PATCH .../content/reconcile is a legitimate update of a node slugged
-		// "reconcile". Path derivation cannot see the HTTP method, so this path
-		// MUST derive the ordinary node type; the reconcile command names its
-		// own type explicitly (ActionWithType). A typeOverride here would 422
-		// every update of a node addressed as "reconcile".
 		{"/api/teams/t1/hubs/h1/content", "content_nodes"},
 		{"/api/teams/t1/hubs/h1/content/cnt1", "content_nodes"},
 		{"/api/teams/t1/hubs/h1/content/reconcile", "content_nodes"},
@@ -428,8 +354,6 @@ func TestResourceTypeFromPath(t *testing.T) {
 	}
 }
 
-// TestClient_CreateIncludesDerivedType verifies that Create sends data.type
-// derived from the path so the backend's Literal-typed schemas accept it.
 func TestClient_CreateIncludesDerivedType(t *testing.T) {
 	var body struct {
 		Data struct {
@@ -456,10 +380,6 @@ func TestClient_CreateIncludesDerivedType(t *testing.T) {
 	}
 }
 
-// TestMintAPIKey_SendsFlatBodyWithBearer verifies the password→mint flow posts a
-// FLAT body (no `data` envelope) to the api-keys endpoint authenticated with the
-// JWT access token. The backend ApiKeyCreateRequest is a flat pydantic model, so
-// an envelope here 422s.
 func TestMintAPIKey_SendsFlatBodyWithBearer(t *testing.T) {
 	var raw map[string]any
 	var gotAuth, gotPath string
@@ -472,7 +392,6 @@ func TestMintAPIKey_SendsFlatBodyWithBearer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// The outer client carries no key; MintAPIKey issues with the JWT token.
 	c := newTestClient(srv, "")
 	res, err := c.MintAPIKey(context.Background(), "jwt_access_token", "t1", "CI")
 	if err != nil {
@@ -495,10 +414,6 @@ func TestMintAPIKey_SendsFlatBodyWithBearer(t *testing.T) {
 	}
 }
 
-// TestClient_FlatStyleSendsNoEnvelope verifies that a StyleFlat write sends the
-// attributes map as the top-level JSON object with NO `data` wrapper and NO
-// injected `type` — the shape the flat-schema backend endpoints (users, roles,
-// api-keys, stripe-sync) require.
 func TestClient_FlatStyleSendsNoEnvelope(t *testing.T) {
 	var raw map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -523,8 +438,6 @@ func TestClient_FlatStyleSendsNoEnvelope(t *testing.T) {
 	}
 }
 
-// TestClient_EnvelopeStyleWrapsWithType verifies StyleEnvelope (the default)
-// wraps attributes in {"data":{"type":<derived>,"attributes":{…}}}.
 func TestClient_EnvelopeStyleWrapsWithType(t *testing.T) {
 	var body struct {
 		Data struct {
@@ -551,8 +464,6 @@ func TestClient_EnvelopeStyleWrapsWithType(t *testing.T) {
 	}
 }
 
-// TestBuildWriteBody verifies the body-shaping helper for both styles and the
-// nil-attrs (no-body) case.
 func TestBuildWriteBody(t *testing.T) {
 	attrs := map[string]any{"name": "X"}
 
@@ -576,8 +487,6 @@ func TestBuildWriteBody(t *testing.T) {
 	}
 }
 
-// TestNewRawEnvelope verifies the structured-attributes envelope used by segment
-// search marshals to {"data":{"type":…,"attributes":<arbitrary>}}.
 func TestNewRawEnvelope(t *testing.T) {
 	env := NewRawEnvelope("segment_search", map[string]any{
 		"conditions": map[string]any{"version": 1},
@@ -610,9 +519,6 @@ func TestNewRawEnvelope(t *testing.T) {
 	}
 }
 
-// TestClient_ActionCollectionRawSegmentSearch verifies the exact wire body for
-// segment search: an envelope with type "segment_search" whose attributes carry
-// a nested conditions tree (NOT a flat attrs map).
 func TestClient_ActionCollectionRawSegmentSearch(t *testing.T) {
 	var raw map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -655,10 +561,6 @@ func TestClient_ActionCollectionRawSegmentSearch(t *testing.T) {
 	}
 }
 
-// TestClient_RefundSendsRefundsEnvelope verifies that the refund action sends a
-// JSON:API envelope with type "refunds" (derived from the path) and the required
-// `reason` attribute — the shape the backend RefundRequest schema requires. A
-// nil/empty body would 422 since the body is non-optional.
 func TestClient_RefundSendsRefundsEnvelope(t *testing.T) {
 	var body struct {
 		Data struct {
@@ -692,8 +594,6 @@ func TestClient_RefundSendsRefundsEnvelope(t *testing.T) {
 	}
 }
 
-// TestClient_RefundFullOmitsAmount verifies a full refund sends reason without an
-// amount key (the backend treats a missing amount as a full refund).
 func TestClient_RefundFullOmitsAmount(t *testing.T) {
 	var body struct {
 		Data struct {
@@ -726,8 +626,6 @@ func TestClient_RefundFullOmitsAmount(t *testing.T) {
 	}
 }
 
-// TestClient_ActionCollection verifies a custom action that returns a
-// `data: [...]` collection is decoded into a Collection.
 func TestClient_ActionCollection(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", contentTypeJSONAPI)
@@ -754,10 +652,6 @@ func TestClient_ActionCollection(t *testing.T) {
 	}
 }
 
-// isSnakeCaseType returns true if s is a valid snake_case identifier (lower-case
-// letters, digits, and underscores only). Kebab-case values contain a hyphen and
-// therefore fail this check. This is the same rule enforced by the backend's
-// test_jsonapi_type_naming.py contract guard (MIO-636).
 func isSnakeCaseType(s string) bool {
 	if s == "" {
 		return false
@@ -770,11 +664,6 @@ func isSnakeCaseType(s string) bool {
 	return true
 }
 
-// TestTypeOverrides_AllSnakeCase is a compile-time-equivalent guard that fails
-// whenever a kebab-case value (or any non-snake_case string) is introduced into
-// typeOverrides. It enforces the MIO-636 invariant: every JSON:API resource
-// type value sent to the backend must be snake_case. This mirrors the backend's
-// tests/contract/test_jsonapi_type_naming.py guard on the CLI side.
 func TestTypeOverrides_AllSnakeCase(t *testing.T) {
 	for _, o := range typeOverrides {
 		if !isSnakeCaseType(o.typ) {
@@ -783,19 +672,12 @@ func TestTypeOverrides_AllSnakeCase(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 429 / Retry-After tests (MIO-1000, from QA record MIO-982)
-// ---------------------------------------------------------------------------
-
-// TestClient_RateLimitRetry_SucceedsOnSecondAttempt verifies that a 429
-// followed by a 200 results in success, and that the client honours the
-// Retry-After header value (instead of retrying immediately).
 func TestClient_RateLimitRetry_SucceedsOnSecondAttempt(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		n := calls.Add(1)
 		if n == 1 {
-			w.Header().Set("Retry-After", "0") // 0 s → immediate in tests
+			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte(`{"errors":[{"detail":"rate limited"}]}`))
 			return
@@ -818,9 +700,6 @@ func TestClient_RateLimitRetry_SucceedsOnSecondAttempt(t *testing.T) {
 	}
 }
 
-// TestClient_RateLimitRetry_ExhaustsRetries verifies that when the server
-// returns 429 on every attempt, the client stops after rateLimitMaxRetries
-// extra attempts and surfaces the 429 error with ExitRateLimited.
 func TestClient_RateLimitRetry_ExhaustsRetries(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -842,36 +721,31 @@ func TestClient_RateLimitRetry_ExhaustsRetries(t *testing.T) {
 	if !strings.Contains(err.Error(), "rate limited") {
 		t.Errorf("error message %q does not mention rate limit", err.Error())
 	}
-	// Should have made 1 initial + rateLimitMaxRetries extra calls.
 	wantCalls := int32(1 + rateLimitMaxRetries)
 	if got := calls.Load(); got != wantCalls {
 		t.Errorf("server called %d times, want %d (1 initial + %d retries)", got, wantCalls, rateLimitMaxRetries)
 	}
 }
 
-// TestRetryAfterDuration verifies header parsing, the 60 s cap, and the
-// fallback-to-1s behaviour on missing/malformed values. It also tests
-// very large values (e.g. 1e10) that would overflow int64 if converted
-// directly to time.Duration before the cap is applied.
 func TestRetryAfterDuration(t *testing.T) {
 	cases := []struct {
 		header string
 		want   time.Duration
 	}{
 		{"5", 5 * time.Second},
-		{"0", 0},                 // zero is a valid "retry immediately"
-		{"60", 60 * time.Second}, // exactly at cap
-		{"61", 60 * time.Second}, // capped to rateLimitMaxWait
+		{"0", 0},
+		{"60", 60 * time.Second},
+		{"61", 60 * time.Second},
 		{"120", 60 * time.Second},
-		{"1e10", 60 * time.Second}, // huge value — must not overflow, must cap
-		{"1e18", 60 * time.Second}, // beyond int64 max seconds — must cap
-		{"", time.Second},          // absent → fallback
-		{"abc", time.Second},       // malformed → fallback
-		{"-1", time.Second},        // negative → fallback
-		{"1.7", 2 * time.Second},   // fractional → ceiling
-		{"NaN", time.Second},       // ParseFloat accepts NaN; range checks are all false → must fall back
-		{"+Inf", time.Second},      // non-finite → fallback
-		{"-Inf", time.Second},      // non-finite → fallback
+		{"1e10", 60 * time.Second},
+		{"1e18", 60 * time.Second},
+		{"", time.Second},
+		{"abc", time.Second},
+		{"-1", time.Second},
+		{"1.7", 2 * time.Second},
+		{"NaN", time.Second},
+		{"+Inf", time.Second},
+		{"-Inf", time.Second},
 	}
 	for _, tc := range cases {
 		got := retryAfterDuration(tc.header)
@@ -881,10 +755,6 @@ func TestRetryAfterDuration(t *testing.T) {
 	}
 }
 
-// TestClient_RegisterUsesPlainJSON verifies that Register posts a FLAT plain-JSON
-// body to /api/v1/auth/register (the /api/auth/* family speaks application/json,
-// not JSON:API), carries no Authorization header (registration is
-// unauthenticated), and decodes the 201 TokenResponse's access token.
 func TestClient_RegisterUsesPlainJSON(t *testing.T) {
 	var gotCT, gotPath, gotAuth string
 	var raw map[string]any
@@ -898,8 +768,6 @@ func TestClient_RegisterUsesPlainJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// An empty key mirrors how the register command constructs its client: the
-	// endpoint is unauthenticated.
 	c := newTestClient(srv, "")
 	res, err := c.Register(context.Background(), "a@example.com", "s3cr3tpass", "Ada", "Lovelace")
 	if err != nil {
@@ -914,7 +782,6 @@ func TestClient_RegisterUsesPlainJSON(t *testing.T) {
 	if gotAuth != "" {
 		t.Errorf("Authorization = %q, want empty (register is unauthenticated)", gotAuth)
 	}
-	// Flat body: fields at the top level, NO JSON:API `data` envelope.
 	if _, hasData := raw["data"]; hasData {
 		t.Errorf("register body unexpectedly carried a `data` envelope: %#v", raw)
 	}
@@ -935,9 +802,6 @@ func TestClient_RegisterUsesPlainJSON(t *testing.T) {
 	}
 }
 
-// TestClient_RegisterOmitsEmptyNames verifies that first_name/last_name are sent
-// ONLY when non-empty — the backend fields are optional, and sending empty
-// strings would differ from omission.
 func TestClient_RegisterOmitsEmptyNames(t *testing.T) {
 	var raw map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -959,9 +823,6 @@ func TestClient_RegisterOmitsEmptyNames(t *testing.T) {
 	}
 }
 
-// TestClient_RegisterSurfacesConflict verifies that a 409 (email already
-// registered) is surfaced as a usage-class error carrying the backend's precise
-// detail message rather than being masked by a generic string.
 func TestClient_RegisterSurfacesConflict(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentTypeJSONAPI)
@@ -983,8 +844,6 @@ func TestClient_RegisterSurfacesConflict(t *testing.T) {
 	}
 }
 
-// TestClient_RegisterErrorsWithoutAccessToken verifies that a 2xx with no access
-// token is treated as a failure (the mint flow cannot proceed without one).
 func TestClient_RegisterErrorsWithoutAccessToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)

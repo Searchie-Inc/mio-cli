@@ -1,11 +1,5 @@
 package cmd
 
-// auth_token_idiom_test.go — MIO-2995 blind review: the docs told agents to
-// run `export MIO_API_KEY="$(mio auth token)"`, which returns export's own
-// status, so under `set -e` a missing key exported an EMPTY MIO_API_KEY and the
-// script ran on. These tests hold the documented idiom to what bash actually
-// does, and every doc surface to that idiom.
-
 import (
 	"errors"
 	"io/fs"
@@ -22,12 +16,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// TestAuthTokenExportIdiom_StopsASetEScript runs the documented idiom under
-// bash with a `mio` on PATH that answers the way `mio auth token` is pinned to
-// answer — exit 3 and empty stdout with no stored key (TestAuthToken_NoStoredKey),
-// the key and a newline with one (TestAuthToken_PrintsTheStoredKeyAndNothingElse).
-// The oracle is bash itself: with no key a `set -e` script must stop AT the
-// idiom with exit 3, and with one the key must reach a child process.
 func TestAuthTokenExportIdiom_StopsASetEScript(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the idiom is POSIX shell")
@@ -54,7 +42,6 @@ func TestAuthTokenExportIdiom_StopsASetEScript(t *testing.T) {
 				script := "set -euo pipefail\n" + form.snippet + "\n" +
 					`printf 'child sees [%s]\n' "$(sh -c 'printf %s "${MIO_API_KEY-unset}"')"` + "\n"
 				run := exec.Command(bash, "-c", script)
-				// Nothing inherited but PATH: no MIO_API_KEY can leak in.
 				run.Env = []string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")}
 				out, runErr := run.Output()
 				code := 0
@@ -83,25 +70,10 @@ func TestAuthTokenExportIdiom_StopsASetEScript(t *testing.T) {
 	}
 }
 
-// authTokenCapture finds a shell capture of `mio auth token`'s stdout: a
-// $(…) substitution, or an old-style backtick one right after an assignment
-// (elsewhere a backticked `mio auth token` is a Markdown code span, not a
-// capture). Anything may sit between the opener and `mio`, and between `mio`
-// and `auth token`: an env assignment, `command`, a path, global flags.
 var authTokenCapture = regexp.MustCompile("(\\$\\(|=[\"']?`)[^)`]*\\bmio\\b[^)`]*\\bauth\\s+token\\b")
 
-// exportsTheKey matches the second statement of authTokenExport alone on its
-// line, optionally followed by a comment.
 var exportsTheKey = regexp.MustCompile(`^\s*export MIO_API_KEY\s*(#.*)?$`)
 
-// TestAuthTokenExportIdiom_EveryDocUsesIt: wherever the docs capture `mio auth
-// token` (authTokenCapture) — every Markdown and text file in the repo, and
-// every command's help — it must be as authTokenExport (its first statement
-// alone on its line, `export MIO_API_KEY` alone on the next) or
-// authTokenExportOneLine, the forms the test above runs. Any other shape,
-// `export MIO_API_KEY="$(mio auth token)"` above all, is named by file and
-// line. A capture it does not recognise as one (a `mio` reached through an
-// alias or a variable) is outside what it can see.
 func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 	root, err := filepath.Abs("..")
 	if err != nil {
@@ -113,7 +85,6 @@ func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			// .claude/worktrees holds OTHER branches' checkouts.
 			if d.Name() == ".git" || d.Name() == "node_modules" || path == filepath.Join(root, ".claude", "worktrees") {
 				return filepath.SkipDir
 			}
@@ -165,9 +136,6 @@ func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 			if !authTokenCapture.MatchString(rest) {
 				continue
 			}
-			// The two-statement form: the first statement ALONE on its line (a
-			// trailing comment aside — anything else, `|| true` say, can swallow
-			// the exit 3), and exactly `export MIO_API_KEY` on the next.
 			if after, ok := strings.CutPrefix(strings.TrimSpace(rest), first); ok && isBlankOrComment(after) &&
 				i+1 < len(lines) && exportsTheKey.MatchString(lines[i+1]) {
 				continue
@@ -177,8 +145,6 @@ func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 				name, i+1, strings.TrimSpace(line), strings.ReplaceAll(authTokenExport, "\n", "\n  "), authTokenExportOneLine)
 		}
 	}
-	// A floor, so a scan that silently stopped reading the surfaces agents
-	// execute cannot pass: each of these documents the export today.
 	for _, must := range []string{"AGENTS.md", "README.md", "llms.txt", "cmd/skills/content/mio-skill.md", "`mio auth token --help`"} {
 		if captures[must] == 0 {
 			t.Errorf("%s never captures `mio auth token`: the scan is not reading it, or it lost its export instructions", must)
@@ -186,13 +152,6 @@ func TestAuthTokenExportIdiom_EveryDocUsesIt(t *testing.T) {
 	}
 }
 
-// stripOneLineIdiom removes every occurrence of authTokenExportOneLine from
-// line and reports whether any of them was not a statement of its own. A
-// prefix such as `local` or `readonly` returns its own status (0), which hides
-// the exit 3 from set -e exactly like `export` does, so the only thing allowed
-// just before the idiom is the start of the line, the backtick opening a
-// Markdown code span, or `(`, `:`, `;` or `{`. The idiom must also end its
-// statement: `export MIO_API_KEY_OTHER` is not an export of the key.
 func stripOneLineIdiom(line string) (rest string, prefixed bool) {
 	var b strings.Builder
 	for {
@@ -215,8 +174,6 @@ func stripOneLineIdiom(line string) (rest string, prefixed bool) {
 	}
 }
 
-// isBlankOrComment reports whether what follows a shell statement on its line
-// is nothing but whitespace or a comment.
 func isBlankOrComment(s string) bool {
 	s = strings.TrimSpace(s)
 	return s == "" || strings.HasPrefix(s, "#")

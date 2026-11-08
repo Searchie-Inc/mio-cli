@@ -1,34 +1,5 @@
 package cmd
 
-// community.go — `mio community` command group.
-//
-// Routes (see backend app/community/routers/):
-//
-// spaces (admin, hub-scoped):
-//
-//	list     GET    /api/admin/teams/{team_id}/hubs/{hub_id}/spaces
-//	create   POST   /api/admin/teams/{team_id}/hubs/{hub_id}/spaces
-//	retrieve GET    /api/admin/teams/{team_id}/hubs/{hub_id}/spaces/{space_id}
-//	update   PATCH  /api/admin/teams/{team_id}/hubs/{hub_id}/spaces/{space_id}
-//	delete   DELETE /api/admin/teams/{team_id}/hubs/{hub_id}/spaces/{space_id}
-//
-// discussions (admin, hub-scoped):
-//
-//	list     GET    /api/admin/teams/{team_id}/hubs/{hub_id}/discussions
-//	create   POST   /api/admin/teams/{team_id}/hubs/{hub_id}/discussions
-//	retrieve GET    /api/admin/teams/{team_id}/hubs/{hub_id}/discussions/{id}
-//	update   PATCH  /api/admin/teams/{team_id}/hubs/{hub_id}/discussions/{id}
-//	delete   DELETE /api/admin/teams/{team_id}/hubs/{hub_id}/discussions/{id}
-//
-// members moderation (admin, hub-scoped):
-//
-//	ban    POST /api/admin/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/ban
-//	unban  POST /api/admin/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/unban
-//	warn   POST /api/admin/teams/{team_id}/hubs/{hub_id}/members/{contact_id}/warn
-//
-// All routes require both --team and --hub in context. Requires a team-owner
-// JWT (platform_admin or team-owner role) as enforced by the backend.
-
 import (
 	"fmt"
 	"net/url"
@@ -40,7 +11,6 @@ import (
 )
 
 func init() {
-	// community spaces <action>
 	communitySpacesCmd.AddCommand(
 		communitySpacesListCmd,
 		communitySpacesCreateCmd,
@@ -51,7 +21,6 @@ func init() {
 	)
 	communityCmd.AddCommand(communitySpacesCmd)
 
-	// community discussions <action>
 	communityDiscussionsCmd.AddCommand(
 		communityDiscussionsListCmd,
 		communityDiscussionsCreateCmd,
@@ -61,7 +30,6 @@ func init() {
 	)
 	communityCmd.AddCommand(communityDiscussionsCmd)
 
-	// community members <action>
 	communityMembersCmd.AddCommand(
 		communityMembersBanCmd,
 		communityMembersUnbanCmd,
@@ -71,8 +39,6 @@ func init() {
 
 	rootCmd.AddCommand(communityCmd)
 }
-
-// ---- community group --------------------------------------------------------
 
 var communityCmd = &cobra.Command{
 	Use:   "community",
@@ -86,8 +52,6 @@ All community admin operations are hub-scoped: both --team and --hub are require
   mio community members ban contact_xyz --hub hub_abc123 --yes`,
 }
 
-// communityContext is shared boilerplate: build context, require auth, resolve
-// team and hub ids for all community admin sub-commands.
 func communityContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -107,16 +71,9 @@ func communityContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	return c, teamID, hubID, nil
 }
 
-// communityAdminBase returns the admin hub base path shared by spaces,
-// discussions, and member moderation.
-// /api/admin/teams/{team_id}/hubs/{hub_id}
 func communityAdminBase(teamID, hubID string) string {
 	return fmt.Sprintf("/api/admin/teams/%s/hubs/%s", teamID, hubID)
 }
-
-// ======================================================================
-// community spaces
-// ======================================================================
 
 var communitySpacesCmd = &cobra.Command{
 	Use:   "spaces",
@@ -124,7 +81,6 @@ var communitySpacesCmd = &cobra.Command{
 	Long:  "List, create, retrieve, update and delete spaces within a hub.",
 }
 
-// spacesPath returns .../spaces[/{id}].
 func spacesPath(teamID, hubID, id string) string {
 	base := communityAdminBase(teamID, hubID) + "/spaces"
 	if id != "" {
@@ -132,8 +88,6 @@ func spacesPath(teamID, hubID, id string) string {
 	}
 	return base
 }
-
-// ---- spaces list ------------------------------------------------------------
 
 var communitySpacesListCmd = &cobra.Command{
 	Use:   "list",
@@ -159,8 +113,6 @@ var communitySpacesListCmd = &cobra.Command{
 	},
 }
 
-// ---- spaces create ----------------------------------------------------------
-
 var communitySpacesCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a space in a hub.",
@@ -169,7 +121,6 @@ var communitySpacesCreateCmd = &cobra.Command{
   mio community spaces create --hub hub_abc123 --name "Announcements" --slug announcements --description "Official announcements"`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate before resolving auth/team/hub so a bad flag fires no request.
 		attrs := map[string]any{}
 		if err := setSpaceWriteAttrs(cmd, attrs); err != nil {
 			return err
@@ -193,8 +144,6 @@ var communitySpacesCreateCmd = &cobra.Command{
 	},
 }
 
-// ---- spaces retrieve --------------------------------------------------------
-
 var communitySpacesRetrieveCmd = &cobra.Command{
 	Use:     "retrieve <id>",
 	Short:   "Retrieve a space by id.",
@@ -214,8 +163,6 @@ var communitySpacesRetrieveCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- spaces update ----------------------------------------------------------
 
 var communitySpacesUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
@@ -245,8 +192,6 @@ var communitySpacesUpdateCmd = &cobra.Command{
 	},
 }
 
-// ---- spaces delete ----------------------------------------------------------
-
 var communitySpacesDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
 	Short: "Delete a space by id.",
@@ -272,8 +217,6 @@ var communitySpacesDeleteCmd = &cobra.Command{
 	},
 }
 
-// ---- spaces flag registration -----------------------------------------------
-
 func init() {
 	for _, cmd := range []*cobra.Command{communitySpacesCreateCmd, communitySpacesUpdateCmd} {
 		cmd.Flags().String("name", "", "Space display name.")
@@ -293,17 +236,12 @@ func init() {
 	addPaginationFlags(communitySpacesListCmd)
 }
 
-// ======================================================================
-// community discussions
-// ======================================================================
-
 var communityDiscussionsCmd = &cobra.Command{
 	Use:   "discussions",
 	Short: "Manage community discussions.",
 	Long:  "List, create, retrieve, update and delete discussion posts within a hub. Requires team-admin privileges.",
 }
 
-// discussionsAdminPath returns .../discussions[/{id}].
 func discussionsAdminPath(teamID, hubID, id string) string {
 	base := communityAdminBase(teamID, hubID) + "/discussions"
 	if id != "" {
@@ -311,36 +249,6 @@ func discussionsAdminPath(teamID, hubID, id string) string {
 	}
 	return base
 }
-
-// AUTHORSHIP (MIO-2262, and why `create` carries no author flag).
-//
-// v1 of the admin create-discussion endpoint took an `author_contact_id` and was
-// reverted for exactly that reason: it let anyone holding a team-owner key post
-// as any member. This file used to carry a note saying the verb was Won't-Do.
-// That note is now WRONG — mio-backend #544 (0da17745, merged 2026-07-22, live in
-// production) landed the endpoint back in an impersonation-free shape:
-//
-//	POST /api/admin/teams/{team_id}/hubs/{hub_id}/discussions
-//	{"data":{"type":"discussions","attributes":{
-//	    "space_id":…, "title":…, "body"?:…, "is_published"?:bool}}}
-//
-// The author is ALWAYS derived server-side from the authenticated actor
-// (contact JWT → that contact; user JWT / team-bound API key → the team owner's
-// contact via resolve_team_owner_contact), and the request schema is
-// extra="forbid", so a smuggled author_contact_id is a 422 rather than a silent
-// ignore. Mirroring that here, the CLI verb has NO --author-contact-id flag:
-// offering one would only manufacture the impersonation surface the endpoint was
-// rebuilt to remove, and there is no wire field to put it in.
-//
-// Authoring a discussion as some OTHER specific member stays a seeder-only,
-// in-process capability — there is still no HTTP surface for it.
-//
-// Note the name collision when searching for prior art: mio-backend ships its own
-// internal ops CLI whose verb is spelled `mio community discussions create` too
-// (cli/commands/community.py) — a Click command running in-process against the
-// database. This one is the HTTP client.
-
-// ---- discussions list -------------------------------------------------------
 
 var communityDiscussionsListCmd = &cobra.Command{
 	Use:   "list",
@@ -378,30 +286,6 @@ var communityDiscussionsListCmd = &cobra.Command{
 	},
 }
 
-// injectDiscussionDerivedState adds `deleted` — whether this discussion has been
-// soft-deleted — because nothing else in the payload says so plainly.
-//
-// The admin discussions views deliberately return soft-deleted rows: the
-// repository takes include_deleted and the admin router passes it True, which is
-// what makes this the one view carrying drafts, tombstoned AND moderation-removed
-// rows. The scaffold's welcome-post idempotency scan depends on that (MIO-2558),
-// so the rows must keep coming.
-//
-// The trap is that the API's computed `status` is only published/scheduled/draft
-// — it has no "deleted" value — so a tombstoned discussion reports
-// `status: "published"` with a non-null `deleted_at` beside it. Operators read
-// the status, conclude their delete failed, run it again, and get a legitimate
-// 404 the second time. That is MIO-3022: the delete verb was never broken, the
-// reads just could not show its effect.
-//
-// `status` is deliberately NOT overwritten. It is an API-provided value, and
-// rewriting it would discard whether the row was published or still a draft when
-// it was deleted. Same stance as injectHubDerivedState: derive alongside, never
-// replace. --raw bypasses this and renders the untouched envelope.
-//
-// Injected only when `deleted_at` is PRESENT. An absent key means the server did
-// not tell us, and a synthesized `deleted: false` would be indistinguishable from
-// a real one — the fail-closed mistake MIO-2991 made with registration_enabled.
 func injectDiscussionDerivedState(res *client.Resource) {
 	if res == nil || res.Attributes == nil {
 		return
@@ -413,10 +297,6 @@ func injectDiscussionDerivedState(res *client.Resource) {
 	res.Attributes["deleted"] = v != nil
 }
 
-// injectDiscussionDerivedStateAll applies it to every row in a collection.
-//
-// Indexed, not ranged by value: Attributes is a shared map so either works today,
-// but indexing stays correct if the helper ever assigns to the Resource itself.
 func injectDiscussionDerivedStateAll(col *client.Collection) {
 	if col == nil {
 		return
@@ -425,8 +305,6 @@ func injectDiscussionDerivedStateAll(col *client.Collection) {
 		injectDiscussionDerivedState(&col.Data[i])
 	}
 }
-
-// ---- discussions create -----------------------------------------------------
 
 var communityDiscussionsCreateCmd = &cobra.Command{
 	Use:   "create",
@@ -446,8 +324,6 @@ immediately (the backend default); pass --is-published=false to leave a draft.`,
   mio community discussions create --hub hub_abc123 --space-id space_abc --title "Draft" --is-published=false`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate before resolving auth/team/hub so a bad invocation fires no
-		// request (repo contract) — same pre-auth discipline `spaces create` follows.
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "space-id")
 		setStringFlag(cmd, attrs, "title")
@@ -460,12 +336,6 @@ immediately (the backend default); pass --is-published=false to leave a draft.`,
 		if _, ok := attrs["title"]; !ok {
 			return errs.New(errs.ExitUsage, "--title is required to create a discussion")
 		}
-		// PRESENCE is all the CLI checks. The blank/NUL/280-code-point title
-		// contract lives in ONE place server-side (app/community/discussion_text.py,
-		// shared by the endpoint's schema and the backend's own ops CLI); mirroring
-		// it here would be a second copy free to drift, and the conduit rule says a
-		// value the API accepts must reach it. So `--title ""` is a 422, not a
-		// client-side rejection — exactly how `spaces create --name ""` behaves.
 
 		c, teamID, hubID, err := communityContext(cmd)
 		if err != nil {
@@ -479,8 +349,6 @@ immediately (the backend default); pass --is-published=false to leave a draft.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- discussions retrieve ---------------------------------------------------
 
 var communityDiscussionsRetrieveCmd = &cobra.Command{
 	Use:     "retrieve <id>",
@@ -503,8 +371,6 @@ var communityDiscussionsRetrieveCmd = &cobra.Command{
 	},
 }
 
-// ---- discussions update -----------------------------------------------------
-
 var communityDiscussionsUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update a discussion's moderation state by id.",
@@ -518,8 +384,6 @@ not title/body (those are authored by the member and are not admin-editable).`,
   mio community discussions update disc_abc123 --hub hub_abc123 --is-broadcast=false`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate flags BEFORE resolving auth/team/hub so a no-op update fails
-		// with a usage error and fires no HTTP request (repo contract).
 		attrs := map[string]any{}
 		setBoolFlag(cmd, attrs, "is-pinned")
 		setBoolFlag(cmd, attrs, "is-locked")
@@ -542,8 +406,6 @@ not title/body (those are authored by the member and are not admin-editable).`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- discussions delete -----------------------------------------------------
 
 var communityDiscussionsDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
@@ -570,8 +432,6 @@ var communityDiscussionsDeleteCmd = &cobra.Command{
 	},
 }
 
-// ---- discussions flag registration ------------------------------------------
-
 func init() {
 	for _, cmd := range []*cobra.Command{communityDiscussionsUpdateCmd} {
 		cmd.Flags().Bool("is-pinned", false, "Pin (true) or unpin (false) the discussion.")
@@ -579,34 +439,17 @@ func init() {
 		cmd.Flags().Bool("is-broadcast", false, "Mark (true) or unmark (false) the discussion as a broadcast announcement.")
 	}
 
-	// create (MIO-2262). These four ARE the endpoint's whole attribute set — its
-	// schema is extra="forbid" — and there is no author flag by design (see the
-	// AUTHORSHIP note above). The moderation booleans live on `update` only: the
-	// create schema has no is_pinned/is_locked/is_broadcast field.
 	communityDiscussionsCreateCmd.Flags().String("space-id", "", "Id of the space to post in (required).")
 	communityDiscussionsCreateCmd.Flags().String("title", "", "Discussion title, max 280 characters (required).")
 	communityDiscussionsCreateCmd.Flags().String("body", "", "Markdown body of the post.")
 	communityDiscussionsCreateCmd.Flags().Bool("is-published", true, "Publish immediately (default). Pass --is-published=false to save a draft.")
 
 	addPaginationFlags(communityDiscussionsListCmd)
-	// --filter-status sends filter[status], which admin_list_discussions does NOT
-	// declare — it accepts filter[space_id] and filter[is_broadcast] only, and
-	// FastAPI drops undeclared query params silently, so this filters NOTHING and
-	// returns the full list rather than erroring. Pre-existing (it predates
-	// MIO-2808) and tracked as MIO-2816, which also covers the mirror-image gap:
-	// filter[is_broadcast] IS accepted by the endpoint and has no flag here. The
-	// help text says so rather than the flag being removed, since removing it
-	// would break any script that passes it. Filter client-side on .status
-	// (the flattened status attribute; .attributes.status yields null, MIO-3413).
 	communityDiscussionsListCmd.Flags().String("filter-status", "",
 		"IGNORED by the API (it accepts no status filter) — filter client-side on .status: published, scheduled or draft.")
 	communityDiscussionsListCmd.Flags().String("filter-space", "", "Filter by space id.")
 
 }
-
-// ======================================================================
-// community members (moderation)
-// ======================================================================
 
 var communityMembersCmd = &cobra.Command{
 	Use:   "members",
@@ -619,12 +462,9 @@ the .id from 'mio contacts' (that is the team-contact id and these verbs will
   CID=$(mio contacts retrieve <team-contact-id> -o plain --jq .contact_id)`,
 }
 
-// memberActionPath returns .../members/{contact_id}/{action}.
 func memberActionPath(teamID, hubID, contactID, action string) string {
 	return fmt.Sprintf("%s/members/%s/%s", communityAdminBase(teamID, hubID), contactID, action)
 }
-
-// ---- members ban ------------------------------------------------------------
 
 var communityMembersBanCmd = &cobra.Command{
 	Use:   "ban <contact_id>",
@@ -663,8 +503,6 @@ it with:
 	},
 }
 
-// ---- members unban ----------------------------------------------------------
-
 var communityMembersUnbanCmd = &cobra.Command{
 	Use:   "unban <contact_id>",
 	Short: "Unban a hub member.",
@@ -702,8 +540,6 @@ it with:
 	},
 }
 
-// ---- members warn -----------------------------------------------------------
-
 var communityMembersWarnCmd = &cobra.Command{
 	Use:   "warn <contact_id>",
 	Short: "Warn a hub member.",
@@ -740,8 +576,6 @@ it with:
 		return c.render(cmd, res)
 	},
 }
-
-// ---- members flag registration ----------------------------------------------
 
 func init() {
 	for _, cmd := range []*cobra.Command{

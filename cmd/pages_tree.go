@@ -1,18 +1,5 @@
 package cmd
 
-// pages_tree.go — `mio pages tree` sub-group: author (PUT) and read (GET) a
-// page's draft node-tree (the page-builder tree). This is how the homepage
-// sections are built from the CLI (MIO-2258). Tree shape follows mio-hub's
-// DS-conformed section recipes (mio-backend docs/specs seeder homepage guide).
-//
-// Routes:
-//
-//	set  PUT  /api/teams/{team_id}/hubs/{hub_id}/pages/{page_id}/tree   (If-Match OCC)
-//	get  GET  /api/teams/{team_id}/hubs/{hub_id}/pages/{page_id}/tree?audience=author&resolve=true
-//
-// The write derives JSON:API type "page_draft_trees" via the pages/tree
-// typeOverride in internal/client.
-
 import (
 	"net/url"
 	"strconv"
@@ -33,7 +20,6 @@ var pagesTreeCmd = &cobra.Command{
 draft_version; 'get' returns the resolved author draft.`,
 }
 
-// pagesTreePath returns …/pages/{page_id}/tree.
 func pagesTreePath(teamID, hubID, pageID string) string {
 	return pagesPath(teamID, hubID, pageID) + "/tree"
 }
@@ -90,11 +76,6 @@ homepage.)`,
 	Example: `  mio pages tree set page_abc123 --hub hub_123 --if-match 0 --file tree.json`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// --if-match is optional (defaults to 0). Omitting it sends If-Match: 0,
-		// the first-set sentinel: the backend's atomic OCC update matches only a
-		// page still at draft_version 0 (never had a draft). A page that already
-		// has a draft (draft_version >= 1) is a conflict, not a clobber — so the
-		// default is safe and optimistic concurrency stays intact for later sets.
 		file, ferr := cmd.Flags().GetString("file")
 		if ferr != nil {
 			return errs.New(errs.ExitUsage, "--file: %s", ferr)
@@ -103,8 +84,6 @@ homepage.)`,
 		if file == "" {
 			return errs.New(errs.ExitUsage, "--file is required: path to the tree JSON file")
 		}
-		// parseJSONFlag reads an @-prefixed path; force the prefix so --file is
-		// always treated as a file path (trees are large — always from a file).
 		v, terr := parseJSONFlag("@" + strings.TrimPrefix(file, "@"))
 		if terr != nil {
 			return errs.New(errs.ExitUsage, "--file: %s", terr)
@@ -113,9 +92,6 @@ homepage.)`,
 		if !ok {
 			return errs.New(errs.ExitUsage, "--file must contain a JSON object (the tree)")
 		}
-		// Pre-flight: reject the well-defined malformed node settings the API
-		// accepts (200) but the renderer silently drops, so the author gets a clear
-		// error here rather than a phantom success (MIO-2537). Runs before any HTTP.
 		if verr := validatePageTree(treeObj); verr != nil {
 			return verr
 		}
@@ -129,8 +105,6 @@ homepage.)`,
 		if err != nil {
 			return err
 		}
-		// PUT …/pages/{id}/tree with {data:{type:page_draft_trees,attributes:{tree}}}
-		// and the If-Match OCC header (mirrors 'pages publish').
 		res, err := c.client.ActionWithHeaders(
 			c.ctx, client.StyleEnvelope, "PUT",
 			pagesTreePath(teamID, hubID, args[0]),

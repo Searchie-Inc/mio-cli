@@ -10,8 +10,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/version"
 )
 
-// runSkills drives the root command with the given args in-process, isolating
-// flag state, and returns captured stdout/stderr and the execution error.
 func runSkills(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	resetGlobalFlags()
@@ -55,7 +53,6 @@ func TestSkillsInstall_WritesClaudeUserTarget(t *testing.T) {
 		t.Errorf("stdout should report the install path, got: %q", stdout)
 	}
 
-	// Idempotent: a second identical install is a no-op, not an error.
 	stdout2, _, err2 := runSkills(t, "skills", "install")
 	if err2 != nil {
 		t.Fatalf("second install: %v", err2)
@@ -66,8 +63,6 @@ func TestSkillsInstall_WritesClaudeUserTarget(t *testing.T) {
 }
 
 func TestSkillsInstall_ProjectScopeWritesDotClaude(t *testing.T) {
-	// --project writes a relative ./.claude path, but isolate HOME too so target
-	// detection can never so much as stat a real home.
 	_, dir := isolateSkillSandbox(t)
 
 	if _, _, err := runSkills(t, "skills", "install", "--project"); err != nil {
@@ -128,8 +123,6 @@ func TestSkillsPrint_EmitsBody(t *testing.T) {
 func TestRefreshManagedSkills_RefreshesUnmodifiedManagedInstall(t *testing.T) {
 	home := isolateSkillHome(t)
 
-	// Simulate a prior install from an older CLI version: managed markers, but an
-	// untouched body (hash matches).
 	path := filepath.Join(home, ".claude", "skills", "mio", "SKILL.md")
 	if err := writeSkillFile(path, renderSkill("0.0.1")); err != nil {
 		t.Fatalf("seed install: %v", err)
@@ -138,9 +131,6 @@ func TestRefreshManagedSkills_RefreshesUnmodifiedManagedInstall(t *testing.T) {
 		t.Fatalf("seed file should classify as managedUnmodified, got %v", st)
 	}
 
-	// The refresh is performed BY the newly installed binary — this process holds
-	// only its own embedded body and cannot render another version's (MIO-2874).
-	// Stand in for that binary writing its own content.
 	oldExec := skillRefreshExec
 	t.Cleanup(func() { skillRefreshExec = oldExec })
 	skillRefreshExec = func(_ string, loc skillLocation) error {
@@ -171,7 +161,6 @@ func TestRefreshManagedSkills_RefreshesUnmodifiedManagedInstall(t *testing.T) {
 func TestRefreshManagedSkills_NeverClobbersHandEditedInstall(t *testing.T) {
 	home := isolateSkillHome(t)
 
-	// A managed install the user hand-edited: body hash no longer matches.
 	edited := strings.Replace(renderSkill("0.0.1"),
 		"# mio — Membership.io CLI", "# HAND EDITED", 1)
 	path := filepath.Join(home, ".claude", "skills", "mio", "SKILL.md")
@@ -203,10 +192,6 @@ func TestRefreshManagedSkills_NudgesWhenNeverInstalled(t *testing.T) {
 	var buf bytes.Buffer
 	refreshManagedSkills(&buf, &buf, "/opt/mio/bin/mio")
 
-	// "mio skills install" alone cannot discriminate — it is a substring of the
-	// edited-locally message too ("run 'mio skills install --force --target ...'"), so
-	// swapping the branches leaves this green. Assert the nudge exactly, and
-	// assert the other message is ABSENT.
 	if !strings.Contains(buf.String(), "A mio CLI agent skill is available") {
 		t.Errorf("expected the install nudge, got: %q", buf.String())
 	}
@@ -225,12 +210,10 @@ func TestSkillsInstall_ForceOverwritesHandEdited(t *testing.T) {
 		t.Fatalf("seed edited install: %v", err)
 	}
 
-	// Without --force the install refuses.
 	if _, _, err := runSkills(t, "skills", "install"); err == nil {
 		t.Fatal("install over a hand-edited file should fail without --force")
 	}
 
-	// With --force it overwrites with the current managed content.
 	if _, _, err := runSkills(t, "skills", "install", "--force"); err != nil {
 		t.Fatalf("install --force: %v", err)
 	}

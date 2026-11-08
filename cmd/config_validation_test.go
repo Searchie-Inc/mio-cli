@@ -1,13 +1,5 @@
 package cmd
 
-// config_validation_test.go — MIO-2646: `mio config set` must validate the value
-// shape of its known keys (api_base = http(s) URL; current_team/current_hub =
-// UUID) so a bogus value is rejected at the setter (exit 2) instead of persisting
-// verbatim and failing with a cryptic error on a later, unrelated command.
-//
-// This validates the CLI's OWN local state (the config file) — distinct from the
-// --team/--hub flags, which stay faithful conduits the API validates.
-
 import (
 	"strings"
 	"testing"
@@ -52,8 +44,6 @@ func TestConfigSet_ValidatesValues(t *testing.T) {
 	}
 }
 
-// A rejected value must NOT be written to the config file — the setter validates
-// before Save, so the next command reads the prior (default) value, not garbage.
 func TestConfigSet_RejectionDoesNotPersist(t *testing.T) {
 	dir := t.TempDir()
 	env := []string{"XDG_CONFIG_HOME=" + dir}
@@ -71,8 +61,6 @@ func TestConfigSet_RejectionDoesNotPersist(t *testing.T) {
 	}
 }
 
-// A valid value is persisted and read back — the positive counterpart to the
-// rejection test, pinning that validation does not block legitimate writes.
 func TestConfigSet_ValidValuePersists(t *testing.T) {
 	const uuid = "019e204f-9ea0-7601-ac0f-ab522eece374"
 	dir := t.TempDir()
@@ -89,7 +77,3 @@ func TestConfigSet_ValidValuePersists(t *testing.T) {
 		t.Errorf("current_team not persisted: get returned %q, want %s", res.Stdout, uuid)
 	}
 }
-
-// The MIO-2648 --anonymous wiring guard that used to live here moved to
-// anonymous_test.go, where MIO-2694 corrected its assertion: --anonymous now
-// REACHES the network unauthenticated instead of exiting 3 beforehand.

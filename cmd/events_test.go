@@ -1,31 +1,5 @@
 package cmd
 
-// events_test.go — contract tests for the `mio events` command group
-// (Events v1 API, MIO-3173).
-//
-// Covers:
-//   - events create: body shape (JSON:API envelope, type "hub_events",
-//     snake_case attrs), required-flag validation, and the NO team_id segment
-//     path shape (regression guard — events is the first resource whose base
-//     path is /api/hubs/{hub_id}/events with no /teams/{team_id} prefix).
-//   - events list: filter[status]/sort query params, --status/--sort
-//     enum validation, --after cursor
-//   - events retrieve / update: GET/PATCH path + partial-update semantics,
-//     including that an explicit --attendee-list-visible=false serializes
-//   - events cancel: POST .../cancel action verb (nil body)
-//   - events rsvp set: PUT .../rsvp, body type "event_rsvps", --status validation
-//   - events rsvp withdraw: DELETE .../rsvp, --yes gate, and that the response
-//     body IS rendered (the API returns 200 with an RSVP body, not 204 — this
-//     command must use client.Action, never client.Delete, which would discard it)
-//   - events rsvps list: GET .../rsvps
-//   - eventsContext auth: MIO_CONTACT_TOKEN is used as the bearer (Authorization
-//     header) instead of the team API key, and every command fails fast with
-//     ExitAuth when only a team API key is configured (Codex round 1, MIO-3173 —
-//     every Events v1 route requires a contact identity a team key cannot provide)
-//
-// Reuses the in-process harness from contract_test.go (runContract,
-// newMockServer, baseEnv, withTeam).
-
 import (
 	"encoding/json"
 	"io"
@@ -37,21 +11,10 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// eventsEnv returns the env vars needed for `mio events` commands: the usual
-// API-key/base-url pair PLUS MIO_CONTACT_TOKEN. Every Events v1 route requires
-// a contact identity (see eventsContext in events.go) — a team API key alone
-// 401s on all of them, so every events test that expects to reach the mock
-// server must supply a contact token. Tests that specifically exercise the
-// no-contact-token failure path use baseEnv directly instead.
 func eventsEnv(apiBase string) []string {
 	return append(baseEnv(apiBase), "MIO_CONTACT_TOKEN=test-contact-token")
 }
 
-// ── fixtures ─────────────────────────────────────────────────────────────────
-
-// hubEventBody uses "scheduled" for status — the real backend event-status
-// enum is scheduled|cancelled (never "upcoming"; "upcoming"/"past" are only
-// --status FILTER values on list, not attribute values on a resource).
 const hubEventBody = `{
 	"data": {
 		"id": "evt_1",
@@ -77,11 +40,6 @@ const eventRSVPBody = `{
 	}
 }`
 
-// ── events create ──────────────────────────────────────────────────────────
-
-// TestEventsCreate_BodyShape verifies create sends a JSON:API envelope with
-// type "hub_events" and the correct snake_case attribute keys, to a path with
-// NO /teams/{team_id} segment.
 func TestEventsCreate_BodyShape(t *testing.T) {
 	var gotBody []byte
 	var gotPath string
@@ -116,7 +74,6 @@ func TestEventsCreate_BodyShape(t *testing.T) {
 		t.Errorf("HTTP method = %q, want POST", gotMethod)
 	}
 
-	// Regression guard: events is hub-scoped ONLY — no /teams/{team_id} segment.
 	if strings.Contains(gotPath, "/teams/") {
 		t.Errorf("path %q must NOT contain a /teams/ segment (events has no team_id in its route)", gotPath)
 	}
@@ -158,10 +115,8 @@ func TestEventsCreate_BodyShape(t *testing.T) {
 	}
 }
 
-// TestEventsCreate_MissingRequiredFlags verifies that omitting any of the
-// required flags (title, starts-at, ends-at, timezone, location-type) exits 2.
 func TestEventsCreate_MissingRequiredFlags(t *testing.T) {
-	srv := newMockServer(t, nil) // must not be called
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
@@ -169,7 +124,6 @@ func TestEventsCreate_MissingRequiredFlags(t *testing.T) {
 			"events", "create",
 			"--title", "Community Meetup",
 			"--starts-at", "2026-09-01T18:00:00Z",
-			// --ends-at, --timezone, --location-type intentionally omitted
 		)...)
 
 	if res.Code != errs.ExitUsage {
@@ -177,9 +131,6 @@ func TestEventsCreate_MissingRequiredFlags(t *testing.T) {
 	}
 }
 
-// TestEventsCreate_OptionalAttrs verifies optional flags (capacity, visibility,
-// segment-id, rsvp-tag-id, attendee-list-visible, description, cover-image-url)
-// are translated to the correct snake_case attribute keys when set.
 func TestEventsCreate_OptionalAttrs(t *testing.T) {
 	var gotBody []byte
 
@@ -250,10 +201,6 @@ func TestEventsCreate_OptionalAttrs(t *testing.T) {
 	}
 }
 
-// ── events list ───────────────────────────────────────────────────────────
-
-// TestEventsList_QueryParams verifies --status and --sort map to
-// filter[status] and sort query params, and the path has no /teams/ segment.
 func TestEventsList_QueryParams(t *testing.T) {
 	var gotPath string
 	var gotQuery string
@@ -296,10 +243,6 @@ func TestEventsList_QueryParams(t *testing.T) {
 	}
 }
 
-// ── events retrieve ───────────────────────────────────────────────────────
-
-// TestEventsRetrieve_Path verifies retrieve issues a GET to the correct
-// single-resource path.
 func TestEventsRetrieve_Path(t *testing.T) {
 	var gotMethod, gotPath string
 
@@ -326,10 +269,6 @@ func TestEventsRetrieve_Path(t *testing.T) {
 	}
 }
 
-// ── events update ─────────────────────────────────────────────────────────
-
-// TestEventsUpdate_BodyShape verifies update sends a PATCH with only the
-// changed flags, type "hub_events".
 func TestEventsUpdate_BodyShape(t *testing.T) {
 	var gotBody []byte
 	var gotMethod, gotPath string
@@ -385,10 +324,8 @@ func TestEventsUpdate_BodyShape(t *testing.T) {
 	}
 }
 
-// TestEventsUpdate_NothingToUpdate verifies that update with no field flags
-// set exits 2.
 func TestEventsUpdate_NothingToUpdate(t *testing.T) {
-	srv := newMockServer(t, nil) // must not be called
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "update", "evt_1")...)
@@ -398,10 +335,6 @@ func TestEventsUpdate_NothingToUpdate(t *testing.T) {
 	}
 }
 
-// ── events cancel ─────────────────────────────────────────────────────────
-
-// TestEventsCancel_PostToCancelPath verifies cancel sends a nil-body POST to
-// .../cancel and renders the returned resource.
 func TestEventsCancel_PostToCancelPath(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody []byte
@@ -444,10 +377,8 @@ func TestEventsCancel_PostToCancelPath(t *testing.T) {
 	}
 }
 
-// TestEventsCancel_RequiresYes verifies cancel without --yes exits 5 in a
-// non-TTY shell and never calls the API.
 func TestEventsCancel_RequiresYes(t *testing.T) {
-	srv := newMockServer(t, nil) // must not be called
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "cancel", "evt_1")...)
@@ -457,10 +388,6 @@ func TestEventsCancel_RequiresYes(t *testing.T) {
 	}
 }
 
-// ── events rsvp set ───────────────────────────────────────────────────────
-
-// TestEventsRSVPSet_BodyShape verifies rsvp set sends a PUT to .../rsvp with
-// a JSON:API envelope of type "event_rsvps" and attributes.status set.
 func TestEventsRSVPSet_BodyShape(t *testing.T) {
 	var gotBody []byte
 	var gotMethod, gotPath string
@@ -512,8 +439,6 @@ func TestEventsRSVPSet_BodyShape(t *testing.T) {
 	}
 }
 
-// TestEventsRSVPSet_NotGoing verifies --status not_going is accepted and
-// forwarded verbatim.
 func TestEventsRSVPSet_NotGoing(t *testing.T) {
 	var gotBody []byte
 
@@ -548,9 +473,8 @@ func TestEventsRSVPSet_NotGoing(t *testing.T) {
 	}
 }
 
-// TestEventsRSVPSet_MissingStatus verifies omitting --status exits 2.
 func TestEventsRSVPSet_MissingStatus(t *testing.T) {
-	srv := newMockServer(t, nil) // must not be called
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "rsvp", "set", "evt_1")...)
@@ -560,13 +484,8 @@ func TestEventsRSVPSet_MissingStatus(t *testing.T) {
 	}
 }
 
-// TestEventsRSVPSet_InvalidStatus verifies an out-of-enum --status value
-// exits 2 without hitting the API. "attending" (not "maybe") is the example
-// here: "maybe" became a legal third RSVP state (MIO-maybe-rsvp), so it can
-// no longer stand in for an invalid value — see TestEventsRSVPSet_Maybe for
-// its positive-path coverage instead.
 func TestEventsRSVPSet_InvalidStatus(t *testing.T) {
-	srv := newMockServer(t, nil) // must not be called
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1",
@@ -580,27 +499,10 @@ func TestEventsRSVPSet_InvalidStatus(t *testing.T) {
 	}
 }
 
-// TestEventsRSVPSet_Maybe verifies --status maybe is accepted and forwarded
-// verbatim to the SAME wire contract as going/not_going: PUT to
-// .../events/{id}/rsvp with a JSON:API envelope of type "event_rsvps" and
-// attributes.status set. "Maybe" is a real third RSVP state (product ruling,
-// Slack #8-mio-development 2026-09-07, thread 1788527517.683859): it keeps
-// the event in the member's "My Events" tab without committing to "going".
-// The CLI has no capacity or notification logic of its own (that lives in
-// mio-backend) — it only needs to stop rejecting the value and pass it
-// through, exactly like "going"/"not_going" above.
-//
-// This asserts method + path + envelope type, not just the status attribute
-// (MIO-3739 review round): a body-only oracle stayed green when "maybe" was
-// mutated to route to a different verb/path/envelope entirely, because
-// nothing here could tell the two implementations apart — see
-// .claude/rules/verifying-guards.md ("probe set smaller than the claim").
 func TestEventsRSVPSet_Maybe(t *testing.T) {
 	var gotBody []byte
 	var gotMethod, gotPath string
 
-	// The full wire path, including the /v1 the client injects — eventsPath's
-	// doc comment describes the pre-version prefix only.
 	const wantRSVPPath = "/api/v1/hubs/hub_123/events/evt_1/rsvp"
 
 	const maybeRSVPBody = `{
@@ -636,10 +538,6 @@ func TestEventsRSVPSet_Maybe(t *testing.T) {
 	if gotMethod != http.MethodPut {
 		t.Errorf("HTTP method = %q, want PUT", gotMethod)
 	}
-	// Exact equality, not HasSuffix: the contract is that events paths carry
-	// NO team_id segment (see eventsPath's doc comment). A suffix match is
-	// satisfied by "/api/teams/t_team1/hubs/hub_123/events/evt_1/rsvp" too, so
-	// it cannot fail in the one direction this assertion exists to catch.
 	if gotPath != wantRSVPPath {
 		t.Errorf("path = %q, want %q", gotPath, wantRSVPPath)
 	}
@@ -660,12 +558,8 @@ func TestEventsRSVPSet_Maybe(t *testing.T) {
 	}
 }
 
-// ── events rsvp withdraw ──────────────────────────────────────────────────
-
-// TestEventsRSVPWithdraw_RequiresYes verifies withdraw without --yes exits 5
-// and never calls the API.
 func TestEventsRSVPWithdraw_RequiresYes(t *testing.T) {
-	srv := newMockServer(t, nil) // DELETE must not be called
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "rsvp", "withdraw", "evt_1")...)
@@ -675,12 +569,6 @@ func TestEventsRSVPWithdraw_RequiresYes(t *testing.T) {
 	}
 }
 
-// TestEventsRSVPWithdraw_WithYes_RendersBody is the regression guard for the
-// 200-with-body contract: the withdraw endpoint returns 200 with the RSVP
-// resource transitioned to "not_going" (the real backend RSVP-status enum is
-// going|not_going|maybe — there is no separate "withdrawn" status), NOT 204.
-// The command must render it (client.Action), not discard it (client.Delete
-// would swallow the body on a 200).
 func TestEventsRSVPWithdraw_WithYes_RendersBody(t *testing.T) {
 	var gotMethod, gotPath string
 
@@ -696,7 +584,7 @@ func TestEventsRSVPWithdraw_WithYes_RendersBody(t *testing.T) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/vnd.api+json")
-		w.WriteHeader(http.StatusOK) // 200, NOT 204 — this is the real contract
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(withdrawnBody))
 	}))
 	t.Cleanup(srv.Close)
@@ -713,16 +601,11 @@ func TestEventsRSVPWithdraw_WithYes_RendersBody(t *testing.T) {
 	if !strings.HasSuffix(gotPath, "/hubs/hub_123/events/evt_1/rsvp") {
 		t.Errorf("path %q does not end with /hubs/hub_123/events/evt_1/rsvp", gotPath)
 	}
-	// The 200 response body must be rendered, not discarded.
 	if !strings.Contains(res.Stdout, "not_going") {
 		t.Errorf("stdout does not contain the rendered RSVP body (status=not_going); stdout=%q", res.Stdout)
 	}
 }
 
-// ── events rsvps list ─────────────────────────────────────────────────────
-
-// TestEventsRSVPsList_GetPath verifies rsvps list issues a GET to
-// .../events/{id}/rsvps.
 func TestEventsRSVPsList_GetPath(t *testing.T) {
 	var gotMethod, gotPath string
 
@@ -749,13 +632,8 @@ func TestEventsRSVPsList_GetPath(t *testing.T) {
 	}
 }
 
-// ── events list: --status / --sort enum validation ───────────────────────────
-
-// TestEventsList_InvalidStatus verifies an out-of-enum --status value exits 2
-// without hitting the API — the backend silently mistreats unknown values
-// rather than rejecting them (Codex round 1, MIO-3173).
 func TestEventsList_InvalidStatus(t *testing.T) {
-	srv := newMockServer(t, nil) // must not be called
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "list", "--status", "live")...)
@@ -765,10 +643,8 @@ func TestEventsList_InvalidStatus(t *testing.T) {
 	}
 }
 
-// TestEventsList_InvalidSort verifies an out-of-enum --sort value exits 2
-// without hitting the API.
 func TestEventsList_InvalidSort(t *testing.T) {
-	srv := newMockServer(t, nil) // must not be called
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "list", "--sort", "title")...)
@@ -778,8 +654,6 @@ func TestEventsList_InvalidSort(t *testing.T) {
 	}
 }
 
-// TestEventsList_AfterCursor verifies --after maps to page[after], alongside
-// --limit → page[size] (already covered by TestEventsList_QueryParams).
 func TestEventsList_AfterCursor(t *testing.T) {
 	var gotQuery string
 
@@ -802,13 +676,6 @@ func TestEventsList_AfterCursor(t *testing.T) {
 	}
 }
 
-// ── events update: explicit --attendee-list-visible=false ────────────────────
-
-// TestEventsUpdate_AttendeeListVisibleFalseSerializes verifies that an
-// EXPLICIT --attendee-list-visible=false is sent in the request body (present
-// with value false), not silently dropped because false looks like the flag's
-// zero value. setBoolFlag gates on cmd.Flags().Changed, not on the value, so
-// this should already work — this test pins it as a regression guard.
 func TestEventsUpdate_AttendeeListVisibleFalseSerializes(t *testing.T) {
 	var gotBody []byte
 
@@ -848,13 +715,6 @@ func TestEventsUpdate_AttendeeListVisibleFalseSerializes(t *testing.T) {
 	}
 }
 
-// ── eventsContext auth: contact-token bearer swap ─────────────────────────────
-
-// TestEventsContext_UsesContactTokenBearer is the regression guard for the
-// Critical finding in Codex round 1 (MIO-3173): every Events v1 route requires
-// a contact identity, which a team API key cannot provide. When
-// MIO_CONTACT_TOKEN is configured, events commands MUST send it as the
-// Authorization bearer — not the team API key.
 func TestEventsContext_UsesContactTokenBearer(t *testing.T) {
 	var gotAuth string
 
@@ -878,20 +738,6 @@ func TestEventsContext_UsesContactTokenBearer(t *testing.T) {
 	}
 }
 
-// TestEventsContext_ScopeResolutionUsesAPIKeyClient is the regression guard
-// for the Important finding in Codex round 2 (MIO-3173): team/hub SCOPE
-// RESOLUTION (--hub given as a name/slug rather than a raw id) must use the
-// team-API-key client, never the contact-token client. Before the fix,
-// eventsContext swapped in the contact bearer before calling
-// requireTeam/requireHub, so a hub-slug lookup sent the contact JWT to the
-// platform-scoped GET /api/teams/{team_id}/hubs route — a different expected
-// audience than the contact-JWT-only Events v1 routes, which the backend
-// rejects.
-//
-// --hub is passed as a SLUG ("my-hub", not "hub_123") specifically to force
-// requireHub to actually call ResolveHub (an id-shaped value like "hub_123"
-// passes through with no API call at all — see internal/client/resolve.go —
-// so it wouldn't exercise this path).
 func TestEventsContext_ScopeResolutionUsesAPIKeyClient(t *testing.T) {
 	var gotHubListAuth, gotHubListPath string
 	var gotEventsAuth, gotEventsPath string
@@ -907,13 +753,11 @@ func TestEventsContext_ScopeResolutionUsesAPIKeyClient(t *testing.T) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		w.WriteHeader(http.StatusOK)
 		if strings.Contains(r.URL.Path, "/teams/") {
-			// Hub-slug resolution: GET /api/teams/{team_id}/hubs.
 			gotHubListAuth = r.Header.Get("Authorization")
 			gotHubListPath = r.URL.Path
 			_, _ = w.Write([]byte(hubListBody))
 			return
 		}
-		// The actual Events v1 request: GET /api/hubs/{hub_id}/events.
 		gotEventsAuth = r.Header.Get("Authorization")
 		gotEventsPath = r.URL.Path
 		_, _ = w.Write([]byte(`{"data":[],"meta":{"page":{"has_more":false}}}`))
@@ -942,20 +786,12 @@ func TestEventsContext_ScopeResolutionUsesAPIKeyClient(t *testing.T) {
 	}
 }
 
-// TestEventsContext_NoContactToken_FailsFast verifies that with only a team
-// API key configured (no MIO_CONTACT_TOKEN) events commands fail fast with
-// ExitAuth and never reach the network — instead of round-tripping to a
-// guaranteed 401 on every single command.
 func TestEventsContext_NoContactToken_FailsFast(t *testing.T) {
-	// Guard against ambient-environment leakage: if the machine running this
-	// test happens to have MIO_CONTACT_TOKEN exported (e.g. a developer's own
-	// shell profile), baseEnv alone would not clear it and this test's
-	// "team key only" premise would silently stop being tested.
 	t.Setenv(eventsContactTokenEnv, "")
 
-	srv := newMockServer(t, nil) // must not be called
+	srv := newMockServer(t, nil)
 
-	res := runContract(t, baseEnv(srv.URL), // API key only, no MIO_CONTACT_TOKEN
+	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "events", "list")...)
 
 	if res.Code != errs.ExitAuth {
@@ -963,23 +799,11 @@ func TestEventsContext_NoContactToken_FailsFast(t *testing.T) {
 	}
 }
 
-// TestEventsContext_NoContactToken_HonestErrorMessage pins the exact guidance
-// of the fail-fast auth error: it must point the caller at MIO_CONTACT_TOKEN
-// and must NOT tell them to "run `mio login`" — that command mints and stores
-// only a team API key today (see the package doc comment in events.go) and
-// can never satisfy this precondition, so that advice would be actively
-// misleading (corrective round, MIO-3173). Drives the real binary via
-// buildBinary/runBinary (like the TestContract_ErrorEnvelope_* tests in
-// contract_test.go) because the rendered JSON:API envelope is written by
-// main.go to os.Stderr after os.Exit — only a subprocess can capture it; the
-// in-process runContract harness never populates res.Stderr for a RunE error.
 func TestEventsContext_NoContactToken_HonestErrorMessage(t *testing.T) {
 	bin := buildBinary(t)
 
 	_, stderr, exitCode := runBinary(t, bin, []string{
 		"MIO_API_KEY=test-key",
-		// No MIO_CONTACT_TOKEN. The auth gate fires before any network call,
-		// so the API base is never actually dialed.
 		"MIO_API_BASE_URL=http://127.0.0.1:1",
 	}, "--team", "t_team1", "--hub", "hub_123", "events", "list")
 
@@ -1010,29 +834,7 @@ func TestEventsContext_NoContactToken_HonestErrorMessage(t *testing.T) {
 	}
 }
 
-// NOTE: an earlier version of this file had a
-// TestEventsContext_NoCredentialsAtAll_FailsFast test (no API key AND no
-// contact token, not anonymous). It was removed: with no MIO_API_KEY env var
-// and no --api-key flag, config.Resolve falls through to the real OS
-// keychain (GetAPIKey), which on an interactive macOS dev machine can block
-// indefinitely on a Keychain access prompt that never gets a response in an
-// automated/headless run — observed as a real >120s hang while gating round
-// 3. eventsContext's fail-fast check (Step 1) never inspects
-// c.resolved.APIKey at all, so that test exercised the exact same branch as
-// TestEventsContext_NoContactToken_FailsFast below (API key present, no
-// token) with zero additional code-path coverage — not worth the flake risk.
-// The internal/config package's own tests already cover the real
-// GetAPIKey/keychain behavior hermetically via withFileBackendOnly.
-
-// TestEventsContext_AnonymousBypassesGate verifies --anonymous is honoured as
-// a deliberate unauthenticated probe (mirroring requireAuth's MIO-2694
-// precedent elsewhere in the CLI) even with no contact token configured: the
-// request reaches the server with no Authorization header, rather than being
-// blocked by the events-specific auth gate.
 func TestEventsContext_AnonymousBypassesGate(t *testing.T) {
-	// Guard against ambient-environment leakage (see the identical comment in
-	// TestEventsContext_NoContactToken_FailsFast) — this test's premise is
-	// specifically "no contact token", so an ambient one must not leak in.
 	t.Setenv(eventsContactTokenEnv, "")
 
 	var called bool
@@ -1047,7 +849,7 @@ func TestEventsContext_AnonymousBypassesGate(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, baseEnv(srv.URL), // API key present, but --anonymous overrides it
+	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "--anonymous", "events", "list")...)
 
 	if res.Code != errs.ExitOK {
@@ -1061,15 +863,6 @@ func TestEventsContext_AnonymousBypassesGate(t *testing.T) {
 	}
 }
 
-// TestEventsContext_AnonymousWinsOverContactToken is the regression guard for
-// the Critical finding in Codex round 2 (MIO-3173): --anonymous MUST win over
-// an ambient MIO_CONTACT_TOKEN, not the other way around. Before the fix, the
-// switch checked "contactToken != \"\"" before "--anonymous", so a real
-// contact token configured in the environment silently defeated an explicit
-// --anonymous request and leaked a live bearer credential to whatever
-// --api-base was in play. This test sets a real contact token (via eventsEnv)
-// AND --anonymous together and asserts the request still carries NO
-// Authorization header.
 func TestEventsContext_AnonymousWinsOverContactToken(t *testing.T) {
 	var called bool
 	var gotAuth string
@@ -1083,7 +876,7 @@ func TestEventsContext_AnonymousWinsOverContactToken(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := runContract(t, eventsEnv(srv.URL), // MIO_CONTACT_TOKEN IS set here
+	res := runContract(t, eventsEnv(srv.URL),
 		withTeam("t_team1", "--hub", "hub_123", "--anonymous", "events", "list")...)
 
 	if res.Code != errs.ExitOK {
@@ -1098,44 +891,17 @@ func TestEventsContext_AnonymousWinsOverContactToken(t *testing.T) {
 	}
 }
 
-// ── events hosts (MIO-3740) ───────────────────────────────────────────────
-//
-// The backend makes an event's host CLIENT-SETTABLE and PLURAL:
-//
-//   - host_contact_id  (string)      — sugar for host_contact_ids=[value]
-//   - host_contact_ids (list[str])   — 1..MAX_HOSTS_PER_EVENT (3) entries,
-//     duplicates rejected
-//   - the two are MUTUALLY EXCLUSIVE; sending both is a 422
-//   - on create, omitting both stamps the authenticated caller as sole host
-//
-// (mio-backend app/hub_events/schemas.py: HubEventCreateAttributes /
-// HubEventUpdateAttributes and their _reject_ambiguous_host_fields validator;
-// the cap is MAX_HOSTS_PER_EVENT in app/hub_events/models.py.)
-//
-// These tests assert the WIRE — the exact request path and the exact
-// attributes object — not merely that a request happened. The path is
-// compared for EQUALITY, not with strings.HasSuffix: a suffix match would
-// happily accept /api/v1/teams/{team}/hubs/hub_123/events, and events is the
-// one resource whose route carries no team segment at all. The /v1 in the
-// expected path is injected by the client (canonicalRequestPath), not by
-// eventsPath.
-
 const (
 	eventsCreateWirePath = "/api/v1/hubs/hub_123/events"
 	eventsUpdateWirePath = "/api/v1/hubs/hub_123/events/evt_1"
 )
 
-// recordedEventRequest is one request the host-flag mock server saw.
 type recordedEventRequest struct {
 	Method string
 	Path   string
 	Body   string
 }
 
-// newHostRecordingServer starts a mock server that records EVERY request it
-// receives — including ones it would otherwise ignore — so a test can assert
-// that a rejected flag combination sent NOTHING AT ALL. The returned slice
-// pointer is read after runContract returns.
 func newHostRecordingServer(t *testing.T, status int, body string) (*httptest.Server, *[]recordedEventRequest) {
 	t.Helper()
 	got := &[]recordedEventRequest{}
@@ -1150,8 +916,6 @@ func newHostRecordingServer(t *testing.T, status int, body string) (*httptest.Se
 	return srv, got
 }
 
-// eventAttributesFrom decodes the JSON:API attributes object out of a recorded
-// request body.
 func eventAttributesFrom(t *testing.T, body string) map[string]any {
 	t.Helper()
 	var doc struct {
@@ -1169,8 +933,6 @@ func eventAttributesFrom(t *testing.T, body string) map[string]any {
 	return doc.Data.Attributes
 }
 
-// wantHostContactIDs asserts attrs.host_contact_ids is exactly want (a JSON
-// array of strings, in order) and that the singular host_contact_id is absent.
 func wantHostContactIDs(t *testing.T, attrs map[string]any, want []string) {
 	t.Helper()
 	raw, ok := attrs["host_contact_ids"]
@@ -1194,8 +956,6 @@ func wantHostContactIDs(t *testing.T, attrs map[string]any, want []string) {
 	}
 }
 
-// eventsCreateArgs returns a minimal, valid `events create` invocation with the
-// given extra flags appended.
 func eventsCreateArgs(extra ...string) []string {
 	base := []string{
 		"--hub", "hub_123",
@@ -1210,16 +970,11 @@ func eventsCreateArgs(extra ...string) []string {
 	return withTeam("t_team1", append(base, extra...)...)
 }
 
-// eventsUpdateArgs returns a minimal `events update` invocation with the given
-// extra flags appended.
 func eventsUpdateArgs(extra ...string) []string {
 	base := []string{"--hub", "hub_123", "events", "update", "evt_1"}
 	return withTeam("t_team1", append(base, extra...)...)
 }
 
-// TestEventsCreate_HostContactIDsCommaSeparated pins the plural flag onto the
-// wire: --host-contact-ids a,b must serialize as the JSON array
-// host_contact_ids: ["a","b"], to the exact events path.
 func TestEventsCreate_HostContactIDsCommaSeparated(t *testing.T) {
 	srv, got := newHostRecordingServer(t, http.StatusCreated, hubEventBody)
 
@@ -1241,9 +996,6 @@ func TestEventsCreate_HostContactIDsCommaSeparated(t *testing.T) {
 	wantHostContactIDs(t, eventAttributesFrom(t, req.Body), []string{"con_a", "con_b"})
 }
 
-// TestEventsCreate_HostContactIDsRepeatedFlagSameBody pins cobra's StringSlice
-// contract: the repeated form (--host-contact-ids a --host-contact-ids b) and
-// the comma form must produce the SAME wire body, byte for byte.
 func TestEventsCreate_HostContactIDsRepeatedFlagSameBody(t *testing.T) {
 	srv, got := newHostRecordingServer(t, http.StatusCreated, hubEventBody)
 
@@ -1272,9 +1024,6 @@ func TestEventsCreate_HostContactIDsRepeatedFlagSameBody(t *testing.T) {
 	}
 }
 
-// TestEventsCreate_HostContactIDSingular pins the singular sugar: it must send
-// host_contact_id (a bare string) and must NOT also send host_contact_ids —
-// the API 422s the pair.
 func TestEventsCreate_HostContactIDSingular(t *testing.T) {
 	srv, got := newHostRecordingServer(t, http.StatusCreated, hubEventBody)
 
@@ -1299,9 +1048,6 @@ func TestEventsCreate_HostContactIDSingular(t *testing.T) {
 	}
 }
 
-// TestEventsCreate_NoHostFlagsSendsNeitherField pins the default: with neither
-// host flag set, NEITHER field appears in the body, so the backend stamps the
-// authenticated caller as sole host (today's behaviour, unchanged).
 func TestEventsCreate_NoHostFlagsSendsNeitherField(t *testing.T) {
 	srv, got := newHostRecordingServer(t, http.StatusCreated, hubEventBody)
 
@@ -1322,8 +1068,6 @@ func TestEventsCreate_NoHostFlagsSendsNeitherField(t *testing.T) {
 	}
 }
 
-// TestEventsUpdate_HostContactIDsCommaSeparated is the update-side twin of the
-// create test: the plural flag on the wire, at the exact single-resource path.
 func TestEventsUpdate_HostContactIDsCommaSeparated(t *testing.T) {
 	srv, got := newHostRecordingServer(t, http.StatusOK, hubEventBody)
 
@@ -1344,13 +1088,11 @@ func TestEventsUpdate_HostContactIDsCommaSeparated(t *testing.T) {
 	}
 	attrs := eventAttributesFrom(t, req.Body)
 	wantHostContactIDs(t, attrs, []string{"con_a", "con_b"})
-	// PATCH stays partial: the host set is the ONLY thing this request changes.
 	if len(attrs) != 1 {
 		t.Errorf("attributes = %v, want exactly 1 key (host_contact_ids)", attrs)
 	}
 }
 
-// TestEventsUpdate_HostContactIDsRepeatedFlagSameBody — repeated form, update side.
 func TestEventsUpdate_HostContactIDsRepeatedFlagSameBody(t *testing.T) {
 	srv, got := newHostRecordingServer(t, http.StatusOK, hubEventBody)
 
@@ -1377,7 +1119,6 @@ func TestEventsUpdate_HostContactIDsRepeatedFlagSameBody(t *testing.T) {
 	}
 }
 
-// TestEventsUpdate_HostContactIDSingular — singular sugar, update side.
 func TestEventsUpdate_HostContactIDSingular(t *testing.T) {
 	srv, got := newHostRecordingServer(t, http.StatusOK, hubEventBody)
 
@@ -1401,36 +1142,23 @@ func TestEventsUpdate_HostContactIDSingular(t *testing.T) {
 	}
 }
 
-// TestEventsHostFlags_RejectedBeforeAnyRequest is the guard the whole feature
-// rests on: every host-flag combination the API would 422 must exit ExitUsage
-// LOCALLY, having sent the mock server NOTHING. A test that only checked the
-// exit code would pass even if the CLI round-tripped the bad body first, so
-// the "server saw 0 requests" assertion is the load-bearing half.
 func TestEventsHostFlags_RejectedBeforeAnyRequest(t *testing.T) {
 	cases := []struct {
 		name  string
 		extra []string
 	}{
-		// Mutually exclusive — the API's _reject_ambiguous_host_fields 422s
-		// the pair; cobra's MarkFlagsMutuallyExclusive rejects it here first.
 		{"both host flags", []string{"--host-contact-id", "con_a", "--host-contact-ids", "con_b"}},
 		{"both host flags, same id", []string{"--host-contact-id", "con_a", "--host-contact-ids", "con_a"}},
-		// Over MAX_HOSTS_PER_EVENT (3).
 		{"over the cap", []string{"--host-contact-ids", "con_a,con_b,con_c,con_d"}},
 		{"over the cap, repeated form", []string{
 			"--host-contact-ids", "con_a", "--host-contact-ids", "con_b",
 			"--host-contact-ids", "con_c", "--host-contact-ids", "con_d",
 		}},
-		// Duplicates are rejected, never silently de-duplicated.
 		{"duplicate id", []string{"--host-contact-ids", "con_a,con_a"}},
 		{"duplicate id, repeated form", []string{"--host-contact-ids", "con_a", "--host-contact-ids", "con_a"}},
-		// Blank entries: dropping one would ship a SHORTER host set than named.
 		{"empty id between two real ones", []string{"--host-contact-ids", "con_a,,con_b"}},
 		{"whitespace-only id", []string{"--host-contact-ids", "con_a, ,con_b"}},
 		{"empty flag value", []string{"--host-contact-ids", ""}},
-		// The singular flag's own blank case: an empty id resolves to no hub
-		// member, so the API fails closed on it exactly as it does on a blank
-		// list entry.
 		{"empty singular id", []string{"--host-contact-id", ""}},
 		{"whitespace-only singular id", []string{"--host-contact-id", "  "}},
 	}
@@ -1460,11 +1188,6 @@ func TestEventsHostFlags_RejectedBeforeAnyRequest(t *testing.T) {
 	}
 }
 
-// TestEventsHostFlags_ErrorsNameWhatIsWrong pins the MESSAGE, not just the exit
-// code: the SilenceErrors root never writes it into the stderr buffer (main.go
-// renders it), so this drives the tree through executeCLI and reads the raw
-// error. An exit-code-only guard would accept "unknown flag" or a bare
-// "invalid input" for every one of these.
 func TestEventsHostFlags_ErrorsNameWhatIsWrong(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -1527,10 +1250,6 @@ func TestEventsHostFlags_ErrorsNameWhatIsWrong(t *testing.T) {
 	}
 }
 
-// TestEventsHostFlags_AtTheCapIsAccepted is the accept-side counterpart to the
-// over-the-cap reject above. Without it, an off-by-one cap (">= 3" instead of
-// "> 3") would still pass every rejection case in this file — a reject-only
-// probe cannot tell the two implementations apart.
 func TestEventsHostFlags_AtTheCapIsAccepted(t *testing.T) {
 	srv, got := newHostRecordingServer(t, http.StatusCreated, hubEventBody)
 
@@ -1546,14 +1265,6 @@ func TestEventsHostFlags_AtTheCapIsAccepted(t *testing.T) {
 	wantHostContactIDs(t, eventAttributesFrom(t, (*got)[0].Body), []string{"con_a", "con_b", "con_c"})
 }
 
-// TestEventsHostFlags_RejectedBeforeScopeResolution proves WHERE the check
-// runs, not just that it runs. The other rejection tests pass --hub hub_123,
-// an ID-SHAPED value that ResolveHub returns unchanged with no API call — so
-// they would stay green even if the validation happened after eventsContext.
-// Here --hub is a NAME, which eventsContext can only resolve by listing the
-// team's hubs over HTTP. Zero requests is therefore the only outcome
-// consistent with "a knowingly-invalid host set fires no request at all"; a
-// validation placed after eventsContext shows up as exactly one GET.
 func TestEventsHostFlags_RejectedBeforeScopeResolution(t *testing.T) {
 	verbs := map[string][]string{
 		"create": {
@@ -1584,8 +1295,6 @@ func TestEventsHostFlags_RejectedBeforeScopeResolution(t *testing.T) {
 			if code := codeForExecuteErr(err); code != errs.ExitUsage {
 				t.Errorf("exit code = %d, want %d (ExitUsage); err=%v", code, errs.ExitUsage, err)
 			}
-			// The error must be the HOST one, not a hub-resolution failure —
-			// otherwise "0 requests" could be true for the wrong reason.
 			if !strings.Contains(err.Error(), "--host-contact-ids") {
 				t.Errorf("error %q does not name --host-contact-ids; the host check must fire "+
 					"before hub resolution, not after it", err.Error())

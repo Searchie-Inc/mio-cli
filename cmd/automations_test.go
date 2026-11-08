@@ -1,19 +1,5 @@
 package cmd
 
-// automations_test.go — contract tests for `mio automations` and
-// `mio webhook-endpoints` command groups.
-//
-// Covers:
-//   - automations create: body shape (JSON:API envelope, snake_case attributes)
-//   - automations publish: HTTP method, path suffix, nil-body action
-//   - automations enroll: body shape (JSON:API envelope with automation_enrollments type)
-//   - automations fire-event: flat body (no envelope), required flags
-//   - webhook-endpoints create: body shape, signing_secret included
-//   - webhook-endpoints delete: DELETE method called, --yes required
-//
-// Reuses the in-process harness from contract_test.go (runContract,
-// newMockServer, baseEnv, withTeam).
-
 import (
 	"encoding/json"
 	"io"
@@ -24,8 +10,6 @@ import (
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
-
-// ── fixtures ─────────────────────────────────────────────────────────────────
 
 const automationBody = `{
 	"data": {
@@ -61,11 +45,6 @@ const webhookEndpointBody = `{
 	}
 }`
 
-// ── automations create ────────────────────────────────────────────────────────
-
-// TestAutomationsCreate_BodyShape verifies that create sends a JSON:API
-// envelope with type "automations" and the correct snake_case attribute keys.
-// --definition is now required (MIO-968c).
 func TestAutomationsCreate_BodyShape(t *testing.T) {
 	var gotBody []byte
 	var gotPath string
@@ -122,7 +101,6 @@ func TestAutomationsCreate_BodyShape(t *testing.T) {
 	}
 }
 
-// TestAutomationsCreate_MissingName verifies that omitting --name exits 2.
 func TestAutomationsCreate_MissingName(t *testing.T) {
 	srv := newMockServer(t, nil)
 	const defJSON = `{"nodes":[{"type":"exit","id":"n1","config":{}}],"edges":[],"triggers":[]}`
@@ -131,7 +109,6 @@ func TestAutomationsCreate_MissingName(t *testing.T) {
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"automations", "create",
-			// --name intentionally omitted; --definition provided to isolate the test
 			"--definition", defJSON,
 		)...)
 
@@ -140,10 +117,6 @@ func TestAutomationsCreate_MissingName(t *testing.T) {
 	}
 }
 
-// ── automations publish ───────────────────────────────────────────────────────
-
-// TestAutomationsPublish_PostToPublishPath verifies that publish sends a POST
-// to the correct path and handles a 201 response with a resource body.
 func TestAutomationsPublish_PostToPublishPath(t *testing.T) {
 	var gotMethod string
 	var gotPath string
@@ -182,8 +155,6 @@ func TestAutomationsPublish_PostToPublishPath(t *testing.T) {
 	}
 }
 
-// TestAutomationsPublish_NoBodyPrints verifies that a 204 No Content response
-// causes a fallback message to be printed instead of crashing.
 func TestAutomationsPublish_NoBodyPrints(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -204,10 +175,6 @@ func TestAutomationsPublish_NoBodyPrints(t *testing.T) {
 	}
 }
 
-// ── automations enroll ────────────────────────────────────────────────────────
-
-// TestAutomationsEnroll_BodyShape verifies that enroll sends a JSON:API
-// envelope with type "automation_enrollments" and the correct attribute key.
 func TestAutomationsEnroll_BodyShape(t *testing.T) {
 	var gotBody []byte
 	var gotPath string
@@ -254,10 +221,6 @@ func TestAutomationsEnroll_BodyShape(t *testing.T) {
 	}
 }
 
-// ── automations fire-event ────────────────────────────────────────────────────
-
-// TestAutomationsFireEvent_FlatBody verifies that fire-event sends a flat
-// JSON body (NOT a JSON:API envelope) with snake_case keys.
 func TestAutomationsFireEvent_FlatBody(t *testing.T) {
 	var gotBody []byte
 	var gotPath string
@@ -290,7 +253,6 @@ func TestAutomationsFireEvent_FlatBody(t *testing.T) {
 		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
 	}
 
-	// Must be flat — no "data" wrapper.
 	if _, hasData := flat["data"]; hasData {
 		t.Error("fire-event body must NOT have a top-level \"data\" key (must be flat)")
 	}
@@ -305,20 +267,11 @@ func TestAutomationsFireEvent_FlatBody(t *testing.T) {
 	}
 }
 
-// TestAutomationsFireEvent_MetaOnly202 is the regression guard for MIO-2554.
-// POST .../automations/events returns a META-ONLY JSON:API response
-// (CustomEventAcceptedResponse — 202 for a newly-accepted event, 200 for a
-// duplicate) carrying a top-level `meta` object and NO `data` member — valid
-// per JSON:API §7.1. The command must decode that flat document via ActionRaw
-// and render the meta, exiting 0 — NOT run it through the resource decoder,
-// which errors "response had no `data` member" on every SUCCESSFUL fire. This
-// mirrors the MIO-2503 fix for `automations test`.
 func TestAutomationsFireEvent_MetaOnly202(t *testing.T) {
 	var gotBody []byte
 	var gotMethod string
 	var gotPath string
 
-	// Real backend contract: CustomEventAcceptedResponse — meta-only, no `data`.
 	const acceptedBody = `{
 		"meta": {"status": "accepted", "event_id": "evt_abc123", "enrollments_triggered": 2}
 	}`
@@ -352,8 +305,6 @@ func TestAutomationsFireEvent_MetaOnly202(t *testing.T) {
 		t.Errorf("path %q does not end with /automations/events", gotPath)
 	}
 
-	// The meta-only ack must be rendered to stdout (default JSON off a non-TTY),
-	// not swallowed by a resource-decode failure.
 	if !strings.Contains(res.Stdout, "event_id") || !strings.Contains(res.Stdout, "evt_abc123") {
 		t.Errorf("stdout does not contain rendered meta (event_id); stdout=%q", res.Stdout)
 	}
@@ -362,13 +313,11 @@ func TestAutomationsFireEvent_MetaOnly202(t *testing.T) {
 	if err := json.Unmarshal(gotBody, &flat); err != nil {
 		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
 	}
-	// Regression guard: request must stay flat — no "data" wrapper (no envelope).
 	if _, hasData := flat["data"]; hasData {
 		t.Error("fire-event body must NOT have a top-level \"data\" key (must be flat)")
 	}
 }
 
-// TestAutomationsFireEvent_MissingEventType verifies that omitting --event-type exits 2.
 func TestAutomationsFireEvent_MissingEventType(t *testing.T) {
 	srv := newMockServer(t, nil)
 
@@ -377,7 +326,6 @@ func TestAutomationsFireEvent_MissingEventType(t *testing.T) {
 			"--hub", "hub_123",
 			"automations", "fire-event",
 			"--team-contact-id", "tcid_xyz",
-			// --event-type intentionally omitted
 		)...)
 
 	if res.Code != errs.ExitUsage {
@@ -385,11 +333,6 @@ func TestAutomationsFireEvent_MissingEventType(t *testing.T) {
 	}
 }
 
-// ── webhook-endpoints create ──────────────────────────────────────────────────
-
-// TestWebhookEndpointsCreate_BodyShape verifies that create sends a JSON:API
-// envelope with type "webhook_endpoints" and the correct attribute keys,
-// including signing_secret.
 func TestWebhookEndpointsCreate_BodyShape(t *testing.T) {
 	var gotBody []byte
 	var gotPath string
@@ -444,7 +387,6 @@ func TestWebhookEndpointsCreate_BodyShape(t *testing.T) {
 	}
 }
 
-// TestWebhookEndpointsCreate_MissingFlags verifies that omitting all flags exits 2.
 func TestWebhookEndpointsCreate_MissingFlags(t *testing.T) {
 	srv := newMockServer(t, nil)
 
@@ -459,18 +401,13 @@ func TestWebhookEndpointsCreate_MissingFlags(t *testing.T) {
 	}
 }
 
-// ── webhook-endpoints delete ──────────────────────────────────────────────────
-
-// TestWebhookEndpointsDelete_RequiresYes verifies that delete without --yes
-// exits 5 (ExitNeedsConfir) in non-TTY mode.
 func TestWebhookEndpointsDelete_RequiresYes(t *testing.T) {
-	srv := newMockServer(t, nil) // DELETE must not be called
+	srv := newMockServer(t, nil)
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
 			"--hub", "hub_123",
 			"webhook-endpoints", "delete", "we_1",
-			// --yes intentionally omitted
 		)...)
 
 	if res.Code != errs.ExitNeedsConfir {
@@ -478,8 +415,6 @@ func TestWebhookEndpointsDelete_RequiresYes(t *testing.T) {
 	}
 }
 
-// TestWebhookEndpointsDelete_WithYes verifies that delete with --yes sends
-// DELETE to the correct path and exits 0.
 func TestWebhookEndpointsDelete_WithYes(t *testing.T) {
 	var gotMethod string
 	var gotPath string
@@ -509,22 +444,10 @@ func TestWebhookEndpointsDelete_WithYes(t *testing.T) {
 	}
 }
 
-// ── automations test (dry-run) ────────────────────────────────────────────────
-
-// TestAutomationsTest_FlatBody is the regression guard for MIO-2503. The
-// POST .../automations/{id}/test endpoint intentionally returns a FLAT report
-// {"meta":{…},"trace":[…]} with NO JSON:API `data` member. The command must
-// decode that flat document and render meta+trace, exiting 0 — NOT run it
-// through the resource decoder (which errors "response had no `data` member" on
-// every successful dry-run). This test drives the REAL flat response shape and
-// asserts both the flat request body and that the rendered report reaches
-// stdout.
 func TestAutomationsTest_FlatBody(t *testing.T) {
 	var gotBody []byte
 	var gotPath string
 
-	// Real backend contract: DryRunResponse {meta: dict, trace: list} at 200,
-	// Content-Type application/vnd.api+json, no top-level `data`.
 	const testResponseBody = `{
 		"meta": {"steps_executed": 3, "dry_run": true},
 		"trace": [
@@ -556,8 +479,6 @@ func TestAutomationsTest_FlatBody(t *testing.T) {
 		t.Errorf("path %q does not end with /automations/auto_1/test", gotPath)
 	}
 
-	// The flat meta+trace report must be rendered to stdout (default JSON off a
-	// non-TTY), not swallowed by a resource-decode failure.
 	if !strings.Contains(res.Stdout, "steps_executed") {
 		t.Errorf("stdout does not contain rendered meta (steps_executed); stdout=%q", res.Stdout)
 	}
@@ -570,7 +491,6 @@ func TestAutomationsTest_FlatBody(t *testing.T) {
 		t.Fatalf("request body is not valid JSON: %v; body=%q", err, gotBody)
 	}
 
-	// Regression guard: request must be flat — no "data" wrapper (no envelope).
 	if _, hasData := flat["data"]; hasData {
 		t.Error("automations test body must NOT have a top-level \"data\" key (must be flat, not a JSON:API envelope)")
 	}
@@ -579,11 +499,6 @@ func TestAutomationsTest_FlatBody(t *testing.T) {
 	}
 }
 
-// ── fire-event: missing idempotency-key ───────────────────────────────────────
-
-// TestAutomationsFireEvent_MissingIdempotencyKey verifies that omitting
-// --idempotency-key exits 2 (ExitUsage) even when --event-type and
-// --team-contact-id are provided.
 func TestAutomationsFireEvent_MissingIdempotencyKey(t *testing.T) {
 	srv := newMockServer(t, nil)
 
@@ -593,7 +508,6 @@ func TestAutomationsFireEvent_MissingIdempotencyKey(t *testing.T) {
 			"automations", "fire-event",
 			"--event-type", "purchase_completed",
 			"--team-contact-id", "tcid_xyz",
-			// --idempotency-key intentionally omitted
 		)...)
 
 	if res.Code != errs.ExitUsage {
@@ -601,10 +515,6 @@ func TestAutomationsFireEvent_MissingIdempotencyKey(t *testing.T) {
 	}
 }
 
-// ── webhook-endpoints create: missing required flags ──────────────────────────
-
-// TestWebhookEndpointsCreate_MissingName verifies that omitting --name (while
-// supplying --target-url) exits 2 (ExitUsage).
 func TestWebhookEndpointsCreate_MissingName(t *testing.T) {
 	srv := newMockServer(t, nil)
 
@@ -613,7 +523,6 @@ func TestWebhookEndpointsCreate_MissingName(t *testing.T) {
 			"--hub", "hub_123",
 			"webhook-endpoints", "create",
 			"--target-url", "https://example.com/hook",
-			// --name intentionally omitted
 		)...)
 
 	if res.Code != errs.ExitUsage {
@@ -621,8 +530,6 @@ func TestWebhookEndpointsCreate_MissingName(t *testing.T) {
 	}
 }
 
-// TestWebhookEndpointsCreate_MissingTargetURL verifies that omitting --target-url
-// (while supplying --name) exits 2 (ExitUsage).
 func TestWebhookEndpointsCreate_MissingTargetURL(t *testing.T) {
 	srv := newMockServer(t, nil)
 
@@ -631,7 +538,6 @@ func TestWebhookEndpointsCreate_MissingTargetURL(t *testing.T) {
 			"--hub", "hub_123",
 			"webhook-endpoints", "create",
 			"--name", "My Hook",
-			// --target-url intentionally omitted
 		)...)
 
 	if res.Code != errs.ExitUsage {
@@ -639,12 +545,6 @@ func TestWebhookEndpointsCreate_MissingTargetURL(t *testing.T) {
 	}
 }
 
-// ── empty required-flag rejection (whitespace/empty string) ──────────────────
-
-// TestAutomationsFireEvent_EmptyIdempotencyKey verifies that passing
-// --idempotency-key "" (explicitly empty) exits 2 (ExitUsage), not 0.
-// This tests the fix for the "changed but empty" blind spot where nil checks
-// passed because setStringFlag stored "" instead of nil.
 func TestAutomationsFireEvent_EmptyIdempotencyKey(t *testing.T) {
 	srv := newMockServer(t, nil)
 
@@ -654,7 +554,7 @@ func TestAutomationsFireEvent_EmptyIdempotencyKey(t *testing.T) {
 			"automations", "fire-event",
 			"--event-type", "purchase_completed",
 			"--team-contact-id", "tcid_xyz",
-			"--idempotency-key", "", // explicitly empty
+			"--idempotency-key", "",
 		)...)
 
 	if res.Code != errs.ExitUsage {
@@ -662,8 +562,6 @@ func TestAutomationsFireEvent_EmptyIdempotencyKey(t *testing.T) {
 	}
 }
 
-// TestWebhookEndpointsCreate_EmptyName verifies that --name "" (explicitly
-// empty) exits 2 (ExitUsage).
 func TestWebhookEndpointsCreate_EmptyName(t *testing.T) {
 	srv := newMockServer(t, nil)
 
@@ -680,8 +578,6 @@ func TestWebhookEndpointsCreate_EmptyName(t *testing.T) {
 	}
 }
 
-// TestWebhookEndpointsCreate_EmptyTargetURL verifies that --target-url ""
-// (explicitly empty) exits 2 (ExitUsage).
 func TestWebhookEndpointsCreate_EmptyTargetURL(t *testing.T) {
 	srv := newMockServer(t, nil)
 

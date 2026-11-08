@@ -8,14 +8,11 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// MIO-2590: a segment-search 422 returns the unresolved refs in the error's
-// meta.missing_slugs / meta.cross_team_refs; message() must surface them so the
-// generic "failed to compile" is self-diagnosable.
 func TestApiError_Message_SurfacesMetaRefs(t *testing.T) {
 	e := apiError{
 		Detail: "One or more condition references failed to compile.",
 		Meta: map[string]any{
-			"missing_slugs":   []any{"vip", "founding-member"}, // list[str]
+			"missing_slugs":   []any{"vip", "founding-member"},
 			"cross_team_refs": []any{},
 		},
 	}
@@ -28,8 +25,6 @@ func TestApiError_Message_SurfacesMetaRefs(t *testing.T) {
 	}
 }
 
-// cross_team_refs is a list of {type, message} OBJECTS (not strings) — the object
-// shape must render, not be silently dropped (Opus review of #72).
 func TestApiError_Message_SurfacesCrossTeamRefObjects(t *testing.T) {
 	e := apiError{
 		Detail: "One or more condition references failed to compile.",
@@ -52,10 +47,6 @@ func TestApiError_Message_NoMetaUnchanged(t *testing.T) {
 	}
 }
 
-// MIO-2656: errorForResponse must record the status the API answered with, for
-// every body shape — a JSON:API errors array, a non-JSON:API body (gateway HTML,
-// a plain string), and an empty body. Without this the envelope has to
-// reverse-engineer the status out of the exit code, which is lossy.
 func TestErrorForResponse_RecordsTransportStatus(t *testing.T) {
 	c := &Client{}
 
@@ -68,8 +59,6 @@ func TestErrorForResponse_RecordsTransportStatus(t *testing.T) {
 		{"jsonapi errors array", 403, `{"errors":[{"status":"403","detail":"forbidden"}]}`, errs.ExitAuth},
 		{"jsonapi errors array", 409, `{"errors":[{"status":"409","detail":"conflict"}]}`, errs.ExitUsage},
 		{"jsonapi errors array", 422, `{"errors":[{"status":"422","detail":"invalid"}]}`, errs.ExitUsage},
-		// A 502 from a proxy in front of the app has no JSON:API body at all, so
-		// the body could never have been the source of the status.
 		{"non-jsonapi body", 502, `<html>bad gateway</html>`, errs.ExitServer},
 		{"empty body", 429, ``, errs.ExitRateLimited},
 	}
@@ -87,14 +76,8 @@ func TestErrorForResponse_RecordsTransportStatus(t *testing.T) {
 	}
 }
 
-// When the body's `status` member disagrees with the response line, the
-// TRANSPORT status wins: the response line is what actually happened on the
-// wire, it is what the exit code is derived from (so the two can never
-// contradict each other in the envelope), and unlike the body member it always
-// exists. The body's claim still reaches the user inside the detail message.
 func TestErrorForResponse_TransportStatusBeatsBodyStatus(t *testing.T) {
 	c := &Client{}
-	// Response line says 403; the body claims 200 (a stale/hand-written member).
 	err := c.errorForResponse(403, []byte(`{"errors":[{"status":"200","detail":"forbidden"}]}`))
 
 	if got := errs.HTTPStatusOf(err); got != 403 {
@@ -108,8 +91,6 @@ func TestErrorForResponse_TransportStatusBeatsBodyStatus(t *testing.T) {
 	}
 }
 
-// A multi-error body has no single body status to promote — another reason the
-// transport status is the only coherent source.
 func TestErrorForResponse_MultipleBodyStatusesUseTransport(t *testing.T) {
 	c := &Client{}
 	err := c.errorForResponse(422, []byte(
@@ -124,8 +105,6 @@ func TestErrorForResponse_MultipleBodyStatusesUseTransport(t *testing.T) {
 }
 
 func TestMetaRefs(t *testing.T) {
-	// mixed: strings (missing_slugs shape) + a {type,message} object (cross_team
-	// shape) + skippable junk (empty string, bare number, empty object).
 	got := metaRefs([]any{
 		"a", "",
 		map[string]any{"type": "has_tag", "message": "cross-team"},
@@ -139,18 +118,11 @@ func TestMetaRefs(t *testing.T) {
 	if metaRefs("not-an-array") != nil {
 		t.Error("a non-array meta value must yield nil")
 	}
-	// message-only object (no type) renders just the message.
 	if r := metaRefs([]any{map[string]any{"message": "boom"}}); len(r) != 1 || r[0] != "boom" {
 		t.Errorf("message-only object = %v, want [boom]", r)
 	}
 }
 
-// TestHasAPIErrorCode_MatchesCodeNotMessage pins the exact reason this helper
-// exists (MIO-2976). apiError.message() prefers detail > title > code, so
-// whenever the server sends a detail — which it normally does — the machine
-// code is ABSENT from the rendered string. A caller that grepped err.Error()
-// for the code would never match, silently, forever; that was a real bug in the
-// first cut of the hub-op error guidance.
 func TestHasAPIErrorCode_MatchesCodeNotMessage(t *testing.T) {
 	err := errs.WrapHTTP(http.StatusConflict, &apiErrorList{Errors: []apiError{{
 		Status: "409",
@@ -158,9 +130,6 @@ func TestHasAPIErrorCode_MatchesCodeNotMessage(t *testing.T) {
 		Detail: "key reused with a different request",
 	}}})
 
-	// The discriminating assertion: the code is genuinely NOT in the message, so
-	// a message-based implementation of HasAPIErrorCode would fail this test
-	// rather than coincidentally pass it.
 	if strings.Contains(err.Error(), "idempotency_fingerprint_mismatch") {
 		t.Fatalf("precondition broken: the code now appears in the message (%q) — "+
 			"this test can no longer tell a code match from a message match", err.Error())
@@ -174,19 +143,11 @@ func TestHasAPIErrorCode_MatchesCodeNotMessage(t *testing.T) {
 	if HasAPIErrorCode(nil, "anything") {
 		t.Error("a nil error carries no codes")
 	}
-	// An error with no JSON:API body in its chain must simply not match.
 	if HasAPIErrorCode(errs.New(errs.ExitServer, "transport failed"), "idempotency_fingerprint_mismatch") {
 		t.Error("a non-API error must not match any code")
 	}
 }
 
-// MIO-3912: every error the client builds from a JSON:API errors body carries
-// that body, byte-for-byte, as its document — so the stderr envelope can keep
-// the members apiError does not model (id, links, unknown ones) and the ones it
-// models but message() does not render (code, title, meta.request_id). Covers
-// all three places such an error is built: a non-2xx answer, and a 2xx answer
-// whose body is an errors document (single-resource and collection decoders).
-// A body that is not a JSON:API errors document carries none.
 func TestAPIErrorDocument_IsTheBodyVerbatim(t *testing.T) {
 	body := []byte(`{"errors":[{"id":"e1","status":"422","code":"invalid_price_config","title":"Invalid price config","detail":"too many","links":{"about":"https://example.test"},"meta":{"request_id":"rid-1","n":12345678901234567890}}],"meta":{"top":true}}`)
 

@@ -1,38 +1,5 @@
 package cmd
 
-// hubs_scaffold_content_nodes.go — the content-nodes step of the CLIENT-SIDE
-// scaffold pipeline (MIO-4167), and the matching read of the whole-hub op's own
-// content step, so `-o json` reports content items the same way on both paths.
-//
-// WHY THE STEP EXISTS. Media playlists and content items are two surfaces: a
-// file that lives only in a playlist has no content item, so progress and
-// completion tracking, "My List", comments and single-file page bindings are
-// all missing for it. The backend's whole-hub op materialises content items for
-// the playlists it creates (mio-backend app/hub_scaffold/service.py
-// _step_content_nodes, MIO-3258 T3). The client-side pipeline never did, so
-// every hub it built shipped without them until someone ran
-// `mio content reconcile --playlist-id …` by hand — and the bare form of that
-// command cannot help, because it reads HubTemplateApplication provenance that
-// only the server-side op records. The MIO-3258 plan (§6) prescribed exactly
-// this call for a CLI that runs its own step sequence.
-//
-// WHAT IT SENDS. POST …/hubs/{hub}/content/reconcile with EXPLICIT playlist_ids:
-// the ids this run holds, in template order — the ones stepPlaylists created,
-// or, on a resume whose playlists step skipped, the ones it recovered
-// unambiguously. Never a bodyless POST (it would ask for provenance this path
-// never records and 422 no_playlist_provenance) and never a title guess: the
-// starter template ships two playlists titled "Add another playlist", so a title
-// cannot say which row is which. A key with no id is NAMED on stderr instead.
-// So is a recovered id whose playlist is not scoped to the hub (a team-library
-// playlist merely published into it): the route rejects the WHOLE request with
-// 422 playlist_not_in_hub if any id is not the hub's own, so sending one would
-// fail the step, and with it every page after it, on every re-run.
-//
-// WHERE IT RUNS. Between playlists and pages, the position the op gives it:
-// after the playlists and their items are published (a lesson is created
-// published only when its file AND its playlist are) and before any page, so a
-// page bound to a playlist sees a fully materialised hub.
-
 import (
 	"fmt"
 	"net/http"
@@ -44,46 +11,19 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// scaffoldContentNode is one content item the reconcile (client path) or the
-// op's content step (op path) reported. outcome is the backend's D7 vocabulary
-// verbatim (created / adopted / adopted_not_member_visible / skipped_*); nodeID
-// is "" when this run did not learn it (the op reports ids for CREATED rows
-// only).
 type scaffoldContentNode struct {
 	legacyHash, outcome, nodeID string
 }
 
-// recordContentNodes stores what the backend reported and marks the run as one
-// that DID reconcile. A run that never calls it reports content_nodes as null:
-// "did not reconcile" is a different fact from "reconciled nothing".
 func (sc *scaffoldContext) recordContentNodes(nodes []scaffoldContentNode) {
 	sc.contentNodes = nodes
 	sc.contentNodesKnown = true
 }
 
-// contentReconcilePath is the hub content reconcile route (MIO-3258 T4) — the
-// same path `mio content reconcile` posts to.
 func contentReconcilePath(teamID, hubID string) string {
 	return contentBasePath(teamID, hubID, "") + "/reconcile"
 }
 
-// stepContentNodes materialises content items for the playlists this run holds
-// ids for. See the file comment for the why; the rules here are:
-//
-//   - no playlists in the template: nothing to do, and the result is [] (a
-//     certain "nothing"), not null;
-//   - a key with no id (a resume whose playlists step skipped and could not
-//     recover it unambiguously): named on stderr with the command that fixes
-//     it, never guessed;
-//   - a recovered id whose playlist is not scoped to the hub
-//     (sc.playlistsNotInHub): left out of the request and named on stderr,
-//     because the route rejects the whole request for it;
-//   - a backend without the route (405 from the /content/{node_id} route the
-//     path falls onto, or a bare 404): a stderr note, not a failure — the rest
-//     of the hub is still worth building;
-//   - anything else fails the step like any other step's failure, and the error
-//     carries the exact reconcile command, ids included, because a resume skips
-//     the playlists step and can only recover the ids a page binding needs.
 func stepContentNodes(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	if len(t.Playlists) == 0 {
 		return sc.step("content-nodes", "no playlists in template", func() error {
@@ -119,7 +59,6 @@ func stepContentNodes(sc *scaffoldContext, t *catalog.HubTemplate) error {
 					errs.HTTPStatusOf(err), reconcileCommand(sc, ids))
 				return nil
 			}
-			// The API's own detail usually ends in a period already.
 			sep := ". "
 			if strings.HasSuffix(err.Error(), ".") {
 				sep = " "
@@ -141,12 +80,6 @@ func stepContentNodes(sc *scaffoldContext, t *catalog.HubTemplate) error {
 	})
 }
 
-// scaffoldReconcileIDs returns, in TEMPLATE order, the playlist ids this run
-// holds that reconcile accepts — created by stepPlaylists, or recovered by it
-// and scoped to the hub — plus the keys it holds no id for, and the recovered
-// ones ("key (id)") whose playlist is not scoped to the hub. It reads what the
-// playlists step recorded and nothing else: that step owns creating and
-// recovering ids, and this step only reconciles what it has.
 func scaffoldReconcileIDs(sc *scaffoldContext, t *catalog.HubTemplate) (ids, missing, notInHub []string) {
 	for _, p := range t.Playlists {
 		id := sc.playlistIDsByKey[p.Key]
@@ -162,10 +95,6 @@ func scaffoldReconcileIDs(sc *scaffoldContext, t *catalog.HubTemplate) (ids, mis
 	return ids, missing, notInHub
 }
 
-// hubScopedPlaylistsCommand is the command that lists the playlists reconcile
-// accepts for this hub: the team's playlists whose own hub_id is the hub. Not
-// `media hub-playlists list`, whose .id is the publication row and which also
-// lists team-library playlists published into the hub.
 func hubScopedPlaylistsCommand(sc *scaffoldContext) string {
 	parts := []string{"mio media playlists list"}
 	if sc.teamID != "" {
@@ -175,8 +104,6 @@ func hubScopedPlaylistsCommand(sc *scaffoldContext) string {
 	return "`" + strings.Join(parts, " ") + "`"
 }
 
-// reconcileCommand is the exact `mio content reconcile` invocation for ids on
-// this hub — what an operator runs when the step could not.
 func reconcileCommand(sc *scaffoldContext, ids []string) string {
 	parts := []string{"mio content reconcile", "--hub " + sc.hubID}
 	if sc.teamID != "" {
@@ -188,11 +115,6 @@ func reconcileCommand(sc *scaffoldContext, ids []string) string {
 	return "`" + strings.Join(parts, " ") + "`"
 }
 
-// contentReconcileRouteAbsent reports whether a reconcile failure means the
-// backend has no reconcile route at all. On a backend that predates it the path
-// matches GET|PATCH|DELETE /content/{node_id}, so the POST is a 405; a backend
-// with no content router answers a bare 404. The route's OWN 404 carries
-// code hub_not_found, and that one is a real failure: the route exists.
 func contentReconcileRouteAbsent(err error) bool {
 	switch errs.HTTPStatusOf(err) {
 	case http.StatusMethodNotAllowed:
@@ -203,9 +125,6 @@ func contentReconcileRouteAbsent(err error) bool {
 	return false
 }
 
-// reconcileResultNodes reads the reconcile response
-// (HubContentReconcileResultAttributes.results, one entry per NodeSpec in the
-// backend's own order). ok is false when there is no results list to read.
 func reconcileResultNodes(res *client.Resource) (nodes []scaffoldContentNode, ok bool) {
 	if res == nil {
 		return nil, false
@@ -229,8 +148,6 @@ func reconcileResultNodes(res *client.Resource) (nodes []scaffoldContentNode, ok
 	return nodes, true
 }
 
-// describeContentOutcomes renders outcome counts for the operator note, sorted
-// by outcome so the line is deterministic.
 func describeContentOutcomes(nodes []scaffoldContentNode) string {
 	if len(nodes) == 0 {
 		return "no items to create"
@@ -251,20 +168,6 @@ func describeContentOutcomes(nodes []scaffoldContentNode) string {
 	return strings.Join(parts, ", ")
 }
 
-// recordHubOpContentNodes reads the whole-hub op's content step off its summary,
-// so the op path reports content_nodes with the same entry shape the client
-// path does. The op's rows are `content_node:<legacy_hash>`: "created" appends
-// an id to created_resource_ids.content_nodes, "skipped" carries the D7 outcome
-// as its reason and no id. idsTrusted is recordHubOpResult's count check for
-// the content_nodes kind — when the counts disagree every id is dropped rather
-// than paired by guesswork, exactly as for every other kind.
-//
-// Two ways the op did NOT reconcile, reported as null rather than []:
-//   - its content step was skipped wholesale (resource "content_nodes"; the
-//     generic skip note already says why);
-//   - it created playlists yet reported no content rows at all — every created
-//     playlist yields at least a container row, so this is a backend op that
-//     predates MIO-3258 T3.
 func recordHubOpContentNodes(sc *scaffoldContext, res client.HubFromTemplateResult, idsTrusted bool) {
 	var nodes []scaffoldContentNode
 	ids := res.CreatedIDs["content_nodes"]
@@ -305,10 +208,6 @@ func recordHubOpContentNodes(sc *scaffoldContext, res client.HubFromTemplateResu
 	sc.recordContentNodes(nodes)
 }
 
-// contentNodesResult renders the machine-readable content_nodes value: null
-// when the run did not reconcile, else one {legacy_hash, outcome, node_id}
-// entry per content item in the order the backend reported them ([] when there
-// was nothing to reconcile). node_id is null when this run did not learn it.
 func contentNodesResult(sc *scaffoldContext) any {
 	if !sc.contentNodesKnown {
 		return nil

@@ -7,12 +7,6 @@ import (
 	"testing"
 )
 
-// The `community` hub template was retired in favour of `starter` (MIO-3053);
-// MIO-3519 found `mio hubs scaffold --help` and the docs still teaching it, so
-// the documented command failed against every backend. Oracle: the text an
-// agent actually reads (the command's own Example and the shipped docs), not a
-// second list. This is a tripwire for that exact regression; the real oracle
-// (the live catalog) is out of reach offline.
 var retiredTemplateRe = regexp.MustCompile(`--template[ =]["']?community\b|the (shipped |live )?` + "`community`" + ` (one|template)`)
 
 func TestDocs_DoNotTeachRetiredCommunityTemplate(t *testing.T) {

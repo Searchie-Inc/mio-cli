@@ -1,30 +1,5 @@
 package cmd
 
-// coupons.go implements the `mio coupons` command group.
-//
-// Coupons are team-scoped discount codes managed under the products domain.
-// All routes require a team admin JWT — this is an admin-only surface.
-//
-// Routes (see app/products/router.py "admin_router", prefix /api/teams/{team_id}):
-//
-//	create     POST   /api/teams/{team_id}/coupons/
-//	list       GET    /api/teams/{team_id}/coupons/
-//	retrieve   GET    /api/teams/{team_id}/coupons/{coupon_id}
-//	update     PATCH  /api/teams/{team_id}/coupons/{coupon_id}
-//	delete     DELETE /api/teams/{team_id}/coupons/{coupon_id}
-//
-// Create required fields (from CouponCreateAttributes, extra="forbid"):
-//   - code          (string, alphanumeric + hyphens, normalized to uppercase)
-//   - discount_type (string: "percentage" or "amount")
-//   - discount_value (integer > 0)
-//   - currency       (required when discount_type = "amount")
-//
-// Update mutable fields (from CouponUpdateAttributes, extra="forbid"):
-//   - max_redemptions, first_time_only, expires_at, is_active, metadata
-// Note: code, discount_type, discount_value, currency are IMMUTABLE post-create.
-//
-// MIO-846 — scaffolded from the Jake V3 QA audit (2026-06-09).
-
 import (
 	"fmt"
 	"net/url"
@@ -36,7 +11,6 @@ import (
 )
 
 func init() {
-	// coupons <action>
 	couponsCmd.AddCommand(
 		couponsCreateCmd,
 		couponsListCmd,
@@ -45,11 +19,8 @@ func init() {
 		couponsDeleteCmd,
 	)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(couponsCmd)
 }
-
-// ---- coupons group -------------------------------------------------------------
 
 var couponsCmd = &cobra.Command{
 	Use:   "coupons",
@@ -57,7 +28,6 @@ var couponsCmd = &cobra.Command{
 	Long:  "Create, list, retrieve, update and delete discount coupons for the active team (admin only).",
 }
 
-// couponsPath returns /api/teams/{team_id}/coupons[/{id}].
 func couponsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/coupons", teamID)
 	if id != "" {
@@ -103,14 +73,12 @@ var couponsCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "expires-at")
 		setBoolFlag(cmd, attrs, "is-active")
 
-		// Validate discount_type enum client-side (backend: DISCOUNT_TYPES = {"percent","amount"}).
 		if dt, ok := attrs["discount_type"].(string); ok {
 			if dt != "percent" && dt != "amount" {
 				return errs.New(errs.ExitUsage, "--discount-type must be \"percent\" or \"amount\", got %q", dt)
 			}
 		}
 
-		// Normalize currency to lowercase and validate against backend SUPPORTED_CURRENCIES.
 		if raw, ok := attrs["currency"].(string); ok && raw != "" {
 			normalized := strings.ToLower(raw)
 			validCurrencies := map[string]bool{"usd": true, "cad": true, "gbp": true, "eur": true, "aud": true}
@@ -261,8 +229,6 @@ var couponsDeleteCmd = &cobra.Command{
 }
 
 func init() {
-	// create: code, discount_type, discount_value are required (immutable post-create).
-	// currency is required when discount_type=amount (validated by backend).
 	couponsCreateCmd.Flags().String("code", "", "Coupon code (alphanumeric + hyphens, normalized to uppercase). Required.")
 	couponsCreateCmd.Flags().String("discount-type", "", "Discount type: percent or amount. Required.")
 	couponsCreateCmd.Flags().Int("discount-value", 0, "Discount value: percentage (1-100) or fixed amount in smallest currency unit. Required.")
@@ -273,7 +239,6 @@ func init() {
 	couponsCreateCmd.Flags().Bool("is-active", true, "Whether the coupon is active (default: true).")
 	markFlagsRequired(couponsCreateCmd, "code", "discount-type", "discount-value")
 
-	// update: only mutable fields; code/discount_type/discount_value/currency absent.
 	couponsUpdateCmd.Flags().Int("max-redemptions", 0, "Maximum number of redemptions (must be ≥ 1). Omit to leave unchanged.")
 	couponsUpdateCmd.Flags().Bool("first-time-only", false, "Restrict to first-time buyers only.")
 	couponsUpdateCmd.Flags().String("expires-at", "", "Expiry timestamp in RFC 3339 format, e.g. 2026-12-31T23:59:59Z.")

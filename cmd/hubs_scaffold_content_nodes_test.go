@@ -1,16 +1,5 @@
 package cmd
 
-// hubs_scaffold_content_nodes_test.go — MIO-4167: the client-side scaffold
-// reconciles the playlists it builds into content items, the way the backend
-// whole-hub op's _step_content_nodes does (mio-backend app/hub_scaffold/
-// service.py, MIO-3258 T3).
-//
-// THE ORACLE IS THE WIRE. What matters is the reconcile REQUEST: that it fires,
-// where in the pipeline it fires, and that its playlist_ids are exactly the ids
-// this run created or recovered — never a bodyless POST (which asks the backend
-// to derive the set from HubTemplateApplication provenance a client-side
-// scaffold never has, and 422s no_playlist_provenance), and never a guess.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -29,17 +18,13 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// contentNodesWire is the traffic a full scaffold run emits that decides these
-// tests: the ordered write log, and every reconcile request verbatim.
 type contentNodesWire struct {
-	events          []string // "playlist-create:<id>", "playlist-publish", "reconcile", "page-create"
+	events          []string
 	reconcilePaths  []string
 	reconcileBodies [][]byte
 	opPosts         int
 }
 
-// reconcileOK answers the reconcile POST the way mio-backend does
-// (HubContentReconcileResponse): one D7 result per NodeSpec.
 const reconcileOKBody = `{"data":{"id":"hub_new","type":"content_node_reconciliations","attributes":{
   "hub_id":"hub_new",
   "results":[
@@ -48,8 +33,6 @@ const reconcileOKBody = `{"data":{"id":"hub_new","type":"content_node_reconcilia
     {"legacy_hash":"h_c2","node_type":"container","outcome":"skipped_slug_conflict","node_id":null,"member_visible":null,"reason":"slug taken"}
   ]}}}`
 
-// mintedPlaylistIDs are the ids contentNodesServer gives its first playlist
-// creates, in creation order: deliberately neither sorted nor reverse-sorted.
 var mintedPlaylistIDs = []string{"pl_c", "pl_a", "pl_b"}
 
 func reconcileOK(w http.ResponseWriter) {
@@ -57,10 +40,6 @@ func reconcileOK(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(reconcileOKBody))
 }
 
-// playlistsCatalogBody is the 2.1 fixture's community template carrying the
-// starter template's playlist block (without documents or a page binding, so
-// nothing but the playlists themselves is in play) — including the two
-// playlists that share a title, which is what makes a title-based guess wrong.
 func playlistsCatalogBody(t *testing.T) []byte {
 	t.Helper()
 	return vocabCatalogBody(t, func(ht map[string]any, _ map[string]any) {
@@ -72,14 +51,6 @@ func playlistsCatalogBody(t *testing.T) []byte {
 	})
 }
 
-// contentNodesServer serves a full CREATE-mode scaffold. The whole-hub op
-// answers opStatus/opBody (405 = absent, so the client-side pipeline runs);
-// every team playlist create mints a DISTINCT id so a dropped or reordered id
-// is visible in the reconcile body; reconcile answers via the given handler.
-//
-// The ids are minted OUT of lexical order (mintedPlaylistIDs): creation order
-// is template order, so ids that also sorted into that order could not tell
-// "template order" from "sorted", and a sort.Strings on the ids would pass.
 func contentNodesServer(t *testing.T, catBody []byte, opStatus int, opBody string, reconcile func(w http.ResponseWriter)) (*httptest.Server, *contentNodesWire) {
 	t.Helper()
 	rec := &contentNodesWire{}
@@ -105,7 +76,7 @@ func contentNodesServer(t *testing.T, catBody []byte, opStatus int, opBody strin
 			rec.reconcileBodies = append(rec.reconcileBodies, body)
 			reconcile(w)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/scaffold-from-template"):
-			w.WriteHeader(http.StatusNotFound) // the pages op is absent here
+			w.WriteHeader(http.StatusNotFound)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/teams/t_team1/hubs"):
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"data":{"id":"hub_new","type":"hubs","attributes":{"slug":"my-community","is_private":true}}}`))
@@ -140,7 +111,7 @@ func contentNodesServer(t *testing.T, catBody []byte, opStatus int, opBody strin
 			_, _ = w.Write([]byte(`{"data":{"id":"hub_new","type":"hubs","attributes":{"slug":"my-community","title":"Founders","is_private":true,"branding":{"primary":"#000"}}}}`))
 		case r.Method == http.MethodGet:
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":[]}`)) // a fresh hub: every collection is empty
+			_, _ = w.Write([]byte(`{"data":[]}`))
 		default:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{}}`))
@@ -150,8 +121,6 @@ func contentNodesServer(t *testing.T, catBody []byte, opStatus int, opBody strin
 	return srv, rec
 }
 
-// clientPathContentNodesServer is contentNodesServer with the whole-hub op
-// absent, i.e. the client-side pipeline — the path this ticket is about.
 func clientPathContentNodesServer(t *testing.T, catBody []byte, reconcile func(w http.ResponseWriter)) (*httptest.Server, *contentNodesWire) {
 	t.Helper()
 	return contentNodesServer(t, catBody, http.StatusMethodNotAllowed, `{"detail":"Method Not Allowed"}`, reconcile)
@@ -170,15 +139,6 @@ func indexOfEvent(events []string, prefix string, last bool) int {
 	return at
 }
 
-// TestScaffoldContentNodes_ReconcilesExactlyThePlaylistsItCreated: a
-// client-side scaffold of a template with playlists POSTs the reconcile route
-// ONCE, naming exactly the ids its playlists step created, in template order —
-// between the last playlist publish and the first page, the position the
-// backend op's _step_content_nodes takes.
-//
-// Before MIO-4167 no reconcile fired at all, so every client-built hub's
-// playlist files had no content item (no progress tracking, My List, comments)
-// until someone ran `content reconcile --playlist-id` by hand.
 func TestScaffoldContentNodes_ReconcilesExactlyThePlaylistsItCreated(t *testing.T) {
 	srv, rec := clientPathContentNodesServer(t, playlistsCatalogBody(t), reconcileOK)
 
@@ -193,11 +153,6 @@ func TestScaffoldContentNodes_ReconcilesExactlyThePlaylistsItCreated(t *testing.
 	if want := "/api/v1/teams/t_team1/hubs/hub_new/content/reconcile"; rec.reconcilePaths[0] != want {
 		t.Errorf("reconcile path = %q, want %q", rec.reconcilePaths[0], want)
 	}
-	// EXPLICIT ids, in template order. A bodyless POST would ask the backend for
-	// HubTemplateApplication provenance this path never records (422
-	// no_playlist_provenance); a missing or reordered id reconciles the wrong set
-	// (the backend positions each container by its index in this list). The
-	// stub mints pl_c, pl_a, pl_b in that order, so sorted order would differ.
 	assertExactBody(t, rec.reconcileBodies[0], `{
 		"data": {
 			"type": "content_node_reconciliations",
@@ -205,9 +160,6 @@ func TestScaffoldContentNodes_ReconcilesExactlyThePlaylistsItCreated(t *testing.
 		}
 	}`)
 
-	// Between playlists and pages, like the op: after the playlists are
-	// published (a lesson is created published only when its file AND playlist
-	// are) and before any page is written.
 	at := indexOfEvent(rec.events, "reconcile", false)
 	if lastPub := indexOfEvent(rec.events, "playlist-publish", true); lastPub < 0 || at < lastPub {
 		t.Errorf("reconcile must follow the last playlist publish; events=%v", rec.events)
@@ -217,9 +169,6 @@ func TestScaffoldContentNodes_ReconcilesExactlyThePlaylistsItCreated(t *testing.
 	}
 }
 
-// TestScaffoldContentNodes_ResultReportsTheReconciledNodes: `-o json` reports
-// what the reconcile answered, per node — the same content_nodes key the op
-// path fills from its summary (TestScaffoldHubOp_ReportsTheOpsContentNodes).
 func TestScaffoldContentNodes_ResultReportsTheReconciledNodes(t *testing.T) {
 	srv, _ := clientPathContentNodesServer(t, playlistsCatalogBody(t), reconcileOK)
 
@@ -238,15 +187,6 @@ func TestScaffoldContentNodes_ResultReportsTheReconciledNodes(t *testing.T) {
 	}
 }
 
-// TestScaffoldContentNodes_BackendWithoutTheRouteIsANoteNotAFailure: an older
-// backend has no reconcile route, so POST …/content/reconcile falls onto the
-// GET|PATCH|DELETE /content/{node_id} route and answers 405 (or 404 on one with
-// no content router at all). That is a stderr note and the run carries on — the
-// hub is still built — and the result says the run did NOT reconcile (null),
-// which is not the same as reconciling nothing.
-//
-// The reconcile route's OWN 404 (hub_not_found) is not an absent route: it
-// surfaces, like every other failure.
 func TestScaffoldContentNodes_BackendWithoutTheRouteIsANoteNotAFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -298,10 +238,6 @@ func TestScaffoldContentNodes_BackendWithoutTheRouteIsANoteNotAFailure(t *testin
 	})
 }
 
-// TestScaffoldContentNodes_OtherFailuresStopTheRunAndNameTheRecovery: any other
-// failure stops the pipeline like every other step's does — but the error names
-// the exact reconcile command, with the ids, because a resume skips the
-// playlists step and can only recover the ids a page binding needs.
 func TestScaffoldContentNodes_OtherFailuresStopTheRunAndNameTheRecovery(t *testing.T) {
 	boom := func(w http.ResponseWriter) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -316,8 +252,6 @@ func TestScaffoldContentNodes_OtherFailuresStopTheRunAndNameTheRecovery(t *testi
 		t.Errorf("a failed step must stop the pipeline; events=%v", rec.events)
 	}
 
-	// The error text is what main.go renders into the stderr envelope. A fresh
-	// server, so the minted playlist ids start again from the first.
 	srv2, _ := clientPathContentNodesServer(t, playlistsCatalogBody(t), boom)
 	err := executeCLI(t, scaffoldEnv(t, srv2.URL), scaffoldArgs()...)
 	if err == nil {
@@ -328,7 +262,6 @@ func TestScaffoldContentNodes_OtherFailuresStopTheRunAndNameTheRecovery(t *testi
 		t.Errorf("the failure must name the recovery command with every id (%q); err=%v", want, err)
 	}
 
-	// An API detail that already ends in a period is not given a second one.
 	srv3, _ := clientPathContentNodesServer(t, playlistsCatalogBody(t), func(w http.ResponseWriter) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		_, _ = w.Write([]byte(`{"errors":[{"status":"422","detail":"Rejected by the route."}]}`))
@@ -342,9 +275,6 @@ func TestScaffoldContentNodes_OtherFailuresStopTheRunAndNameTheRecovery(t *testi
 	}
 }
 
-// TestScaffoldContentNodes_TemplateWithoutPlaylistsFiresNothing: nothing to
-// reconcile means no request — and a result of [] (reconciled nothing, for
-// certain), not null (did not reconcile).
 func TestScaffoldContentNodes_TemplateWithoutPlaylistsFiresNothing(t *testing.T) {
 	srv, rec := clientPathContentNodesServer(t, catalog21Body(t), reconcileOK)
 
@@ -361,8 +291,6 @@ func TestScaffoldContentNodes_TemplateWithoutPlaylistsFiresNothing(t *testing.T)
 	}
 }
 
-// TestScaffoldContentNodes_DryRunNamesTheStepAndWritesNothing: the plan names
-// the reconcile and its playlists; the run stays write-free.
 func TestScaffoldContentNodes_DryRunNamesTheStepAndWritesNothing(t *testing.T) {
 	srv, mutated := func() (*httptest.Server, *bool) {
 		s, _, m := liveCatalogScaffoldServer(t, playlistsCatalogBody(t))
@@ -385,12 +313,6 @@ func TestScaffoldContentNodes_DryRunNamesTheStepAndWritesNothing(t *testing.T) {
 	}
 }
 
-// ─── resume: never guess ───────────────────────────────────────────────────────
-
-// resumeReconcileServer answers the playlists step's O1 gate with existing hub
-// playlist rows (so the create loop is skipped), serves each playlist's title,
-// and records every reconcile body. Any other POST is recorded as a write the
-// resume must not make.
 func resumeReconcileServer(t *testing.T, titlesByID map[string]string) (*httptest.Server, *[][]byte, *int) {
 	t.Helper()
 	var bodies [][]byte
@@ -411,7 +333,6 @@ func resumeReconcileServer(t *testing.T, titlesByID map[string]string) (*httptes
 			return
 		}
 		if strings.Contains(path, "/playlists/") && !strings.Contains(path, "/hubs/") {
-			// Scoped to hub_1: the playlists a first run created carry its hub_id.
 			id := path[strings.LastIndex(path, "/")+1:]
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintf(w, `{"data":{"id":%q,"type":"playlists","attributes":{"title":%q,"hub_id":"hub_1"}}}`, id, titlesByID[id])
@@ -437,11 +358,6 @@ func sortedStringKeys(m map[string]string) []string {
 	return keys
 }
 
-// TestScaffoldContentNodes_ResumeNeverGuessesByTitle: on a resume the playlists
-// step is skipped (the hub already has playlists), so the only ids this run has
-// are the ones recoverPlaylistIDsForBindings recovered unambiguously. The step
-// reconciles exactly those and NAMES the rest — the two placeholder playlists
-// share a title, so any title match for them would be a coin-flip.
 func TestScaffoldContentNodes_ResumeNeverGuessesByTitle(t *testing.T) {
 	tmpl := playlistsTemplate()
 	titles := map[string]string{
@@ -455,7 +371,7 @@ func TestScaffoldContentNodes_ResumeNeverGuessesByTitle(t *testing.T) {
 		var notes strings.Builder
 		sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
 		sc.noteW = &notes
-		sc.pagePlan = bandPagePlan() // binds getting-started, so the playlists step recovers it
+		sc.pagePlan = bandPagePlan()
 		if err := stepPlaylists(sc, tmpl); err != nil {
 			t.Fatalf("stepPlaylists: %v", err)
 		}
@@ -481,7 +397,7 @@ func TestScaffoldContentNodes_ResumeNeverGuessesByTitle(t *testing.T) {
 		var notes strings.Builder
 		sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
 		sc.noteW = &notes
-		sc.pagePlan = unboundPagePlan() // no binding: recovery looks nothing up
+		sc.pagePlan = unboundPagePlan()
 		if err := stepPlaylists(sc, tmpl); err != nil {
 			t.Fatalf("stepPlaylists: %v", err)
 		}
@@ -500,12 +416,6 @@ func TestScaffoldContentNodes_ResumeNeverGuessesByTitle(t *testing.T) {
 	})
 }
 
-// ─── the op path reports the same key ─────────────────────────────────────────
-
-// hubOpContentNodesBody is a live op answer for a template with playlists: its
-// _step_content_nodes rows are `content_node:<legacy_hash>`, created (with an id
-// appended to created_resource_ids.content_nodes) or skipped with the D7
-// outcome as the reason.
 func hubOpContentNodesBody(contentIDs string) string {
 	return `{"data":{"id":"hub_new","type":"hub_scaffolds","attributes":{
   "hub_id":"hub_new",
@@ -529,10 +439,6 @@ func hubOpContentNodesBody(contentIDs string) string {
   "replayed":false}}}`
 }
 
-// TestScaffoldHubOp_ReportsTheOpsContentNodes: the whole-hub op already
-// materialises content items; its result must reach `-o json` under the same
-// key and entry shape the client path reports, paired to ids with the same
-// count check every other kind gets.
 func TestScaffoldHubOp_ReportsTheOpsContentNodes(t *testing.T) {
 	t.Run("rows paired to their ids", func(t *testing.T) {
 		srv, rec := contentNodesServer(t, playlistsCatalogBody(t), http.StatusCreated, hubOpContentNodesBody(`["cn_a","cn_b"]`), reconcileOK)
@@ -574,9 +480,6 @@ func TestScaffoldHubOp_ReportsTheOpsContentNodes(t *testing.T) {
 	})
 
 	t.Run("playlists created but no content rows is not an empty result", func(t *testing.T) {
-		// A backend op that predates MIO-3258 T3 creates playlists and reports no
-		// content_node rows at all. Reporting [] would claim it reconciled nothing
-		// for certain; it did not reconcile.
 		body := strings.Replace(hubOpContentNodesBody(`[]`), `{"resource":"content_node:h_c1","action":"created"},
     {"resource":"content_node:h_l1","action":"skipped","reason":"adopted"},
     {"resource":"content_node:h_c2","action":"created"},`, "", 1)
@@ -591,10 +494,6 @@ func TestScaffoldHubOp_ReportsTheOpsContentNodes(t *testing.T) {
 	})
 
 	t.Run("the op's content step skipped wholesale is null and not called pre-T3", func(t *testing.T) {
-		// The op reports one `content_nodes` row, skipped, when its content step
-		// could not run at all (service.py _step_content_nodes, content_service
-		// not wired). That is not a backend that predates MIO-3258 T3, so the
-		// run must not say it is: the generic skipped-row note already says why.
 		body := strings.Replace(hubOpContentNodesBody(`[]`), `{"resource":"content_node:h_c1","action":"created"},
     {"resource":"content_node:h_l1","action":"skipped","reason":"adopted"},
     {"resource":"content_node:h_c2","action":"created"},`,
@@ -616,9 +515,6 @@ func TestScaffoldHubOp_ReportsTheOpsContentNodes(t *testing.T) {
 	})
 }
 
-// TestScaffoldContentNodes_KeyIsOnBothPaths: the parity gate for this key
-// specifically — the whole-object shape test compares key SETS, which a key
-// missing from BOTH paths would pass.
 func TestScaffoldContentNodes_KeyIsOnBothPaths(t *testing.T) {
 	opSrv, _ := contentNodesServer(t, playlistsCatalogBody(t), http.StatusCreated, hubOpContentNodesBody(`["cn_a","cn_b"]`), reconcileOK)
 	cliSrv, _ := clientPathContentNodesServer(t, playlistsCatalogBody(t), reconcileOK)
@@ -649,7 +545,6 @@ func toSet(keys []string) map[string]string {
 	return m
 }
 
-// playlistsTemplate is the resolved form of playlistsCatalogBody's block.
 func playlistsTemplate() *catalog.HubTemplate {
 	return &catalog.HubTemplate{
 		ID: "starter",
@@ -661,18 +556,8 @@ func playlistsTemplate() *catalog.HubTemplate {
 	}
 }
 
-// ─── resume: a playlist the hub merely publishes is not the hub's ─────────────
-
-// scopedPlaylist is one playlist a resume stub serves: its title (what recovery
-// joins on) and its hub_id (what the reconcile route checks). An empty hubID is
-// a team-library playlist, hub_id null, that was published into the hub.
 type scopedPlaylist struct{ title, hubID string }
 
-// reconcileLikeTheBackend answers POST …/hubs/{hub}/content/reconcile with the
-// backend's rule (reconcile_service.py _validated_explicit_playlist_ids): if ANY
-// id does not resolve to a playlist whose hub_id is this hub, the WHOLE request
-// is 422 playlist_not_in_hub; otherwise one container result per id. A stub
-// that accepted any id would confirm a reconcile the real route refuses.
 func reconcileLikeTheBackend(w http.ResponseWriter, hubID string, body []byte, playlists map[string]scopedPlaylist) {
 	var doc struct {
 		Data struct {
@@ -700,9 +585,6 @@ func reconcileLikeTheBackend(w http.ResponseWriter, hubID string, body []byte, p
 		hubID, hubID, strings.Join(results, ","))
 }
 
-// bindingPlaylistsCatalogBody is playlistsCatalogBody plus a homepage whose
-// root binds the getting-started playlist by key (the starter homepage's band),
-// which is what makes a resume RECOVER that playlist's id.
 func bindingPlaylistsCatalogBody(t *testing.T) []byte {
 	t.Helper()
 	return vocabCatalogBody(t, func(ht map[string]any, cat map[string]any) {
@@ -723,9 +605,6 @@ func bindingPlaylistsCatalogBody(t *testing.T) []byte {
 	})
 }
 
-// scopedResumeServer serves a full `hubs scaffold --hub hub_x` run onto a hub
-// that already publishes the given playlists (so the playlists step skips and
-// recovers by title), answering reconcile with the backend's hub-scope rule.
 func scopedResumeServer(t *testing.T, catBody []byte, playlists map[string]scopedPlaylist) (*httptest.Server, *contentNodesWire) {
 	t.Helper()
 	const hubID = "hub_x"
@@ -748,7 +627,7 @@ func scopedResumeServer(t *testing.T, catBody []byte, playlists map[string]scope
 			rec.reconcileBodies = append(rec.reconcileBodies, body)
 			reconcileLikeTheBackend(w, hubID, body, playlists)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/scaffold-from-template"):
-			w.WriteHeader(http.StatusNotFound) // the pages op is absent here
+			w.WriteHeader(http.StatusNotFound)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/pages"):
 			rec.events = append(rec.events, "page-create")
 			w.WriteHeader(http.StatusCreated)
@@ -767,8 +646,6 @@ func scopedResumeServer(t *testing.T, catBody []byte, playlists map[string]scope
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"hub_x","type":"hubs","attributes":{"slug":"acme","title":"Acme","is_private":true}}}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/hubs/"+hubID+"/playlists"):
-			// The hub's publication rows. A row's hub_id is the hub it is
-			// published INTO, never the playlist's own scope.
 			rows := make([]string, 0, len(playlists))
 			for _, id := range sortedStringKeys(titles) {
 				rows = append(rows, fmt.Sprintf(`{"id":"hm_%s","type":"hub_media","attributes":{"hub_id":%q,"playlist_id":%q}}`, id, hubID, id))
@@ -776,7 +653,6 @@ func scopedResumeServer(t *testing.T, catBody []byte, playlists map[string]scope
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintf(w, `{"data":[%s]}`, strings.Join(rows, ","))
 		case r.Method == http.MethodGet && strings.Contains(path, "/teams/t_team1/playlists/"):
-			// PlaylistResource: hub_id is always serialized, null when unscoped.
 			id := path[strings.LastIndex(path, "/")+1:]
 			p := playlists[id]
 			scope := "null"
@@ -801,24 +677,10 @@ func scopedResumeArgs() []string {
 	return withTeam("t_team1", "hubs", "scaffold", "--template", "community", "--hub", "hub_x", "--output", "json")
 }
 
-// TestScaffoldContentNodes_ResumeReconcilesOnlyPlaylistsScopedToTheHub: the
-// resume that recovers a playlist for a page binding may recover a TEAM-LIBRARY
-// playlist: one published into the hub whose own hub_id is null (or another
-// hub). The page binding may use it; the reconcile route may not, because it
-// rejects the whole request with 422 playlist_not_in_hub when any id is not
-// scoped to the hub. Sending it anyway failed the content-nodes step, which
-// runs BEFORE pages, so a resume that exited 0 before MIO-4167 wrote no page at
-// all, and every re-run recovered the same id and failed the same way.
-//
-// So the step reconciles only ids scoped to the hub and NAMES the rest. The
-// oracle is the wire: no reconcile carrying the library id, and the pages
-// written. The second subtest is the control: the same run with the playlist
-// scoped to the hub DOES reconcile it, so the first cannot pass by never
-// reconciling at all.
 func TestScaffoldContentNodes_ResumeReconcilesOnlyPlaylistsScopedToTheHub(t *testing.T) {
 	t.Run("a team-library playlist is named, not sent, and the pages still apply", func(t *testing.T) {
 		srv, rec := scopedResumeServer(t, bindingPlaylistsCatalogBody(t), map[string]scopedPlaylist{
-			"pl_team": {title: "Getting Started"}, // hub_id null: the team library
+			"pl_team": {title: "Getting Started"},
 		})
 		res := runContract(t, scaffoldEnv(t, srv.URL), scopedResumeArgs()...)
 		if res.Code != errs.ExitOK {
@@ -860,16 +722,7 @@ func TestScaffoldContentNodes_ResumeReconcilesOnlyPlaylistsScopedToTheHub(t *tes
 	})
 }
 
-// TestScaffoldContentNodes_MissingKeyGuidanceYieldsIDsReconcileAccepts: the
-// note for a key with no id tells the operator how to find the id. An agent
-// runs that command verbatim, so the oracle is RUNNING it: against a team with
-// a playlist scoped to the hub, a team-library one and another hub's (all
-// three published into this hub), the command must print the scoped playlist's
-// id and nothing reconcile would reject. `media hub-playlists list --hub`, the
-// guidance this replaced, prints publication-row ids (hm_…) and every
-// published playlist, the library one included.
 func TestScaffoldContentNodes_MissingKeyGuidanceYieldsIDsReconcileAccepts(t *testing.T) {
-	// 1. A resume that recovers nothing emits the guidance.
 	srv, _, _ := resumeReconcileServer(t, map[string]string{"pl_gs": "Getting Started"})
 	var notes strings.Builder
 	sc := newStepSC(client.New(srv.URL, "k"), "hub_1", "acme")
@@ -895,7 +748,6 @@ func TestScaffoldContentNodes_MissingKeyGuidanceYieldsIDsReconcileAccepts(t *tes
 		t.Fatalf("the note must name a command that finds the ids; notes=%q", notes.String())
 	}
 
-	// 2. Run it against a team whose hub publishes three playlists, one its own.
 	team := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		w.WriteHeader(http.StatusOK)
@@ -929,7 +781,6 @@ func TestScaffoldContentNodes_MissingKeyGuidanceYieldsIDsReconcileAccepts(t *tes
 	}
 }
 
-// twoBindingPagePlan is bandPagePlan binding each of keys, one section each.
 func twoBindingPagePlan(keys ...string) *scaffoldPlan {
 	p := bandPagePlan()
 	kids := make([]any, 0, len(keys))
@@ -943,14 +794,10 @@ func twoBindingPagePlan(keys ...string) *scaffoldPlan {
 	return p
 }
 
-// TestStepContentNodes_FiltersPerPlaylistNotPerRequest: with one recovered
-// playlist scoped to the hub and one scoped elsewhere, the step reconciles the
-// scoped one. Dropping the whole request because one id is foreign would lose
-// content items the route would have made.
 func TestStepContentNodes_FiltersPerPlaylistNotPerRequest(t *testing.T) {
 	srv, rec := scopedResumeServer(t, nil, map[string]scopedPlaylist{
 		"pl_gs":  {title: "Getting Started", hubID: "hub_x"},
-		"pl_lib": {title: "Library", hubID: "hub_other"}, // another hub's playlist, published into this one
+		"pl_lib": {title: "Library", hubID: "hub_other"},
 	})
 	tmpl := &catalog.HubTemplate{ID: "starter", Playlists: []catalog.TemplatePlaylist{
 		{Title: "Getting Started", Key: "getting-started", Visibility: "public"},

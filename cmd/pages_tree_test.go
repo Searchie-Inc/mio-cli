@@ -1,10 +1,5 @@
 package cmd
 
-// pages_tree_test.go — contract tests for `mio pages tree set/get` (MIO-2258):
-// authoring a page's draft node-tree via PUT with If-Match OCC, and reading the
-// author draft tree. The write derives the JSON:API type "page_draft_trees"
-// from the .../pages/{id}/tree tail via a typeOverride.
-
 import (
 	"encoding/json"
 	"io"
@@ -19,9 +14,6 @@ import (
 
 const draftTreeBody = `{"data":{"id":"page_x","type":"page_draft_trees","attributes":{"draft_version":4,"tree":{"root":{"kind":"stack"}}}}}`
 
-// TestPagesTreeSet_PutWithIfMatch verifies `tree set` PUTs .../pages/{id}/tree
-// with the If-Match header and a {data:{type:page_draft_trees,attributes:{tree}}}
-// body read from --file.
 func TestPagesTreeSet_PutWithIfMatch(t *testing.T) {
 	dir := t.TempDir()
 	fp := dir + "/tree.json"
@@ -77,11 +69,6 @@ func TestPagesTreeSet_PutWithIfMatch(t *testing.T) {
 	}
 }
 
-// TestPagesTreeSet_DefaultsIfMatchZero verifies that omitting --if-match is
-// allowed for the first tree on a draft-less page: the PUT still fires and sends
-// If-Match: "0" (the first-set sentinel). This is the MIO-2518 relaxation — the
-// backend's atomic OCC guard rejects a defaulted 0 against a page that already
-// has a draft, so the default can never clobber an existing draft.
 func TestPagesTreeSet_DefaultsIfMatchZero(t *testing.T) {
 	dir := t.TempDir()
 	fp := dir + "/tree.json"
@@ -122,8 +109,6 @@ func TestPagesTreeSet_DefaultsIfMatchZero(t *testing.T) {
 	}
 }
 
-// TestPagesTreeGet_Query verifies `tree get` GETs .../tree with audience=author
-// and resolve=true.
 func TestPagesTreeGet_Query(t *testing.T) {
 	var gotMethod, gotPath, gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,11 +1,5 @@
 package cmd
 
-// media_playlist_cover_test.go — contract test for `mio media playlists set-cover`
-// (MIO-2289, MIO-2519). Sets a playlist's cover by first resolving the file's
-// media_id (GET /files/{id}) then POSTing a playlist-cover-attachment (type
-// "attachments") pinned to target_type=playlist / role=thumbnail. The media_id
-// on the wire is the RESOLVED Media PK, never the file id.
-
 import (
 	"io"
 	"net/http"
@@ -54,7 +48,6 @@ func TestPlaylistSetCover_ResolvesFileMediaID(t *testing.T) {
 	if typ != "attachments" {
 		t.Errorf("type=%q want attachments", typ)
 	}
-	// The RESOLVED Media PK must be sent, not the file id.
 	if attrs["media_id"] != "media_pk_1" {
 		t.Errorf("media_id=%v want media_pk_1 (resolved from the file, not the file id)", attrs["media_id"])
 	}
@@ -81,9 +74,6 @@ func TestPlaylistSetCover_RequiresFileID(t *testing.T) {
 	}
 }
 
-// TestPlaylistSetCover_FileWithoutMedia asserts that a file that has no media_id
-// yet (e.g. still processing) fails with a self-naming usage error AFTER the
-// file GET but BEFORE any cover POST.
 func TestPlaylistSetCover_FileWithoutMedia(t *testing.T) {
 	var postHit bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

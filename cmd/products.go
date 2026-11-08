@@ -1,29 +1,5 @@
 package cmd
 
-// products.go is THE REFERENCE RESOURCE for the mio CLI. Every other resource
-// command file is a copy of this structure adapted to its own routes.
-//
-// Conventions a copying agent MUST follow:
-//
-//   - Self-registration only: this file attaches its whole command tree in
-//     init() via rootCmd.AddCommand. It never edits a shared registry file, so
-//     resources can be added in parallel without merge conflicts.
-//   - One cobra.Command per action (create/list/retrieve/update/delete) plus a
-//     sub-resource group (prices) showing the nested pattern.
-//   - Paths are built from the resolved team id (and hub id where applicable),
-//     never hardcoded.
-//   - create/update read --flags into an attributes map; the client wraps them
-//     in the JSON:API envelope. Only flags the user actually set are sent, so a
-//     PATCH stays a partial update.
-//   - delete is destructive → it goes through confirmDestructive (honours --yes,
-//     exits 5 off a TTY without --yes).
-//   - Every command resolves context via newContext and requires auth.
-//
-// Routes (see docs/internal/api-surface.md "products"):
-//
-//	products: CRUD /api/teams/{team_id}/products[/{id}]
-//	prices:   CRUD /api/teams/{team_id}/products/{id}/prices[/{pid}]
-
 import (
 	"fmt"
 	"net/url"
@@ -34,7 +10,6 @@ import (
 )
 
 func init() {
-	// products <action>
 	productsCmd.AddCommand(
 		productsCreateCmd,
 		productsListCmd,
@@ -43,7 +18,6 @@ func init() {
 		productsDeleteCmd,
 	)
 
-	// products prices <action>  (nested sub-resource)
 	productsPricesCmd.AddCommand(
 		productsPricesCreateCmd,
 		productsPricesListCmd,
@@ -53,11 +27,8 @@ func init() {
 	)
 	productsCmd.AddCommand(productsPricesCmd)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(productsCmd)
 }
-
-// ---- products group ---------------------------------------------------------
 
 var productsCmd = &cobra.Command{
 	Use:   "products",
@@ -65,7 +36,6 @@ var productsCmd = &cobra.Command{
 	Long:  "Create, list, retrieve, update and delete products for the active team.",
 }
 
-// productsPath returns /api/teams/{team_id}/products[/{id}].
 func productsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/products", teamID)
 	if id != "" {
@@ -97,8 +67,6 @@ var productsCreateCmd = &cobra.Command{
 			return err
 		}
 
-		// --name and --type are required by the backend ProductCreateAttributes
-		// schema; cobra enforces both before RunE (markFlagsRequired in init).
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "type")
@@ -236,13 +204,6 @@ var productsDeleteCmd = &cobra.Command{
 }
 
 func init() {
-	// Attribute flags for create/update.
-	// NOTE: --status and --published were removed (MIO-941) — the backend
-	// ProductCreateAttributes/ProductUpdateAttributes schemas do not include those
-	// fields; sending them caused a 422 "extra inputs not permitted".
-	// --type maps to attributes.type (required on create; allowed values:
-	// course, membership, bundle, digital_download, booking).
-	// --is-active maps to attributes.is_active.
 	for _, cmd := range []*cobra.Command{productsCreateCmd, productsUpdateCmd} {
 		cmd.Flags().String("name", "", "Product name.")
 		cmd.Flags().String("type", "", "Product type: course, membership, bundle, digital_download, or booking. Required on create.")
@@ -253,15 +214,12 @@ func init() {
 	addPaginationFlags(productsListCmd)
 }
 
-// ---- products prices sub-resource ------------------------------------------
-
 var productsPricesCmd = &cobra.Command{
 	Use:   "prices",
 	Short: "Manage a product's prices.",
 	Long:  "Create, list, retrieve, update and delete prices nested under a product.",
 }
 
-// pricesPath returns /api/teams/{team_id}/products/{product_id}/prices[/{price_id}].
 func pricesPath(teamID, productID, priceID string) string {
 	base := fmt.Sprintf("/api/teams/%s/products/%s/prices", teamID, productID)
 	if priceID != "" {
@@ -303,19 +261,13 @@ To change one, create a new price and deactivate the old one with
 			return err
 		}
 
-		// --amount, --currency, and --type are required by PriceCreateAttributes;
-		// cobra enforces them before RunE (markFlagsRequired in init).
 		attrs := map[string]any{}
 		setIntFlag(cmd, attrs, "amount")
 		setStringFlag(cmd, attrs, "currency")
 		setStringFlag(cmd, attrs, "type")
 		setStringFlag(cmd, attrs, "interval")
 		setIntFlag(cmd, attrs, "interval-count")
-		// Sent only when given (Changed), so 0 reaches the API as 0 and an
-		// omitted flag leaves the backend default (null, no trial). No bound or
-		// type rule here: the API owns both (ge=0, le=INT32_MAX; no type rule).
-		// Stripe's 730-day Checkout maximum is documented in the help, not
-		// enforced: it is Stripe's rule, not the API's.
+		// vendor: Stripe caps a Checkout free trial at 730 days; the API does not check it https://docs.stripe.com/api/checkout/sessions/create
 		setIntFlag(cmd, attrs, "trial-period-days")
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "description")
@@ -420,8 +372,6 @@ var productsPricesDeleteCmd = &cobra.Command{
 	},
 }
 
-// pricesContext is the shared boilerplate for the price subcommands: build the
-// context, require auth, and resolve the team id.
 func pricesContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -438,8 +388,6 @@ func pricesContext(cmd *cobra.Command) (*cmdContext, string, error) {
 }
 
 func init() {
-	// Create flags: amount, currency, type are required; interval/interval-count
-	// are required when type=recurring; name/description/is-active are optional.
 	productsPricesCreateCmd.Flags().Int("amount", 0, "Price amount in the currency's minor unit (e.g. cents). Required.")
 	productsPricesCreateCmd.Flags().String("currency", "", "ISO currency code: usd, cad, gbp, eur, or aud. Required.")
 	productsPricesCreateCmd.Flags().String("type", "", "Price type: one_time or recurring. Required.")
@@ -452,7 +400,6 @@ func init() {
 
 	markFlagsRequired(productsPricesCreateCmd, "amount", "currency", "type")
 
-	// Update flags: only mutable fields (billing fields are immutable after creation).
 	productsPricesUpdateCmd.Flags().String("name", "", "Human-readable price label (max 100 chars).")
 	productsPricesUpdateCmd.Flags().String("description", "", "Price description (max 500 chars).")
 	productsPricesUpdateCmd.Flags().Bool("is-active", false, "Whether the price is active.")

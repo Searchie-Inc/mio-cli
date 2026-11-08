@@ -1,9 +1,5 @@
 package cmd
 
-// mio2269_common_test.go — shared helpers for the MIO-2269 long-tail admin
-// bundle contract tests (roles permissions, hubs redirect-origins, hubs
-// policies gate/get, email suppressions, analytics engagement).
-
 import (
 	"io"
 	"net/http"
@@ -11,9 +7,6 @@ import (
 	"testing"
 )
 
-// captureAdminReq starts a test server that records the first request's method,
-// path, raw query string, and raw body, then replies with respBody at the given
-// HTTP status. It returns pointers the caller dereferences after runContract.
 func captureAdminReq(t *testing.T, status int, respBody string) (srv *httptest.Server, method, path, rawQuery *string, body *[]byte) {
 	t.Helper()
 	var m, p, q string
@@ -31,9 +24,6 @@ func captureAdminReq(t *testing.T, status int, respBody string) (srv *httptest.S
 	return srv, &m, &p, &q, &b
 }
 
-// firedGuardServer starts a test server that flips *fired to true if it ever
-// receives a request. Used by required-flag / usage-error cases that must exit
-// before any HTTP request is made.
 func firedGuardServer(t *testing.T) (*httptest.Server, *bool) {
 	t.Helper()
 	fired := false
