@@ -107,6 +107,19 @@ func analyze(path string, src []byte) (kept, dropped []finding, spans []span, er
 	return kept, dropped, spans, nil
 }
 
+func importsC(path string, src []byte) bool {
+	_, f, err := parse(path, src, parser.ImportsOnly)
+	if err != nil {
+		return false
+	}
+	for _, imp := range f.Imports {
+		if imp.Path.Value == `"C"` {
+			return true
+		}
+	}
+	return false
+}
+
 func cut(src []byte, spans []span) []byte {
 	out := append([]byte(nil), src...)
 	for i := len(spans) - 1; i >= 0; i-- {
@@ -144,7 +157,7 @@ func strip(path string, src []byte) ([]byte, bool, error) {
 	if len(dropped) == 0 {
 		return src, false, nil
 	}
-	if bytes.Contains(src, []byte("import \"C\"")) {
+	if importsC(path, src) {
 		return nil, false, fmt.Errorf("%s: cgo preamble comments are code; strip by hand", path)
 	}
 	out, err := format.Source(cut(src, spans))

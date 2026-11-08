@@ -289,3 +289,15 @@ func TestWalkIncludesTestdataAndHiddenDirs(t *testing.T) {
 		t.Fatalf("want 3 files, got %v err=%v", files, err)
 	}
 }
+
+func TestStripRefusesEveryCgoImportForm(t *testing.T) {
+	for name, src := range map[string]string{
+		"single":  "package p\n\n/*\nint v;\n*/\nimport \"C\"\n\n// x\nvar a = 1\n",
+		"grouped": "package p\n\nimport (\n\t/* int v; */\n\t\"C\"\n)\n\n// x\nvar a = 1\n",
+		"tab":     "package p\n\n/* int v; */\nimport\t\"C\"\n\n// x\nvar a = 1\n",
+	} {
+		if _, _, err := strip("p.go", []byte(src)); err == nil {
+			t.Errorf("%s: strip must refuse a cgo file", name)
+		}
+	}
+}
