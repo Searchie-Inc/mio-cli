@@ -1,13 +1,5 @@
 package cmd
 
-// media_playlist_items_test.go — contract tests for
-// `mio media playlists items {add,list,remove,reorder}` (MIO-2513).
-//
-// add/reorder derive the JSON:API type "playlist_items" from the
-// .../playlists/{id}/items tail via the playlists/items typeOverride (the bare
-// "items" segment would otherwise resolve to the "playlists" parent type).
-// reorder uses UpdateWithID so PlaylistItemUpdateData gets data.id in the body.
-
 import (
 	"encoding/json"
 	"net/http"
@@ -165,7 +157,6 @@ func TestPlaylistItemsReorder_Body(t *testing.T) {
 	if attrs["position"] != float64(3) {
 		t.Errorf("position=%v want 3", attrs["position"])
 	}
-	// PlaylistItemUpdateData requires data.id in the body (backend rejects otherwise).
 	var doc struct {
 		Data struct {
 			ID string `json:"id"`

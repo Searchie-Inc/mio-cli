@@ -1,43 +1,5 @@
 package cmd
 
-// community_moderation.go — the community moderation console (MIO-2265).
-//
-// Adds three sub-groups under `mio community`, all hub-scoped (both --team and
-// --hub required, resolved via communityContext) against the admin router at
-// /api/admin/teams/{team_id}/hubs/{hub_id}:
-//
-// report-reasons (P6C CRUD, backend moderation_admin.py):
-//
-//	list     GET    /report-reasons
-//	create   POST   /report-reasons              {data:{type:report_reasons,attributes:{label,position}}}
-//	update   PATCH  /report-reasons/{reason_id}  {data:{type:report_reasons,id,attributes:{label?,position?,is_active?}}}
-//	delete   DELETE /report-reasons/{reason_id}  (204)
-//
-// comments (admin, app/comments/router.py):
-//
-//	list     GET    /comments?filter[target_type]=&filter[target_id]=
-//	delete   DELETE /comments/{comment_id}       (204)
-//
-// moderation (P6E admin reads + actions, moderation_admin.py):
-//
-//	queue      GET    /moderation/queue
-//	counts     GET    /moderation/counts
-//	audit-log  GET    /moderation/audit-log
-//	banned     GET    /moderation/banned-members
-//	removed    GET    /moderation/removed
-//	content view    GET  /moderation/content/{content_type}/{content_id}
-//	content remove  POST /moderation/content/{content_type}/{content_id}/remove
-//	content restore POST /moderation/content/{content_type}/{content_id}/restore
-//	reports get     GET   /moderation/reports/{report_id}
-//	reports resolve PATCH /moderation/reports/{report_id}
-//
-// Plus `community members soft-ban` (POST /members/{contact_id}/soft_ban).
-//
-// Auth: the scoped console reads and standalone member actions accept a platform
-// team-owner key (our CLI credential) or a qualifying hub-moderator contact JWT;
-// report-reason mutation and comment admin are owner-only. Enforced by the
-// backend — the CLI only supplies the hub/team scope.
-
 import (
 	"fmt"
 	"net/url"
@@ -47,8 +9,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/client"
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
-
-// ── enum whitelists (validated client-side so a bad value fires no request) ──
 
 var (
 	queueSortValues        = map[string]bool{"last_reported_at": true, "-last_reported_at": true, "report_count": true, "-report_count": true}
@@ -61,9 +21,6 @@ var (
 	commentTargetTypes     = map[string]bool{"discussion": true, "content_node": true, "section": true}
 )
 
-// setEnumQuery validates a string flag against an allowed set (before any HTTP
-// request) and, when set and valid, writes it into query under key. A flag that
-// was not changed is a no-op; an out-of-enum value returns ExitUsage.
 func setEnumQuery(cmd *cobra.Command, query url.Values, flagName, key string, allowed map[string]bool, allowedDesc string) error {
 	if !cmd.Flags().Changed(flagName) {
 		return nil
@@ -81,8 +38,6 @@ func setEnumQuery(cmd *cobra.Command, query url.Values, flagName, key string, al
 	return nil
 }
 
-// setNonNegativeInt copies a changed int flag into attrs (under its snake_case
-// attribute key) after enforcing value >= 0 — validated before any HTTP request.
 func setNonNegativeInt(cmd *cobra.Command, attrs map[string]any, flagName string) error {
 	if !cmd.Flags().Changed(flagName) {
 		return nil
@@ -98,7 +53,6 @@ func setNonNegativeInt(cmd *cobra.Command, attrs map[string]any, flagName string
 	return nil
 }
 
-// setStringQuery writes a non-empty changed string flag into query under key.
 func setStringQuery(cmd *cobra.Command, query url.Values, flagName, key string) {
 	if !cmd.Flags().Changed(flagName) {
 		return
@@ -108,14 +62,6 @@ func setStringQuery(cmd *cobra.Command, query url.Values, flagName, key string) 
 	}
 }
 
-// rawDataEnvelope builds a JSON:API single-resource write body with an EXPLICIT
-// type (and optional id) that path-based type derivation cannot produce, sent
-// via StyleFlat so the client forwards it verbatim:
-//   - report_reasons update requires data.id (ReportReasonUpdateData schema);
-//   - moderation_actions soft-ban lives under .../members/... whose tail derives
-//     the wrong "hub_memberships" type;
-//   - moderation_reports resolve lives under .../moderation/reports/... whose
-//     tail is not a write collection.
 func rawDataEnvelope(typ, id string, attrs map[string]any) map[string]any {
 	data := map[string]any{"type": typ, "attributes": attrs}
 	if id != "" {
@@ -124,17 +70,12 @@ func rawDataEnvelope(typ, id string, attrs map[string]any) map[string]any {
 	return map[string]any{"data": data}
 }
 
-// ======================================================================
-// report-reasons
-// ======================================================================
-
 var communityReportReasonsCmd = &cobra.Command{
 	Use:   "report-reasons",
 	Short: "Manage community report reasons.",
 	Long:  "List, create, update and delete the report reasons offered to members when they flag content. Requires team-admin privileges.",
 }
 
-// reportReasonsPath returns .../report-reasons[/{id}].
 func reportReasonsPath(teamID, hubID, id string) string {
 	base := communityAdminBase(teamID, hubID) + "/report-reasons"
 	if id != "" {
@@ -169,7 +110,6 @@ var communityReportReasonsCreateCmd = &cobra.Command{
 	Example: `  mio community report-reasons create --hub hub_abc123 --label "Spam" --position 0`,
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Validate before resolving auth/team/hub so a bad flag fires no request.
 		if !cmd.Flags().Changed("label") {
 			return errs.New(errs.ExitUsage, "--label is required to create a report reason")
 		}
@@ -212,8 +152,6 @@ var communityReportReasonsUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// The backend ReportReasonUpdateData schema requires data.id; path-based
-		// derivation only fills type. Send the full envelope (type+id) verbatim.
 		body := rawDataEnvelope("report_reasons", args[0], attrs)
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "PATCH", reportReasonsPath(teamID, hubID, args[0]), body)
 		if err != nil {
@@ -245,17 +183,12 @@ var communityReportReasonsDeleteCmd = &cobra.Command{
 	},
 }
 
-// ======================================================================
-// comments (admin)
-// ======================================================================
-
 var communityCommentsCmd = &cobra.Command{
 	Use:   "comments",
 	Short: "Moderate community comments.",
 	Long:  "List (including tombstoned) and admin-delete comments within a hub. Requires team-admin privileges.",
 }
 
-// commentsAdminPath returns .../comments[/{id}].
 func commentsAdminPath(teamID, hubID, id string) string {
 	base := communityAdminBase(teamID, hubID) + "/comments"
 	if id != "" {
@@ -317,17 +250,12 @@ var communityCommentsDeleteCmd = &cobra.Command{
 	},
 }
 
-// ======================================================================
-// moderation (queue / counts / audit-log / banned / removed / content / reports)
-// ======================================================================
-
 var communityModerationCmd = &cobra.Command{
 	Use:   "moderation",
 	Short: "Community moderation console.",
 	Long:  "Inspect the moderation queue, counts, audit log, banned members, removed content, individual reports, and take content/report actions. Requires team-admin privileges.",
 }
 
-// moderationPath returns .../moderation/{suffix}.
 func moderationPath(teamID, hubID, suffix string) string {
 	return communityAdminBase(teamID, hubID) + "/moderation/" + suffix
 }
@@ -469,15 +397,12 @@ var communityModerationRemovedCmd = &cobra.Command{
 	},
 }
 
-// ── moderation content view / remove / restore ──
-
 var communityModerationContentCmd = &cobra.Command{
 	Use:   "content",
 	Short: "Inspect and remove/restore reported content.",
 	Long:  "View the full body of a discussion or comment (live or removed), soft-remove it, or restore it.",
 }
 
-// moderationContentPath returns .../moderation/content/{content_type}/{content_id}[/{action}].
 func moderationContentPath(teamID, hubID, contentType, contentID, action string) string {
 	p := moderationPath(teamID, hubID, "content/"+contentType+"/"+contentID)
 	if action != "" {
@@ -486,7 +411,6 @@ func moderationContentPath(teamID, hubID, contentType, contentID, action string)
 	return p
 }
 
-// validateContentType checks the shared discussion|comment enum before any HTTP.
 func validateContentType(contentType string) error {
 	if !moderationContentTypes[contentType] {
 		return errs.New(errs.ExitUsage, "invalid content type %q: must be discussion or comment", contentType)
@@ -571,8 +495,6 @@ var communityModerationContentRestoreCmd = &cobra.Command{
 	},
 }
 
-// ── moderation reports get / resolve ──
-
 var communityModerationReportsCmd = &cobra.Command{
 	Use:   "reports",
 	Short: "Inspect and resolve moderation reports.",
@@ -629,8 +551,6 @@ pass --soft-ban-until (ISO 8601); --notes records an admin note.`,
 		if err := confirmDestructive(cmd, fmt.Sprintf("Resolve report %s as %q?", args[0], resolution)); err != nil {
 			return err
 		}
-		// The resolve path (.../moderation/reports/{id}) is not a write collection,
-		// so send an explicit moderation_reports envelope verbatim.
 		body := rawDataEnvelope("moderation_reports", "", attrs)
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "PATCH", moderationPath(teamID, hubID, "reports/"+args[0]), body)
 		if err != nil {
@@ -639,10 +559,6 @@ pass --soft-ban-until (ISO 8601); --notes records an admin note.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ======================================================================
-// members soft-ban (standalone moderation action)
-// ======================================================================
 
 var communityMembersSoftBanCmd = &cobra.Command{
 	Use:   "soft-ban <contact_id>",
@@ -681,8 +597,6 @@ it with:
 		if err := confirmDestructive(cmd, fmt.Sprintf("Soft-ban member %s?", args[0])); err != nil {
 			return err
 		}
-		// POST .../members/{contact_id}/soft_ban expects a moderation_actions
-		// envelope; the .../members tail would otherwise derive "hub_memberships".
 		path := memberActionPath(teamID, hubID, args[0], "soft_ban")
 		body := rawDataEnvelope("moderation_actions", "", attrs)
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST", path, body)
@@ -697,10 +611,7 @@ it with:
 	},
 }
 
-// ── registration ──
-
 func init() {
-	// report-reasons
 	communityReportReasonsCmd.AddCommand(
 		communityReportReasonsListCmd,
 		communityReportReasonsCreateCmd,
@@ -715,7 +626,6 @@ func init() {
 	communityReportReasonsUpdateCmd.Flags().Int("position", 0, "New zero-based display position.")
 	communityReportReasonsUpdateCmd.Flags().Bool("is-active", true, "Whether the reason is active.")
 
-	// comments
 	communityCommentsCmd.AddCommand(communityCommentsListCmd, communityCommentsDeleteCmd)
 	communityCmd.AddCommand(communityCommentsCmd)
 
@@ -723,7 +633,6 @@ func init() {
 	communityCommentsListCmd.Flags().String("target-id", "", "Comment target id (required together with --target-type to return results).")
 	addPaginationFlags(communityCommentsListCmd)
 
-	// moderation
 	communityModerationContentCmd.AddCommand(
 		communityModerationContentViewCmd,
 		communityModerationContentRemoveCmd,
@@ -764,7 +673,6 @@ func init() {
 	communityModerationReportsResolveCmd.Flags().String("notes", "", "Optional admin note for the resolution.")
 	communityModerationReportsResolveCmd.Flags().String("soft-ban-until", "", "For soft_banned: ISO 8601 expiry timestamp.")
 
-	// members soft-ban (extends the existing community members group)
 	communityMembersCmd.AddCommand(communityMembersSoftBanCmd)
 	communityMembersSoftBanCmd.Flags().String("notes", "", "Optional admin note for the soft ban.")
 	communityMembersSoftBanCmd.Flags().String("reason", "", "Ban reason code: terms_violation, spamming, or compromised_account.")

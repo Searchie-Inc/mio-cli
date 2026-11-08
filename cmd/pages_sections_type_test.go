@@ -1,15 +1,5 @@
 package cmd
 
-// pages_sections_type_test.go — the imperative-door `--type` validation
-// (MIO-2340): `pages sections create --type` is validated against the catalog.
-// It is read-tolerant — a KNOWN non-writable type (e.g. calendar) is
-// rejected fast (ExitUsage) before any HTTP, but an UNKNOWN type is deferred to
-// the backend (so a newly-added writable type the vendored catalog predates is
-// not blocked client-side). compact flipped to writable:true in 0.10.0
-// (MIO-2681) — see TestSectionsCreate_CompactNowWritable_Proceeds below.
-// testimonials flipped writable:true in 0.13.0 — no longer usable as the
-// known-non-writable example (see TestSectionsCreate_KnownNonWritableType_ExitUsageBeforeHTTP).
-
 import (
 	"io"
 	"net/http"
@@ -21,9 +11,6 @@ import (
 )
 
 func TestSectionsCreate_KnownNonWritableType_ExitUsageBeforeHTTP(t *testing.T) {
-	// `calendar` is a real section type but writable=false — reject it on
-	// the imperative door, before any HTTP. (testimonials was the previous
-	// example here; it flipped writable=false -> true in 0.13.0.)
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fired = true
@@ -47,8 +34,6 @@ func TestSectionsCreate_KnownNonWritableType_ExitUsageBeforeHTTP(t *testing.T) {
 }
 
 func TestSectionsCreate_UnknownType_DefersToBackend(t *testing.T) {
-	// An unknown type (not in the vendored catalog) must be passed through to the
-	// backend, not blocked — it may be a newly-added writable type.
 	var gotType string
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,10 +65,6 @@ func TestSectionsCreate_UnknownType_DefersToBackend(t *testing.T) {
 }
 
 func TestSectionsCreate_WritableType_Proceeds(t *testing.T) {
-	// "text" was removed as a section type entirely in catalogVersion 0.12.0
-	// (mio-page-catalog#19, along with cta/video) — use "row" (still
-	// writable=true) so this test exercises the known-writable path rather
-	// than the unknown-type-deferred-to-backend path.
 	var gotType string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -110,10 +91,6 @@ func TestSectionsCreate_WritableType_Proceeds(t *testing.T) {
 }
 
 func TestSectionsCreate_CompactNowWritable_Proceeds(t *testing.T) {
-	// compact flipped writable=false -> true in catalogVersion 0.10.0
-	// (MIO-2681, imperative-door parity with grid) — it must now pass
-	// client-side validation and reach the backend like any other writable
-	// type.
 	var gotType string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

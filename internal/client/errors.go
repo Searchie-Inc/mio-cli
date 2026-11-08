@@ -5,8 +5,6 @@ import (
 	"strings"
 )
 
-// apiError mirrors a single JSON:API error object. Every member is optional per
-// the spec; we keep the ones that carry useful operator-facing signal.
 type apiError struct {
 	Status string          `json:"status"`
 	Code   string          `json:"code"`
@@ -16,14 +14,11 @@ type apiError struct {
 	Meta   map[string]any  `json:"meta"`
 }
 
-// apiErrorSource locates the offending field/parameter for an apiError.
 type apiErrorSource struct {
 	Pointer   string `json:"pointer"`
 	Parameter string `json:"parameter"`
 }
 
-// message renders one error object into a short human-readable line, preferring
-// detail > title > code, and appending the source pointer/parameter if present.
 func (e apiError) message() string {
 	msg := e.Detail
 	if msg == "" {
@@ -43,11 +38,6 @@ func (e apiError) message() string {
 			msg += " (parameter: " + e.Source.Parameter + ")"
 		}
 	}
-	// Surface diagnostic reference arrays carried in the error's meta so an
-	// otherwise-generic failure is self-diagnosable — e.g. a segment-search 422
-	// "One or more condition references failed to compile." returns the exact
-	// unresolved refs in meta.missing_slugs / meta.cross_team_refs (MIO-2590).
-	// Without this they were silently dropped from the rendered error.
 	for _, key := range []string{"missing_slugs", "cross_team_refs"} {
 		if refs := metaRefs(e.Meta[key]); len(refs) > 0 {
 			msg += " (" + key + ": " + strings.Join(refs, ", ") + ")"
@@ -56,10 +46,6 @@ func (e apiError) message() string {
 	return msg
 }
 
-// metaRefs flattens a JSON:API meta array into display strings. The backend uses
-// two shapes: missing_slugs is a list of plain strings, while cross_team_refs is
-// a list of {type, message} objects (list[dict[str,str]]) — so handle both, or
-// the object form would render as nothing. Non-array meta yields nil.
 func metaRefs(v any) []string {
 	arr, ok := v.([]any)
 	if !ok {
@@ -88,27 +74,16 @@ func metaRefs(v any) []string {
 	return out
 }
 
-// apiErrorList is the error type returned when a response body carries a
-// top-level JSON:API `errors` array. It joins every error object into one
-// message so the cause string is useful to humans and greppable by agents.
 type apiErrorList struct {
 	Errors []apiError
 
-	// doc is the response body the Errors were decoded from, byte-for-byte.
-	// Errors keeps only the members message() renders; doc keeps all of them
-	// (code, title, id, links, every meta member, members the CLI has never
-	// heard of), so main.go's error envelope can carry what the API sent
-	// instead of a CLI-side reconstruction of it (MIO-3912).
 	doc []byte
 }
 
-// newAPIErrorList builds the error for a body carrying a JSON:API `errors`
-// array, retaining the body itself as the error's document.
 func newAPIErrorList(list []apiError, body []byte) *apiErrorList {
 	return &apiErrorList{Errors: list, doc: append([]byte(nil), body...)}
 }
 
-// APIErrorDocument implements errs.APIErrorDocumentCarrier.
 func (l *apiErrorList) APIErrorDocument() []byte {
 	if l == nil {
 		return nil
@@ -116,7 +91,6 @@ func (l *apiErrorList) APIErrorDocument() []byte {
 	return l.doc
 }
 
-// Error implements the error interface by joining all error messages.
 func (l *apiErrorList) Error() string {
 	if l == nil || len(l.Errors) == 0 {
 		return "request failed"
@@ -128,14 +102,6 @@ func (l *apiErrorList) Error() string {
 	return strings.Join(parts, "; ")
 }
 
-// HasAPIErrorCode reports whether err's chain carries a JSON:API error object
-// with the given machine-readable `code`.
-//
-// Callers must use this rather than matching err.Error(): apiError.message()
-// prefers detail > title > code, so the code is ABSENT from the rendered string
-// whenever the server also sent a detail — which it normally does. A caller that
-// grepped the message for a code would therefore silently never match, and would
-// keep not matching no matter how the message was worded.
 func HasAPIErrorCode(err error, code string) bool {
 	var list *apiErrorList
 	for e := err; e != nil; {

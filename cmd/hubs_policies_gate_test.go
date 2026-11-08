@@ -1,20 +1,5 @@
 package cmd
 
-// hubs_policies_gate_test.go — contract tests for `mio hubs policies gate`
-// (MIO-2269).
-//
-// gate: PATCH .../hubs/{hub}/policies/gate — enveloped, JSON:API type
-//       "hub_policy_gate" (derived from the two-segment policies/gate tail),
-//       attributes {enabled: bool}.
-//
-// (`policies get` IS implemented as of MIO-2815 — see hubs_policies_get_test.go.
-// An earlier version of this comment claimed the omission was intentional, on
-// the grounds that the only policies GET was the hub portal route, which needs
-// member auth and rejects admin API keys. That was wrong:
-// GET /api/v1/teams/{team_id}/hubs/{identifier}/policies exists
-// (admin_get_hub_policies, MIO-2394) and takes the SAME owner credentials as the
-// gate verb below, reporting both documents with the ACTUAL stored gate state.)
-
 import (
 	"net/http"
 	"strings"
@@ -25,8 +10,6 @@ import (
 
 const policyGateBody = `{"data":{"id":"hub_x","type":"hub_policy_gate","attributes":{"enabled":true}}}`
 
-// TestHubsPoliciesGate_Enabled pins the gate PATCH with --enabled: method, path,
-// JSON:API type "hub_policy_gate", attributes.enabled == true.
 func TestHubsPoliciesGate_Enabled(t *testing.T) {
 	srv, gotMethod, gotPath, _, gotBody := captureAdminReq(t, http.StatusOK, policyGateBody)
 
@@ -52,7 +35,6 @@ func TestHubsPoliciesGate_Enabled(t *testing.T) {
 	}
 }
 
-// TestHubsPoliciesGate_Disabled pins that --enabled=false sends enabled: false.
 func TestHubsPoliciesGate_Disabled(t *testing.T) {
 	srv, _, _, _, gotBody := captureAdminReq(t, http.StatusOK, policyGateBody)
 
@@ -68,9 +50,6 @@ func TestHubsPoliciesGate_Disabled(t *testing.T) {
 	}
 }
 
-// TestHubsPoliciesGate_MissingEnabled pins that omitting --enabled exits
-// ExitUsage without firing any request (a bare bool defaults to false, so it
-// must be given explicitly).
 func TestHubsPoliciesGate_MissingEnabled(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 

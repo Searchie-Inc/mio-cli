@@ -1,82 +1,5 @@
 package cmd
 
-// events.go implements the `mio events` command group for hub events (Events
-// v1 API, MIO-3173). Every sub-command is hub-scoped ONLY.
-//
-// UNLIKE every other resource in this CLI, the events base route does NOT sit
-// under /api/teams/{team_id}/... — the backend route (mio-backend
-// app/hub_events/router.py) is /api/hubs/{hub_id}/events, with no team_id
-// segment at all. This is the first resource with that shape. The command
-// still resolves and requires a team (via requireTeam, called inside
-// eventsContext) for context/UX consistency with every other hub-scoped
-// resource — but the resolved team id is never interpolated into the path.
-// See eventsPath.
-//
-// Routes (mio-backend app/hub_events/router.py):
-//
-//	create        POST    /api/hubs/{hub_id}/events
-//	list          GET     /api/hubs/{hub_id}/events
-//	retrieve      GET     /api/hubs/{hub_id}/events/{id}
-//	update        PATCH   /api/hubs/{hub_id}/events/{id}
-//	cancel        POST    /api/hubs/{hub_id}/events/{id}/cancel
-//	rsvp set      PUT     /api/hubs/{hub_id}/events/{id}/rsvp
-//	rsvp withdraw DELETE  /api/hubs/{hub_id}/events/{id}/rsvp
-//	rsvps list    GET     /api/hubs/{hub_id}/events/{id}/rsvps
-//
-// create/update/cancel require hub owner/admin/moderator permissions. The
-// rsvp set/withdraw verbs act as the AUTHENTICATED MEMBER CONTACT (login-based
-// auth) — they operate on the calling contact's own RSVP, not an arbitrary one,
-// and do NOT require hub owner/admin/mod permissions.
-//
-// AUTH (Codex round 1, MIO-3173): every Events v1 route — including
-// create/update/cancel — is gated by a contact-identity dependency
-// (require_hub_elevated_contact / member deps on the backend). A team API key
-// authenticates as the TEAM, not an individual contact, so it cannot satisfy
-// that dependency: every command in this file 401s under a plain team key.
-//
-// `mio login` (see login.go mintAndStore) mints and stores ONLY a team-scoped
-// API key today — the JWT obtained from POST /api/auth/login is used once to
-// mint that key and then discarded; the CLI has no existing mechanism that
-// persists a contact/member access token, and no other command consumes one.
-// Until the CLI grows a dedicated member-login flow (tracked as a follow-up),
-// eventsContext below reads a member access token from MIO_CONTACT_TOKEN —
-// the minimal, precedent-setting escape hatch, mirroring the MIO_API_KEY /
-// MIO_EMAIL / MIO_PASSWORD env-var pattern already used by config.EnvAPIKey
-// and login.go — and swaps it in as the bearer for the events request itself
-// (see eventsContext's doc comment for the precise, load-bearing ORDER this
-// happens in relative to team/hub scope resolution and --anonymous). With
-// only a team API key configured, eventsContext fails fast with an actionable
-// error rather than letting every command round-trip to a guaranteed 401.
-//
-// TEAM-KEY AUTHORING (MIO-3610). The backend has since added an ops twin of the
-// create/update/cancel routes, gated by require_hub_event_author:
-//
-//	create  POST   /api/admin/teams/{team_id}/hubs/{hub_id}/events
-//	update  PATCH  /api/admin/teams/{team_id}/hubs/{hub_id}/events/{id}
-//	cancel  POST   /api/admin/teams/{team_id}/hubs/{hub_id}/events/{id}/cancel
-//
-// which accepts a team-bound API key carrying can_author_events (or a team-owner
-// JWT, or a hub-owner contact JWT). So the three AUTHORING verbs now need no
-// MIO_CONTACT_TOKEN: with none set (and not --anonymous) they use the resolved
-// API key against that route. With MIO_CONTACT_TOKEN set they behave exactly as
-// before (member route, contact bearer) — an explicit token is an explicit
-// choice, and switching such a user to a key that may lack can_author_events
-// would turn working setups into 403s. list/retrieve/rsvp are unchanged: they
-// stay on the member route and still need the token (a team key cannot name a
-// person, so RSVP never moves; list/retrieve are a follow-up). The admin cancel
-// takes NO body, so `cancel --message` is refused on the team-key route rather
-// than silently dropped. See eventsAuthoringContext.
-//
-// OUT OF SCOPE (deferred to a follow-up ticket): GET .../events/{id}/calendar.ics
-// — a raw text/calendar download that needs a new raw-response client method
-// distinct from the JSON:API decoders used everywhere else in this file.
-//
-// See also internal/client/client.go: resourceTypeFromPath's typeOverrides
-// table carries two entries this command group depends on —
-// {"hubs/events": "hub_events"} and {"events/rsvp": "event_rsvps"} — and
-// knownCollections gained "rsvp". Without those, every events/rsvp write 422s
-// (the backend's Literal-typed write schemas reject the wrong envelope type).
-
 import (
 	"fmt"
 	"net/http"
@@ -90,18 +13,9 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// eventsContactTokenEnv is the environment variable holding a member/contact
-// access token. NOTE: this is NOT the same JWT `mio login` deals with —
-// POST /api/auth/login (login.go's mintAndStore) authenticates a TEAM
-// principal and mints a team API key; a contact/member identity comes from
-// the separate /api/contact-auth flow (mio-backend app/contact_auth), which
-// this CLI has no command for yet (tracked as MIO-3178). Events v1 requires a
-// contact identity on every route; see the package doc comment above for why
-// a team API key cannot be used instead.
 const eventsContactTokenEnv = "MIO_CONTACT_TOKEN"
 
 func init() {
-	// events <action>
 	eventsCmd.AddCommand(
 		eventsCreateCmd,
 		eventsListCmd,
@@ -110,22 +24,17 @@ func init() {
 		eventsCancelCmd,
 	)
 
-	// events rsvp <action>  (nested sub-resource: the caller's own RSVP)
 	eventsRSVPCmd.AddCommand(
 		eventsRSVPSetCmd,
 		eventsRSVPWithdrawCmd,
 	)
 	eventsCmd.AddCommand(eventsRSVPCmd)
 
-	// events rsvps <action>  (nested sub-resource: read all RSVPs on an event)
 	eventsRSVPsCmd.AddCommand(eventsRSVPsListCmd)
 	eventsCmd.AddCommand(eventsRSVPsCmd)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(eventsCmd)
 }
-
-// ---- events group -----------------------------------------------------------
 
 var eventsCmd = &cobra.Command{
 	Use:   "events",
@@ -142,8 +51,6 @@ create/update/cancel require hub owner/admin/moderator permissions. See
 'mio events rsvp --help' for the member-facing RSVP actions.`,
 }
 
-// adminEventsPath returns /api/admin/teams/{team_id}/hubs/{hub_id}/events[/{id}],
-// the team-principal authoring twin (MIO-3610).
 func adminEventsPath(teamID, hubID, id string) string {
 	base := fmt.Sprintf("/api/admin/teams/%s/hubs/%s/events", teamID, hubID)
 	if id != "" {
@@ -152,16 +59,10 @@ func adminEventsPath(teamID, hubID, id string) string {
 	return base
 }
 
-// eventsAuthoringUsesTeamKey reports whether create/update/cancel go to the
-// admin route with the team API key: no MIO_CONTACT_TOKEN and not --anonymous.
-// Pure (no I/O), so a flag combination that cannot work on that route can be
-// refused before anything is sent or confirmed.
 func eventsAuthoringUsesTeamKey() bool {
 	return !flags.anonymous && strings.TrimSpace(os.Getenv(eventsContactTokenEnv)) == ""
 }
 
-// eventsAuthoringContext resolves the client and the path builder for the
-// authoring verbs (create/update/cancel). See the TEAM-KEY AUTHORING note above.
 func eventsAuthoringContext(cmd *cobra.Command) (*cmdContext, func(id string) string, error) {
 	if !eventsAuthoringUsesTeamKey() {
 		c, hubID, err := eventsContext(cmd)
@@ -188,8 +89,6 @@ func eventsAuthoringContext(cmd *cobra.Command) (*cmdContext, func(id string) st
 	return c, func(id string) string { return adminEventsPath(teamID, hubID, id) }, nil
 }
 
-// teamKeyHintIf adds the can_author_events hint when the request went to the
-// team-key route.
 func teamKeyHintIf(err error) error {
 	if eventsAuthoringUsesTeamKey() {
 		return withTeamKeyHint(err)
@@ -197,9 +96,6 @@ func teamKeyHintIf(err error) error {
 	return err
 }
 
-// withTeamKeyHint explains a 403 from the team-key route: the key needs the
-// can_author_events flag (an API key is not an event author by default) and only
-// the team owner can grant it. Only called on the team-key route.
 func withTeamKeyHint(err error) error {
 	if err == nil || errs.HTTPStatusOf(err) != http.StatusForbidden {
 		return err
@@ -211,8 +107,6 @@ func withTeamKeyHint(err error) error {
 		"Alternatively set %s to a member access token to author as that member", err, eventsContactTokenEnv)
 }
 
-// eventsPath returns /api/hubs/{hub_id}/events[/{id}]. NOTE: no team_id
-// segment — see the package doc comment above.
 func eventsPath(hubID, id string) string {
 	base := fmt.Sprintf("/api/hubs/%s/events", hubID)
 	if id != "" {
@@ -221,50 +115,14 @@ func eventsPath(hubID, id string) string {
 	return base
 }
 
-// eventsRSVPPath returns /api/hubs/{hub_id}/events/{event_id}/rsvp — the
-// caller's own RSVP on the event.
 func eventsRSVPPath(hubID, eventID string) string {
 	return eventsPath(hubID, eventID) + "/rsvp"
 }
 
-// eventsRSVPsPath returns /api/hubs/{hub_id}/events/{event_id}/rsvps — the
-// full list of RSVPs on the event.
 func eventsRSVPsPath(hubID, eventID string) string {
 	return eventsPath(hubID, eventID) + "/rsvps"
 }
 
-// eventsContext is the shared boilerplate for events sub-commands: builds the
-// context, resolves both team id (for context/UX consistency — see the
-// package doc comment) and hub id, and — critically for this resource —
-// swaps the HTTP client's bearer to a member/contact access token when one is
-// configured via MIO_CONTACT_TOKEN. Only hubID is returned; the events API
-// path never interpolates a team id.
-//
-// Every Events v1 route requires a contact identity (see the package doc
-// comment); a team API key cannot satisfy it. So unlike every other
-// eventsContext-shaped helper in this CLI, this one does NOT call
-// c.requireAuth() (which only checks for a team API key) — it has its own
-// gate, in a specific, load-bearing ORDER (Codex round 2, MIO-3173):
-//
-//  1. Fail fast, before any network call, unless EITHER --anonymous or a
-//     configured contact token is present. An API key alone (or nothing at
-//     all) round-trips to a guaranteed 401 on every Events v1 route, so this
-//     is rejected locally with an actionable error instead.
-//  2. Resolve team + hub scope (requireTeam/requireHub) using the CLIENT
-//     newContext BUILT — the team-API-key client (or an unauthenticated one
-//     under --anonymous) — never the contact-token client. /api/teams and
-//     /api/teams/{id}/hubs are platform-scoped routes with a DIFFERENT
-//     expected audience than the contact-JWT-only Events v1 routes; sending
-//     the contact bearer there gets rejected by the backend (round 2
-//     Important finding — swapping the bearer before scope resolution broke
-//     hub-slug/name lookups and auto-default).
-//  3. Only THEN swap the bearer to the contact token for the actual Events
-//     request — and only when --anonymous was NOT passed. --anonymous ALWAYS
-//     wins over an ambient MIO_CONTACT_TOKEN: a deliberately unauthenticated
-//     probe must never leak a real bearer credential to a custom (possibly
-//     attacker-controlled) --api-base origin (round 2 Critical finding —
-//     checking the token before --anonymous let an ambient token defeat an
-//     explicit --anonymous request).
 func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -273,13 +131,7 @@ func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 
 	contactToken := strings.TrimSpace(os.Getenv(eventsContactTokenEnv))
 
-	// Step 1: fail fast, before touching the network, if there is no way to
-	// even attempt an Events v1 request.
 	if !c.resolved.Anonymous && contactToken == "" {
-		// Do NOT tell the user to "run `mio login`" here — that command
-		// mints and stores only a team API key (see the package doc comment
-		// above), never a contact token, so that advice would be actively
-		// misleading.
 		return nil, "", errs.New(errs.ExitAuth,
 			"mio events requires a member (contact) token. Set MIO_CONTACT_TOKEN with a "+
 				"member access token (member login for the CLI is tracked in MIO-3178); "+
@@ -287,8 +139,6 @@ func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 				"on the Events v1 API")
 	}
 
-	// Step 2: resolve scope with the team-API-key (or anonymous) client —
-	// the contact-token swap below must not happen before this.
 	if _, err := c.requireTeam(); err != nil {
 		return nil, "", err
 	}
@@ -297,8 +147,6 @@ func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 		return nil, "", err
 	}
 
-	// Step 3: swap to the contact-token bearer for the Events request itself.
-	// --anonymous wins unconditionally, even over an ambient contact token.
 	if !c.resolved.Anonymous && contactToken != "" {
 		c.client = client.New(c.resolved.APIBase, contactToken, client.WithDebug(flags.debug))
 	}
@@ -306,60 +154,14 @@ func eventsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	return c, hubID, nil
 }
 
-// eventsMaxHosts is the CLI-side mirror of the backend's MAX_HOSTS_PER_EVENT
-// (mio-backend app/hub_events/models.py — currently 3), the cap on how many
-// hosts one event may carry. The backend enforces it at three layers of its
-// own (the write schema's Field(max_length=...), the service layer, and that
-// shared constant), so this copy is a client-side FAIL-FAST, never the
-// authority: it turns a knowingly-invalid body into a local usage error
-// instead of a round-trip that is guaranteed to 422. If the backend ever
-// raises the cap, this number is stale-but-safe (it rejects requests the API
-// would now accept) rather than unsafe.
 const eventsMaxHosts = 3
 
-// eventsAttrFlags is the set of create/update flags, shared so both commands
-// stay in lockstep. attrKey (see flags.go) translates each kebab-case flag
-// name to its snake_case attribute key (e.g. --starts-at -> starts_at).
-//
-// NEITHER host flag is in this list: both are read explicitly by
-// setEventAttrs so their values can be checked before the wire (and, for the
-// plural, so it serializes as a JSON ARRAY rather than a string).
 var eventsAttrFlags = []string{
 	"title", "starts-at", "ends-at", "timezone", "location-type",
 	"description", "cover-image-url", "location-url", "location-address",
 	"visibility", "segment-id", "rsvp-tag-id",
 }
 
-// setEventAttrs copies every changed create/update flag into attrs, applying
-// the correct getter per field. Only flags the user actually set are copied
-// (setStringFlag/setIntFlag/setBoolFlag all no-op on an unset flag), so a
-// PATCH stays a partial update; clearing cover media is handled explicitly by update.
-//
-// HOSTS (MIO-3740). The backend accepts EITHER host_contact_id (a single
-// contact id, sugar for a one-entry list) OR host_contact_ids (the full
-// ordered set, position 0 being the primary/denormalized host) — never both;
-// sending both is a 422. That mutual exclusivity is declared to cobra with
-// MarkFlagsMutuallyExclusive (see the flag-registration init below), so it
-// fires during flag validation, before this builder — or any request — runs.
-//
-// Neither host flag is a plain set*Flag copy: both are read explicitly so
-// their values can be checked BEFORE the wire (same shape as
-// achievements.go's --rule-content-node-ids and content.go's --playlist-id).
-// Silently repairing any of these would ship a host set the caller did not
-// ask for and still report success:
-//
-//   - a blank entry would ship a SHORTER list than was named;
-//   - a duplicate is loud evidence of a confused caller — the backend rejects
-//     it (schemas.py _reject_duplicate_host_contact_ids) rather than
-//     de-duplicating, and so does this;
-//   - an empty list and an over-cap list are both flat 422s server-side
-//     (min_length=1 / max_length=MAX_HOSTS_PER_EVENT);
-//   - an empty singular id is the same guaranteed 422 by another route: it
-//     resolves to no hub member, and the backend fails closed.
-//
-// The plural value stored is a real []string, NOT a joined string — the
-// backend reads host_contact_ids as list[str], so a comma-joined string
-// would be one bad id rather than a list.
 func setEventAttrs(cmd *cobra.Command, attrs map[string]any) error {
 	for _, f := range eventsAttrFlags {
 		setStringFlag(cmd, attrs, f)
@@ -425,8 +227,6 @@ func setEventAttrs(cmd *cobra.Command, attrs map[string]any) error {
 	return nil
 }
 
-// ---- create -------------------------------------------------------------------
-
 var eventsCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a hub event.",
@@ -477,10 +277,6 @@ route is used as before.`,
     --host-contact-ids con_a,con_b,con_c`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Build the body BEFORE eventsContext so an invalid host set fires no
-		// request at all — not even the scope-resolution round-trips
-		// eventsContext makes when --hub/--team is a NAME rather than an id
-		// (the same rule content.go's --playlist-id documents, MIO-3074).
 		attrs := map[string]any{}
 		if err := setEventAttrs(cmd, attrs); err != nil {
 			return err
@@ -491,10 +287,6 @@ route is used as before.`,
 			return err
 		}
 
-		// --title, --starts-at, --ends-at, --timezone, and --location-type are
-		// required by the backend HubEventCreateAttributes schema; cobra
-		// enforces them before RunE (markFlagsRequired in init).
-
 		res, err := c.client.Create(c.ctx, pathFor(""), attrs)
 		if err != nil {
 			return teamKeyHintIf(err)
@@ -502,8 +294,6 @@ route is used as before.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- list -------------------------------------------------------------------
 
 var eventsListCmd = &cobra.Command{
 	Use:   "list",
@@ -525,10 +315,6 @@ Allowed values for --sort:   starts_at, -starts_at.`,
 		query := url.Values{}
 		addPageFlags(cmd, query)
 
-		// Validate --status/--sort client-side: the backend silently mistreats
-		// unrecognised values (Codex round 1, MIO-3173) rather than rejecting
-		// them, so a typo would otherwise return an unexpectedly-unfiltered/
-		// unsorted result instead of a clear error.
 		if cmd.Flags().Changed("status") {
 			v, ferr := cmd.Flags().GetString("status")
 			if ferr == nil {
@@ -560,8 +346,6 @@ Allowed values for --sort:   starts_at, -starts_at.`,
 	},
 }
 
-// ---- retrieve ---------------------------------------------------------------
-
 var eventsRetrieveCmd = &cobra.Command{
 	Use:     "retrieve <id>",
 	Short:   "Retrieve an event by id.",
@@ -581,8 +365,6 @@ var eventsRetrieveCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- update -----------------------------------------------------------------
 
 var eventsUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
@@ -615,8 +397,6 @@ route is used as before.`,
   mio events update evt_abc123 --hub hub_123 --host-contact-ids con_a,con_b`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Built BEFORE eventsContext for the same reason as create above: an
-		// invalid host set must fire no request at all.
 		attrs := map[string]any{}
 		if err := setEventAttrs(cmd, attrs); err != nil {
 			return err
@@ -646,8 +426,6 @@ route is used as before.`,
 	},
 }
 
-// ---- cancel -------------------------------------------------------------------
-
 var eventsCancelCmd = &cobra.Command{
 	Use:   "cancel <id>",
 	Short: "Cancel an event.",
@@ -675,8 +453,6 @@ there; set MIO_CONTACT_TOKEN to cancel with an organiser message.`,
 			}
 			attrs = map[string]any{"message": message}
 			if eventsAuthoringUsesTeamKey() {
-				// The admin cancel takes no body: sending the message would be
-				// accepted and dropped, and attendees would never see it.
 				return errs.New(errs.ExitUsage, "--message cannot be sent with a team API key: the team-key cancel route takes no body. "+
 					"Set "+eventsContactTokenEnv+" to a member access token to cancel with an organiser message, or cancel without --message")
 			}
@@ -701,8 +477,6 @@ there; set MIO_CONTACT_TOKEN to cancel with an organiser message.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- events rsvp sub-resource (the caller's own RSVP) ------------------------
 
 var eventsRSVPCmd = &cobra.Command{
 	Use:   "rsvp",
@@ -733,16 +507,10 @@ hub owner/admin/moderator permissions.`,
 			return err
 		}
 
-		// --status is required; cobra enforces it before RunE.
 		status, ferr := cmd.Flags().GetString("status")
 		if ferr != nil {
 			return errs.Wrap(errs.ExitGeneric, ferr)
 		}
-		// This enum is hand-mirrored from the backend's single source of
-		// truth (mio-backend app/hub_events/rsvp_status.py, the RsvpStatus
-		// Literal) and nothing watches the two for drift — see the
-		// typeOverrides/knownCollections precedent cited at the top of this
-		// file (MIO-2665 catalog pin) for why that is a known hazard here.
 		switch status {
 		case "going", "not_going", "maybe":
 		default:
@@ -784,10 +552,6 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 			return err
 		}
 
-		// The API returns 200 with the withdrawn RSVP resource in the body (NOT
-		// 204 No Content), so this MUST go through client.Action (which decodes
-		// and renders a resource body) rather than client.Delete (which discards
-		// any response body unconditionally).
 		res, err := c.client.Action(c.ctx, "DELETE", eventsRSVPPath(hubID, args[0]), nil)
 		if err != nil {
 			return err
@@ -799,8 +563,6 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- events rsvps sub-resource (read all RSVPs on an event) -----------------
 
 var eventsRSVPsCmd = &cobra.Command{
 	Use:   "rsvps",
@@ -840,10 +602,7 @@ list too when the host left the attendee list visible for this event.`,
 	},
 }
 
-// ---- flag registration -------------------------------------------------------
-
 func init() {
-	// Attribute flags for events create/update.
 	for _, cmd := range []*cobra.Command{eventsCreateCmd, eventsUpdateCmd} {
 		cmd.Flags().String("title", "", "Event title.")
 		cmd.Flags().String("starts-at", "", "Event start time, RFC3339 (e.g. 2026-09-01T18:00:00Z).")
@@ -861,10 +620,6 @@ func init() {
 		cmd.Flags().String("rsvp-tag-id", "", "Tag id to apply to contacts who RSVP \"going\". Not applied for \"maybe\" or \"not_going\".")
 		cmd.Flags().Bool("attendee-list-visible", false, "Whether the attendee list is visible to other attendees.")
 
-		// Hosts (MIO-3740). Two shapes for one concept, so cobra is told they
-		// are mutually exclusive: that check runs during flag validation,
-		// before RunE, so the ambiguous combination the API 422s can never be
-		// assembled into a body, let alone sent.
 		cmd.Flags().String("host-contact-id", "",
 			"Contact id to record as the event's SOLE host, replacing the whole host set — shorthand for "+
 				"--host-contact-ids with a single value. Must be a current, active member of this hub. "+
@@ -885,15 +640,12 @@ func init() {
 	eventsCancelCmd.Flags().String("message", "", "Organiser message to going/maybe attendees (max 280 characters).")
 	markFlagsRequired(eventsCreateCmd, "title", "starts-at", "ends-at", "timezone", "location-type")
 
-	// Pagination + filter/sort on list.
 	addPaginationFlags(eventsListCmd)
 	eventsListCmd.Flags().String("status", "", "Filter by status: upcoming or past.")
 	eventsListCmd.Flags().String("sort", "", "Sort order: starts_at or -starts_at.")
 
-	// rsvp set flags.
 	eventsRSVPSetCmd.Flags().String("status", "", "RSVP status: going, not_going, or maybe. Required.")
 	markFlagsRequired(eventsRSVPSetCmd, "status")
 
-	// Pagination on rsvps list.
 	addPaginationFlags(eventsRSVPsListCmd)
 }

@@ -1,9 +1,5 @@
 package client
 
-// upload_test.go — tests for the raw-S3-PUT upload plumbing (MIO-2267): a direct
-// binary PUT to a presigned URL (no mio auth header) and resource-level `meta`
-// decoding (where the create response carries the presigned upload_url).
-
 import (
 	"context"
 	"io"
@@ -107,7 +103,6 @@ func TestDecodeResource_PopulatesMeta(t *testing.T) {
 	if res.Meta["upload_url"] != "https://s3.example/put?sig=1" {
 		t.Errorf("Meta[upload_url] = %v, want the presigned URL", res.Meta["upload_url"])
 	}
-	// Meta must not leak into the flattened (agent-facing) view.
 	if _, ok := res.Flatten()["meta"]; ok {
 		t.Errorf("Flatten() must not include meta")
 	}

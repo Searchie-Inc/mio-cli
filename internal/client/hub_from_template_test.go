@@ -1,14 +1,5 @@
 package client
 
-// hub_from_template_test.go — transport contract for the whole-hub scaffold op
-// (MIO-2976 / MIO-2926).
-//
-// The oracle here is the WIRE: the exact path, the exact body keys, the
-// Idempotency-Key header, and the response field names. Every one of these was
-// read off mio-backend origin/main (app/hub_scaffold/{router,schemas}.py), and
-// a mismatch on any of them fails silently rather than loudly — which is what
-// these pin.
-
 import (
 	"context"
 	"encoding/json"
@@ -21,8 +12,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// A realistic 201 body, field names taken verbatim from
-// app/hub_scaffold/schemas.py HubScaffoldResultAttributes.
 const hubOpOKBody = `{"data":{"id":"hub_new","type":"hub_scaffolds","attributes":{
   "hub_id":"hub_new",
   "summary":[
@@ -43,7 +32,6 @@ func hubOpServer(t *testing.T, status int, body string) (*httptest.Server, *stri
 		reqBody, _ = io.ReadAll(r.Body)
 		hdr = r.Header.Clone()
 		if status == http.StatusMethodNotAllowed {
-			// Reproduce the dormant shape exactly: bare 405, Allow: GET.
 			w.Header().Set("Allow", "GET")
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			_, _ = w.Write([]byte(`{"detail":"Method Not Allowed"}`))
@@ -62,7 +50,6 @@ func newHubOpClient(t *testing.T, srv *httptest.Server) *Client {
 	return New(srv.URL, "k", WithHTTPClient(srv.Client()))
 }
 
-// The path, the envelope type and the Idempotency-Key header are the contract.
 func TestHubFromTemplate_PathBodyAndIdempotencyHeader(t *testing.T) {
 	srv, gotPath, gotBody, gotHdr := hubOpServer(t, http.StatusCreated, hubOpOKBody)
 	c := newHubOpClient(t, srv)
@@ -110,18 +97,11 @@ func TestHubFromTemplate_PathBodyAndIdempotencyHeader(t *testing.T) {
 	if ov["logo_url"] != "https://cdn/logo.png" || ov["registration_enabled"] != true || ov["publish"] != true {
 		t.Errorf("overrides = %v, want the three supplied values", ov)
 	}
-	// An override the caller did not set must be ABSENT, not null/"": the
-	// service applies only truthy overrides, and an empty string is rejected
-	// outright because it would change the idempotency fingerprint while doing
-	// nothing.
 	if _, present := ov["favicon_url"]; present {
 		t.Errorf("favicon_url must be OMITTED when unset, not sent; overrides=%v", ov)
 	}
 }
 
-// The dormancy signal. A flag-off or legacy backend answers a bare 405 with
-// Allow: GET, byte-identical to a backend without the route — normalized onto
-// ExitNotFound so the caller falls back rather than failing.
 func TestHubFromTemplate_DormantOpIsExitNotFound(t *testing.T) {
 	srv, _, _, _ := hubOpServer(t, http.StatusMethodNotAllowed, "")
 	c := newHubOpClient(t, srv)
@@ -135,16 +115,11 @@ func TestHubFromTemplate_DormantOpIsExitNotFound(t *testing.T) {
 	if got := errs.CodeOf(err); got != errs.ExitNotFound {
 		t.Errorf("exit code = %d, want %d (ExitNotFound)", got, errs.ExitNotFound)
 	}
-	// The exit code is NOT the probe signal — the sentinel is. See the
-	// template_not_found case below for why the distinction is load-bearing.
 	if !errors.Is(err, ErrHubOpAbsent) {
 		t.Errorf("a dormant op must carry ErrHubOpAbsent — it is what the fallback keys on; got %v", err)
 	}
 }
 
-// Everything that is NOT the dormancy signal must surface unchanged. Falling
-// back client-side against a backend that HAS the op but is unhealthy or
-// disagreeing just smears partial state.
 func TestHubFromTemplate_OtherErrorsDoNotLookLikeAbsence(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -153,11 +128,6 @@ func TestHubFromTemplate_OtherErrorsDoNotLookLikeAbsence(t *testing.T) {
 		want   int
 	}{
 		{"digest mismatch", http.StatusConflict, `{"errors":[{"code":"catalog_digest_mismatch","detail":"stale"}]}`, errs.ExitUsage},
-		// THE discriminating case. This op answers 404 for an unknown template,
-		// and 404 derives the SAME ExitNotFound the dormant 405 does — so an
-		// exit-code test cannot tell them apart, and a caller that branched on
-		// the code would apply client-side while the backend is saying the
-		// template does not exist. Only the sentinel separates them.
 		{"template unknown", http.StatusNotFound, `{"errors":[{"code":"template_not_found","detail":"nope"}]}`, errs.ExitNotFound},
 		{"server error", http.StatusInternalServerError, `{"errors":[{"detail":"boom"}]}`, errs.ExitServer},
 	} {
@@ -180,11 +150,6 @@ func TestHubFromTemplate_OtherErrorsDoNotLookLikeAbsence(t *testing.T) {
 	}
 }
 
-// The response field names are the other half of the contract, and getting one
-// wrong is SILENT: a mistyped key yields a zero value with no error. The wire
-// key is `created_resource_ids` — reading `created_ids` (the obvious guess, and
-// what an earlier draft of this file did) leaves the map empty, which is
-// indistinguishable from a legitimate replay.
 func TestHubFromTemplate_ParsesResultFieldsByTheirWireNames(t *testing.T) {
 	srv, _, _, _ := hubOpServer(t, http.StatusCreated, hubOpOKBody)
 	c := newHubOpClient(t, srv)
@@ -215,9 +180,6 @@ func TestHubFromTemplate_ParsesResultFieldsByTheirWireNames(t *testing.T) {
 	}
 }
 
-// A replay carries the summary but NO created ids, by design. A caller must use
-// Replayed to tell it from "created nothing" — this pins that the transport
-// surfaces both faithfully rather than inventing ids.
 func TestHubFromTemplate_ReplayHasSummaryButNoCreatedIDs(t *testing.T) {
 	const replay = `{"data":{"id":"hub_new","type":"hub_scaffolds","attributes":{
 	  "hub_id":"hub_new",

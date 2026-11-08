@@ -9,15 +9,6 @@ import (
 	"github.com/99designs/keyring"
 )
 
-// withXDG points config storage at a temp dir for the duration of the test and
-// clears the auth env vars so resolution is deterministic.
-//
-// It also points HOME (and USERPROFILE) at a second temp dir. Every path this
-// package derives goes through XDG_CONFIG_HOME first, so HOME should never be
-// consulted here — but a bug that derived a path from HOME anyway would
-// otherwise read or WRITE the developer's real ~/.config/mio. That is not
-// hypothetical: during MIO-2995's mutation run, a store path derived from
-// $HOME made SetAPIKey replace the real ~/.config/mio/keyring/api-key.
 func withXDG(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -30,9 +21,6 @@ func withXDG(t *testing.T) string {
 	return dir
 }
 
-// withFileBackendOnly restricts keyring operations to the file backend for the
-// duration of the test, preventing OS keychain interaction and making keyring
-// tests deterministic across platforms.
 func withFileBackendOnly(t *testing.T) {
 	t.Helper()
 	orig := keyringAllowedBackends
@@ -100,20 +88,15 @@ func TestResolve_APIKeyPrecedence_EnvBeatsConfig(t *testing.T) {
 	}
 }
 
-// MIO-2648 — Overrides.Anonymous forces an unauthenticated resolution, skipping
-// BOTH the MIO_API_KEY env var and the stored keychain key, so `--anonymous` can
-// deliberately run without credentials for diagnostics. An explicit --api-key
-// still wins over --anonymous.
 func TestResolve_AnonymousSkipsEnvAndKeychain(t *testing.T) {
-	withXDG(t)             // clears EnvAPIKey to ""
-	withFileBackendOnly(t) // deterministic keyring
+	withXDG(t)
+	withFileBackendOnly(t)
 	if err := SetAPIKey("keychain_key"); err != nil {
 		t.Fatalf("SetAPIKey: %v", err)
 	}
 
 	cfg, _ := Load()
 
-	// Baseline (no env): the keychain key resolves.
 	r, err := cfg.Resolve(Overrides{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -122,7 +105,6 @@ func TestResolve_AnonymousSkipsEnvAndKeychain(t *testing.T) {
 		t.Fatalf("baseline APIKey = %q, want keychain_key", r.APIKey)
 	}
 
-	// --anonymous skips the keychain → empty.
 	r, err = cfg.Resolve(Overrides{Anonymous: true})
 	if err != nil {
 		t.Fatalf("Resolve(anonymous): %v", err)
@@ -131,7 +113,6 @@ func TestResolve_AnonymousSkipsEnvAndKeychain(t *testing.T) {
 		t.Errorf("APIKey = %q, want empty under --anonymous (keychain skipped)", r.APIKey)
 	}
 
-	// --anonymous also skips the env var.
 	t.Setenv(EnvAPIKey, "env_key")
 	r, err = cfg.Resolve(Overrides{})
 	if err != nil {
@@ -148,7 +129,6 @@ func TestResolve_AnonymousSkipsEnvAndKeychain(t *testing.T) {
 		t.Errorf("APIKey = %q, want empty under --anonymous (env skipped)", r.APIKey)
 	}
 
-	// An explicit --api-key still wins over --anonymous (per the flag contract).
 	r, err = cfg.Resolve(Overrides{Anonymous: true, APIKey: "explicit_key"})
 	if err != nil {
 		t.Fatalf("Resolve(anonymous+key): %v", err)
@@ -158,10 +138,6 @@ func TestResolve_AnonymousSkipsEnvAndKeychain(t *testing.T) {
 	}
 }
 
-// MIO-2694 — Resolve must ECHO the anonymous mode back on Resolved. An empty
-// APIKey is ambiguous ("no key found" vs "no key wanted"), and the command layer
-// needs the difference to know whether to skip the key-required precondition. If
-// this flag is dropped, --anonymous can never reach the network.
 func TestResolve_AnonymousIsRecordedOnResolved(t *testing.T) {
 	withXDG(t)
 	cfg, _ := Load()
@@ -177,8 +153,6 @@ func TestResolve_AnonymousIsRecordedOnResolved(t *testing.T) {
 		t.Errorf("APIKey = %q, want empty", r.APIKey)
 	}
 
-	// The default resolution must NOT claim to be anonymous — otherwise every
-	// command would silently skip the key check.
 	r, err = cfg.Resolve(Overrides{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -252,10 +226,6 @@ func TestLoad_MissingFileIsEmpty(t *testing.T) {
 	}
 }
 
-// ---- File-backend key management tests ----------------------------------------
-
-// TestFileKey_GeneratedOnFirstUse verifies that loadOrCreateFileKey creates a
-// key file when none exists and returns a non-empty key.
 func TestFileKey_GeneratedOnFirstUse(t *testing.T) {
 	dir := withXDG(t)
 	key, err := loadOrCreateFileKey()
@@ -265,15 +235,12 @@ func TestFileKey_GeneratedOnFirstUse(t *testing.T) {
 	if len(key) == 0 {
 		t.Fatal("expected non-empty key")
 	}
-	// Key file must exist on disk.
 	keyPath := filepath.Join(dir, "mio", fileKeyName)
 	if _, err := os.Stat(keyPath); err != nil {
 		t.Errorf("key file not created at %s: %v", keyPath, err)
 	}
 }
 
-// TestFileKey_StableAcrossCalls verifies the key is reloaded unchanged on the
-// second call (idempotent).
 func TestFileKey_StableAcrossCalls(t *testing.T) {
 	withXDG(t)
 	k1, err := loadOrCreateFileKey()
@@ -289,17 +256,13 @@ func TestFileKey_StableAcrossCalls(t *testing.T) {
 	}
 }
 
-// TestFileKey_UniqueAcrossInstalls verifies that two fresh config dirs get
-// different keys (i.e., no hardcoded passphrase).
 func TestFileKey_UniqueAcrossInstalls(t *testing.T) {
-	// Install A.
 	withXDG(t)
 	kA, err := loadOrCreateFileKey()
 	if err != nil {
 		t.Fatalf("install A: %v", err)
 	}
 
-	// Install B — new temp dir, new key.
 	dirB := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dirB)
 	kB, err := loadOrCreateFileKey()
@@ -312,7 +275,6 @@ func TestFileKey_UniqueAcrossInstalls(t *testing.T) {
 	}
 }
 
-// TestFileKey_Permissions verifies the key file is stored 0600.
 func TestFileKey_Permissions(t *testing.T) {
 	dir := withXDG(t)
 	if _, err := loadOrCreateFileKey(); err != nil {
@@ -328,32 +290,23 @@ func TestFileKey_Permissions(t *testing.T) {
 	}
 }
 
-// TestFileKey_PermissionDriftInvalidates verifies that a key file whose
-// permissions have drifted beyond 0600 is treated as potentially compromised:
-// the key file is removed and loadOrCreateFileKey regenerates with a NEW key
-// on the next call (rather than silently repairing and reusing the old key).
 func TestFileKey_PermissionDriftInvalidates(t *testing.T) {
 	dir := withXDG(t)
-	// Generate the key initially.
 	origKey, err := loadOrCreateFileKey()
 	if err != nil {
 		t.Fatalf("initial loadOrCreateFileKey: %v", err)
 	}
-	// Widen permissions to simulate drift.
 	keyPath := filepath.Join(dir, "mio", fileKeyName)
 	if err := os.Chmod(keyPath, 0o644); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	// The validation must reject the drifted key and regenerate.
 	newKey, err := loadOrCreateFileKey()
 	if err != nil {
 		t.Fatalf("loadOrCreateFileKey after drift: %v", err)
 	}
-	// A fresh key must have been generated (different from the old one).
 	if newKey == origKey {
 		t.Error("expected a new key after permission drift, but got the same key — drift was silently repaired instead of invalidated")
 	}
-	// New key file must be at 0600.
 	info, err := os.Stat(keyPath)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
@@ -363,17 +316,13 @@ func TestFileKey_PermissionDriftInvalidates(t *testing.T) {
 	}
 }
 
-// TestFileKey_SymlinkRejected verifies that a symlink at the key path is
-// detected and regenerated as a regular file.
 func TestFileKey_SymlinkRejected(t *testing.T) {
 	dir := withXDG(t)
 	keyPath := filepath.Join(dir, "mio", fileKeyName)
 
-	// Create the mio config dir.
 	if err := os.MkdirAll(filepath.Join(dir, "mio"), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	// Put a symlink at the key path.
 	target := filepath.Join(dir, "other-key.txt")
 	if err := os.WriteFile(target, []byte("deadbeef"), 0o600); err != nil {
 		t.Fatalf("write target: %v", err)
@@ -382,8 +331,6 @@ func TestFileKey_SymlinkRejected(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	// loadOrCreateFileKey must detect the symlink, remove it, and generate a
-	// real regular-file key.
 	key, err := loadOrCreateFileKey()
 	if err != nil {
 		t.Fatalf("loadOrCreateFileKey with symlink: %v", err)
@@ -391,7 +338,6 @@ func TestFileKey_SymlinkRejected(t *testing.T) {
 	if !isValidFileKey(key) {
 		t.Errorf("regenerated key %q is invalid", key)
 	}
-	// The path should now be a regular file, not a symlink.
 	info, err := os.Lstat(keyPath)
 	if err != nil {
 		t.Fatalf("lstat after symlink rejection: %v", err)
@@ -401,8 +347,6 @@ func TestFileKey_SymlinkRejected(t *testing.T) {
 	}
 }
 
-// TestKeyring_SetGetRoundTrip verifies that SetAPIKey+GetAPIKey round-trip via
-// the file backend (no OS keychain in the test environment).
 func TestKeyring_SetGetRoundTrip(t *testing.T) {
 	withXDG(t)
 	withFileBackendOnly(t)
@@ -420,8 +364,6 @@ func TestKeyring_SetGetRoundTrip(t *testing.T) {
 	}
 }
 
-// TestKeyring_DeleteRemovesKey verifies DeleteAPIKey clears the stored key and a
-// subsequent GetAPIKey returns "".
 func TestKeyring_DeleteRemovesKey(t *testing.T) {
 	withXDG(t)
 	withFileBackendOnly(t)
@@ -441,18 +383,10 @@ func TestKeyring_DeleteRemovesKey(t *testing.T) {
 	}
 }
 
-// TestKeyring_LegacyHardcodedPassphraseInvalidated verifies that a keyring file
-// encrypted with the old hardcoded passphrase produces an error that tells the
-// user to re-login, and that the next login's write replaces it. (The read
-// leaves the file in place; see TestLegacyBlob_EveryReadReportsItAndLeavesItInPlace.)
 func TestKeyring_LegacyHardcodedPassphraseInvalidated(t *testing.T) {
 	withXDG(t)
-	// Force file backend only so this test is deterministic (no OS keychain).
 	withFileBackendOnly(t)
 
-	// Simulate a legacy installation: write a keyring file encrypted with the
-	// old hardcoded passphrase "mio-cli" directly via the keyring library.
-	// openKeyringWithPassword uses file-backend-only with cfgDirOverride="".
 	legacyRing, err := openKeyringWithPassword("mio-cli", "")
 	if err != nil {
 		t.Fatalf("open legacy ring: %v", err)
@@ -461,12 +395,6 @@ func TestKeyring_LegacyHardcodedPassphraseInvalidated(t *testing.T) {
 		t.Fatalf("set legacy key: %v", err)
 	}
 
-	// Now call GetAPIKey — it must not silently succeed (that would mean we
-	// decrypted with the hardcoded passphrase again), and must return an error
-	// whose message tells the user to re-login.
-	//
-	// The stale file stays where it is; a subsequent SetAPIKey (login) must
-	// replace it without error.
 	_, err = GetAPIKey()
 	if err == nil {
 		t.Fatal("expected an error for legacy-encrypted keyring, got nil — hardcoded passphrase still in use!")
@@ -475,7 +403,6 @@ func TestKeyring_LegacyHardcodedPassphraseInvalidated(t *testing.T) {
 		t.Errorf("error message should mention re-login, got: %v", err)
 	}
 
-	// Writing over the legacy blob and reading the fresh key back must succeed.
 	if err := SetAPIKey("mio_sk_fresh_key"); err != nil {
 		t.Fatalf("SetAPIKey over the legacy blob: %v", err)
 	}

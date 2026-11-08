@@ -1,11 +1,5 @@
 package catalog
 
-// resolve_test.go — catalog source resolution precedence (MIO-2340): the CLI
-// prefers a fresh live-fetched catalog, falls back to the last-good on-disk
-// cache, and finally to the embedded digest-pinned vendored copy — degrading
-// gracefully so scaffolding works offline/air-gapped. --catalog overrides
-// everything; --offline forces the vendored copy.
-
 import (
 	"context"
 	"errors"
@@ -15,7 +9,6 @@ import (
 	"testing"
 )
 
-// fakeFetcher is a scripted Fetcher for the resolver tests.
 type fakeFetcher struct {
 	res    FetchResult
 	err    error
@@ -34,7 +27,7 @@ func (f *fakeFetcher) FetchCatalog(_ context.Context, ifNoneMatch string) (Fetch
 
 func vendoredBytes(t *testing.T) []byte {
 	t.Helper()
-	return vendoredCatalogJSON // valid digest by construction
+	return vendoredCatalogJSON
 }
 
 func TestResolve_Live200_Valid_AdoptsAndCaches(t *testing.T) {
@@ -47,14 +40,9 @@ func TestResolve_Live200_Valid_AdoptsAndCaches(t *testing.T) {
 	if src != SourceLive {
 		t.Errorf("source = %q, want live", src)
 	}
-	// Assert against the vendored copy's own version rather than a literal: this
-	// test proves Resolve ADOPTED the body it was handed, not what today's pin
-	// happens to be (that is parity_test's digest pin). Keeps a re-pin to
-	// catalog.json + fixtures + CATALOG_REF with no unrelated test churn.
 	if want := loadForTest(t).Meta.CatalogVersion; cat.Meta.CatalogVersion != want {
 		t.Errorf("catalogVersion = %q, want %q (the vendored pin)", cat.Meta.CatalogVersion, want)
 	}
-	// Cache must be written for the next invocation.
 	if _, err := os.Stat(filepath.Join(dir, cacheBodyFile)); err != nil {
 		t.Errorf("live fetch did not write the cache body: %v", err)
 	}
@@ -74,7 +62,6 @@ func TestResolve_Live200_DigestMismatch_FallsBackToVendored(t *testing.T) {
 	if !warned {
 		t.Error("a digest mismatch should warn")
 	}
-	// The pinned 0.31.0 catalog declares 14 section templates.
 	if len(cat.Templates) != 14 {
 		t.Errorf("fell back to the wrong catalog: %d templates", len(cat.Templates))
 	}
@@ -82,7 +69,6 @@ func TestResolve_Live200_DigestMismatch_FallsBackToVendored(t *testing.T) {
 
 func TestResolve_Live304_UsesCache(t *testing.T) {
 	dir := t.TempDir()
-	// Seed the cache with a valid (vendored) body + etag.
 	seedCache(t, dir, vendoredBytes(t), `"`+pinnedDigest+`"`)
 	f := &fakeFetcher{res: FetchResult{NotModified: true}}
 	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir})
@@ -166,9 +152,6 @@ func TestResolve_NilFetcher_UsesVendored(t *testing.T) {
 	}
 }
 
-// refetchFetcher answers 304 to a conditional request (ifNoneMatch != "") and
-// 200 with body to an unconditional one — modeling the recovery path when a
-// cached ETag exists but the cached body is gone.
 type refetchFetcher struct {
 	body  []byte
 	calls int
@@ -184,8 +167,6 @@ func (f *refetchFetcher) FetchCatalog(_ context.Context, ifNoneMatch string) (Fe
 
 func TestResolve_Live304_CacheBodyMissing_Refetches(t *testing.T) {
 	dir := t.TempDir()
-	// Seed only the ETag (no body): cache.load() will fail but etag() returns it,
-	// so the first fetch is conditional → 304.
 	if err := os.WriteFile(filepath.Join(dir, cacheETagFile), []byte(`"stale"`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -204,8 +185,6 @@ func TestResolve_Live304_CacheBodyMissing_Refetches(t *testing.T) {
 
 func TestResolve_Live200_CachesDigestDerivedETag(t *testing.T) {
 	dir := t.TempDir()
-	// The server sends a WRONG ETag; the resolver must persist the digest-derived
-	// ETag instead, so the cached body and ETag can never desync.
 	f := &fakeFetcher{res: FetchResult{Body: vendoredBytes(t), ETag: `"server-sent-wrong"`}}
 	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir})
 	if err != nil {
@@ -224,8 +203,6 @@ func TestResolve_Live200_CachesDigestDerivedETag(t *testing.T) {
 	}
 }
 
-// badDigestBody parses fine, but its meta.digest disagrees with the recomputed
-// digest, so digest verification must reject it.
 func badDigestBody() []byte {
 	return []byte(`{"meta":{"digest":"sha256:wrong"},"templates":[],"pageTemplates":[],"sectionTypes":[],"pageTypes":[]}`)
 }
@@ -244,7 +221,6 @@ func TestResolve_Mutating_OverrideDigestMismatchFailsClosed(t *testing.T) {
 		t.Errorf("error = %q, want the mutating refusal message", err)
 	}
 
-	// Non-mutating keeps the existing warn-and-use behavior.
 	var warned bool
 	_, src, err := Resolve(context.Background(), ResolveOptions{OverrideFile: fp, Warnf: func(string, ...any) { warned = true }})
 	if err != nil {
@@ -260,7 +236,6 @@ func TestResolve_Mutating_OverrideDigestMismatchFailsClosed(t *testing.T) {
 
 func TestResolve_Mutating_LiveFetchErrorFailsNoFallback(t *testing.T) {
 	dir := t.TempDir()
-	// Warm cache: the test must prove the fallback is REFUSED, not just absent.
 	seedCache(t, dir, vendoredBytes(t), `"sha256:faae8f12a9236644b9868b75ef1d245002736228b51f2f8eefa1a43ddd7bd392"`)
 	f := &fakeFetcher{err: errors.New("network down")}
 	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Mutating: true, Warnf: func(string, ...any) {}})
@@ -274,7 +249,6 @@ func TestResolve_Mutating_LiveFetchErrorFailsNoFallback(t *testing.T) {
 
 func TestResolve_Mutating_BadLiveDigestFailsNoFallback(t *testing.T) {
 	dir := t.TempDir()
-	// Warm cache: a rejected live body must NOT continue to cache/vendored.
 	seedCache(t, dir, vendoredBytes(t), `"sha256:faae8f12a9236644b9868b75ef1d245002736228b51f2f8eefa1a43ddd7bd392"`)
 	f := &fakeFetcher{res: FetchResult{Body: badDigestBody(), ETag: `"sha256:wrong"`}}
 	_, src, err := Resolve(context.Background(), ResolveOptions{Fetcher: f, CacheDir: dir, Mutating: true, Warnf: func(string, ...any) {}})
@@ -301,8 +275,6 @@ func TestResolve_Mutating_304UsesValidatedCache(t *testing.T) {
 
 func TestResolve_Mutating_304CacheBodyMissing_Refetches(t *testing.T) {
 	dir := t.TempDir()
-	// ETag only, no body: 304 validates a cache we cannot read back, so the
-	// resolver must recover via an unconditional refetch — under Mutating too.
 	if err := os.WriteFile(filepath.Join(dir, cacheETagFile), []byte(`"stale"`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -319,8 +291,6 @@ func TestResolve_Mutating_304CacheBodyMissing_Refetches(t *testing.T) {
 	}
 }
 
-// failRefetchFetcher answers 304 to a conditional request and errors on the
-// unconditional refetch — a fetch failure inside the 304-recovery path.
 type failRefetchFetcher struct{ calls int }
 
 func (f *failRefetchFetcher) FetchCatalog(_ context.Context, ifNoneMatch string) (FetchResult, error) {
@@ -333,9 +303,6 @@ func (f *failRefetchFetcher) FetchCatalog(_ context.Context, ifNoneMatch string)
 
 func TestResolve_Mutating_304RefetchError_SurfacesCause(t *testing.T) {
 	dir := t.TempDir()
-	// ETag only, no body: the 304 validates a cache we cannot read back, and the
-	// recovery refetch then fails. The error must carry the real fetch failure,
-	// not the generic no-fetcher message.
 	if err := os.WriteFile(filepath.Join(dir, cacheETagFile), []byte(`"stale"`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +363,6 @@ func TestCacheDirUnder_SeparatesOrigins(t *testing.T) {
 	}
 }
 
-// seedCache writes a body+etag into the cache dir the way Resolve expects.
 func seedCache(t *testing.T, dir string, body []byte, etag string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, cacheBodyFile), body, 0o600); err != nil {

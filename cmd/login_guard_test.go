@@ -1,11 +1,5 @@
 package cmd
 
-// login_guard_test.go — MIO-3572: login/register must not silently overwrite
-// the one stored API key. The oracle is the wire plus the credential store:
-// every test records the requests the stub saw and reads the stored key back,
-// so "the key was kept" and "nothing irreversible was sent" are observed, not
-// assumed.
-
 import (
 	"bufio"
 	"encoding/json"
@@ -32,18 +26,14 @@ const (
 	guardBetaTeam  = "team_beta"
 )
 
-// guardBackend is a fake mio API recording every request ("METHOD path").
 type guardBackend struct {
-	srv  *httptest.Server
-	mu   sync.Mutex
-	reqs []string
-	// bearers lists every Authorization bearer any request carried, in order —
-	// the oracle for "was the stored key sent anywhere".
+	srv     *httptest.Server
+	mu      sync.Mutex
+	reqs    []string
 	bearers []string
-	token   string // JWT handed out by /auth/login and /auth/register
+	token   string
 }
 
-// sawBearer reports whether any request carried this key as its bearer.
 func (b *guardBackend) sawBearer(key string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -66,9 +56,6 @@ func (b *guardBackend) saw(prefix string) bool {
 	return false
 }
 
-// newGuardBackend: the login/register JWT claims loginTeam. GET /auth/me answers
-// per bearer key: old→team_alpha, pasted→team_beta, "mio_sk_dead"→401,
-// "mio_sk_flaky"→503.
 func newGuardBackend(t *testing.T, loginTeam string) *guardBackend {
 	t.Helper()
 	b := &guardBackend{token: makeLoginJWT(t, loginTeam)}
@@ -119,7 +106,6 @@ func newGuardBackend(t *testing.T, loginTeam string) *guardBackend {
 	return b
 }
 
-// storedKey reads the credential store back.
 func storedKey(t *testing.T) string {
 	t.Helper()
 	k, err := config.GetAPIKey()
@@ -143,7 +129,6 @@ func guardEnv(b *guardBackend, extra ...string) []string {
 	return append([]string{"MIO_API_BASE_URL=" + b.srv.URL, "MIO_API_KEY="}, extra...)
 }
 
-// loginHeadless runs `mio login --email --password [extra...]`.
 func loginHeadless(t *testing.T, b *guardBackend, extra ...string) contractResult {
 	t.Helper()
 	args := append([]string{"login", "--email", "a@test.member.dev", "--password", "pw"}, extra...)
@@ -152,7 +137,7 @@ func loginHeadless(t *testing.T, b *guardBackend, extra ...string) contractResul
 
 func TestLoginGuard_StoredKeyForAnotherTeam_NonInteractiveRefusesBeforeMinting(t *testing.T) {
 	seedStoredKey(t, guardOldKey)
-	b := newGuardBackend(t, guardBetaTeam) // logging into a DIFFERENT team than the stored key's
+	b := newGuardBackend(t, guardBetaTeam)
 
 	res, err := runResume(t, guardEnv(b), "login", "--email", "a@test.member.dev", "--password", "pw")
 	if res.Code != errs.ExitNeedsConfir {
@@ -189,7 +174,7 @@ func TestLoginGuard_WithYes_Replaces(t *testing.T) {
 
 func TestLoginGuard_SameTeam_NoPrompt(t *testing.T) {
 	seedStoredKey(t, guardOldKey)
-	b := newGuardBackend(t, guardAlphaTeam) // same team as the stored key
+	b := newGuardBackend(t, guardAlphaTeam)
 	res := loginHeadless(t, b)
 	if res.Code != errs.ExitOK {
 		t.Fatalf("an ordinary re-login must not need confirmation: exit = %d, stderr=%q", res.Code, res.Stderr)
@@ -302,8 +287,6 @@ func TestLoginGuard_PastedOrEnvKey(t *testing.T) {
 	})
 }
 
-// --anonymous promises to ignore stored credentials: the stored key must not be
-// sent to the API to learn its team, on the password path or with an explicit key.
 func TestLoginGuard_Anonymous_NeverSendsTheStoredKey(t *testing.T) {
 	seedStoredKey(t, guardOldKey)
 	b := newGuardBackend(t, guardBetaTeam)
@@ -323,8 +306,6 @@ func TestLoginGuard_Anonymous_NeverSendsTheStoredKey(t *testing.T) {
 	}
 }
 
-// interactive answers: the prompt is shown only on a terminal; a character
-// device as stdout stands in for one (the same trick isTTY's check allows).
 func TestLoginGuard_InteractiveAnswers(t *testing.T) {
 	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {
@@ -341,8 +322,6 @@ func TestLoginGuard_InteractiveAnswers(t *testing.T) {
 			resetGlobalFlags()
 			cmd, errBuf := testCmd("")
 			cmd.SetOut(devnull)
-			// A caller-owned bufio.Reader that already holds the answer: the guard
-			// must read THIS reader (the interactive login wraps stdin in one).
 			stdinIsTerminal = func(*cobra.Command) bool { return true }
 			t.Cleanup(func() { stdinIsTerminal = isInteractiveStdin })
 			err := confirmReplaceStoredKey(cmd, b.srv.URL, guardBetaTeam, bufio.NewReader(strings.NewReader(tc.answer)), true)
@@ -359,8 +338,6 @@ func TestLoginGuard_InteractiveAnswers(t *testing.T) {
 	}
 }
 
-// After the 403-recovery the target team changes; the guard must be asked about
-// the NEW team too (a stored key for it must not be replaced unasked).
 func TestMintAndStore_Guard_AskedAgainAfterOwnershipRecovery(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	resetGlobalFlags()
@@ -383,10 +360,6 @@ func TestMintAndStore_Guard_AskedAgainAfterOwnershipRecovery(t *testing.T) {
 	_ = cobra.Command{}
 }
 
-// ── review of MIO-3572 (Codex gpt-6.1-sol, xhigh) ────────────────────────────
-
-// A piped "y" must not approve a replacement just because stdout is a character
-// device (generic confirmDestructive treats /dev/null as a terminal).
 func TestLoginGuard_PipedYesWithDevNullStdoutDoesNotApprove(t *testing.T) {
 	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	if err != nil {
@@ -396,16 +369,14 @@ func TestLoginGuard_PipedYesWithDevNullStdoutDoesNotApprove(t *testing.T) {
 	seedStoredKey(t, guardOldKey)
 	b := newGuardBackend(t, guardBetaTeam)
 	resetGlobalFlags()
-	cmd, _ := testCmd("y\n") // stdin is not a terminal (a *strings.Reader)
-	cmd.SetOut(devnull)      // stdout IS a character device
+	cmd, _ := testCmd("y\n")
+	cmd.SetOut(devnull)
 	err = confirmReplaceStoredKey(cmd, b.srv.URL, guardBetaTeam, cmd.InOrStdin(), true)
 	if err == nil || errs.CodeOf(err) != errs.ExitNeedsConfir {
 		t.Fatalf("err = %v, want exit 5 (a real terminal on stdin is required, or --yes)", err)
 	}
 }
 
-// register must not send the stored key anywhere: it documents that it sends no
-// key, and the answer is "ask" either way (it always creates a new team).
 func TestRegisterGuard_DoesNotSendTheStoredKeyToTheAPI(t *testing.T) {
 	seedStoredKey(t, guardOldKey)
 	b := newGuardBackend(t, guardBetaTeam)
@@ -418,11 +389,6 @@ func TestRegisterGuard_DoesNotSendTheStoredKeyToTheAPI(t *testing.T) {
 	}
 }
 
-// A stored credential mio cannot READ (permissions) is replaced by the documented
-// recovery (MIO-2995: `MIO_API_KEY=<key> mio login`; the old credential cannot be
-// exported either) — but never silently: the note names what is being replaced.
-// (Codex's review wanted a confirmation here; the documented recovery wins, and
-// TestLogin_EnvKeyReplacesABlobItCannotRead pins it.)
 func TestLoginGuard_UnreadableStoredCredential_ReplacedWithAVisibleNote(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("permission bits do not bind root")
@@ -446,8 +412,6 @@ func TestLoginGuard_UnreadableStoredCredential_ReplacedWithAVisibleNote(t *testi
 	}
 }
 
-// The prompt must not echo a response body: a proxy that reflects request
-// headers would put the stored key into the message.
 func TestLoginGuard_UnverifiableKey_PromptNeverEchoesTheResponseBody(t *testing.T) {
 	seedStoredKey(t, "mio_sk_reflect")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -473,7 +437,6 @@ func TestLoginGuard_UnverifiableKey_PromptNeverEchoesTheResponseBody(t *testing.
 	}
 }
 
-// A refusal must leave config.toml (current_team) untouched too.
 func TestLoginGuard_RefusalLeavesCurrentTeamUntouched(t *testing.T) {
 	seedStoredKey(t, guardOldKey)
 	cfgDir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "mio")
@@ -497,7 +460,6 @@ func TestLoginGuard_RefusalLeavesCurrentTeamUntouched(t *testing.T) {
 	}
 }
 
-// The pasted --api-key path is guarded like the env path.
 func TestLoginGuard_ApiKeyFlag(t *testing.T) {
 	seedStoredKey(t, guardOldKey)
 	b := newGuardBackend(t, guardBetaTeam)
@@ -510,8 +472,6 @@ func TestLoginGuard_ApiKeyFlag(t *testing.T) {
 	}
 }
 
-// Refusal in the ownership-recovery branch must stop the retry mint and keep the
-// stored key — the callback list alone cannot tell "asked" from "obeyed".
 func TestMintAndStore_Guard_RefusalAfterOwnershipRecoveryStopsTheRetry(t *testing.T) {
 	seedStoredKey(t, guardOldKey)
 	resetGlobalFlags()
@@ -546,13 +506,11 @@ func TestMintAndStore_Guard_RefusalAfterOwnershipRecoveryStopsTheRetry(t *testin
 	}
 }
 
-// A network failure while verifying the stored key must be reported without the
-// transport error's text (it can carry URLs and request details).
 func TestLoginGuard_UnreachableAPI_PromptSaysOnlyThatTheRequestFailed(t *testing.T) {
 	seedStoredKey(t, guardOldKey)
 	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := dead.URL
-	dead.Close() // connection refused from here on
+	dead.Close()
 	resetGlobalFlags()
 	cmd, _ := testCmd("")
 	err := confirmReplaceStoredKey(cmd, url, guardBetaTeam, cmd.InOrStdin(), true)

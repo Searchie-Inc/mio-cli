@@ -1,15 +1,5 @@
 package cmd
 
-// update_native_test.go — coverage for the Go-native Windows self-updater
-// (MIO-2688).
-//
-// The real end-to-end path (download a GitHub release and swap a running
-// mio.exe) can only be exercised on Windows, which CI is not. Everything below
-// the OS boundary is therefore driven with the platform passed in as data
-// (GOOS/GOARCH) and GitHub replaced by an httptest server, so the asset naming,
-// checksum verification, zip extraction and the rename-then-replace sequencing
-// are all covered here on Linux.
-
 import (
 	"archive/zip"
 	"bytes"
@@ -44,7 +34,7 @@ func TestReleaseAssetName(t *testing.T) {
 		version, goos, goarch, want string
 	}{
 		{"0.12.1", "windows", "amd64", "mio_0.12.1_windows_amd64.zip"},
-		{"v0.12.1", "windows", "amd64", "mio_0.12.1_windows_amd64.zip"}, // tag form
+		{"v0.12.1", "windows", "amd64", "mio_0.12.1_windows_amd64.zip"},
 		{"0.12.1", "darwin", "arm64", "mio_0.12.1_darwin_arm64.tar.gz"},
 		{"0.12.1", "linux", "amd64", "mio_0.12.1_linux_amd64.tar.gz"},
 	}
@@ -86,8 +76,6 @@ func TestChecksumForAsset(t *testing.T) {
 		t.Errorf("checksum = %q, want bbb222", got)
 	}
 
-	// sha256sum binary-mode ("*name") entries are matched, and hashes normalize
-	// to lower case for the comparison.
 	got, err = checksumForAsset(body, "mio_0.12.1_linux_amd64.tar.gz")
 	if err != nil {
 		t.Fatalf("checksumForAsset (binary mode): %v", err)
@@ -161,7 +149,6 @@ func TestInstallStagedBinaryRenamesTheOldOneAside(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "mio.exe")
 	writeFile(t, dest, "OLD")
-	// A leftover .old from a previous update must not block the rename.
 	writeFile(t, dest+".old", "ANCIENT")
 	staged := filepath.Join(dir, "mio.exe.new-123")
 	writeFile(t, staged, "NEW")
@@ -176,8 +163,6 @@ func TestInstallStagedBinaryRenamesTheOldOneAside(t *testing.T) {
 	if _, err := os.Stat(staged); err == nil {
 		t.Error("the staged file should have been renamed away")
 	}
-	// On Linux the .old can be deleted immediately; on Windows it stays until
-	// the next run. Either way the ANCIENT leftover must be gone.
 	if _, err := os.Stat(dest + ".old"); err == nil {
 		if got := readFile(t, dest+".old"); got == "ANCIENT" {
 			t.Error("the stale .old from a previous update was not replaced")
@@ -203,8 +188,6 @@ func TestInstallStagedBinaryRestoresTheOldBinaryWhenTheSwapFails(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "mio.exe")
 	writeFile(t, dest, "OLD")
-	// A staged path that does not exist makes the second rename fail, which is
-	// exactly the "we already moved the running binary aside" danger window.
 	staged := filepath.Join(dir, "does-not-exist")
 
 	err := installStagedBinary(staged, dest, &bytes.Buffer{})
@@ -229,7 +212,6 @@ func TestSweepSupersededBinary(t *testing.T) {
 	old := exe + ".old"
 	writeFile(t, old, "previous")
 
-	// Not Windows: never touch anything.
 	sweepSupersededBinary("linux", exe)
 	if _, err := os.Stat(old); err != nil {
 		t.Fatalf(".old must be left alone off Windows: %v", err)
@@ -243,7 +225,6 @@ func TestSweepSupersededBinary(t *testing.T) {
 		t.Errorf("the running binary must survive the sweep: %v", err)
 	}
 
-	// Absent .old, an empty exe path, and a missing dir are all no-ops.
 	sweepSupersededBinary("windows", exe)
 	sweepSupersededBinary("windows", "")
 }
@@ -268,7 +249,6 @@ func TestLatestReleaseVersion(t *testing.T) {
 	if got != "0.12.1" {
 		t.Errorf("version = %q, want 0.12.1 (leading v stripped)", got)
 	}
-	// GitHub rejects API requests without a User-Agent.
 	if !strings.HasPrefix(gotUA, "mio-cli/") {
 		t.Errorf("User-Agent = %q, want a mio-cli/... UA", gotUA)
 	}
@@ -302,8 +282,6 @@ func TestRunNativeUpdateEndToEnd(t *testing.T) {
 			t.Errorf("progress output missing %q; got:\n%s", want, out.String())
 		}
 	}
-	// The installed file must carry the exec bits (os.CreateTemp stages at 0600).
-	// Meaningless on Windows, which is why this only asserts on the CI host.
 	if runtime.GOOS != "windows" {
 		fi, err := os.Stat(dest)
 		if err != nil {
@@ -314,7 +292,6 @@ func TestRunNativeUpdateEndToEnd(t *testing.T) {
 		}
 	}
 
-	// The staging temp file must not be left behind in the install dir.
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if strings.Contains(e.Name(), ".new-") {
@@ -328,7 +305,7 @@ func TestRunNativeUpdateRefusesOnChecksumMismatch(t *testing.T) {
 	dest := filepath.Join(dir, "mio.exe")
 	writeFile(t, dest, "OLD-BINARY")
 
-	srv := newFakeReleaseServer(t, "0.12.1", "TAMPERED", true) // publishes a bogus checksum
+	srv := newFakeReleaseServer(t, "0.12.1", "TAMPERED", true)
 	defer srv.Close()
 	withReleaseEndpoints(t, srv.URL, srv.URL)
 
@@ -373,7 +350,6 @@ func TestRunNativeUpdateMissingReleaseIsAClearError(t *testing.T) {
 }
 
 func TestRunNativeUpdateRejectsUnbuiltWindowsArch(t *testing.T) {
-	// goreleaser does not build windows/arm64, so there is no asset to fetch.
 	err := runNativeUpdate(context.Background(), nativeUpdateConfig{
 		Prefix: t.TempDir(),
 		GOOS:   "windows",
@@ -384,11 +360,6 @@ func TestRunNativeUpdateRejectsUnbuiltWindowsArch(t *testing.T) {
 	}
 }
 
-// Local input must be validated BEFORE anything touches the network — the same
-// "no request fires on a usage error" rule the resource commands follow. Codex
-// review round 1 caught the original ordering: the prefix check sat after the
-// latest-release lookup, so a typo'd --prefix surfaced a DNS/network error (and
-// this very test silently reached the real api.github.com).
 func TestRunNativeUpdateValidatesLocalInputBeforeAnyRequest(t *testing.T) {
 	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -429,8 +400,6 @@ func TestRunNativeUpdateValidatesLocalInputBeforeAnyRequest(t *testing.T) {
 			wantErr: "not a valid release version",
 		},
 		{
-			// Same "bad local target" class: refuse before spending a download,
-			// not after (Codex review round 2).
 			name:    "dest exists but is not a regular file",
 			cfg:     nativeUpdateConfig{Prefix: dirContainingDir(t, "mio.exe"), GOOS: "windows", GOARCH: "amd64"},
 			wantErr: "not a regular file",
@@ -444,8 +413,6 @@ func TestRunNativeUpdateValidatesLocalInputBeforeAnyRequest(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
 			}
-			// Exit-code contract: deterministic local-input failures are usage
-			// errors (exit 2), not generic failures (Codex review round 2).
 			if got := errs.CodeOf(err); got != errs.ExitUsage {
 				t.Errorf("exit code = %d, want %d (ExitUsage)", got, errs.ExitUsage)
 			}
@@ -469,8 +436,6 @@ func TestValidateReleaseVersion(t *testing.T) {
 	}
 }
 
-// A dest that is not a regular file (a directory, most destructively) must not
-// be renamed aside and replaced — Codex review round 1.
 func TestInstallStagedBinaryRefusesANonRegularDest(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "mio.exe")
@@ -482,8 +447,6 @@ func TestInstallStagedBinaryRefusesANonRegularDest(t *testing.T) {
 	}
 	staged := filepath.Join(dir, "mio.exe.new-1")
 	writeFile(t, staged, "NEW")
-	// An unrelated leftover .old must survive too: refusing an invalid target
-	// has to be completely no-touch (Codex review round 3).
 	writeFile(t, dest+".old", "PREVIOUS")
 
 	err := installStagedBinary(staged, dest, &bytes.Buffer{})
@@ -504,9 +467,6 @@ func TestInstallStagedBinaryRefusesANonRegularDest(t *testing.T) {
 	}
 }
 
-// A malformed tag from GitHub is a server-side problem, not something the user
-// typed, so it must NOT be reported as a usage error (Codex review round 3 —
-// the %w wrap was promoting the inner ExitUsage all the way to the exit code).
 func TestRunNativeUpdateMalformedUpstreamTagIsNotAUsageError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"tag_name":"v0.12.1/../../x"}`)
@@ -529,10 +489,6 @@ func TestRunNativeUpdateMalformedUpstreamTagIsNotAUsageError(t *testing.T) {
 	}
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────
-
-// withReleaseEndpoints points the release URLs at a test server for the test's
-// lifetime.
 func withReleaseEndpoints(t *testing.T, api, download string) {
 	t.Helper()
 	oldAPI, oldDownload := githubAPIBaseURL, githubDownloadBaseURL
@@ -540,8 +496,6 @@ func withReleaseEndpoints(t *testing.T, api, download string) {
 	t.Cleanup(func() { githubAPIBaseURL, githubDownloadBaseURL = oldAPI, oldDownload })
 }
 
-// newFakeReleaseServer serves the three endpoints the native updater talks to:
-// the latest-release API, the windows/amd64 zip, and checksums.txt.
 func newFakeReleaseServer(t *testing.T, version, binaryContent string, corruptChecksum bool) *httptest.Server {
 	t.Helper()
 
@@ -604,8 +558,6 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-// dirContainingDir returns a fresh directory that holds a subdirectory called
-// name — i.e. an install prefix whose mio.exe is not a regular file.
 func dirContainingDir(t *testing.T, name string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -615,7 +567,6 @@ func dirContainingDir(t *testing.T, name string) string {
 	return dir
 }
 
-// writeTempFile creates a file (not a directory) and returns its path.
 func writeTempFile(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "file")

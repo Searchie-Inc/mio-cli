@@ -1,20 +1,5 @@
 package cmd
 
-// hubs_blobs_test.go — contract tests for the presentation-blob flags on
-// `mio hubs create`: --branding-json / --navigation-json / --settings-json /
-// --meta-json (MIO-2254). These blobs are opaque JSONB on the hub; the CLI
-// passes them through verbatim so an operator/agent can author a hub's
-// branding, navigation, settings and feature-guard meta in one POST.
-//
-// Contract pinned here:
-//   --branding-json '{...}'   → data.attributes.branding   = that object
-//   --navigation-json '{...}' → data.attributes.navigation = that object
-//   --settings-json '{...}'   → data.attributes.settings   = that object
-//   --meta-json '{...}'       → data.attributes.meta        = that object
-//   numeric values survive as numbers (not stringified)
-//   --logo-url MERGES into --branding-json (does not clobber it)
-//   malformed JSON or a non-object value → ExitUsage, no HTTP request fired
-
 import (
 	"net/http"
 	"net/http/httptest"
@@ -24,9 +9,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// TestHubsCreate_BrandingJSONFlag verifies --branding-json is sent verbatim as
-// data.attributes.branding, with numeric values preserved as numbers (the
-// MIO-2235 regression: string font sizes were silently dropped by the FE).
 func TestHubsCreate_BrandingJSONFlag(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -49,14 +31,11 @@ func TestHubsCreate_BrandingJSONFlag(t *testing.T) {
 	if branding["primary"] != "#6747E3" {
 		t.Errorf("branding.primary = %v, want \"#6747E3\"", branding["primary"])
 	}
-	// Numbers must round-trip as numbers, not strings.
 	if branding["heading_font_size"] != float64(32) {
 		t.Errorf("branding.heading_font_size = %#v, want numeric 32", branding["heading_font_size"])
 	}
 }
 
-// TestHubsCreate_NavigationSettingsMetaJSONFlags verifies the other three blob
-// flags each land at their top-level attribute as objects.
 func TestHubsCreate_NavigationSettingsMetaJSONFlags(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -101,10 +80,6 @@ func TestHubsCreate_NavigationSettingsMetaJSONFlags(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_LogoURLMergesIntoBrandingJSON verifies that --logo-url and
-// --branding-json compose: logo_url is merged INTO the branding object rather
-// than replacing it (branding is a whole-blob field server-side, so the CLI
-// must send one merged object).
 func TestHubsCreate_LogoURLMergesIntoBrandingJSON(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -133,9 +108,6 @@ func TestHubsCreate_LogoURLMergesIntoBrandingJSON(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_InvalidBlobJSONErrorsFast verifies malformed JSON and
-// non-object values (arrays/scalars) fail fast with ExitUsage and fire NO
-// HTTP request.
 func TestHubsCreate_InvalidBlobJSONErrorsFast(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -173,11 +145,6 @@ func TestHubsCreate_InvalidBlobJSONErrorsFast(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_InvalidBlobJSONNoResolveRequest verifies that a malformed blob
-// flag fails fast with ExitUsage BEFORE any HTTP call — even when --team is a
-// NAME/SLUG that would otherwise trigger a team-resolution GET /api/teams inside
-// hubsContext. Regression for the codex-review finding: flag validation must run
-// before auth/team resolution, else a bad --branding-json still fires a request.
 func TestHubsCreate_InvalidBlobJSONNoResolveRequest(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -190,7 +157,7 @@ func TestHubsCreate_InvalidBlobJSONNoResolveRequest(t *testing.T) {
 
 	res := runContract(t, baseEnv(srv.URL),
 		"hubs", "create",
-		"--team", "acme-name", // NOT id-shaped → would trigger ResolveTeam GET /api/teams
+		"--team", "acme-name",
 		"--name", "X",
 		"--branding-json", `{not json`,
 	)
@@ -203,8 +170,6 @@ func TestHubsCreate_InvalidBlobJSONNoResolveRequest(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_BlobJSONFromFile verifies a blob flag reads its JSON from an
-// @file path (large blobs like a full navigation tree live in a file).
 func TestHubsCreate_BlobJSONFromFile(t *testing.T) {
 	dir := t.TempDir()
 	fp := dir + "/nav.json"

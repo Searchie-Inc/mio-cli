@@ -7,16 +7,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// TestSetFlags_SnakeCaseKeys verifies that kebab-case flag names are written to
-// the attributes map under snake_case keys (the JSON:API backend uses
-// snake_case attribute names), while the user-facing flag name stays kebab.
 func TestSetFlags_SnakeCaseKeys(t *testing.T) {
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().String("user-id", "", "")
 	cmd.Flags().String("first-name", "", "")
 	cmd.Flags().Int("interval-count", 0, "")
 	cmd.Flags().Bool("is-free-tier", false, "")
-	cmd.Flags().String("name", "", "") // no hyphen — must remain unchanged
+	cmd.Flags().String("name", "", "")
 
 	if err := cmd.Flags().Set("user-id", "usr_123"); err != nil {
 		t.Fatal(err)
@@ -58,7 +55,6 @@ func TestSetFlags_SnakeCaseKeys(t *testing.T) {
 			t.Errorf("attrs[%q] = %v, want %v", k, gotV, wantV)
 		}
 	}
-	// Ensure no kebab-case keys leaked through.
 	for _, kebab := range []string{"user-id", "first-name", "interval-count", "is-free-tier"} {
 		if _, ok := attrs[kebab]; ok {
 			t.Errorf("attrs unexpectedly contains kebab key %q", kebab)
@@ -66,7 +62,6 @@ func TestSetFlags_SnakeCaseKeys(t *testing.T) {
 	}
 }
 
-// TestAttrKey is a focused unit check on the kebab→snake conversion.
 func TestAttrKey(t *testing.T) {
 	cases := map[string]string{
 		"user-id":        "user_id",
@@ -82,13 +77,11 @@ func TestAttrKey(t *testing.T) {
 	}
 }
 
-// TestSetMappedFlags verifies that mapped helpers write to an EXPLICIT backend
-// key (not the snake_cased flag name) only when the user set the flag.
 func TestSetMappedFlags(t *testing.T) {
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().String("from-email", "", "")
 	cmd.Flags().Int("mail-port", 0, "")
-	cmd.Flags().String("reply-to", "", "") // left unset
+	cmd.Flags().String("reply-to", "", "")
 
 	if err := cmd.Flags().Set("from-email", "hi@example.com"); err != nil {
 		t.Fatal(err)
@@ -100,7 +93,7 @@ func TestSetMappedFlags(t *testing.T) {
 	attrs := map[string]any{}
 	setMappedString(cmd, attrs, "from-email", "mail_from_email")
 	setMappedInt(cmd, attrs, "mail-port", "mail_port")
-	setMappedString(cmd, attrs, "reply-to", "reply_to") // unset → omitted
+	setMappedString(cmd, attrs, "reply-to", "reply_to")
 
 	if attrs["mail_from_email"] != "hi@example.com" {
 		t.Errorf("mail_from_email = %v, want hi@example.com", attrs["mail_from_email"])
@@ -111,15 +104,12 @@ func TestSetMappedFlags(t *testing.T) {
 	if _, ok := attrs["reply_to"]; ok {
 		t.Errorf("reply_to should be omitted when the flag is unset; got %v", attrs["reply_to"])
 	}
-	// The snake_cased flag name must NOT leak as a key.
 	if _, ok := attrs["from_email"]; ok {
 		t.Errorf("attrs unexpectedly contains the flag-derived key from_email")
 	}
 }
 
-// TestParseJSONFlag verifies inline JSON and @file parsing for structured flags.
 func TestParseJSONFlag(t *testing.T) {
-	// Inline object.
 	v, err := parseJSONFlag(`{"version":1,"groups":[]}`)
 	if err != nil {
 		t.Fatalf("inline parse error: %v", err)
@@ -129,12 +119,10 @@ func TestParseJSONFlag(t *testing.T) {
 		t.Errorf("inline parse = %#v, want object with version=1", v)
 	}
 
-	// Invalid JSON surfaces an error.
 	if _, err := parseJSONFlag(`{not json`); err == nil {
 		t.Error("expected error for invalid JSON, got nil")
 	}
 
-	// @file form.
 	dir := t.TempDir()
 	fp := dir + "/conds.json"
 	if err := os.WriteFile(fp, []byte(`{"version":1,"groups":[{"logic":"AND","conditions":[]}]}`), 0o600); err != nil {

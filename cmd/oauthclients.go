@@ -1,26 +1,5 @@
 package cmd
 
-// oauthclients.go implements the `mio oauth-clients` command group.
-//
-// Routes (Hub-as-IdP SSO, team-admin surface only — member-facing /oauth/* flows
-// are browser/tool driven and are NOT exposed here):
-//
-//	create           POST   /api/teams/{team_id}/oauth-clients
-//	list             GET    /api/teams/{team_id}/oauth-clients
-//	retrieve         GET    /api/teams/{team_id}/oauth-clients/{id}
-//	delete           DELETE /api/teams/{team_id}/oauth-clients/{id}
-//	redirect-uris add    POST   /api/teams/{team_id}/oauth-clients/{client_pk}/redirect-uris
-//	redirect-uris remove DELETE /api/teams/{team_id}/oauth-clients/{client_pk}/redirect-uris/{id}
-//
-// JSON:API resource types: "oauth_clients", "oauth_client_redirect_uris"
-//
-// NOTE: `first_party` and `allowed_scopes` are platform-admin-only fields
-// (configurable only via PATCH /api/oauth-clients/{id} which requires platform
-// admin auth). They are intentionally NOT exposed here.
-//
-// The client_secret is returned by the server only on create. Store it
-// immediately — subsequent retrieve and list calls will not re-expose it.
-
 import (
 	"fmt"
 	"net/url"
@@ -32,7 +11,6 @@ import (
 )
 
 func init() {
-	// oauth-clients <action>
 	oauthClientsCmd.AddCommand(
 		oauthClientsCreateCmd,
 		oauthClientsListCmd,
@@ -41,7 +19,6 @@ func init() {
 		oauthClientsRedirectURIsCmd,
 	)
 
-	// oauth-clients redirect-uris <action>
 	oauthClientsRedirectURIsCmd.AddCommand(
 		oauthClientsRedirectURIsAddCmd,
 		oauthClientsRedirectURIsRemoveCmd,
@@ -50,9 +27,6 @@ func init() {
 	rootCmd.AddCommand(oauthClientsCmd)
 }
 
-// ── path helpers ──────────────────────────────────────────────────────────────
-
-// oauthClientsPath returns /api/teams/{team_id}/oauth-clients[/{id}].
 func oauthClientsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/oauth-clients", teamID)
 	if id != "" {
@@ -61,7 +35,6 @@ func oauthClientsPath(teamID, id string) string {
 	return base
 }
 
-// redirectURIsPath returns /api/teams/{team_id}/oauth-clients/{client_pk}/redirect-uris[/{id}].
 func redirectURIsPath(teamID, clientPK, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/oauth-clients/%s/redirect-uris", teamID, clientPK)
 	if id != "" {
@@ -69,8 +42,6 @@ func redirectURIsPath(teamID, clientPK, id string) string {
 	}
 	return base
 }
-
-// ── group ─────────────────────────────────────────────────────────────────────
 
 var oauthClientsCmd = &cobra.Command{
 	Use:   "oauth-clients",
@@ -83,8 +54,6 @@ their users via your hub using standard OAuth 2.0 / OIDC flows.
 The client_secret is returned only once at creation time. Store it immediately —
 subsequent retrieve and list calls will not re-expose the secret.`,
 }
-
-// ── create ────────────────────────────────────────────────────────────────────
 
 var oauthClientsCreateCmd = &cobra.Command{
 	Use:   "create",
@@ -128,7 +97,6 @@ returns an empty or absent secret for them).`,
 
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "name")
-		// --public maps to the backend's is_public attribute name.
 		setMappedBool(cmd, attrs, "public", "is_public")
 		setStringFlag(cmd, attrs, "brand-label")
 		setStringFlag(cmd, attrs, "logo-url")
@@ -137,10 +105,6 @@ returns an empty or absent secret for them).`,
 			return errs.New(errs.ExitUsage, "--name is required")
 		}
 
-		// --redirect-uri supplies the initial redirect URI. A single String flag
-		// avoids the in-process test reset accumulation issue that pflag list types
-		// (StringArray / StringSlice) have when resetCommandFlags calls Set with
-		// the default value. Additional URIs can be added via `redirect-uris add`.
 		if cmd.Flags().Changed("redirect-uri") {
 			if v, err2 := cmd.Flags().GetString("redirect-uri"); err2 == nil && strings.TrimSpace(v) != "" {
 				attrs["redirect_uris"] = []string{v}
@@ -154,8 +118,6 @@ returns an empty or absent secret for them).`,
 		return c.render(cmd, res)
 	},
 }
-
-// ── list ──────────────────────────────────────────────────────────────────────
 
 var oauthClientsListCmd = &cobra.Command{
 	Use:   "list",
@@ -189,8 +151,6 @@ var oauthClientsListCmd = &cobra.Command{
 	},
 }
 
-// ── retrieve ──────────────────────────────────────────────────────────────────
-
 var oauthClientsRetrieveCmd = &cobra.Command{
 	Use:     "retrieve <id>",
 	Short:   "Retrieve an OAuth client by id.",
@@ -217,8 +177,6 @@ var oauthClientsRetrieveCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ── delete ────────────────────────────────────────────────────────────────────
 
 var oauthClientsDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
@@ -259,15 +217,11 @@ non-interactive environments.`,
 	},
 }
 
-// ── redirect-uris sub-group ───────────────────────────────────────────────────
-
 var oauthClientsRedirectURIsCmd = &cobra.Command{
 	Use:   "redirect-uris",
 	Short: "Manage redirect URIs for an OAuth client.",
 	Long:  "Add and remove allowed redirect URIs on an OAuth client.",
 }
-
-// ── redirect-uris add ─────────────────────────────────────────────────────────
 
 var oauthClientsRedirectURIsAddCmd = &cobra.Command{
 	Use:   "add <client_id>",
@@ -303,8 +257,6 @@ var oauthClientsRedirectURIsAddCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ── redirect-uris remove ──────────────────────────────────────────────────────
 
 var oauthClientsRedirectURIsRemoveCmd = &cobra.Command{
 	Use:   "remove <client_id> <uri_id>",
@@ -346,21 +298,14 @@ non-interactive environments.`,
 	},
 }
 
-// ── flag registration ─────────────────────────────────────────────────────────
-
 func init() {
-	// create flags
 	oauthClientsCreateCmd.Flags().String("name", "", "Human-readable name for the OAuth client. (required)")
 	oauthClientsCreateCmd.Flags().Bool("public", false, "Create a public client (PKCE — for mobile apps and SPAs). Confidential by default.")
 	oauthClientsCreateCmd.Flags().String("brand-label", "", "Custom label shown on the OAuth consent/login screen.")
 	oauthClientsCreateCmd.Flags().String("logo-url", "", "URL of a logo image shown on the OAuth consent/login screen.")
-	// Single String (not StringSlice/StringArray) to avoid pflag in-process test
-	// reset accumulation. Additional URIs can be added via `redirect-uris add`.
 	oauthClientsCreateCmd.Flags().String("redirect-uri", "", "Initial allowed redirect URI. Use `redirect-uris add` to add more after creation.")
 
-	// list pagination
 	addPaginationFlags(oauthClientsListCmd)
 
-	// redirect-uris add flags
 	oauthClientsRedirectURIsAddCmd.Flags().String("uri", "", "The redirect URI to add. (required)")
 }

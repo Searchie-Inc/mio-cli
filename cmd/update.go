@@ -60,22 +60,12 @@ stderr names it and the exact 'mio skills install' command that updates it.`,
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Updating mio in %s...\n", opts.Prefix)
 		if err := selfUpdateRunner(cmd.Context(), opts, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
-			// Keep an exit code the runner already decided: the native Windows
-			// updater returns ExitUsage for deterministic local-input failures
-			// (bad --prefix/--version, unsupported arch, non-file destination)
-			// that fire no request, and the contract says those exit 2. The Unix
-			// install-script path only ever returns untyped exec errors, so it
-			// still maps to ExitGeneric exactly as before (Codex review round 2).
 			var ce *errs.CLIError
 			if errors.As(err, &ce) {
 				return ce
 			}
 			return errs.Wrap(errs.ExitGeneric, err)
 		}
-		// After a successful self-update, keep any managed agent skill in sync.
-		// The refresh is delegated to the binary we just installed — this
-		// process still holds the OLD embedded skill body and cannot render the
-		// new one (MIO-2874). Best-effort: never fails the update.
 		refreshManagedSkills(cmd.OutOrStdout(), cmd.ErrOrStderr(), installedBinaryPath(opts.Prefix))
 		return nil
 	},
@@ -87,17 +77,6 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 }
 
-// installedBinaryPath is where the updater just wrote the new binary. Returns ""
-// when no regular file is there, so the caller reports the skill was left alone
-// instead of silently leaving a stale one (MIO-2874).
-//
-// The result is made ABSOLUTE deliberately. filepath.Join(".", "mio") yields the
-// separator-free "mio", and os/exec resolves a separator-free name through $PATH
-// rather than the current directory — so `mio update --prefix .` would hand the
-// skill refresh to whatever other mio happens to be on PATH and then report its
-// version as installed. That is precisely the "skill that lies about which verbs
-// exist" outcome this whole path exists to prevent, reached through a supported
-// flag value.
 func installedBinaryPath(prefix string) string {
 	name := "mio"
 	if runtime.GOOS == "windows" {
@@ -127,12 +106,6 @@ func resolveUpdatePrefix(prefix string) (string, error) {
 }
 
 func defaultSelfUpdateRunner(ctx context.Context, opts updateOptions, stdout, stderr io.Writer) error {
-	// Windows has no `sh` (and usually no `curl`), so the shell pipeline below
-	// cannot run there at all — it failed with `exec: "sh": executable file not
-	// found in %PATH%` and the Windows build could never self-update (MIO-2688).
-	// Take the Go-native download+replace path instead. Every other platform
-	// keeps re-running scripts/install.sh unchanged, including the darwin
-	// Gatekeeper mitigation from MIO-2603.
 	if useNativeUpdater(runtime.GOOS) {
 		return runNativeUpdate(ctx, nativeUpdateConfig{
 			Prefix:  opts.Prefix,

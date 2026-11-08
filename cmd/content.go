@@ -1,21 +1,5 @@
 package cmd
 
-// content.go implements the `mio content` command group for managing content
-// items nested under a hub. Every sub-command is hub-scoped: both {team_id}
-// and {hub_id} must be resolved from context (or supplied via --team/--hub).
-//
-// Routes (see docs/internal/api-surface.md "content"):
-//
-//	create   POST   /api/teams/{team_id}/hubs/{hub_id}/content
-//	list     GET    /api/teams/{team_id}/hubs/{hub_id}/content
-//	retrieve GET    /api/teams/{team_id}/hubs/{hub_id}/content/{id}
-//	children GET    /api/teams/{team_id}/hubs/{hub_id}/content/{id}/children
-//	update   PATCH  /api/teams/{team_id}/hubs/{hub_id}/content/{id}
-//	delete   DELETE /api/teams/{team_id}/hubs/{hub_id}/content/{id}
-//	restore  POST   /api/teams/{team_id}/hubs/{hub_id}/content/{id}/restore
-//	reorder  POST   /api/teams/{team_id}/hubs/{hub_id}/content/reorder
-//	reconcile POST  /api/teams/{team_id}/hubs/{hub_id}/content/reconcile
-
 import (
 	"fmt"
 	"net/http"
@@ -28,7 +12,6 @@ import (
 )
 
 func init() {
-	// content <action>
 	contentCmd.AddCommand(
 		contentCreateCmd,
 		contentListCmd,
@@ -41,11 +24,8 @@ func init() {
 		contentReconcileCmd,
 	)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(contentCmd)
 }
-
-// ---- content group ----------------------------------------------------------
 
 var contentCmd = &cobra.Command{
 	Use:   "content",
@@ -53,7 +33,6 @@ var contentCmd = &cobra.Command{
 	Long:  "Create, list, retrieve, update, delete, restore, reorder, and reconcile content items within a hub.",
 }
 
-// contentBasePath returns /api/teams/{team_id}/hubs/{hub_id}/content[/{id}].
 func contentBasePath(teamID, hubID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/hubs/%s/content", teamID, hubID)
 	if id != "" {
@@ -62,8 +41,6 @@ func contentBasePath(teamID, hubID, id string) string {
 	return base
 }
 
-// contentContext is the shared boilerplate for content sub-commands: builds the
-// context, requires auth, and resolves both team id and hub id.
 func contentContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -82,8 +59,6 @@ func contentContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	}
 	return c, teamID, hubID, nil
 }
-
-// ---- create -----------------------------------------------------------------
 
 var contentCreateCmd = &cobra.Command{
 	Use:   "create",
@@ -113,16 +88,9 @@ a whole hub's playlists one each, see 'mio content reconcile'.`,
   mio content create --hub hub_abc --title "Workshop Replay" --node-type lesson --content-type video --parent-id cnt_xyz --file-id file_abc123`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Flag-shape validation runs BEFORE contentContext so a contradictory
-		// pair fires no request even when --hub is a name (see
-		// validateContentMediaFlags).
 		if err := validateContentMediaFlags(cmd); err != nil {
 			return err
 		}
-
-		// --title and --node-type are required by the backend
-		// ContentNodeCreateAttributes schema; cobra enforces both before RunE
-		// (markFlagsRequired in init).
 
 		c, teamID, hubID, err := contentContext(cmd)
 		if err != nil {
@@ -149,8 +117,6 @@ a whole hub's playlists one each, see 'mio content reconcile'.`,
 	},
 }
 
-// ---- list -------------------------------------------------------------------
-
 var contentListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List root content items in a hub.",
@@ -175,8 +141,6 @@ var contentListCmd = &cobra.Command{
 	},
 }
 
-// ---- retrieve ---------------------------------------------------------------
-
 var contentRetrieveCmd = &cobra.Command{
 	Use:     "retrieve <id>",
 	Short:   "Retrieve a content item by id.",
@@ -196,8 +160,6 @@ var contentRetrieveCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- children ---------------------------------------------------------------
 
 var contentChildrenCmd = &cobra.Command{
 	Use:   "children <id>",
@@ -223,8 +185,6 @@ var contentChildrenCmd = &cobra.Command{
 		return c.render(cmd, col)
 	},
 }
-
-// ---- update -----------------------------------------------------------------
 
 var contentUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
@@ -274,8 +234,6 @@ Note: node_type and parent_id are immutable after create and cannot be changed v
 	},
 }
 
-// ---- delete -----------------------------------------------------------------
-
 var contentDeleteCmd = &cobra.Command{
 	Use:     "delete <id>",
 	Short:   "Delete a content item by id.",
@@ -299,8 +257,6 @@ var contentDeleteCmd = &cobra.Command{
 		return nil
 	},
 }
-
-// ---- restore ----------------------------------------------------------------
 
 var contentRestoreCmd = &cobra.Command{
 	Use:     "restore <id>",
@@ -327,25 +283,6 @@ var contentRestoreCmd = &cobra.Command{
 	},
 }
 
-// applyContentMediaFlags resolves the content node's media binding for `create`
-// and `update`.
-//
-// --media-id takes the Media PK directly. --file-id takes the FILE id — the id
-// a creator actually holds after `mio media files upload` — and resolves it to
-// the Media PK here (MIO-3074). That resolution matters more than convenience:
-// the backend stores media_id verbatim WITHOUT validating it (MIO-3432), so a
-// file id passed to --media-id yields a lesson silently pointing at nothing
-// rather than an error. The two flags are mutually exclusive.
-// validateContentMediaFlags checks the --media-id/--file-id pairing with NO
-// network access, so it can run BEFORE contentContext.
-//
-// That ordering is the whole point. contentContext resolves the team and hub,
-// and requireTeam/requireHub LIST over HTTP whenever either was given as a name
-// or slug rather than an id (internal/client/resolve.go — an id-shaped value
-// short-circuits, a name does not). Validating after it means a user who
-// addresses their hub by name pays a round trip before being told their flags
-// contradict each other. `media playlists set-cover` already establishes the
-// rule: "Validate before resolving auth/team so a bad flag fires no request."
 func validateContentMediaFlags(cmd *cobra.Command) error {
 	hasMedia := cmd.Flags().Changed("media-id")
 	hasFile := cmd.Flags().Changed("file-id")
@@ -357,22 +294,6 @@ func validateContentMediaFlags(cmd *cobra.Command) error {
 	if hasFile && flagValue(cmd, "file-id") == "" {
 		return errs.New(errs.ExitUsage, "--file-id was set but is empty")
 	}
-	// --media-id needs the same guard, and for a sharper reason: setStringFlag
-	// neither trims nor rejects empty, and the backend stores media_id WITHOUT
-	// validating it (MIO-3432) — so `--media-id ""` would create a lesson
-	// pointing at nothing, with a 201 and no error.
-	//
-	// This applies to UPDATE too, and that is a deliberate reversal. Treating an
-	// empty value as "clear the link" reads well until you write the shell that
-	// most people write:
-	//
-	//	mio content update $ID --media-id "$MEDIA"    # $MEDIA unset upstream
-	//
-	// cobra sees the flag as Changed with an empty value, so a Changed-based
-	// guard does not catch it, and a silent clear DESTROYS a working link while
-	// exiting 0. An empty value is far more often a broken variable than an
-	// intent to unlink, so it must fail loudly. Clearing is available, but only
-	// through a flag a variable cannot accidentally become: --unset-media.
 	if hasMedia && flagValue(cmd, "media-id") == "" {
 		return errs.New(errs.ExitUsage,
 			"--media-id was set but is empty (pass a media PK, use --file-id to resolve one from a file id, or --unset-media to unlink)")
@@ -387,14 +308,6 @@ func validateContentMediaFlags(cmd *cobra.Command) error {
 }
 
 func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, attrs map[string]any) error {
-	// Explicit unlink. JSON null is what the backend's `media_id: str | None`
-	// clears on under exclude_unset semantics; "" would store an empty string.
-	// This is a boolean precisely so no shell variable can expand into it.
-	//
-	// It is ALSO gated by confirmDestructive, the same bar `content delete` uses
-	// two commands over: a live lesson stops playing the moment its media is
-	// unlinked, and a non-interactive shell must pass --yes to do that. Being
-	// un-typo-able is not the same as being safe to run unattended in a loop.
 	if cmd.Flags().Changed("unset-media") {
 		if unset, _ := cmd.Flags().GetBool("unset-media"); unset {
 			if err := confirmDestructive(cmd, "Unlink this content item's media? The lesson will stop playing"); err != nil {
@@ -412,7 +325,6 @@ func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, at
 		return nil
 	}
 
-	// Shape already validated by validateContentMediaFlags before any request.
 	fileID := flagValue(cmd, "file-id")
 	mediaID, err := resolveFileMediaID(c, teamID, fileID, "this content item's media")
 	if err != nil {
@@ -421,8 +333,6 @@ func applyContentMediaFlags(cmd *cobra.Command, c *cmdContext, teamID string, at
 	attrs["media_id"] = mediaID
 	return nil
 }
-
-// ---- reorder ----------------------------------------------------------------
 
 var contentReorderCmd = &cobra.Command{
 	Use:   "reorder",
@@ -443,11 +353,6 @@ the list.`,
 		}
 		order, _ := cmd.Flags().GetString("order")
 
-		// The backend ReorderAttributes schema (extra="forbid") requires
-		// attributes.items — a LIST of {id, position} objects — and rejects any
-		// other field. Split --order into that ordered array, stamping each id
-		// with its 0-based position; the parent is determined by item context
-		// server-side, so nothing else is sent.
 		items := make([]map[string]any, 0)
 		for _, raw := range strings.Split(order, ",") {
 			id := strings.TrimSpace(raw)
@@ -475,17 +380,7 @@ the list.`,
 	},
 }
 
-// ---- flag registration ------------------------------------------------------
-
 func init() {
-	// Flags for create.
-	// NOTE: --status and --published were removed (MIO-942 + Codex R1) — the
-	// ContentNodeCreateAttributes schema uses extra="forbid" and has neither a
-	// status nor a published field. Publication is controlled by published_at
-	// (a nullable timestamp the backend gates visibility on: published =
-	// published_at <= now), exposed here as --published-at.
-	// --node-type maps to attributes.node_type (required on create; immutable after).
-	// --content-type maps to attributes.content_type (optional sub-type for lessons).
 	contentCreateCmd.Flags().String("title", "", "Content item title.")
 	contentCreateCmd.Flags().String("node-type", "", `Node type: "container" (folder/module) or "lesson" (leaf item). Required on create.`)
 	markFlagsRequired(contentCreateCmd, "title", "node-type")
@@ -497,7 +392,6 @@ func init() {
 	contentCreateCmd.Flags().String("media-id", "", "Id of the media asset backing this content item (the .media_id from 'mio media files retrieve', NOT the file id).")
 	contentCreateCmd.Flags().String("file-id", "", "Id of the FILE backing this content item (the .id from 'mio media files list'); its media_id is resolved for you. Mutually exclusive with --media-id.")
 
-	// Flags for update (node_type and parent_id are immutable after create).
 	contentUpdateCmd.Flags().String("title", "", "Content item title.")
 	contentUpdateCmd.Flags().String("content-type", "", `Optional content sub-type for lesson nodes (e.g. video, audio, pdf, text).`)
 	contentUpdateCmd.Flags().String("description", "", "Content item description.")
@@ -507,28 +401,14 @@ func init() {
 	contentUpdateCmd.Flags().Bool("unset-media", false, "Unlink this content item's media, sending an explicit null — the lesson stops playing. A boolean so no shell variable can expand into it, and destructive, so it prompts (or needs --yes in a non-interactive shell).")
 	contentUpdateCmd.Flags().String("file-id", "", "Id of the FILE backing this content item (the .id from 'mio media files list'); its media_id is resolved for you. Mutually exclusive with --media-id.")
 
-	// Reconcile: repeatable --playlist-id. Omitted entirely means "use this
-	// hub's scaffold provenance" (the backend derives the set); an empty list
-	// is rejected server-side, so the command refuses to send one.
 	contentReconcileCmd.Flags().StringSlice("playlist-id", nil, "Playlist id to reconcile; repeatable. Omit to use the playlists in the hub's scaffold provenance, which only the server-side hub scaffold op records (a hand-built or client-side-scaffolded hub has none and rejects a bare run).")
 
-	// Pagination for list and children.
 	addPaginationFlags(contentListCmd)
 	addPaginationFlags(contentChildrenCmd)
 
-	// Reorder flags. There is no --parent-id: the backend reorder route
-	// (ReorderAttributes, extra="forbid") only accepts an items array and
-	// determines each node's parent from item context, so a parent flag would
-	// be a misleading no-op that the API rejects.
 	contentReorderCmd.Flags().String("order", "", "Comma-separated list of content ids in the desired display order (position = 0-based index).")
 }
 
-// ---- reconcile --------------------------------------------------------------
-
-// contentReconcileType is the JSON:API `type` the backend's
-// HubContentReconcileResource declares as a Literal. It is sent explicitly
-// (ActionWithType) rather than derived from the request path — see the comment
-// at the call site and in internal/client/client.go's typeOverrides.
 const contentReconcileType = "content_node_reconciliations"
 
 var contentReconcileCmd = &cobra.Command{
@@ -573,14 +453,6 @@ Three limits worth knowing before you run it:
   mio content reconcile --hub hub_abc --playlist-id pl_a --playlist-id pl_b`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Built BEFORE contentContext so a bad --playlist-id fires no request
-		// even when --hub is a name that would otherwise be resolved over HTTP
-		// (same rule as validateContentMediaFlags).
-		//
-		// The backend accepts a bodyless POST and derives the playlist set from
-		// the hub's scaffold provenance; an explicitly EMPTY list is rejected
-		// (min_length=1) rather than read as "no override". So send a body only
-		// when the caller actually named playlists.
 		var body map[string]any
 		if cmd.Flags().Changed("playlist-id") {
 			ids, _ := cmd.Flags().GetStringSlice("playlist-id")
@@ -588,9 +460,6 @@ Three limits worth knowing before you run it:
 			for _, raw := range ids {
 				id := strings.TrimSpace(raw)
 				if id == "" {
-					// Dropping a blank silently would reconcile a SHORTER set
-					// than the caller named and still report success — the
-					// caller would have no way to notice the omission.
 					return errs.New(errs.ExitUsage,
 						"--playlist-id contains an empty value; remove it or supply a real playlist id")
 				}
@@ -607,12 +476,6 @@ Three limits worth knowing before you run it:
 			return err
 		}
 
-		// The envelope type is named EXPLICITLY rather than derived from the
-		// path. .../content/reconcile is an ambiguous tail: the backend resolves
-		// a content node by slug as well as by id, so PATCH on that same path is
-		// a legitimate update of a node slugged "reconcile". A path-keyed
-		// typeOverride would answer both with the reconciliation type and 422
-		// that update (extra="forbid"). See internal/client ActionWithType.
 		path := contentBasePath(teamID, hubID, "") + "/reconcile"
 		res, err := c.client.ActionWithType(c.ctx, http.MethodPost, path, contentReconcileType, body)
 		if err != nil {

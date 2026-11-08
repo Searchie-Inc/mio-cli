@@ -1,10 +1,5 @@
 package cmd
 
-// media_transcripts_test.go — contract tests for the `mio media transcripts`
-// command group (MIO-2289). Reads (get / vtt / content / versions) hit the
-// team-scoped transcript router; the write surface is edit (PATCH words) and
-// revert (POST version), both deriving JSON:API type "transcripts".
-
 import (
 	"net/http"
 	"testing"

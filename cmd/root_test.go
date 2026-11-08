@@ -10,9 +10,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// codeForExecuteErr mirrors main.exitCodeFor: a *CLIError keeps its code; any
-// other error returned from Execute() is a Cobra usage error → ExitUsage. Kept
-// in sync with main.go by the assertions below.
 func codeForExecuteErr(err error) int {
 	if err == nil {
 		return errs.ExitOK
@@ -24,8 +21,6 @@ func codeForExecuteErr(err error) int {
 	return errs.ExitUsage
 }
 
-// runRoot executes the real root command tree against args and returns the
-// error, with stdout/stderr captured so the test stays quiet.
 func runRoot(t *testing.T, args ...string) error {
 	t.Helper()
 	root := RootCmd()
@@ -37,13 +32,7 @@ func runRoot(t *testing.T, args ...string) error {
 	return root.Execute()
 }
 
-// TestExitCode_UsageErrorsMapToExitUsage verifies the central exit-code contract:
-// every Cobra usage error (flag parse, required-flag, arg count, unknown command)
-// resolves to ExitUsage (2), and a real *CLIError keeps its own code.
 func TestExitCode_UsageErrorsMapToExitUsage(t *testing.T) {
-	// A throwaway subcommand with a required flag + NoArgs, registered only for
-	// this test, so we exercise required-flag and arg-count paths deterministically
-	// without depending on any specific resource command's flags.
 	probe := &cobra.Command{
 		Use:  "probe-usage-error",
 		Args: cobra.NoArgs,
@@ -76,9 +65,6 @@ func TestExitCode_UsageErrorsMapToExitUsage(t *testing.T) {
 	}
 }
 
-// TestExitCode_FlagErrorFuncWrapsAsCLIError verifies the SetFlagErrorFunc hook
-// turns flag-parse errors into a *CLIError carrying ExitUsage (so the code is
-// correct even before main.go's fallback).
 func TestExitCode_FlagErrorFuncWrapsAsCLIError(t *testing.T) {
 	err := runRoot(t, "version", "--definitely-not-a-flag")
 	if err == nil {

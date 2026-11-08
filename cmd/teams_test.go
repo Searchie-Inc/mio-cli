@@ -1,21 +1,5 @@
 package cmd
 
-// teams_test.go — MIO-3830: `teams create` / `teams update` send what the API's
-// write schemas accept.
-//
-// mio-backend app/teams/schemas.py (origin/main):
-//
-//	class TeamCreate(_JsonApiInbound):   extra="forbid"; name: str; slug: str
-//	class TeamUpdate(_JsonApiInbound):   extra="forbid"; name: str | None
-//
-// Up to v0.23.0 `teams create` had no --slug, so it never sent the required
-// `slug` and answered 422 ("Field required (/slug)") whatever was passed. The
-// --subdomain flag both commands had sent `subdomain`, a field neither schema
-// has ("Extra inputs are not permitted (/subdomain)"), so `teams update
-// --subdomain` answered 422 too. The oracle here is the WIRE: each test
-// captures the request the real command tree sends and compares the whole
-// body, so a stale or extra attribute fails by name.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -37,8 +21,6 @@ type teamsWireRequest struct {
 	Body   []byte
 }
 
-// newTeamsRecordingServer records every request and answers each with a teams
-// resource (201 for POST, 200 otherwise).
 func newTeamsRecordingServer(t *testing.T) (*httptest.Server, func() []teamsWireRequest) {
 	t.Helper()
 	var mu sync.Mutex
@@ -64,9 +46,6 @@ func newTeamsRecordingServer(t *testing.T) (*httptest.Server, func() []teamsWire
 	}
 }
 
-// runTeamsCLI drives the real command tree in-process and returns both streams
-// and the error Execute returned (so the message can be asserted, not only the
-// exit code).
 func runTeamsCLI(t *testing.T, env []string, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	restore := overlayEnv(t, env)
@@ -82,8 +61,6 @@ func runTeamsCLI(t *testing.T, env []string, args ...string) (stdout, stderr str
 	return out.String(), errBuf.String(), err
 }
 
-// assertOneTeamsWrite asserts exactly one request was sent, with the given
-// method and path, and that its body equals wantBody (deep JSON equality).
 func assertOneTeamsWrite(t *testing.T, reqs []teamsWireRequest, method, path, wantBody string) {
 	t.Helper()
 	if len(reqs) != 1 {
@@ -97,8 +74,6 @@ func assertOneTeamsWrite(t *testing.T, reqs []teamsWireRequest, method, path, wa
 
 const teamsCreateAcmeBody = `{"data":{"type":"teams","attributes":{"name":"Acme Corp","slug":"acme"}}}`
 
-// TestTeamsCreate_SendsSlug pins the wire body for `teams create`: the TeamCreate
-// fields name + slug and nothing else (the schema is extra="forbid").
 func TestTeamsCreate_SendsSlug(t *testing.T) {
 	srv, reqs := newTeamsRecordingServer(t)
 
@@ -110,9 +85,6 @@ func TestTeamsCreate_SendsSlug(t *testing.T) {
 	assertOneTeamsWrite(t, reqs(), http.MethodPost, "/api/v1/teams", teamsCreateAcmeBody)
 }
 
-// TestTeamsCreate_SubdomainIsDeprecatedAliasForSlug: the pre-fix spelling keeps
-// working, sends `slug` (never `subdomain`), and says it is deprecated on
-// STDERR only, so a JSON stdout stays parseable.
 func TestTeamsCreate_SubdomainIsDeprecatedAliasForSlug(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -143,9 +115,6 @@ func TestTeamsCreate_SubdomainIsDeprecatedAliasForSlug(t *testing.T) {
 	}
 }
 
-// TestTeamsCreate_SlugAndSubdomainDiffer_UsageErrorNoRequest: the alias and the
-// canonical flag naming DIFFERENT slugs is ambiguous, so it is a usage error
-// before any credential lookup or request — never a silent last-one-wins.
 func TestTeamsCreate_SlugAndSubdomainDiffer_UsageErrorNoRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -154,7 +123,6 @@ func TestTeamsCreate_SlugAndSubdomainDiffer_UsageErrorNoRequest(t *testing.T) {
 	}{
 		{"slug first", baseEnv, []string{"--slug", "acme", "--subdomain", "other"}},
 		{"subdomain first", baseEnv, []string{"--subdomain", "other", "--slug", "acme"}},
-		// No credentials at all: still exit 2, not 3, so the check runs before auth.
 		{"no credentials", func(u string) []string {
 			return []string{"MIO_API_KEY=", "MIO_API_BASE_URL=" + u}
 		}, []string{"--slug", "acme", "--subdomain", "other"}},
@@ -179,8 +147,6 @@ func TestTeamsCreate_SlugAndSubdomainDiffer_UsageErrorNoRequest(t *testing.T) {
 	}
 }
 
-// TestTeamsCreate_RequiresNameAndSlug: TeamCreate requires both, so omitting
-// either is refused by cobra before any request (exit 2, even with no key).
 func TestTeamsCreate_RequiresNameAndSlug(t *testing.T) {
 	noCreds := func(u string) []string { return []string{"MIO_API_KEY=", "MIO_API_BASE_URL=" + u} }
 	for _, tc := range []struct {
@@ -212,8 +178,6 @@ func TestTeamsCreate_RequiresNameAndSlug(t *testing.T) {
 	}
 }
 
-// TestTeamsCreate_HelpShowsSlugHidesSubdomain: --slug is the documented flag;
-// the deprecated alias works but is not advertised.
 func TestTeamsCreate_HelpShowsSlugHidesSubdomain(t *testing.T) {
 	stdout, stderr, err := runTeamsCLI(t, nil, "teams", "create", "--help")
 	if err != nil {
@@ -228,8 +192,6 @@ func TestTeamsCreate_HelpShowsSlugHidesSubdomain(t *testing.T) {
 	}
 }
 
-// TestTeamsUpdate_SendsOnlyName pins the wire body for `teams update`:
-// TeamUpdate has exactly one field, name.
 func TestTeamsUpdate_SendsOnlyName(t *testing.T) {
 	srv, reqs := newTeamsRecordingServer(t)
 
@@ -241,10 +203,6 @@ func TestTeamsUpdate_SendsOnlyName(t *testing.T) {
 		`{"data":{"type":"teams","attributes":{"name":"New Name"}}}`)
 }
 
-// TestTeamsUpdate_HasNoSlugFlag: TeamUpdate takes no slug (a team's slug is set
-// at creation), so neither spelling exists on update. Before MIO-3830,
-// `--subdomain` was accepted here and always answered 422; now it is an unknown
-// flag, still exit 2, and no request is sent.
 func TestTeamsUpdate_HasNoSlugFlag(t *testing.T) {
 	for _, flag := range []string{"--subdomain", "--slug"} {
 		t.Run(flag, func(t *testing.T) {

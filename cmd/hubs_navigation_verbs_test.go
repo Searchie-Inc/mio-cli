@@ -1,11 +1,5 @@
 package cmd
 
-// hubs_navigation_verbs_test.go — contract tests for `mio hubs navigation`
-// list/add/remove/reorder (MIO-2633). Each mutating verb read-modify-writes the
-// hub navigation blob: GET the hub (nav + slug), mutate one bucket, then PATCH
-// navigation. Tests assert the exact PATCHed bucket and that usage errors fire
-// with NO write (pre-HTTP) or NO PATCH (post-fetch validation).
-
 import (
 	"encoding/json"
 	"fmt"
@@ -18,9 +12,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// navMockServer serves a hub retrieve (GET) carrying the given slug + navigation,
-// and captures the PATCH body. Returns the server, a pointer to the last PATCH
-// body, and a PATCH counter.
 func navMockServer(t *testing.T, slug, navJSON string) (*httptest.Server, *[]byte, *int) {
 	t.Helper()
 	var patchBody []byte
@@ -67,8 +58,6 @@ func navItemStr(t *testing.T, item any, key string) string {
 }
 
 const twoHeaderItems = `{"header":[{"type":"url","href":"/my-hub/a","label":"A"},{"type":"url","href":"/my-hub/b","label":"B"}]}`
-
-// ── add ─────────────────────────────────────────────────────────────────────
 
 func TestNavAdd_UrlConvenience_Appends(t *testing.T) {
 	srv, body, patches := navMockServer(t, "my-hub", twoHeaderItems)
@@ -125,8 +114,6 @@ func TestNavAdd_Position_Inserts(t *testing.T) {
 }
 
 func TestNavAdd_RejectsHubEscapingHref(t *testing.T) {
-	// A hub-relative href outside /{slug} must be rejected AFTER the fetch (slug
-	// known) with NO PATCH.
 	srv, _, patches := navMockServer(t, "my-hub", twoHeaderItems)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "hubs", "navigation", "add", "hub_x", "header",
@@ -164,8 +151,6 @@ func TestNavAdd_UsageErrors_NoRequest(t *testing.T) {
 		})
 	}
 }
-
-// ── remove ──────────────────────────────────────────────────────────────────
 
 func TestNavRemove_ByIndex(t *testing.T) {
 	srv, body, patches := navMockServer(t, "my-hub", twoHeaderItems)
@@ -206,8 +191,6 @@ func TestNavRemove_RequiresIndex_NoRequest(t *testing.T) {
 		t.Error("missing --index must fire before any HTTP request")
 	}
 }
-
-// ── reorder ─────────────────────────────────────────────────────────────────
 
 func TestNavReorder_Permutes(t *testing.T) {
 	const three = `{"header":[{"type":"url","href":"/my-hub/a","label":"A"},{"type":"url","href":"/my-hub/b","label":"B"},{"type":"url","href":"/my-hub/c","label":"C"}]}`
@@ -261,8 +244,6 @@ func TestNavReorder_BadOrderFormat_NoRequest(t *testing.T) {
 	}
 }
 
-// ── list ────────────────────────────────────────────────────────────────────
-
 func TestNavList_IndexesItems(t *testing.T) {
 	srv, _, patches := navMockServer(t, "my-hub", twoHeaderItems)
 	res := runContract(t, baseEnv(srv.URL),
@@ -286,9 +267,6 @@ func TestNavList_IndexesItems(t *testing.T) {
 	}
 }
 
-// The rendered nav output must be a generic JSON tree that --jq (gojq) can
-// traverse — gojq panics on concrete Go slice types like []map[string]any, so
-// indexedBucket must return []any. Regression guard for that class.
 func TestNavList_JqTraversable(t *testing.T) {
 	srv, _, _ := navMockServer(t, "my-hub", twoHeaderItems)
 	res := runContract(t, baseEnv(srv.URL),
@@ -301,8 +279,6 @@ func TestNavList_JqTraversable(t *testing.T) {
 	}
 }
 
-// Codex R1: a present-but-non-object stored navigation is malformed data — the
-// verb must reject it (with no PATCH) rather than silently replace/destroy it.
 func TestNav_MalformedStoredNavigation_NoPatch(t *testing.T) {
 	srv, _, patches := navMockServer(t, "my-hub", `"not-an-object"`)
 	res := runContract(t, baseEnv(srv.URL),
@@ -316,8 +292,6 @@ func TestNav_MalformedStoredNavigation_NoPatch(t *testing.T) {
 	}
 }
 
-// Codex R1: an item carrying its own "index" field must NOT shadow the generated
-// position, or 'list' would advertise the wrong index for remove/reorder.
 func TestNavList_GeneratedIndexWins(t *testing.T) {
 	const withBogusIndex = `{"header":[{"type":"url","href":"/my-hub/a","index":"BOGUS"},{"type":"url","href":"/my-hub/b","index":99}]}`
 	srv, _, _ := navMockServer(t, "my-hub", withBogusIndex)
@@ -331,13 +305,10 @@ func TestNavList_GeneratedIndexWins(t *testing.T) {
 	}
 }
 
-// Codex R1 / Opus: the url convenience flags build a header/footer-shaped item;
-// they must be rejected for the mobile bucket (which uses {id,label,route,icon}),
-// before any HTTP request.
 func TestNavAdd_MobileRejectsUrlFlags_NoRequest(t *testing.T) {
 	for _, args := range [][]string{
 		{"hubs", "navigation", "add", "hub_x", "mobile", "--type", "url", "--href", "/my-hub/x", "--label", "X"},
-		{"hubs", "navigation", "add", "hub_x", "mobile"}, // no source at all → also steered to --item-json
+		{"hubs", "navigation", "add", "hub_x", "mobile"},
 	} {
 		srv, fired := firedGuardServer(t)
 		res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", args...)...)
@@ -350,7 +321,6 @@ func TestNavAdd_MobileRejectsUrlFlags_NoRequest(t *testing.T) {
 	}
 }
 
-// A mobile item supplied via --item-json is accepted and PATCHed as-is.
 func TestNavAdd_MobileItemJSON(t *testing.T) {
 	srv, body, patches := navMockServer(t, "my-hub", `{"mobile":[]}`)
 	res := runContract(t, baseEnv(srv.URL),
@@ -368,7 +338,6 @@ func TestNavAdd_MobileItemJSON(t *testing.T) {
 	}
 }
 
-// A footer add via --item-json PATCHes the footer bucket (not header).
 func TestNavAdd_FooterItemJSON(t *testing.T) {
 	srv, body, _ := navMockServer(t, "my-hub", `{"footer":[{"type":"url","href":"/my-hub/legal","label":"Legal"}]}`)
 	res := runContract(t, baseEnv(srv.URL),
@@ -383,7 +352,6 @@ func TestNavAdd_FooterItemJSON(t *testing.T) {
 	}
 }
 
-// --position out of range is a post-fetch data error: it fires the GET but no PATCH.
 func TestNavAdd_PositionOutOfRange_NoPatch(t *testing.T) {
 	for _, pos := range []string{"99", "-1"} {
 		srv, _, patches := navMockServer(t, "my-hub", twoHeaderItems)
@@ -399,16 +367,6 @@ func TestNavAdd_PositionOutOfRange_NoPatch(t *testing.T) {
 	}
 }
 
-// ─── MIO-2990: every strictly-validated item must carry `position` ───────────
-//
-// The backend declares a bare `position: int` on NavItemUrl, NavItemDiscussions
-// and NavItemPage (app/hubs/validation.py _KNOWN_NAV_ITEM_MODELS) — no default,
-// so an item without it is a 422. The CLI never set it, on ANY path.
-//
-// The tests above could not catch that: they assert on ARRAY ORDER against a
-// stub that does not validate, so they are green whether or not the emitted
-// item carries the field the API requires. These assert the wire shape instead.
-
 func navItemPos(t *testing.T, item any) (int, bool) {
 	t.Helper()
 	m, ok := item.(map[string]any)
@@ -419,15 +377,13 @@ func navItemPos(t *testing.T, item any) (int, bool) {
 	if !present {
 		return 0, false
 	}
-	f, ok := v.(float64) // encoding/json numbers
+	f, ok := v.(float64)
 	if !ok {
 		t.Fatalf("position is not a number: %#v", v)
 	}
 	return int(f), true
 }
 
-// Both construction paths must stamp it — Claudiu reported --item-json only, but
-// the url convenience path omitted it too.
 func TestNavAdd_EmitsPositionOnEveryItem(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -458,8 +414,6 @@ func TestNavAdd_EmitsPositionOnEveryItem(t *testing.T) {
 	}
 }
 
-// A mid-bucket insert must renumber the items it displaced. Set-on-insert alone
-// would leave two items claiming position 0.
 func TestNavAdd_MidBucketInsertRenumbersDisplacedItems(t *testing.T) {
 	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
 	res := runContract(t, baseEnv(srv.URL),
@@ -485,8 +439,6 @@ func TestNavAdd_MidBucketInsertRenumbersDisplacedItems(t *testing.T) {
 	}
 }
 
-// remove goes through the same write path, so it must renumber too — otherwise a
-// removal leaves a gap and every later item claims a stale index.
 func TestNavRemove_RenumbersRemainingItems(t *testing.T) {
 	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
 	res := runContract(t, baseEnv(srv.URL),
@@ -503,10 +455,6 @@ func TestNavRemove_RenumbersRemainingItems(t *testing.T) {
 	}
 }
 
-// The mobile {id,label,route,icon} shape carries no `type` and takes the
-// backend's PASSTHROUGH branch — it is not schema-checked and does not need a
-// position. Stamping one would be inventing a field on a shape the CLI does not
-// own, which the conduit rule cuts against.
 func TestNavAdd_PassthroughItemsAreNotStamped(t *testing.T) {
 	srv, body, _ := navMockServer(t, "my-hub", `{"header":[],"footer":[],"mobile":[]}`)
 	res := runContract(t, baseEnv(srv.URL),
@@ -524,11 +472,6 @@ func TestNavAdd_PassthroughItemsAreNotStamped(t *testing.T) {
 	}
 }
 
-// --position is documented as the insertion index. Since `position` on the item
-// is defined as the array index, the flag necessarily feeds it too — Claudiu's
-// re-test showed `--type url --position 5` still 422'd because the CLI wrote no
-// position AT ALL, not because the flag was disconnected from it. Pinned so the
-// two cannot drift apart.
 func TestNavAdd_PositionFlagFeedsTheItemField(t *testing.T) {
 	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
 	res := runContract(t, baseEnv(srv.URL),
@@ -549,16 +492,6 @@ func TestNavAdd_PositionFlagFeedsTheItemField(t *testing.T) {
 	}
 }
 
-// A caller-supplied `position` inside --item-json is NORMALIZED to the item's
-// array index, not honoured verbatim.
-//
-// This is a deliberate override and the one place this change overrules explicit
-// input. `position` is a derived property of order, not independent data: the
-// CLI owns the array (via --position / remove --index / reorder) and
-// `navigation list` advertises those same indices for addressing. Honouring a
-// conflicting value would produce a menu whose positions disagree with the order
-// the operator was just shown, and could duplicate an existing item's position.
-// Documented in --position's help so it is a decision rather than a surprise.
 func TestNavAdd_ExplicitPositionInItemJSONIsNormalized(t *testing.T) {
 	srv, body, _ := navMockServer(t, "my-hub", twoHeaderItems)
 	res := runContract(t, baseEnv(srv.URL),
@@ -579,17 +512,7 @@ func TestNavAdd_ExplicitPositionInItemJSONIsNormalized(t *testing.T) {
 	}
 }
 
-// ─── the sibling buckets must survive a single-bucket edit untouched ─────────
-//
-// These verbs are documented as mutating ONE bucket, but the write is a
-// whole-blob read-modify-write, so renumbering the entire blob silently rewrote
-// the siblings. That is live rendered state, not bookkeeping: mio-hub SORTS
-// header/footer by `position` (src/lib/hub-shape/navigation.ts parseList), so a
-// footer stored out of array order gets re-flattened by a HEADER-only command,
-// with the footer never appearing in the output.
 func TestNavAdd_DoesNotRenumberSiblingBuckets(t *testing.T) {
-	// footer stored OUT of array order: F carries 3, G carries 0 — mio-hub
-	// renders G,F. A blob-wide renumber would rewrite it to F=0,G=1 and flip it.
 	const nav = `{
 		"header":[{"type":"url","href":"/my-hub/a","label":"A","position":0}],
 		"footer":[{"type":"url","href":"/my-hub/f","label":"F","position":3},
@@ -614,8 +537,6 @@ func TestNavAdd_DoesNotRenumberSiblingBuckets(t *testing.T) {
 	}
 }
 
-// mobile must still be renumbered when IT is the bucket being edited — the fix
-// for the sibling bug must not become "never touch mobile".
 func TestNavAdd_MobileBucketIsRenumberedWhenEdited(t *testing.T) {
 	const nav = `{"header":[],"footer":[],
 		"mobile":[{"type":"url","href":"/my-hub/m","label":"M","position":7}]}`
@@ -634,11 +555,6 @@ func TestNavAdd_MobileBucketIsRenumberedWhenEdited(t *testing.T) {
 	}
 }
 
-// Index, not a counter over recognized items only. mio-hub gives an item with no
-// `position` a fallback of its INPUT INDEX, so in a bucket mixing recognized and
-// passthrough items a counter would make the first recognized item claim 0 and
-// tie with the first passthrough item — reordering the menu away from what
-// `navigation list` shows.
 func TestNavAdd_PositionIsArrayIndexNotAKnownItemCounter(t *testing.T) {
 	const nav = `{"header":[
 		{"type":"playlist","label":"Watch"},
@@ -652,12 +568,9 @@ func TestNavAdd_PositionIsArrayIndexNotAKnownItemCounter(t *testing.T) {
 		t.Fatalf("exit=%d want ExitOK; stderr=%q", res.Code, res.Stderr)
 	}
 	items := patchNavBucket(t, *body, "header")
-	// index 0 is the passthrough playlist (no position, no stamp).
 	if _, present := navItemPos(t, items[0]); present {
 		t.Errorf("the passthrough playlist must not be stamped: %v", items[0])
 	}
-	// The recognized items must carry their ARRAY indices (1, 2) — a counter
-	// over recognized items only would emit 0 and 1.
 	if pos, _ := navItemPos(t, items[1]); pos != 1 {
 		t.Errorf("items[1] position = %d, want 1 (array index); a known-item counter would say 0", pos)
 	}

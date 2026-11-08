@@ -1,16 +1,5 @@
 package cmd
 
-// community_discussions_deleted_test.go — MIO-3022.
-//
-// The admin discussions views return soft-deleted rows on purpose, and the API's
-// computed `status` has no "deleted" value — so a tombstoned discussion comes
-// back as `status: "published"` with a non-null `deleted_at`. Operators read the
-// status, conclude the delete failed, retry, and get a legitimate 404. The delete
-// verb was never broken; the reads could not show its effect.
-//
-// The oracle here is the RENDERED OUTPUT, not the helper: these drive the real
-// commands so a verb that forgets to call the helper fails.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -22,8 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// discussionBody renders one discussion resource. deletedAt "" means the JSON
-// null a live row carries; "-" means the key is absent entirely.
 func discussionBody(id, deletedAt string) string {
 	da := "null"
 	switch deletedAt {
@@ -61,7 +48,6 @@ func decodeOne(t *testing.T, out string) map[string]any {
 	return m
 }
 
-// A soft-deleted discussion must say so. This is the whole bug.
 func TestDiscussions_SoftDeletedRowIsMarkedDeleted(t *testing.T) {
 	srv := discussionServer(t, discussionBody("d_1", "2026-08-07T13:17:43Z"), "")
 
@@ -75,13 +61,11 @@ func TestDiscussions_SoftDeletedRowIsMarkedDeleted(t *testing.T) {
 		t.Errorf("deleted = %v, want true — the row carries a non-null deleted_at; without this an operator "+
 			"reads status %q and concludes the delete failed", got["deleted"], got["status"])
 	}
-	// status must be left ALONE: it records what the row was before deletion.
 	if got["status"] != "published" {
 		t.Errorf("status = %v, want the API's own value untouched", got["status"])
 	}
 }
 
-// ...and a live row must not be mislabelled.
 func TestDiscussions_LiveRowIsNotMarkedDeleted(t *testing.T) {
 	srv := discussionServer(t, discussionBody("d_1", ""), "")
 
@@ -95,9 +79,6 @@ func TestDiscussions_LiveRowIsNotMarkedDeleted(t *testing.T) {
 	}
 }
 
-// An ABSENT deleted_at must not become a synthesized false. That is the
-// fail-closed mistake MIO-2991 made: an invented value is indistinguishable from
-// a real one, so the caller cannot tell "not deleted" from "server didn't say".
 func TestDiscussions_AbsentDeletedAtInjectsNothing(t *testing.T) {
 	srv := discussionServer(t, discussionBody("d_1", "-"), "")
 
@@ -112,9 +93,6 @@ func TestDiscussions_AbsentDeletedAtInjectsNothing(t *testing.T) {
 	}
 }
 
-// EVERY verb that renders a discussion must derive it. MIO-2991 was exactly this
-// shape one resource over: retrieve/create/update had the derived fields and
-// `list` did not, and `list` is what automation enumerates with.
 func TestDiscussions_EveryVerbDerivesDeleted(t *testing.T) {
 	del := discussionBody("d_1", "2026-08-07T13:17:43Z")
 
@@ -153,8 +131,6 @@ func TestDiscussions_EveryVerbDerivesDeleted(t *testing.T) {
 	}
 }
 
-// --raw is the escape hatch to the untouched envelope; a derived field must not
-// leak into it.
 func TestDiscussions_RawBypassesTheDerivedField(t *testing.T) {
 	srv := discussionServer(t, discussionBody("d_1", "2026-08-07T13:17:43Z"), "")
 

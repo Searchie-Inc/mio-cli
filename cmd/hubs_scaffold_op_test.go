@@ -1,13 +1,5 @@
 package cmd
 
-// hubs_scaffold_op_test.go — MIO-2672 Task 9: the W2b backend-op probe, the
-// design's ONLY runtime branch (spec §0). stepPages tries the backend's
-// one-step POST …/pages/scaffold-from-template by simply calling it (the probe
-// IS the real POST — no capability/HEAD check); 404 falls back to the
-// client-side loop. Both branches produce a real hub. These tests drive
-// stepPages against the scripted recoveryBackend (hubs_scaffold_pages_test.go),
-// whose op route is scripted per test via be.opHandler.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -21,15 +13,8 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// fixtureCatalogDigest is the 2.1 catalog fixture's meta.digest — the value the
-// op POST must carry as catalog_digest (the preflight-resolved catalog's pin).
 const fixtureCatalogDigest = "sha256:ab30e06a03eb7040b53754d3afac4313872d1c9e8dfc0c5f9cec9d2b6903c5eb"
 
-// opCreated201 writes the op's 201 with all three community pages, in the shape
-// a CURRENT backend sends (mio-backend #631, MIO-2749): every entry carries its
-// slug, and about/faq BOTH carry role "secondary" — matching the real community
-// hubTemplate, where role is not a unique key. published_revision is a PUBLISHED
-// revision — the context must NOT read it as a draft version.
 func opCreated201(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusCreated)
 	_, _ = w.Write([]byte(`{"data":{"id":"ts_1","type":"template_scaffolds","attributes":{` +
@@ -39,9 +24,6 @@ func opCreated201(w http.ResponseWriter) {
 		`{"role":"secondary","slug":"faq","page_id":"pg_faq","published_revision":1}]}}}`))
 }
 
-// opCreated201NoSlug writes the SAME 201 as a backend that predates MIO-2749:
-// role only, no slug. Drives the templateSlugForRole fallback in
-// recordServerOpResult.
 func opCreated201NoSlug(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusCreated)
 	_, _ = w.Write([]byte(`{"data":{"id":"ts_1","type":"template_scaffolds","attributes":{` +
@@ -51,17 +33,12 @@ func opCreated201NoSlug(w http.ResponseWriter) {
 		`{"role":"secondary","page_id":"pg_faq","published_revision":1}]}}}`))
 }
 
-// opConflict409 writes the op's digest-mismatch rejection.
 func opConflict409(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusConflict)
 	_, _ = w.Write([]byte(`{"errors":[{"status":"409","code":"catalog_digest_mismatch",` +
 		`"detail":"catalog digest does not match the server catalog"}]}`))
 }
 
-// mutatedCatalogBody returns the 2.1 fixture with meta.revision set to rev and
-// meta.digest recomputed over the modified document (catalog.Digest over the
-// UseNumber-parsed doc), so the resolver's digest verification accepts it as a
-// NEW, self-consistent catalog artifact.
 func mutatedCatalogBody(t *testing.T, rev int) []byte {
 	t.Helper()
 	dec := json.NewDecoder(bytes.NewReader(catalog21Body(t)))
@@ -88,12 +65,6 @@ func mutatedCatalogBody(t *testing.T, rev int) []byte {
 	return out
 }
 
-// TestStepPages_OpPathSkipsClientSideWrites: where the backend implements the
-// op, ONE POST applies the whole pages[] plan server-side — zero page-level
-// create/PUT/publish/PATCH/list calls fire — and the request carries the
-// resolved catalog's digest plus the deterministic Idempotency-Key
-// (ApplicationID). The homepage id lands in the context from the role entry;
-// homeDraftVersion stays 0 (published_revision is NOT a draft version).
 func TestStepPages_OpPathSkipsClientSideWrites(t *testing.T) {
 	srv, be := newRecoveryBackend(t, nil, nil)
 	be.opHandler = func(w http.ResponseWriter, _ int) { opCreated201(w) }
@@ -121,10 +92,6 @@ func TestStepPages_OpPathSkipsClientSideWrites(t *testing.T) {
 	if sc.homeDraftVersion != 0 {
 		t.Errorf("homeDraftVersion = %d, want 0 — published_revision must NOT be conflated with a draft version", sc.homeDraftVersion)
 	}
-	// MIO-2574: the op's listing is recorded under the template SLUG, so both
-	// apply branches feed the machine-readable result the same way.
-	// MIO-2749: the op now SENDS the slug, so every entry maps — including the
-	// two that share role "secondary", which role alone could never separate.
 	for slug, want := range map[string]string{
 		"homepage": "pg_home",
 		"about":    "pg_about",
@@ -136,11 +103,6 @@ func TestStepPages_OpPathSkipsClientSideWrites(t *testing.T) {
 	}
 }
 
-// TestStepPages_OpPathRecordsBothSameRolePages is the MIO-2749 regression: the
-// two community pages that SHARE role "secondary" must land under their own
-// distinct slugs. Against the pre-fix code — which inferred slug from role via
-// templateSlugForRole — "secondary" matched two template entries, so the helper
-// returned "" and BOTH ids were silently dropped.
 func TestStepPages_OpPathRecordsBothSameRolePages(t *testing.T) {
 	srv, be := newRecoveryBackend(t, nil, nil)
 	be.opHandler = func(w http.ResponseWriter, _ int) { opCreated201(w) }
@@ -163,11 +125,6 @@ func TestStepPages_OpPathRecordsBothSameRolePages(t *testing.T) {
 	}
 }
 
-// TestStepPages_OpPathLegacyResponseFallsBackToRole: against a backend that
-// predates MIO-2749 the entries carry no slug, so recordServerOpResult falls
-// back to templateSlugForRole. The unambiguous homepage still maps; the two
-// role=="secondary" entries stay unrecorded, because a wrong id is worse than a
-// missing one. This pins the fallback as still reachable and still conservative.
 func TestStepPages_OpPathLegacyResponseFallsBackToRole(t *testing.T) {
 	srv, be := newRecoveryBackend(t, nil, nil)
 	be.opHandler = func(w http.ResponseWriter, _ int) { opCreated201NoSlug(w) }
@@ -190,12 +147,8 @@ func TestStepPages_OpPathLegacyResponseFallsBackToRole(t *testing.T) {
 	}
 }
 
-// TestStepPages_Op404FallsBackToClientSide: the op is absent (dormant flag or
-// older backend) — the probe 404s and the FULL client-side sequence fires for
-// all 3 pages, at the cost of exactly ONE op POST. This is the design's only
-// runtime branch: a missing op is never an error.
 func TestStepPages_Op404FallsBackToClientSide(t *testing.T) {
-	srv, be := newRecoveryBackend(t, nil, nil) // opHandler nil → 404
+	srv, be := newRecoveryBackend(t, nil, nil)
 
 	sc, err := driveStepPages(t, srv.URL)
 	if err != nil {
@@ -215,11 +168,6 @@ func TestStepPages_Op404FallsBackToClientSide(t *testing.T) {
 	}
 }
 
-// TestStepPages_Op409RefetchesOnceAndRetries: the op rejects the digest (the
-// backend's pin moved between our preflight resolve and the POST) → the step
-// re-resolves the catalog from the SAME backend, rebuilds the plan, and retries
-// the op ONCE with the new digest — which succeeds. Exactly 2 op POSTs, with a
-// catalog GET between them, and zero client-side page writes.
 func TestStepPages_Op409RefetchesOnceAndRetries(t *testing.T) {
 	t.Setenv("MIO_CATALOG_CACHE_DIR", t.TempDir())
 	mutBody := mutatedCatalogBody(t, 8)
@@ -270,15 +218,10 @@ func TestStepPages_Op409RefetchesOnceAndRetries(t *testing.T) {
 	}
 }
 
-// TestStepPages_Op409StableDigestSurfaces: the op rejects but the refetched
-// catalog carries the SAME digest — the rejection was not pin staleness, so NO
-// second op POST fires and the ORIGINAL error surfaces with guidance
-// (ExitUsage preserved). No client-side fallback: the hub's pages state is
-// unknown, and a blind client-side apply could double-write.
 func TestStepPages_Op409StableDigestSurfaces(t *testing.T) {
 	t.Setenv("MIO_CATALOG_CACHE_DIR", t.TempDir())
 	srv, be := newRecoveryBackend(t, nil, nil)
-	be.catalogBody = catalog21Body(t) // same digest as sc.cat
+	be.catalogBody = catalog21Body(t)
 	be.opHandler = func(w http.ResponseWriter, _ int) { opConflict409(w) }
 
 	_, err := driveStepPages(t, srv.URL)
@@ -295,7 +238,6 @@ func TestStepPages_Op409StableDigestSurfaces(t *testing.T) {
 	if be.opPosts != 1 {
 		t.Errorf("op POSTs = %d, want 1 — an unchanged digest must NOT be retried", be.opPosts)
 	}
-	// No retry happened, so the message must not say one did (MIO-3017 review).
 	if strings.Contains(err.Error(), "retry") || !strings.Contains(err.Error(), "re-run") {
 		t.Errorf("an unretried digest rejection must not claim a retry and must say re-run; err=%v", err)
 	}
@@ -307,9 +249,6 @@ func TestStepPages_Op409StableDigestSurfaces(t *testing.T) {
 	}
 }
 
-// TestStepPages_Op409RetryAlsoRejectedSaysSo: the pin DID move, the op is
-// retried once with the fresh digest and rejects again — only this path may
-// say a retry happened.
 func TestStepPages_Op409RetryAlsoRejectedSaysSo(t *testing.T) {
 	t.Setenv("MIO_CATALOG_CACHE_DIR", t.TempDir())
 	srv, be := newRecoveryBackend(t, nil, nil)
@@ -328,10 +267,6 @@ func TestStepPages_Op409RetryAlsoRejectedSaysSo(t *testing.T) {
 	}
 }
 
-// TestStepPages_OpServerErrorSurfaces: a 5xx from the op means the op EXISTS
-// but the backend is unhealthy — surface it (ExitServer); NEVER fall back
-// client-side (a client-side apply against an unhealthy backend just smears
-// partial state).
 func TestStepPages_OpServerErrorSurfaces(t *testing.T) {
 	srv, be := newRecoveryBackend(t, nil, nil)
 	be.opHandler = func(w http.ResponseWriter, _ int) {
@@ -354,14 +289,11 @@ func TestStepPages_OpServerErrorSurfaces(t *testing.T) {
 	}
 }
 
-// TestStepPages_CatalogOverrideSkipsOp: --catalog is inherently client-side —
-// an override catalog can never match the backend's pin digest, so the op
-// would always 409. Zero op POSTs; the client-side sequence fires.
 func TestStepPages_CatalogOverrideSkipsOp(t *testing.T) {
 	srv, be := newRecoveryBackend(t, nil, nil)
 
 	_, err := driveStepPagesCfg(t, srv.URL, func(sc *scaffoldContext) {
-		sc.catalogOverride = "testdata/some-catalog.json" // set → escape hatch active
+		sc.catalogOverride = "testdata/some-catalog.json"
 	})
 	if err != nil {
 		t.Fatalf("stepPages with --catalog override: %v", err)
@@ -374,10 +306,6 @@ func TestStepPages_CatalogOverrideSkipsOp(t *testing.T) {
 	}
 }
 
-// TestStepPages_OpEmptyPagesResponseTolerated: a 201 whose body violates the
-// contract (pages: []) must NOT be read as "nothing created" — the hub IS
-// scaffolded (Task-4 review note). The step succeeds, homePageID stays empty,
-// and a warning note tells the operator the backend returned no page listing.
 func TestStepPages_OpEmptyPagesResponseTolerated(t *testing.T) {
 	srv, be := newRecoveryBackend(t, nil, nil)
 	be.opHandler = func(w http.ResponseWriter, _ int) {

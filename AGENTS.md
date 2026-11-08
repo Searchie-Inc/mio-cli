@@ -2,6 +2,8 @@
 
 This document is written for AI coding agents (Claude Code, Codex, etc.) that need to call `mio` programmatically. It covers auth, output format, the exit-code contract, destructive-op handling, and a compact command table.
 
+No comments in code: see `.claude/rules/no-comments.md`. Put the why in the commit message and PR body.
+
 > **This file tracks `main`, not the released binary.** You are probably reading it on GitHub while running a separately installed `mio`, so a behaviour described here may not have shipped yet. Run `mio version` and, when a distinction matters, prefer `mio <cmd> --help` — that is generated from the binary you actually have. Behaviours known to be newer than the latest release carry an inline version gate. The bundled agent skill (`mio skills print`) has no such skew: it is embedded in the binary, so it always describes the binary it came from.
 
 ---

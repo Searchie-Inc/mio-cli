@@ -19,7 +19,6 @@ func TestRenderContractDocs_AgreeWithTheValidator(t *testing.T) {
 		wantKinds = append(wantKinds, kind)
 	}
 	sort.Strings(wantKinds)
-	// README has neither a count nor a kind list; the skill has no kind list.
 	tests := renderContractFacts
 	for _, tc := range tests {
 		t.Run(tc.file+"/"+tc.fact, func(t *testing.T) {
@@ -113,17 +112,10 @@ var renderContractFacts = []struct{ file, fact, pattern, mode string }{
 	{"skills/content/mio-skill.md", "rule count", "(?i)(\\w+) of them `pages tree set` now rejects client-side", "rules"},
 	{"../docs/internal/api-surface.md", "rule count", `(?i)rejects the (\w+) render-fatal shapes`, "rules"},
 	{"../docs/internal/api-surface.md", "kind count", "(?i)one of the (\\w+) kinds that read the TOP-LEVEL `node.value`", "kinds"},
-	{"pages_tree_validate.go", "rule count", `(?i)the (\w+) pinned rules`, "rules"},
-	{"pages_tree_validate.go", "header kind count and set", `(?i)(\w+) leaf kinds read the TOP-LEVEL value — (.*?) — and`, "comma"},
-	{"pages_tree_validate.go", "map comment kind set", `(?i)node.value in mio-hub \(origin/main, src/components/primitives/leaves/\*\): (.*?) each reference node.value`, "set"},
-	// Second and third copies of the same count in the same files (review of MIO-2883):
 	{"../AGENTS.md", "allowlist size", `(?i)allowlists exactly (\w+) kinds`, "kinds"},
 	{"../llms.txt", "allowlist size", `(?i)allowlist has (\w+) entries`, "kinds"},
-	{"pages_tree_validate.go", "allowlist size", `(?i)ALLOWLIST of the (\w+) kinds verified`, "kinds"},
 }
 
-// renderContractSurface reads a doc surface (or the validator source) with Go
-// comment markers stripped and whitespace collapsed, so wrapped prose matches.
 func renderContractSurface(t *testing.T, file string) string {
 	t.Helper()
 	b, err := os.ReadFile(file)
@@ -131,21 +123,11 @@ func renderContractSurface(t *testing.T, file string) string {
 		t.Fatal(err)
 	}
 	content := string(b)
-	if strings.HasSuffix(file, ".go") {
-		content = regexp.MustCompile(`(?m)^\s*// ?`).ReplaceAllString(content, "")
-	}
 	return strings.Join(strings.Fields(content), " ")
 }
 
-// TestRenderContractDocs_EveryCountMentionIsPinned closes the "probe set smaller
-// than the claim" hole (review of MIO-2883): each surface repeats the counts, and
-// an anchor per sentence leaves the other copies free to drift. Every
-// "<number> kinds|entries|shapes|rules" mention on a covered surface must lie
-// inside the span of one of the anchored facts above; a new mention fails until
-// it is anchored (or, if it is about something else, named in unrelatedCounts).
 func TestRenderContractDocs_EveryCountMentionIsPinned(t *testing.T) {
 	mention := regexp.MustCompile(`(?i)\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)\s+(?:leaf\s+|value-bearing\s+|pinned\s+|render-fatal\s+)?(?:kinds|entries|shapes|rules)\b`)
-	// Counts that are about other things than the page-tree render contract.
 	unrelatedCounts := []string{"kinds the catalog deliberately omit", "come in three kinds"}
 	files := map[string]bool{}
 	for _, f := range renderContractFacts {
@@ -185,10 +167,6 @@ func TestRenderContractDocs_EveryCountMentionIsPinned(t *testing.T) {
 	}
 }
 
-// TestPageTreeRules_AreTheOnlyPlaceRulesLive: the docs' rule count is compared to
-// len(pageTreeRules), which is only an oracle if no rejection exists outside it.
-// validatePageNode may therefore not construct an error itself — every rejection
-// must come from a rule — and the rules' names are tied to what the docs say.
 func TestPageTreeRules_AreTheOnlyPlaceRulesLive(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "pages_tree_validate.go", nil, 0)
@@ -217,8 +195,6 @@ func TestPageTreeRules_AreTheOnlyPlaceRulesLive(t *testing.T) {
 		t.Fatal("validatePageNode not found — update this guard")
 	}
 
-	// Each rule must be described on the agent-facing surfaces. The keyword is
-	// what a reader would search for; a replaced or renamed rule fails here.
 	docKeyword := map[string]string{"weight": "weight", "template": "template", "misplaced-value": "settings.value"}
 	var names []string
 	for _, r := range pageTreeRules {
@@ -237,7 +213,6 @@ func TestPageTreeRules_AreTheOnlyPlaceRulesLive(t *testing.T) {
 	if len(docKeyword) != len(pageTreeRules) {
 		t.Errorf("docKeyword names %d rules, pageTreeRules has %d (%v)", len(docKeyword), len(pageTreeRules), names)
 	}
-	// Order is part of the contract: the first violation wins.
 	if got := strings.Join(names, ","); got != "weight,template,misplaced-value" {
 		t.Errorf("rule order = %s; a node that breaks two rules reports the first, so a reorder changes errors — update the docs/tests deliberately", got)
 	}

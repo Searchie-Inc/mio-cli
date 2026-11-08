@@ -1,11 +1,5 @@
 package cmd
 
-// hubs_discussions_defaults_test.go — contract tests for the hub
-// discussions_default_title / discussions_default_description flags on
-// `hubs create` and `hubs update` (MIO-2274; backend mio-backend #486). These
-// are typed top-level columns, so they map straight through (kebab -> snake);
-// an empty value clears to null.
-
 import (
 	"net/http"
 	"testing"
@@ -33,7 +27,6 @@ func TestHubsCreate_DiscussionsDefaults(t *testing.T) {
 	if attrs["discussions_default_description"] != "Say hi to the community." {
 		t.Errorf("discussions_default_description = %v, want the description", attrs["discussions_default_description"])
 	}
-	// The kebab flag name must not leak.
 	if _, ok := attrs["discussions-default-title"]; ok {
 		t.Errorf("kebab key discussions-default-title must not be present; attrs=%v", attrs)
 	}
@@ -59,8 +52,6 @@ func TestHubsUpdate_DiscussionsDefaultTitle(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_DiscussionsDefaultClear verifies an explicit empty value clears
-// the field to JSON null (the column is nullable).
 func TestHubsUpdate_DiscussionsDefaultClear(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusOK)
 

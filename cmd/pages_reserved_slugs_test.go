@@ -37,9 +37,6 @@ func TestPagesCreate_ReservedSlugConduit(t *testing.T) {
 }
 
 func TestPagesCreate_ReservedSlugHelp(t *testing.T) {
-	// The --slug flag's own usage line is the oracle: whole-help substring
-	// matching cannot tell "home"/"members" in the list from the same words in
-	// --is-home / --privacy (review of MIO-2869).
 	for _, cmd := range []*cobra.Command{pagesCreateCmd, pagesUpdateCmd} {
 		t.Run(cmd.Name(), func(t *testing.T) {
 			f := cmd.Flags().Lookup("slug")

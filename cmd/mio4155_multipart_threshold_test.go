@@ -1,20 +1,5 @@
 package cmd
 
-// mio4155_multipart_threshold_test.go — MIO-4155: the multipart story has to be
-// ONE statement everywhere, and that statement has to be what the wire does.
-//
-// Before this, `media files upload --help` said "Single-part upload only
-// (multipart for very large files is a follow-on)" in the same help that listed
-// --multipart and --part-size-mb, `files replace` called itself "Single-part
-// upload.", and the group help and the docs said "auto-multipart for large
-// files" with no number — while the code has switched to multipart above
-// autoMultipartThreshold (100 MB) since MIO-2423 (#43). MIO-2267 (#42) shipped
-// single-part only, and its help sentence outlived it.
-//
-// The guards below take the threshold FROM THE HELP TEXT and drive the real
-// command across it, so the oracle is the request the CLI actually sends, not a
-// second copy of the number.
-
 import (
 	"fmt"
 	"net/http"
@@ -34,10 +19,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// multipartCapable describes one command that can take the multipart path: how
-// to invoke it on a local file, and the first request each path sends. Those
-// init routes are the only thing that distinguishes the two paths before any
-// byte moves, so the stub can refuse them and the test never streams a file.
 type multipartCapable struct {
 	args       func(path string) []string
 	singleInit string
@@ -57,9 +38,6 @@ var multipartCapableCommands = map[string]multipartCapable{
 	},
 }
 
-// commandsWithMultipartFlag walks the real command tree for every command that
-// registers a --multipart flag — the set of commands that can dispatch either
-// way, found from the tree rather than from a list.
 func commandsWithMultipartFlag() map[string]*cobra.Command {
 	out := map[string]*cobra.Command{}
 	var walk func(c *cobra.Command)
@@ -75,9 +53,6 @@ func commandsWithMultipartFlag() map[string]*cobra.Command {
 	return out
 }
 
-// firstRequestRecorder answers every request 422 and records them all, so a
-// dispatch run stops at its first request and the test reads which init route
-// that was.
 func firstRequestRecorder(t *testing.T) (*httptest.Server, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
@@ -98,8 +73,6 @@ func firstRequestRecorder(t *testing.T) (*httptest.Server, func() []string) {
 	}
 }
 
-// sparseFile creates a file of exactly size bytes without writing them — the
-// CLI only stats it before the init request, and the stub refuses the init.
 func sparseFile(t *testing.T, size int64) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), fmt.Sprintf("f-%d.bin", size))
@@ -116,8 +89,6 @@ func sparseFile(t *testing.T, size int64) string {
 	return path
 }
 
-// dispatchFirstRequest runs the real command on a file of the given size and
-// returns the first request it sent ("" when none fired) plus the exit code.
 func dispatchFirstRequest(t *testing.T, mc multipartCapable, size int64, extra ...string) (string, int) {
 	t.Helper()
 	srv, seen := firstRequestRecorder(t)
@@ -134,8 +105,6 @@ var helpBytesThreshold = regexp.MustCompile(`\b(\d+) bytes\b`)
 var helpPartMinimum = regexp.MustCompile(`\bminimum (\d+)\b`)
 var helpPartDefault = regexp.MustCompile(`\bdefault (\d+)\b`)
 
-// statedNumber returns the single number re captures in text. Zero matches, or
-// two different numbers, is a help text that does not make one statement.
 func statedNumber(t *testing.T, re *regexp.Regexp, text, what string) int64 {
 	t.Helper()
 	vals := map[string]bool{}
@@ -156,11 +125,6 @@ func statedNumber(t *testing.T, re *regexp.Regexp, text, what string) int64 {
 	return 0
 }
 
-// TestMultipartThreshold_HelpIsWhatTheWireDoes: for every command that can go
-// multipart, read the threshold its --help states and drive the real command on
-// a file exactly that size (must take the single-PUT path) and one byte larger
-// (must take the multipart path). Changing the threshold in code without the
-// help — or the help without the code — sends the other init request.
 func TestMultipartThreshold_HelpIsWhatTheWireDoes(t *testing.T) {
 	found := commandsWithMultipartFlag()
 	for path := range found {
@@ -195,11 +159,6 @@ func TestMultipartThreshold_HelpIsWhatTheWireDoes(t *testing.T) {
 	}
 }
 
-// TestMultipartPartSize_HelpIsWhatTheCommandEnforces: the minimum part size the
-// help states is the one the command enforces before any request — on the forced
-// AND the automatic multipart path — and the flag is read only on the multipart
-// path (a small file without --multipart ignores it rather than rejecting it).
-// The default the help states is the flag's real default.
 func TestMultipartPartSize_HelpIsWhatTheCommandEnforces(t *testing.T) {
 	found := commandsWithMultipartFlag()
 	for path, mc := range multipartCapableCommands {
@@ -221,9 +180,6 @@ func TestMultipartPartSize_HelpIsWhatTheCommandEnforces(t *testing.T) {
 				t.Errorf("--help says the part size minimum is %d, but --multipart --part-size-mb %s "+
 					"sent %q (exit %d), want no request and exit %d", minMB, below, got, code, errs.ExitUsage)
 			}
-			// The automatic path must enforce the same floor: a file one byte over the
-			// threshold the help states goes multipart with no flag, so a part size
-			// under the minimum has to stop it before the init request too.
 			over := statedNumber(t, helpBytesThreshold, c.Long, "multipart threshold in bytes") + 1
 			if got, code := dispatchFirstRequest(t, mc, over, "--part-size-mb", below); got != "" || code != errs.ExitUsage {
 				t.Errorf("--help says the part size minimum is %d, but a %d-byte file (multipart automatically, "+
@@ -243,8 +199,6 @@ func TestMultipartPartSize_HelpIsWhatTheCommandEnforces(t *testing.T) {
 	}
 }
 
-// staleMultipartClaims are the phrasings MIO-4155 found in shipped help. Each
-// contradicts the multipart dispatch that has existed since MIO-2423.
 var staleMultipartClaims = []struct {
 	name string
 	re   *regexp.Regexp
@@ -254,8 +208,6 @@ var staleMultipartClaims = []struct {
 	{"describes the command as single-part, unconditionally", regexp.MustCompile(`(?i)(?:^|[.!?]\s+)single[- ]part(?:\s+upload)?\.`)},
 }
 
-// helpTexts returns every piece of help the command tree renders, keyed by where
-// it lives.
 func helpTexts() map[string]string {
 	out := map[string]string{}
 	var walk func(c *cobra.Command)
@@ -274,8 +226,6 @@ func helpTexts() map[string]string {
 	return out
 }
 
-// multipartDocSurfaces are the hand-maintained documents that describe
-// `media files upload` / `replace`, and the line in each that does.
 var multipartDocSurfaces = []struct {
 	file   string
 	anchor string
@@ -289,8 +239,6 @@ var multipartDocSurfaces = []struct {
 	{"../cmd/skills/content/mio-skill.md", "- **Media:** `mio media files upload"},
 }
 
-// TestMultipartHelp_NoSinglePartOnlyClaim: no help anywhere in the tree — and
-// no hand-maintained doc surface — may claim single-part only.
 func TestMultipartHelp_NoSinglePartOnlyClaim(t *testing.T) {
 	texts := helpTexts()
 	for _, s := range multipartDocSurfaces {
@@ -318,10 +266,6 @@ func TestMultipartHelp_NoSinglePartOnlyClaim(t *testing.T) {
 	}
 }
 
-// TestMultipartThreshold_EverySurfaceStatesIt: the group help, the flag help and
-// every hand-maintained doc line about upload/replace state the threshold the
-// code dispatches on. Before MIO-4155 they said "auto-multipart for large files"
-// and the reader had to guess.
 func TestMultipartThreshold_EverySurfaceStatesIt(t *testing.T) {
 	const mib = 1024 * 1024
 	if autoMultipartThreshold%mib != 0 {
@@ -353,9 +297,6 @@ func TestMultipartThreshold_EverySurfaceStatesIt(t *testing.T) {
 			t.Errorf("%s: the %q line does not state the multipart threshold (%q) — agents execute this text",
 				s.file, s.anchor, want)
 		}
-		// A part-size default or minimum a doc line states must be the one the
-		// flag and the preflight use; the help is rendered from the constants, the
-		// docs are not.
 		for _, check := range []struct {
 			re   *regexp.Regexp
 			want int
@@ -381,8 +322,6 @@ func TestMultipartThreshold_EverySurfaceStatesIt(t *testing.T) {
 var docPartDefault = regexp.MustCompile(`\bdefault (\d+)\b`)
 var docPartMinimum = regexp.MustCompile(`\bmin(?:imum)? (\d+)\b`)
 
-// anchoredDocLine returns the first line of file containing anchor, reporting
-// an error (and returning "") when there is none.
 func anchoredDocLine(t *testing.T, file, anchor string) string {
 	t.Helper()
 	b, err := os.ReadFile(file)
@@ -398,31 +337,9 @@ func anchoredDocLine(t *testing.T, file, anchor string) string {
 	return ""
 }
 
-// TestMultipartThreshold_StatedBoundaryIsTheWire: the "above 100 MB" check above
-// cannot see the two other statements the same lines make: the exact byte
-// figure, and which side of the switch a file of EXACTLY that size lands on.
-// Both can go stale while "above 100 MB" stays true, so this holds them to the
-// wire. It measures what upload and replace send for a file of exactly the
-// threshold, then requires:
-//
-//   - every "N bytes" on a surface to be the threshold;
-//   - every surface that states it to carry the canonical boundary clause for
-//     what the wire does (canonicalBoundaryClauses);
-//   - every statement about the threshold's edge, anywhere on a surface, to BE
-//     one of those clauses (checkBoundaryWording). A statement that is not a
-//     canonical clause fails whatever it says, right or wrong, negated or not,
-//     so the test never has to read meaning into free prose;
-//   - at least one surface to carry a canonical clause at all, so dropping the
-//     check from the loop below cannot pass silently.
-//
-// Its reach is exactly thresholdEdgeWording: a statement about the edge that
-// uses none of that wording is not seen. TestMultipartBoundaryWording_Cases
-// pins which phrasings it does and does not see.
 func TestMultipartThreshold_StatedBoundaryIsTheWire(t *testing.T) {
 	threshold := int64(autoMultipartThreshold)
 
-	// The oracle: what the real commands send for a file of exactly the
-	// threshold. Upload and replace must agree — every doc says "same threshold".
 	var atThresholdSingle []bool
 	for _, path := range []string{"mio media files upload", "mio media files replace"} {
 		mc := multipartCapableCommands[path]
@@ -489,9 +406,6 @@ func TestMultipartThreshold_StatedBoundaryIsTheWire(t *testing.T) {
 	}
 }
 
-// canonicalBoundaryClauses is the only wording a surface may use for where a
-// file of exactly the threshold goes, chosen by what the wire does with one:
-// the doc form and the --help form.
 func canonicalBoundaryClauses(wireSingle bool) []string {
 	if wireSingle {
 		return []string{"at or below it is one presigned PUT", "of that size or smaller goes up as one presigned PUT"}
@@ -499,15 +413,6 @@ func canonicalBoundaryClauses(wireSingle bool) []string {
 	return []string{"at or above it goes multipart", "of that size or larger goes multipart"}
 }
 
-// thresholdEdgeWording matches wording that says something about a file AT the
-// threshold rather than above it: "exactly 100 MB", "at or below it", "100 MB or
-// more", "at least 100 MB", "from 100 MB up", "a 100 MB file", ">= 100 MB". The
-// threshold may be named as 100 MB / 100MB / 100 MiB or as 104857600 /
-// 104,857,600 bytes, may carry a parenthetical such as "(104857600 bytes)", and
-// in the "at or below", "or smaller", "exactly" and "at least" forms may be
-// "that size" or "the threshold" ("it" only after "at or above/below"). "above
-// 100 MB" and "larger than 104857600 bytes" say nothing about the edge and do
-// not match.
 func thresholdEdgeWording(threshold int64) *regexp.Regexp {
 	digits := strconv.FormatInt(threshold, 10)
 	var grouped strings.Builder
@@ -531,12 +436,6 @@ func thresholdEdgeWording(threshold int64) *regexp.Regexp {
 	}, "|"))
 }
 
-// checkBoundaryWording reports through errorf each statement in text about a
-// file at the threshold's edge that is not a canonical clause for what the wire
-// does, and returns how many edge statements it accepted as canonical. Reporting
-// and counting happen in one pass, so a caller cannot keep the count and lose
-// the reports. Whitespace is collapsed first, so a clause wrapped across help
-// lines still counts.
 func checkBoundaryWording(text string, threshold int64, wireSingle bool, errorf func(format string, args ...any)) (accepted int) {
 	text = strings.Join(strings.Fields(text), " ")
 	var allowed [][2]int
@@ -569,9 +468,6 @@ func checkBoundaryWording(text string, threshold int64, wireSingle bool, errorf 
 	return accepted
 }
 
-// TestMultipartBoundaryWording_Cases pins the reach of checkBoundaryWording, in
-// both wire directions, so a narrowed pattern or a lost direction fails here by
-// name rather than silently letting doc wording through.
 func TestMultipartBoundaryWording_Cases(t *testing.T) {
 	threshold := int64(autoMultipartThreshold)
 	check := func(text string, wireSingle bool) (msgs []string, accepted int) {
@@ -581,7 +477,6 @@ func TestMultipartBoundaryWording_Cases(t *testing.T) {
 		return msgs, accepted
 	}
 	flagged := []string{
-		// Wrong claims (the wire sends exactly-threshold files as one PUT today).
 		"a file of exactly 100 MB also goes multipart",
 		"a file of exactly 100 MB (104857600 bytes) goes multipart",
 		"at exactly 100 MB, uploads go multipart",
@@ -597,7 +492,6 @@ func TestMultipartBoundaryWording_Cases(t *testing.T) {
 		"a 100 MB file goes multipart",
 		"from 100 MB up, uploads go multipart",
 		">= 100 MB",
-		// Right claims in non-canonical wording: flagged too, by design.
 		"a file of exactly 100 MB (104857600 bytes) goes up as one presigned PUT",
 		"a file of exactly 100 MB does not go multipart",
 		"100 MB or less is one PUT",
@@ -623,8 +517,6 @@ func TestMultipartBoundaryWording_Cases(t *testing.T) {
 			t.Errorf("wire=single-PUT at the threshold: %q was flagged but is canonical or says nothing about the edge: %v", text, msgs)
 		}
 	}
-	// Each direction's canonical clauses are accepted (and counted) under that
-	// direction, and rejected under the other.
 	for _, wireSingle := range []bool{true, false} {
 		for _, clause := range canonicalBoundaryClauses(wireSingle) {
 			if msgs, accepted := check(clause, wireSingle); len(msgs) != 0 || accepted != 1 {

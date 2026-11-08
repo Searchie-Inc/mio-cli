@@ -1,15 +1,3 @@
-// Package config owns the mio CLI's persistent state: the TOML config file at
-// $XDG_CONFIG_HOME/mio/config.toml (default ~/.config/mio/config.toml) and the
-// credential-store entry that holds the API key. It also implements the canonical
-// auth-resolution order used by every command.
-//
-// The config file holds non-secret context (current team/hub, api base, named
-// profiles). The API key is a secret and lives in a credential store: an OS
-// store where this build has one it can open (macOS Keychain in cgo builds
-// only, Secret Service/KWallet on a Linux desktop session, Windows Credential
-// Manager), otherwise an encrypted file under the config dir. The release
-// binaries are built with CGO_ENABLED=0, so on macOS they ALWAYS use the file
-// (MIO-2995). Secrets are NEVER written to the TOML file.
 package config
 
 import (
@@ -29,72 +17,39 @@ import (
 )
 
 const (
-	// keyringService is the credential-store service name under which the API key
-	// is stored. Stable across versions so `mio login` once persists.
 	keyringService = "mio-cli"
-	// keyringKeyName is the item label within the service.
 	keyringKeyName = "api-key"
-	// EnvAPIKey is the environment variable holding the bearer key (primary
-	// path for agents and CI).
-	EnvAPIKey = "MIO_API_KEY"
-	// EnvAPIBase overrides the API base URL.
-	EnvAPIBase = "MIO_API_BASE_URL"
-	// DefaultAPIBase is the fallback API base (production). Overridable via the
-	// MIO_API_BASE_URL env var, the --api-base flag, or `mio config set api_base`.
+	EnvAPIKey      = "MIO_API_KEY"
+	EnvAPIBase     = "MIO_API_BASE_URL"
 	DefaultAPIBase = "https://api.member.dev"
 
-	// fileKeyName is the filename (inside the config dir) that holds the
-	// per-install random passphrase for the file-backend keyring fallback.
 	fileKeyName = "file-keyring.key"
 )
 
-// Profile is a named set of context overrides, mirroring Stripe's profiles.
-// The active profile is selected by the --profile flag or the default profile.
 type Profile struct {
 	CurrentTeam string `toml:"current_team,omitempty"`
 	CurrentHub  string `toml:"current_hub,omitempty"`
 	APIBase     string `toml:"api_base,omitempty"`
 }
 
-// Config is the on-disk shape of config.toml. Top-level fields form the default
-// profile; named profiles live under [profiles.<name>].
 type Config struct {
 	CurrentTeam string             `toml:"current_team,omitempty"`
 	CurrentHub  string             `toml:"current_hub,omitempty"`
 	APIBase     string             `toml:"api_base,omitempty"`
 	Profiles    map[string]Profile `toml:"profiles,omitempty"`
 
-	// path is where this config was loaded from / will be saved to. Not
-	// serialized.
 	path string `toml:"-"`
 }
 
-// Resolved is the fully-resolved runtime context a command needs: which key to
-// present, where to send it, and the active team/hub scope.
 type Resolved struct {
-	APIKey  string
-	APIBase string
-	TeamID  string
-	HubID   string
-	// Anonymous records that this resolution was DELIBERATELY unauthenticated
-	// (--anonymous). It is an input mode carried through to the output because
-	// the command layer must be able to tell "no key was found" apart from "no
-	// key was wanted" — an empty APIKey looks identical in both cases.
-	//
-	// Without it the key-required precondition (cmdContext.requireAuth) fires
-	// before anything consults --anonymous, so the flag could never actually send
-	// an unauthenticated request: every `--anonymous` invocation died with
-	// "no API key found" and never reached the HTTP client (MIO-2694).
+	APIKey    string
+	APIBase   string
+	TeamID    string
+	HubID     string
 	Anonymous bool
-	// KeyStore is the credential store Resolve read the stored key from, or
-	// nil when it never looked (the key came from --api-key or MIO_API_KEY, or
-	// --anonymous skipped the lookup). It is what lets an empty APIKey say
-	// WHERE no key was found, and `whoami` say where one was (MIO-2995).
-	KeyStore *Store
+	KeyStore  *Store
 }
 
-// Path returns the absolute path of the config file, honouring XDG_CONFIG_HOME
-// and falling back to ~/.config/mio/config.toml.
 func Path() (string, error) {
 	dir, _, err := configDir()
 	if err != nil {
@@ -103,11 +58,6 @@ func Path() (string, error) {
 	return filepath.Join(dir, "config.toml"), nil
 }
 
-// configDir returns the mio config directory (<base>/mio) and the name of the
-// environment variable that chose <base>: XDG_CONFIG_HOME when it is set,
-// otherwise the home directory's variable (<home>/.config). The encrypted
-// file keyring lives under this directory too, so two processes that disagree
-// on either variable read two different stores.
 func configDir() (dir, source string, err error) {
 	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
 		return filepath.Join(base, "mio"), "XDG_CONFIG_HOME", nil
@@ -119,7 +69,6 @@ func configDir() (dir, source string, err error) {
 	return filepath.Join(home, ".config", "mio"), homeEnvName(), nil
 }
 
-// homeEnvName is the variable os.UserHomeDir reads on this platform.
 func homeEnvName() string {
 	switch runtime.GOOS {
 	case "windows":
@@ -131,8 +80,6 @@ func homeEnvName() string {
 	}
 }
 
-// Load reads the config file. A missing file is not an error — it returns an
-// empty Config bound to the default path so a later Save creates it.
 func Load() (*Config, error) {
 	path, err := Path()
 	if err != nil {
@@ -157,9 +104,6 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// Save writes the config back to disk, creating the parent directory (0700) and
-// writing the file 0600 since it may contain context an operator considers
-// sensitive. Secrets are never written here.
 func (c *Config) Save() error {
 	if c.path == "" {
 		p, err := Path()
@@ -182,56 +126,16 @@ func (c *Config) Save() error {
 	return nil
 }
 
-// ---- Keychain helpers -------------------------------------------------------
-
-// ErrLegacyCredentials is returned when the file keyring's blob decrypts under
-// the passphrase v0.1 hardcoded (legacyFilePassphrase) and not under this
-// install's key. The blob is REPORTED and LEFT IN PLACE: `mio login` and `mio
-// register` replace it through SetAPIKey's atomic rename, and `mio logout`
-// deletes it. Root wiring maps it to ExitAuth; login and register treat it
-// like "no stored key" and go on.
-//
-// No read deletes, moves or renames a stored credential because it is legacy
-// (MIO-2995). A read that removes the blob it has just recognised can remove a
-// key another process published over it in the meantime, and every scheme for
-// closing that race on the read side opened another; with SetAPIKey atomic, a
-// deletion on read buys nothing the next login does not already do.
 var ErrLegacyCredentials = errors.New("stored credentials use legacy encryption")
 
-// ErrUnreadableCredentials is returned when the file keyring's blob exists but
-// does not decode with this install's passphrase and is not a legacy blob
-// either: a write still in flight in another mio process, a blob truncated by
-// a crash, or one encrypted under a key file that has since been regenerated.
-//
-// Like ErrLegacyCredentials, the blob is LEFT IN PLACE. Nothing on the read
-// path can tell a half-finished write from a dead blob, and deleting a
-// credential another process is in the middle of writing destroys it for good
-// (MIO-2995: a blob cut inside its auth tag used to be classified "legacy" and
-// deleted). Root wiring maps it to ExitAuth; `mio login` and `mio register`
-// treat it like "no stored key" and overwrite it.
 var ErrUnreadableCredentials = errors.New("stored API key could not be read")
 
-// StoredKeyUnusable reports whether err says the stored key exists but cannot
-// be used, and re-authenticating (`mio login`, or MIO_API_KEY) is the fix.
 func StoredKeyUnusable(err error) bool {
 	return errors.Is(err, ErrLegacyCredentials) || errors.Is(err, ErrUnreadableCredentials)
 }
 
-// legacyFilePassphrase is the hardcoded passphrase v0.1 (2026-06-01 .. 06-09)
-// encrypted the file keyring with, before MIO-794 moved to a per-install key.
-// It is only ever used to RECOGNISE such a blob so it can be reported.
 const legacyFilePassphrase = "mio-cli"
 
-// loadOrCreateFileKey returns the per-install random passphrase used for the
-// file-backend keyring fallback.  On the first call it generates 32 random
-// bytes, hex-encodes them, and writes the result to
-// <config-dir>/file-keyring.key at mode 0600.  Subsequent calls reload that
-// file.  Two different config dirs therefore always produce different keys,
-// which means a copied keyring blob cannot be decrypted with source knowledge
-// alone.
-//
-// Key generation uses write-to-temp + O_CREATE|O_EXCL link to final path, so
-// concurrent first-run processes are safe: the loser reads the winner's key.
 func loadOrCreateFileKey() (string, error) {
 	cfgPath, err := Path()
 	if err != nil {
@@ -239,27 +143,20 @@ func loadOrCreateFileKey() (string, error) {
 	}
 	keyPath := filepath.Join(filepath.Dir(cfgPath), fileKeyName)
 
-	// Try to read an existing key first.  Any validation failure means we must
-	// regenerate (the old key is removed inside readAndValidateFileKey).
 	if key, err := readAndValidateFileKey(keyPath); err == nil {
 		return key, nil
 	}
-	// Fall through to create/regenerate (the key either doesn't exist, is
-	// corrupt, has bad permissions, or was a symlink/non-regular file).
 
-	// Ensure the parent directory exists (config dir, mode 0700).
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
 		return "", fmt.Errorf("create config dir for key file: %w", err)
 	}
 
-	// Generate a fresh 32-byte random key.
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("generate file keyring key: %w", err)
 	}
 	key := hex.EncodeToString(raw)
 
-	// Write to a temp file first so the reader never sees a partial write.
 	tmp, err := os.CreateTemp(filepath.Dir(keyPath), ".file-keyring-*.tmp")
 	if err != nil {
 		return "", fmt.Errorf("create tmp file keyring key: %w", err)
@@ -267,7 +164,7 @@ func loadOrCreateFileKey() (string, error) {
 	tmpName := tmp.Name()
 	defer func() {
 		_ = tmp.Close()
-		_ = os.Remove(tmpName) // no-op if link succeeded
+		_ = os.Remove(tmpName)
 	}()
 	if err := tmp.Chmod(0o600); err != nil {
 		return "", fmt.Errorf("chmod tmp file keyring key: %w", err)
@@ -279,53 +176,28 @@ func loadOrCreateFileKey() (string, error) {
 		return "", fmt.Errorf("close tmp file keyring key: %w", err)
 	}
 
-	// Hard-link tmp → final path with O_EXCL semantics via os.Link (POSIX
-	// atomic, create-if-absent).  If the link fails because the target already
-	// exists (concurrent winner), discard our key and read the winner's.
 	linkErr := os.Link(tmpName, keyPath)
 	switch {
 	case linkErr == nil:
-		// We are the winner: our key is now at keyPath.  Re-read it so we
-		// go through the same validation every other call does.
 		return readAndValidateFileKeyRetry(keyPath)
 	case errors.Is(linkErr, os.ErrExist):
-		// Another process published first; read their key.
 		return readAndValidateFileKeyRetry(keyPath)
 	default:
 		return "", fmt.Errorf("publish file keyring key: %w", linkErr)
 	}
 }
 
-// readAndValidateFileKey reads keyPath and verifies:
-//   - it exists and is a regular file (not a symlink, FIFO, device, or dir)
-//   - its mode is exactly 0600 (permission drift means potential exposure;
-//     we invalidate rather than silently repair to avoid using a key that
-//     may have been read by another user)
-//   - it contains exactly 64 lowercase hex characters
-//
-// On any validation failure the offending path is removed (best-effort) and
-// an error is returned. On the write path loadOrCreateFileKey then generates a
-// fresh key; the read path (readFilePassword) never does, and reports the
-// stored key unusable instead.
 func readAndValidateFileKey(keyPath string) (string, error) {
-	// Lstat so we see the symlink itself, not its target.
 	info, err := os.Lstat(keyPath)
 	if err != nil {
 		return "", err
 	}
-	// Reject anything that is not a plain regular file.
 	if !info.Mode().IsRegular() {
 		_ = os.Remove(keyPath)
 		return "", fmt.Errorf("file keyring key is not a regular file (mode %v)", info.Mode())
 	}
-	// Permission drift means the key may have been readable by others.
-	// Treat it as compromised: remove it and the encrypted credential blob so
-	// the user must re-login with a fresh key.
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		_ = os.Remove(keyPath)
-		// If the blob cannot be deleted it stays behind, undecryptable without
-		// the key removed above; a later read reports it unusable and the
-		// next `mio login` replaces it.
 		if derr := deleteKeyringFile(); derr != nil {
 			return "", fmt.Errorf(
 				"file keyring key had permissions %04o (expected 0600); key invalidated (blob cleanup failed: %v) — please run `mio login` to re-login",
@@ -347,9 +219,6 @@ func readAndValidateFileKey(keyPath string) (string, error) {
 	return key, nil
 }
 
-// readAndValidateFileKeyRetry retries readAndValidateFileKey with brief waits
-// for the case where the file was just created by a concurrent runner and may
-// still be visible after the hard-link.
 func readAndValidateFileKeyRetry(keyPath string) (string, error) {
 	const (
 		retries = 5
@@ -369,8 +238,6 @@ func readAndValidateFileKeyRetry(keyPath string) (string, error) {
 	return "", fmt.Errorf("file keyring key not readable after retries: %w", lastErr)
 }
 
-// isValidFileKey returns true if key is a 64-character lowercase hex string
-// (the expected encoding of 32 random bytes).
 func isValidFileKey(key string) bool {
 	if len(key) != 64 {
 		return false
@@ -383,17 +250,6 @@ func isValidFileKey(key string) bool {
 	return true
 }
 
-// keyringAllowedBackends is the ordered list of backends tried by openKeyring.
-// It is a package-level variable so tests can force file-only mode to avoid
-// OS keychain interaction.
-//
-// Which of these a given binary can use is decided at BUILD time, not by this
-// list: 99designs/keyring compiles its macOS Keychain backend only under
-// `darwin && cgo`, and the release binaries are built with CGO_ENABLED=0
-// (.goreleaser.yaml), so a released macOS mio has no Keychain backend at all
-// and always lands on the file backend. On Linux the Secret Service and
-// KWallet backends register only when the process can reach a D-Bus session
-// bus, so the choice can differ between two shells of the same user.
 var keyringAllowedBackends = []keyring.BackendType{
 	keyring.KeychainBackend,
 	keyring.SecretServiceBackend,
@@ -402,44 +258,22 @@ var keyringAllowedBackends = []keyring.BackendType{
 	keyring.FileBackend,
 }
 
-// UseFileBackendOnly restricts every credential-store operation in this
-// process to the encrypted file backend under the config dir, and returns a
-// func that restores the previous list. It exists for tests outside this
-// package, which must never read or write the developer's real OS keychain or
-// Secret Service; production code never calls it.
 func UseFileBackendOnly() (restore func()) {
 	orig := keyringAllowedBackends
 	keyringAllowedBackends = []keyring.BackendType{keyring.FileBackend}
 	return func() { keyringAllowedBackends = orig }
 }
 
-// KeyringBackends returns a copy of the backends a credential-store operation
-// in this process may try, in order. It exists so a test package can prove
-// UseFileBackendOnly is in force BEFORE any test stores or reads a key: on a
-// CI runner with no OS store the file backend is picked either way, so the
-// pin's absence is invisible to behaviour there and shows only here.
 func KeyringBackends() []keyring.BackendType {
 	return append([]keyring.BackendType(nil), keyringAllowedBackends...)
 }
 
-// Store identifies the credential store a stored-key operation used, so that
-// an empty or failed lookup can say WHERE it looked (MIO-2995). Before it, the
-// CLI reported every stored key as "keychain" whatever backend held it, which
-// sent the MIO-2995 diagnosis after a macOS Keychain the release binary never
-// touches.
 type Store struct {
-	// Backend is the keyring backend in use.
-	Backend keyring.BackendType
-	// Path is the encrypted blob's path. File backend only.
-	Path string
-	// DirSource names the environment variable that chose the config dir the
-	// blob lives under: XDG_CONFIG_HOME, or the home variable (HOME) when
-	// XDG_CONFIG_HOME is unset. File backend only.
+	Backend   keyring.BackendType
+	Path      string
 	DirSource string
 }
 
-// Label is the short name `whoami` reports as key_source for a key read from
-// this store. "keychain" keeps its historical spelling for the macOS Keychain.
 func (s Store) Label() string {
 	switch s.Backend {
 	case keyring.FileBackend:
@@ -457,7 +291,6 @@ func (s Store) Label() string {
 	}
 }
 
-// Describe names the store in prose, for error messages.
 func (s Store) Describe() string {
 	switch s.Backend {
 	case keyring.FileBackend:
@@ -478,31 +311,17 @@ func (s Store) Describe() string {
 	}
 }
 
-// MissingKeyDetail explains an empty lookup in this store: where it looked,
-// plus the one way this backend is known to report "no key" when a key does
-// exist.
 func (s Store) MissingKeyDetail() string {
 	detail := "looked in " + s.Describe()
 	switch s.Backend {
 	case keyring.FileBackend:
 		detail += "; a process whose XDG_CONFIG_HOME or HOME differs reads a different store"
 	case keyring.KeychainBackend:
-		// 99designs/keyring v1.2.2 keychain.go Get returns ErrKeyNotFound for
-		// ANY failed query (it tests len(results) == 0, which every error has).
 		detail += "; this backend also reports a locked or access-denied keychain as \"not found\""
 	}
 	return detail
 }
 
-// openKeyring opens the first backend in keyringAllowedBackends that this
-// binary supports and can open, and reports which one it chose. It walks the
-// list itself rather than handing the whole list to keyring.Open (which does
-// the same walk) because keyring.Open does not say which backend it picked.
-//
-// The file-backend passphrase is loaded lazily inside FilePasswordFunc so that
-// OS store users never pay the cost of file-key validation. The ring returned
-// here reads with readFilePassword; SetAPIKey writes the file backend through
-// replaceFileBlob instead of this ring's Set.
 func openKeyring() (keyring.Keyring, Store, error) {
 	dir, source, err := configDir()
 	if err != nil {
@@ -526,8 +345,6 @@ func openKeyring() (keyring.Keyring, Store, error) {
 	return nil, Store{}, lastErr
 }
 
-// keyringConfig is the keyring.Config for one backend, with the file backend
-// rooted at fileDir and unlocked by password.
 func keyringConfig(backend keyring.BackendType, fileDir string, password keyring.PromptFunc) keyring.Config {
 	return keyring.Config{
 		ServiceName:      keyringService,
@@ -537,19 +354,11 @@ func keyringConfig(backend keyring.BackendType, fileDir string, password keyring
 	}
 }
 
-// filePasswordError marks a failure of the file backend's passphrase lookup,
-// so a read can tell "could not get the key to decrypt with" apart from "the
-// blob itself did not decode". Only the latter can be a write in flight.
 type filePasswordError struct{ err error }
 
 func (e *filePasswordError) Error() string { return e.err.Error() }
 func (e *filePasswordError) Unwrap() error { return e.err }
 
-// readFilePassword is the passphrase lookup for READING the file keyring. It
-// never creates a key file: the library only asks for the passphrase once the
-// blob exists, and a blob cannot be decrypted by a key minted after it, so
-// creating one here would only replace a clear "key file missing" error with a
-// decode failure. (Writes create it — see writeFilePassword.)
 func readFilePassword(string) (string, error) {
 	dir, _, err := configDir()
 	if err != nil {
@@ -562,13 +371,8 @@ func readFilePassword(string) (string, error) {
 	return key, nil
 }
 
-// readFileKey is readFilePassword's key-file reader. A variable only so a test
-// can inject a filesystem failure (EACCES) that cannot be produced on the key
-// file alone without root.
 var readFileKey = readAndValidateFileKey
 
-// writeFilePassword is the passphrase lookup for WRITING the file keyring: it
-// creates the per-install key file on first use.
 func writeFilePassword(string) (string, error) {
 	key, err := loadOrCreateFileKey()
 	if err != nil {
@@ -577,10 +381,6 @@ func writeFilePassword(string) (string, error) {
 	return key, nil
 }
 
-// openKeyringWithPassword opens a keyring using the given password and the
-// file backend only.  cfgDirOverride sets FileDir to
-// <cfgDirOverride>/mio/keyring; pass "" to derive from Path().
-// This is used in tests and for legacy-credential seeding.
 func openKeyringWithPassword(password, cfgDirOverride string) (keyring.Keyring, error) {
 	var fileDir string
 	if cfgDirOverride != "" {
@@ -600,8 +400,6 @@ func openKeyringWithPassword(password, cfgDirOverride string) (keyring.Keyring, 
 	})
 }
 
-// legacyKeyringItem returns a keyring.Item suitable for seeding a legacy
-// (hardcoded-passphrase) keyring file in tests.
 func legacyKeyringItem(apiKey string) keyring.Item {
 	return keyring.Item{
 		Key:         keyringKeyName,
@@ -611,45 +409,15 @@ func legacyKeyringItem(apiKey string) keyring.Item {
 	}
 }
 
-// unreadableRetries and unreadableRetryWait bound how long a read waits out a
-// write in flight before calling a blob unreadable: at most four re-reads,
-// ~100ms in all. Current binaries never expose a partial blob (SetAPIKey
-// renames a finished file into place), but a mio from v0.22.0 or earlier
-// sharing the same config dir still truncates and rewrites in place, and a
-// reader that lands in that window sees an empty blob (reproduced in
-// MIO-2995). unreadableRetryWait is a variable so tests can step through the
-// window deterministically.
 const unreadableRetries = 4
 
 var unreadableRetryWait = func() { time.Sleep(25 * time.Millisecond) }
 
-// GetAPIKey returns the stored API key, or "" (no error) if none is stored.
-// See LoadAPIKey, which also reports the store it read.
 func GetAPIKey() (string, error) {
 	key, _, err := LoadAPIKey()
 	return key, err
 }
 
-// LoadAPIKey returns the stored API key ("" with no error when none is
-// stored) together with the credential store it consulted — reported even
-// when the key is missing or unusable, so the caller can say where it looked.
-//
-// A file-backend blob that exists but cannot be used is never reported as
-// "no key stored", and nothing here deletes, moves or renames it. Two failures
-// lead there:
-//   - The blob does not decode. It is re-read a bounded number of times,
-//     because a mio from v0.22.0 or earlier may be rewriting it in place.
-//   - The per-install key file cannot be read (missing, not 0600, invalid).
-//     Not retried: the key file is published atomically, so this is never a
-//     write in flight — and on a permission drift readAndValidateFileKey has
-//     just invalidated the blob, so a re-read would find it gone and answer
-//     "no key stored" for a key that was deliberately revoked.
-//
-// Either way, a blob that decrypts under the legacy passphrase is
-// ErrLegacyCredentials (v0.1 installs have no key file at all), and anything
-// else is ErrUnreadableCredentials. Both leave the blob where it is; the next
-// SetAPIKey replaces it. (The key-file permission drift above is the one read
-// that removes a blob: readAndValidateFileKey treats the key as compromised.)
 func LoadAPIKey() (string, Store, error) {
 	ring, store, err := openKeyring()
 	if err != nil {
@@ -660,10 +428,6 @@ func LoadAPIKey() (string, Store, error) {
 		unreadableRetryWait()
 		item, err = ring.Get(keyringKeyName)
 	}
-	// A key file that is missing or invalid is a verdict on the stored
-	// credential. One that exists but cannot be READ (EACCES, EIO) is an
-	// environment failure, the same class as an unreadable blob, and takes the
-	// generic path below.
 	var passErr *filePasswordError
 	keyFileRejected := errors.As(err, &passErr) && !isFilesystemFailure(passErr)
 	switch {
@@ -689,9 +453,6 @@ func LoadAPIKey() (string, Store, error) {
 	}
 }
 
-// isUndecodableBlob reports whether err is the file backend failing to DECODE
-// the blob it read — the only failure a write in flight can cause. A missing
-// blob, a filesystem error and a key-file (passphrase) failure are excluded.
 func isUndecodableBlob(store Store, err error) bool {
 	if err == nil || store.Backend != keyring.FileBackend || errors.Is(err, keyring.ErrKeyNotFound) {
 		return false
@@ -701,18 +462,11 @@ func isUndecodableBlob(store Store, err error) bool {
 	return !errors.As(err, &pathErr) && !errors.As(err, &passErr)
 }
 
-// isFilesystemFailure reports whether err is the filesystem refusing an
-// operation on a path that exists (EACCES, EIO, ...) rather than reporting it
-// missing.
 func isFilesystemFailure(err error) bool {
 	var pathErr *fs.PathError
 	return errors.As(err, &pathErr) && !errors.Is(err, fs.ErrNotExist)
 }
 
-// isLegacyBlob reports whether the blob at store.Path decrypts under the v0.1
-// hardcoded passphrase — positive evidence that it is a legacy blob, as
-// opposed to a partial write, which decrypts under no passphrase at all. It
-// only reads.
 func isLegacyBlob(store Store) bool {
 	ring, err := keyring.Open(keyring.Config{
 		ServiceName:      keyringService,
@@ -727,8 +481,6 @@ func isLegacyBlob(store Store) bool {
 	return err == nil
 }
 
-// deleteKeyringFile removes the encrypted keyring file so it can be
-// re-created on the next `mio login`.
 func deleteKeyringFile() error {
 	dir, _, err := configDir()
 	if err != nil {
@@ -741,7 +493,6 @@ func deleteKeyringFile() error {
 	return nil
 }
 
-// apiKeyItem is the keyring item the API key is stored as.
 func apiKeyItem(key string) keyring.Item {
 	return keyring.Item{
 		Key:         keyringKeyName,
@@ -751,14 +502,6 @@ func apiKeyItem(key string) keyring.Item {
 	}
 }
 
-// SetAPIKey persists the API key to the credential store.
-//
-// On the file backend it never rewrites the live blob in place: the keyring
-// library's own Set truncates and then writes (os.WriteFile), and a concurrent
-// reader in between sees an empty or partial blob (MIO-2995). The blob is
-// written into a private staging directory beside the keyring instead and
-// renamed over the live path, which replaces it atomically — every reader, of
-// any mio version, sees either the old blob or the new one.
 func SetAPIKey(key string) error {
 	ring, store, err := openKeyring()
 	if err != nil {
@@ -776,11 +519,6 @@ func SetAPIKey(key string) error {
 	return nil
 }
 
-// replaceFileBlob encrypts item with the file backend into a fresh staging
-// directory INSIDE the keyring directory and renames the result over
-// store.Path. Staging beside the blob is the only way to guarantee the rename
-// stays on one filesystem: the keyring directory can be a mount point or a
-// symlink to another volume, and a rename across devices fails.
 func replaceFileBlob(store Store, item keyring.Item) error {
 	liveDir := filepath.Dir(store.Path)
 	if err := os.MkdirAll(liveDir, 0o700); err != nil {
@@ -802,30 +540,19 @@ func replaceFileBlob(store Store, item keyring.Item) error {
 	return os.Rename(filepath.Join(stage, filepath.Base(store.Path)), store.Path)
 }
 
-// DeleteAPIKey removes the stored API key: on the file backend, the live blob,
-// whatever it holds (a legacy one included). A missing key is not an error.
 func DeleteAPIKey() error {
 	ring, store, err := openKeyring()
 	if err != nil {
 		return err
 	}
-	// The file backend reports a missing blob as a raw os.ErrNotExist, not
-	// keyring.ErrKeyNotFound; both mean there was nothing to delete.
 	if err := ring.Remove(keyringKeyName); err != nil && !errors.Is(err, keyring.ErrKeyNotFound) && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("delete API key from %s: %w", store.Describe(), err)
 	}
 	return nil
 }
 
-// ---- Resolution -------------------------------------------------------------
-
-// Overrides carries the per-invocation flag values that take precedence over
-// env and config. Empty strings mean "not set on the command line".
 type Overrides struct {
-	APIKey string
-	// Anonymous forces an unauthenticated resolution: the env var and stored-key
-	// fallbacks are skipped so a request can deliberately run without credentials
-	// (MIO-2648). An explicit APIKey still takes effect.
+	APIKey    string
 	Anonymous bool
 	APIBase   string
 	TeamID    string
@@ -833,21 +560,9 @@ type Overrides struct {
 	Profile   string
 }
 
-// Resolve computes the effective {apiKey, apiBase, teamID, hubID} from the
-// precedence chain:
-//
-//	api key : --api-key flag  >  MIO_API_KEY env  >  stored key
-//	api base: --api-base flag >  MIO_API_BASE_URL >  profile/config  >  default
-//	team/hub: --team/--hub    >  profile/config
-//
-// A missing API key is NOT an error here — commands that require auth check for
-// an empty key and emit the auth exit code themselves, so read-only/login flows
-// can proceed.
 func (c *Config) Resolve(o Overrides) (Resolved, error) {
 	prof := c.profile(o.Profile)
 
-	// API key: flag > env > stored key. --anonymous (o.Anonymous) skips the env
-	// and stored-key fallbacks so a request can run explicitly unauthenticated (MIO-2648).
 	apiKey := o.APIKey
 	if apiKey == "" && !o.Anonymous {
 		apiKey = os.Getenv(EnvAPIKey)
@@ -860,10 +575,6 @@ func (c *Config) Resolve(o Overrides) (Resolved, error) {
 		case err == nil:
 			apiKey = stored
 		case StoredKeyUnusable(err):
-			// A legacy or an unreadable blob, left in place either way: there
-			// is no usable stored key. Resolve the rest of the context and
-			// surface the sentinel so callers (root wiring, login, register) can
-			// react — login must be able to go on and overwrite the store.
 			return Resolved{
 				APIBase:   firstNonEmpty(o.APIBase, os.Getenv(EnvAPIBase), prof.APIBase, c.APIBase, DefaultAPIBase),
 				TeamID:    firstNonEmpty(o.TeamID, prof.CurrentTeam, c.CurrentTeam),
@@ -876,7 +587,6 @@ func (c *Config) Resolve(o Overrides) (Resolved, error) {
 		}
 	}
 
-	// API base: flag > env > profile/config > default.
 	apiBase := o.APIBase
 	if apiBase == "" {
 		apiBase = os.Getenv(EnvAPIBase)
@@ -891,14 +601,9 @@ func (c *Config) Resolve(o Overrides) (Resolved, error) {
 	team := firstNonEmpty(o.TeamID, prof.CurrentTeam, c.CurrentTeam)
 	hub := firstNonEmpty(o.HubID, prof.CurrentHub, c.CurrentHub)
 
-	// Anonymous is echoed back so the command layer can distinguish a deliberate
-	// unauthenticated resolution from a failed one (MIO-2694) — see Resolved.
 	return Resolved{APIKey: apiKey, APIBase: apiBase, TeamID: team, HubID: hub, Anonymous: o.Anonymous, KeyStore: keyStore}, nil
 }
 
-// profile returns the named profile merged conceptually with defaults. An
-// unknown or empty name yields a zero Profile (callers fall back to top-level
-// config fields).
 func (c *Config) profile(name string) Profile {
 	if name == "" {
 		return Profile{}

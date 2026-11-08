@@ -8,13 +8,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// MIO-2283: `community discussions update` drops --title/--body (the admin PATCH
-// cannot set them) and replaces --pinned with the three moderation booleans
-// --is-pinned / --is-locked / --is-broadcast, mapped to snake_case attributes on
-// the JSON:API PATCH envelope (type "discussions").
-
-// TestCommunityDiscussionsUpdate_MapsBoolFlags verifies a full update PATCHes
-// .../discussions/{id} with type "discussions" and all three booleans mapped.
 func TestCommunityDiscussionsUpdate_MapsBoolFlags(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureHubRequest(t, http.StatusOK)
 
@@ -47,8 +40,6 @@ func TestCommunityDiscussionsUpdate_MapsBoolFlags(t *testing.T) {
 	}
 }
 
-// TestCommunityDiscussionsUpdate_PartialOnlyChangedFlags verifies only the flags
-// the caller set are sent (partial update — no false-y defaults leak in).
 func TestCommunityDiscussionsUpdate_PartialOnlyChangedFlags(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusOK)
 
@@ -68,8 +59,6 @@ func TestCommunityDiscussionsUpdate_PartialOnlyChangedFlags(t *testing.T) {
 	}
 }
 
-// TestCommunityDiscussionsUpdate_NoFlags_UsageNoRequest verifies that supplying
-// no field flags is a usage error that fires zero HTTP requests.
 func TestCommunityDiscussionsUpdate_NoFlags_UsageNoRequest(t *testing.T) {
 	srv, gotMethod, _, _ := captureHubRequest(t, http.StatusOK)
 
@@ -85,18 +74,13 @@ func TestCommunityDiscussionsUpdate_NoFlags_UsageNoRequest(t *testing.T) {
 	}
 }
 
-// TestCommunityDiscussionsUpdate_NoFlagsRejectBeforeTeamResolve verifies the
-// no-field-flags usage error fires BEFORE auth/team/hub resolution (repo
-// contract) — even with a team NAME that would otherwise need a resolving GET —
-// so no HTTP request is made and the exit is usage (2), not auth (3).
 func TestCommunityDiscussionsUpdate_NoFlagsRejectBeforeTeamResolve(t *testing.T) {
 	srv, gotMethod, _, _ := captureHubRequest(t, http.StatusOK)
 
 	res := runContract(t, baseEnv(srv.URL),
 		"community", "discussions", "update", "disc_abc",
-		"--team", "acme-name", // NOT id-shaped → would trigger a ResolveTeam GET
+		"--team", "acme-name",
 		"--hub", "hub_123",
-		// no --is-pinned/--is-locked/--is-broadcast
 	)
 
 	if res.Code != errs.ExitUsage {
@@ -107,8 +91,6 @@ func TestCommunityDiscussionsUpdate_NoFlagsRejectBeforeTeamResolve(t *testing.T)
 	}
 }
 
-// TestCommunityDiscussionsUpdate_RemovedFlagsRejected verifies the dropped flags
-// (--title/--body/--pinned) are no longer accepted and fire no request.
 func TestCommunityDiscussionsUpdate_RemovedFlagsRejected(t *testing.T) {
 	cases := [][]string{
 		{"--title", "x"},
@@ -131,14 +113,6 @@ func TestCommunityDiscussionsUpdate_RemovedFlagsRejected(t *testing.T) {
 	}
 }
 
-// MIO-2808: `community discussions create` — the CLI half of mio-backend #544
-// (0da17745), the impersonation-free admin welcome-post endpoint
-// POST /api/admin/teams/{team_id}/hubs/{hub_id}/discussions.
-
-// TestCommunityDiscussionsCreate_PostsEnvelopeToCollection pins the whole wire
-// contract: POST to the COLLECTION path, JSON:API type "discussions" (derived
-// from the path — the backend schema's type Literal), and exactly the four
-// attributes the create schema accepts.
 func TestCommunityDiscussionsCreate_PostsEnvelopeToCollection(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -172,10 +146,6 @@ func TestCommunityDiscussionsCreate_PostsEnvelopeToCollection(t *testing.T) {
 	}
 }
 
-// TestCommunityDiscussionsCreate_OnlyChangedFlagsSerialized: an unset --body /
-// --is-published must NOT be sent. is_published in particular defaults to TRUE
-// server-side, so shipping the flag's Go zero value would silently turn every
-// minimal create into a draft.
 func TestCommunityDiscussionsCreate_OnlyChangedFlagsSerialized(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -194,10 +164,6 @@ func TestCommunityDiscussionsCreate_OnlyChangedFlagsSerialized(t *testing.T) {
 	}
 }
 
-// TestCommunityDiscussionsCreate_MissingRequiredFlags_UsageNoRequest: a missing
-// --space-id or --title is ExitUsage BEFORE auth/team/hub resolution, so no HTTP
-// fires at all — asserted with a team NAME that would otherwise force a
-// resolving GET.
 func TestCommunityDiscussionsCreate_MissingRequiredFlags_UsageNoRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -211,7 +177,7 @@ func TestCommunityDiscussionsCreate_MissingRequiredFlags_UsageNoRequest(t *testi
 			srv, gotMethod, _, _ := captureHubRequest(t, http.StatusCreated)
 			args := append([]string{
 				"community", "discussions", "create",
-				"--team", "acme-name", // NOT id-shaped → would trigger a ResolveTeam GET
+				"--team", "acme-name",
 				"--hub", "hub_123",
 			}, tc.args...)
 
@@ -226,11 +192,6 @@ func TestCommunityDiscussionsCreate_MissingRequiredFlags_UsageNoRequest(t *testi
 	}
 }
 
-// TestCommunityDiscussionsCreate_NoAuthorFlag: the author is server-derived by
-// design (MIO-2262). Offering --author-contact-id would re-open the exact
-// impersonation surface that got v1 of the endpoint reverted — and there is no
-// wire field to carry it (the request schema is extra="forbid"), so the flag must
-// not exist and must fire no request.
 func TestCommunityDiscussionsCreate_NoAuthorFlag(t *testing.T) {
 	for _, flag := range []string{"--author-contact-id", "--author-contact", "--author"} {
 		srv, gotMethod, _, _ := captureHubRequest(t, http.StatusCreated)

@@ -1,16 +1,5 @@
 package cmd
 
-// content_reorder_test.go — contract tests for `mio content reorder` (MIO-2500).
-//
-// The backend admin reorder route (POST .../content/reorder) binds
-// ReorderEnvelope: data.type must be the Literal "content_nodes" and
-// data.attributes.items must be a LIST of {id, position} objects
-// (ReorderItem, extra="forbid"). ReorderAttributes also has extra="forbid",
-// so any stray field (order, parent_id) is rejected with 422. The command must
-// therefore split --order into an ordered items array with 0-based positions,
-// send it under attributes.items, and send nothing else. The endpoint returns
-// 204 No Content.
-
 import (
 	"net/http"
 	"testing"
@@ -18,10 +7,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// TestContentReorder_Body verifies reorder POSTs to .../content/reorder with
-// JSON:API type "content_nodes" and attributes.items as an ordered array of
-// {id, position} objects (0-based positions), and that neither the legacy
-// "order" string nor "parent_id" leaks into the body.
 func TestContentReorder_Body(t *testing.T) {
 	srv, method, path, _, body := captureAdminReq(t, http.StatusNoContent, "")
 	res := runContract(t, baseEnv(srv.URL),
@@ -43,7 +28,6 @@ func TestContentReorder_Body(t *testing.T) {
 		t.Errorf("data.type=%q want content_nodes", typ)
 	}
 
-	// attributes.items must be [{id,position}] in the given order, 0-based.
 	rawItems, ok := attrs["items"]
 	if !ok {
 		t.Fatalf("attributes.items missing; attrs=%v", attrs)
@@ -69,7 +53,6 @@ func TestContentReorder_Body(t *testing.T) {
 		}
 	}
 
-	// The legacy buggy shape must be gone: no "order" string, no "parent_id".
 	if _, ok := attrs["order"]; ok {
 		t.Errorf("attributes.order must not be sent (backend forbids it); attrs=%v", attrs)
 	}
@@ -78,9 +61,6 @@ func TestContentReorder_Body(t *testing.T) {
 	}
 }
 
-// TestContentReorder_TrimsAndDropsEmpties verifies surrounding whitespace is
-// trimmed and empty ids (from stray/trailing commas) are dropped, keeping the
-// positions contiguous and 0-based over the surviving ids.
 func TestContentReorder_TrimsAndDropsEmpties(t *testing.T) {
 	srv, _, _, _, body := captureAdminReq(t, http.StatusNoContent, "")
 	res := runContract(t, baseEnv(srv.URL),
@@ -110,8 +90,6 @@ func TestContentReorder_TrimsAndDropsEmpties(t *testing.T) {
 	}
 }
 
-// TestContentReorder_RequiresOrder verifies a missing --order exits ExitUsage
-// and fires no HTTP request.
 func TestContentReorder_RequiresOrder(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -124,9 +102,6 @@ func TestContentReorder_RequiresOrder(t *testing.T) {
 	}
 }
 
-// TestContentReorder_RejectsEmptyOrder verifies an --order that contains only
-// separators/whitespace (no real ids) exits ExitUsage and fires no request,
-// rather than POSTing an empty items array the backend would reject.
 func TestContentReorder_RejectsEmptyOrder(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),

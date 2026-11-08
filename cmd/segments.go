@@ -1,14 +1,5 @@
 package cmd
 
-// segments.go implements the `mio segments` command group.
-//
-// Routes (see docs/internal/api-surface.md "segments"):
-//
-//	segments: CRUD /api/teams/{team_id}/segments[/{id}]
-//	search:   POST /api/teams/{team_id}/segments/search  (preview conditions)
-//	members:  GET  /api/teams/{team_id}/segments/{id}/members
-//	count:    GET  /api/teams/{team_id}/segments/{id}/members/count
-
 import (
 	"fmt"
 	"net/url"
@@ -20,7 +11,6 @@ import (
 )
 
 func init() {
-	// segments <action>
 	segmentsCmd.AddCommand(
 		segmentsCreateCmd,
 		segmentsListCmd,
@@ -32,11 +22,8 @@ func init() {
 		segmentsCountCmd,
 	)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(segmentsCmd)
 }
-
-// ---- segments group ---------------------------------------------------------
 
 var segmentsCmd = &cobra.Command{
 	Use:   "segments",
@@ -49,7 +36,6 @@ var segmentsCmd = &cobra.Command{
   mio segments search --conditions '{"version":1,"groups":[{"logic":"AND","conditions":[{"type":"email","operator":"contains","value":{"text":"@example.com"}}]}]}'`,
 }
 
-// segmentsPath returns /api/teams/{team_id}/segments[/{id}].
 func segmentsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/segments", teamID)
 	if id != "" {
@@ -58,7 +44,6 @@ func segmentsPath(teamID, id string) string {
 	return base
 }
 
-// segmentsMembersPath returns /api/teams/{team_id}/segments/{id}/members[/count].
 func segmentsMembersPath(teamID, id, suffix string) string {
 	base := fmt.Sprintf("/api/teams/%s/segments/%s/members", teamID, id)
 	if suffix != "" {
@@ -96,9 +81,6 @@ Prefix the value with @ to read the JSON from a file (e.g. --conditions @conds.j
 			return err
 		}
 
-		// --name and --conditions are required by the backend
-		// SegmentCreateAttributes schema; cobra enforces both before RunE
-		// (markFlagsRequired in init).
 		rawConditions, _ := cmd.Flags().GetString("conditions")
 		conditions, perr := parseJSONFlag(rawConditions)
 		if perr != nil {
@@ -294,8 +276,6 @@ Pagination is controlled with --page-size and --page-after.`,
 			return errs.Wrap(errs.ExitUsage, fmt.Errorf("--conditions is not valid JSON: %w", perr))
 		}
 
-		// Build the segment_search attributes: {conditions, page?}. page is only
-		// included when the caller set a pagination flag (the backend defaults it).
 		attributes := map[string]any{"conditions": conditions}
 		page := map[string]any{}
 		setMappedInt(cmd, page, "page-size", "size")
@@ -373,11 +353,6 @@ var segmentsCountCmd = &cobra.Command{
 }
 
 func init() {
-	// Attribute flags for create and update.
-	// NOTE: --segment-type was removed (MIO-938) — the backend SegmentCreateAttributes
-	// schema uses extra="forbid" and does not accept a segment_type field; sending it
-	// caused a 422 "extra inputs not permitted". Segment type is now determined
-	// automatically by the backend based on whether conditions are provided.
 	for _, cmd := range []*cobra.Command{segmentsCreateCmd, segmentsUpdateCmd} {
 		cmd.Flags().String("name", "", "Segment name.")
 		cmd.Flags().String("description", "", "Segment description.")
@@ -386,17 +361,11 @@ func init() {
 	}
 	markFlagsRequired(segmentsCreateCmd, "name", "conditions")
 
-	// Pagination flags for list and members.
 	addPaginationFlags(segmentsListCmd)
 	addPaginationFlags(segmentsMembersCmd)
-	// Both segments routes take pages of up to 200 rows, not the usual 100
-	// (mio-backend origin/main segments/router.py list_members page[size]
-	// le=200; schemas.py search page.size le=200), so the more-rows note may
-	// suggest a larger page up to there (MIO-4174).
 	markPageSizeCap(segmentsMembersCmd, 200)
 	markPageSizeCap(segmentsSearchCmd, 200)
 
-	// Search flags.
 	segmentsSearchCmd.Flags().String("conditions", "", `Condition tree as JSON: {"version":1,"groups":[...]}. Prefix with @ to read from a file (e.g. @conditions.json).`)
 	segmentsSearchCmd.Flags().Int("page-size", 0, "Preview page size (1–200). Omit for the backend default.")
 	segmentsSearchCmd.Flags().String("page-after", "", "Pagination cursor for the next page of preview results.")

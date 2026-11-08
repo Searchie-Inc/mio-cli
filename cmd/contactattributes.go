@@ -1,16 +1,5 @@
 package cmd
 
-// contactattributes.go implements the `mio contact-attributes` command tree.
-//
-// Sub-resource groups (all team-scoped unless noted):
-//
-//	defs:       create/list/retrieve/update/delete /api/teams/{team_id}/contact-attributes[/{id}]
-//	options:    create/list/update/delete           /api/teams/{team_id}/contact-attributes/{def}/options[/{id}]
-//	hub-config: create/list/update/delete           /api/teams/{team_id}/hubs/{hub_id}/contact-attributes[/{def}]
-//	values:     get/set                             /api/teams/{team_id}/contacts/{tcid}/attributes
-//
-// Self-registered via init(); no other file is modified.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -28,7 +17,6 @@ import (
 )
 
 func init() {
-	// defs actions
 	contactAttributesCmd.AddCommand(
 		contactAttributesCreateCmd,
 		contactAttributesListCmd,
@@ -37,7 +25,6 @@ func init() {
 		contactAttributesDeleteCmd,
 	)
 
-	// options sub-group
 	contactAttributesOptionsCmd.AddCommand(
 		contactAttributesOptionsCreateCmd,
 		contactAttributesOptionsListCmd,
@@ -46,7 +33,6 @@ func init() {
 	)
 	contactAttributesCmd.AddCommand(contactAttributesOptionsCmd)
 
-	// hub-config sub-group
 	contactAttributesHubConfigCmd.AddCommand(
 		contactAttributesHubConfigCreateCmd,
 		contactAttributesHubConfigListCmd,
@@ -55,18 +41,14 @@ func init() {
 	)
 	contactAttributesCmd.AddCommand(contactAttributesHubConfigCmd)
 
-	// values sub-group
 	contactAttributesValuesCmd.AddCommand(
 		contactAttributesValuesGetCmd,
 		contactAttributesValuesSetCmd,
 	)
 	contactAttributesCmd.AddCommand(contactAttributesValuesCmd)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(contactAttributesCmd)
 }
-
-// ---- root group -------------------------------------------------------------
 
 var contactAttributesCmd = &cobra.Command{
 	Use:   "contact-attributes",
@@ -80,9 +62,6 @@ Sub-commands are grouped into four areas:
   values      — read and write attribute values on individual contacts`,
 }
 
-// ---- path helpers -----------------------------------------------------------
-
-// contactAttributesDefsPath builds /api/teams/{team_id}/contact-attributes[/{id}].
 func contactAttributesDefsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/contact-attributes", teamID)
 	if id != "" {
@@ -91,7 +70,6 @@ func contactAttributesDefsPath(teamID, id string) string {
 	return base
 }
 
-// contactAttributesOptionsPath builds /api/teams/{team_id}/contact-attributes/{def}/options[/{id}].
 func contactAttributesOptionsPath(teamID, def, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/contact-attributes/%s/options", teamID, def)
 	if id != "" {
@@ -100,7 +78,6 @@ func contactAttributesOptionsPath(teamID, def, id string) string {
 	return base
 }
 
-// contactAttributesHubConfigPath builds /api/teams/{team_id}/hubs/{hub_id}/contact-attributes[/{def}].
 func contactAttributesHubConfigPath(teamID, hubID, def string) string {
 	base := fmt.Sprintf("/api/teams/%s/hubs/%s/contact-attributes", teamID, hubID)
 	if def != "" {
@@ -109,15 +86,10 @@ func contactAttributesHubConfigPath(teamID, hubID, def string) string {
 	return base
 }
 
-// contactAttributesValuesPath builds /api/teams/{team_id}/contacts/{tcid}/attributes.
 func contactAttributesValuesPath(teamID, contactID string) string {
 	return fmt.Sprintf("/api/teams/%s/contacts/%s/attributes", teamID, contactID)
 }
 
-// ---- shared context helpers -------------------------------------------------
-
-// caContext is the shared boilerplate for contact-attribute defs sub-commands:
-// build the context, require auth, resolve team id.
 func caContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -133,8 +105,6 @@ func caContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	return c, teamID, nil
 }
 
-// caHubContext is the shared boilerplate for hub-scoped sub-commands:
-// build the context, require auth, resolve team id and hub id.
 func caHubContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -154,18 +124,6 @@ func caHubContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	return c, teamID, hubID, nil
 }
 
-// ============================================================================
-// defs: create/list/retrieve/update/delete
-// ============================================================================
-
-// attrDefFieldTypes is the set of accepted --field-type values (the backend
-// AttributeType enum: text/number/boolean/date/multiple/single — mio-backend
-// app/contact_attributes/schemas.py's ATTRIBUTE_TYPES/AttributeType, mirrored
-// server-side by the models.py:60 CHECK constraint). Validated client-side so
-// a typo exits ExitUsage rather than a 422 round-trip — NEW client-side
-// validation added with the pure-builder extraction (MIO-2543); "single"
-// added MIO-4124 (it was missing even though the backend enum, and this
-// command's own read/set paths, have always supported it).
 var attrDefFieldTypes = map[string]bool{
 	"text":     true,
 	"number":   true,
@@ -175,24 +133,15 @@ var attrDefFieldTypes = map[string]bool{
 	"single":   true,
 }
 
-// AttrDefInput carries the resolved attribute-definition create attributes,
-// decoupled from *cobra.Command so both `contact-attributes create` and the
-// scaffold (MIO-2543) can build the same POST body. Each pointer is nil when the
-// flag was unset. The required-flag ergonomics (name/slug/field-type must be set)
-// stay with the command; this builder validates the field-type VALUE.
 type AttrDefInput struct {
 	Name              *string
 	Slug              *string
-	FieldType         *string // → type (validated enum)
+	FieldType         *string
 	Description       *string
-	IsContactEditable *bool // → is_contact_editable
+	IsContactEditable *bool
 	Position          *int
 }
 
-// buildAttrDefCreateAttrs assembles the attribute-definition create body from d.
-// --field-type maps to the backend field "type" (the domain attribute type, not
-// the JSON:API resource type) and is validated against attrDefFieldTypes. It is a
-// pure builder (takes data, not flags) so the scaffold gets the same validation.
 func buildAttrDefCreateAttrs(d AttrDefInput) (map[string]any, error) {
 	attrs := map[string]any{}
 	if d.Name != nil {
@@ -358,7 +307,6 @@ var contactAttributesDeleteCmd = &cobra.Command{
 }
 
 func init() {
-	// create-only flags (field type is required on create; immutable on update)
 	contactAttributesCreateCmd.Flags().String("name", "", "Attribute name. Required.")
 	contactAttributesCreateCmd.Flags().String("slug", "", "Attribute slug (unique identifier within the team). Required.")
 	contactAttributesCreateCmd.Flags().String("field-type", "", "Attribute field type: text, number, boolean, date, multiple, or single. Required.")
@@ -367,7 +315,6 @@ func init() {
 	contactAttributesCreateCmd.Flags().Bool("is-contact-editable", true, "Whether contacts can edit this attribute themselves.")
 	contactAttributesCreateCmd.Flags().Int("position", 0, "Display order position (lower numbers appear first).")
 
-	// update flags (field type is immutable — not exposed here)
 	contactAttributesUpdateCmd.Flags().String("name", "", "Attribute name.")
 	contactAttributesUpdateCmd.Flags().String("slug", "", "Attribute slug.")
 	contactAttributesUpdateCmd.Flags().String("description", "", "Optional description or hint for this attribute.")
@@ -376,10 +323,6 @@ func init() {
 
 	addPaginationFlags(contactAttributesListCmd)
 }
-
-// ============================================================================
-// options: create/list/update/delete under a definition
-// ============================================================================
 
 var contactAttributesOptionsCmd = &cobra.Command{
 	Use:   "options",
@@ -501,10 +444,6 @@ func init() {
 	addPaginationFlags(contactAttributesOptionsListCmd)
 }
 
-// ============================================================================
-// hub-config: create/list/update/delete per-hub attribute configuration
-// ============================================================================
-
 var contactAttributesHubConfigCmd = &cobra.Command{
 	Use:   "hub-config",
 	Short: "Manage per-hub contact attribute configuration.",
@@ -526,10 +465,6 @@ its display order and visibility.`,
 			return err
 		}
 
-		// The definition id travels in the body, not the URL: create POSTs to
-		// the COLLECTION path .../contact-attributes. The /{definition_id}
-		// path only supports PATCH/DELETE, so a POST there 405s. buildHubConfigAttrs
-		// owns the definition_id-in-body pattern (MIO-2502) + the bool flags.
 		attrs := buildHubConfigAttrs(args[0], HubConfigInput{
 			IsInProfile:    changedBool(cmd, "in-profile"),
 			IsInOnboarding: changedBool(cmd, "in-onboarding"),
@@ -634,10 +569,6 @@ func init() {
 	addPaginationFlags(contactAttributesHubConfigListCmd)
 }
 
-// setHubConfigBoolFlags maps the hub-config boolean flags onto their backend
-// attribute keys. Only flags the caller changed are sent, matching the
-// partial-update / upsert semantics of the backend schema. Used by the hub-config
-// UPDATE command (the def id is in the URL there, so no definition_id in the body).
 func setHubConfigBoolFlags(cmd *cobra.Command, attrs map[string]any) {
 	setMappedBool(cmd, attrs, "in-profile", "is_in_profile")
 	setMappedBool(cmd, attrs, "in-onboarding", "is_in_onboarding")
@@ -646,23 +577,14 @@ func setHubConfigBoolFlags(cmd *cobra.Command, attrs map[string]any) {
 	setMappedBool(cmd, attrs, "searchable", "is_searchable")
 }
 
-// HubConfigInput carries the hub-config boolean flags, decoupled from
-// *cobra.Command. Each pointer is nil when the flag was unset (partial-update /
-// upsert semantics preserved).
 type HubConfigInput struct {
-	IsInProfile    *bool // → is_in_profile
-	IsInOnboarding *bool // → is_in_onboarding
-	IsRequired     *bool // → is_required
-	IsReadOnly     *bool // → is_read_only
-	IsSearchable   *bool // → is_searchable
+	IsInProfile    *bool
+	IsInOnboarding *bool
+	IsRequired     *bool
+	IsReadOnly     *bool
+	IsSearchable   *bool
 }
 
-// buildHubConfigAttrs assembles the hub-config CREATE body: the definition id in
-// the body (MIO-2502 — create POSTs to the collection path, so the def id cannot
-// travel in the URL) plus the bool flags the caller set. It is a pure builder so
-// the scaffold (MIO-2543) can enable an attribute on a hub without a
-// *cobra.Command. Position is added by the caller (setIntFlag), matching the
-// command's previous inline assembly.
 func buildHubConfigAttrs(defID string, d HubConfigInput) map[string]any {
 	attrs := map[string]any{"definition_id": defID}
 	if d.IsInProfile != nil {
@@ -683,10 +605,6 @@ func buildHubConfigAttrs(defID string, d HubConfigInput) map[string]any {
 	return attrs
 }
 
-// ============================================================================
-// values: get/set attribute values on a contact
-// ============================================================================
-
 var contactAttributesValuesCmd = &cobra.Command{
 	Use:   "values",
 	Short: "Read and write attribute values on a contact.",
@@ -705,8 +623,6 @@ var contactAttributesValuesGetCmd = &cobra.Command{
 			return err
 		}
 
-		// GET .../attributes returns a ContactValueListResponse (a LIST at
-		// /data); decode it as a collection, not a single resource.
 		col, err := c.client.List(c.ctx, contactAttributesValuesPath(teamID, args[0]), url.Values{})
 		if err != nil {
 			return err
@@ -752,8 +668,6 @@ attribute accepts exactly one value.`,
 			return errs.New(errs.ExitUsage, "nothing to set: provide at least one --attr key=value pair")
 		}
 
-		// Split every pair up front so a malformed --attr exits ExitUsage
-		// before any request fires (no-request-on-usage-error contract).
 		type attrPair struct{ key, val string }
 		pairs := make([]attrPair, 0, len(rawAttrs))
 		for _, kv := range rawAttrs {
@@ -764,26 +678,11 @@ attribute accepts exactly one value.`,
 			pairs = append(pairs, attrPair{key, val})
 		}
 
-		// Look up each attribute's field type (and id) once (MIO-2553/MIO-4124):
-		// a scalar value must travel in the typed field the def declares
-		// (value_number/value_boolean/value_date/value_text), and a select-type
-		// (single/multiple) def needs its id to fetch its options for
-		// option-value resolution. A slug the team has no definition for is a
-		// usage error (exit 2, no write) rather than a guess the backend would
-		// reject anyway.
 		fieldTypes, err := caDefFieldTypesBySlug(c, teamID)
 		if err != nil {
 			return err
 		}
 
-		// caSelectGroup accumulates the raw (unresolved) option-value tokens for
-		// ONE select-type (single/multiple) attribute slug, across however many
-		// --attr occurrences and comma-separated segments reference it
-		// (MIO-4124): repeated --attr flags and comma-separated values both
-		// merge into the SAME group, in first-occurrence order, with exact
-		// (literal, not resolved-id) duplicate tokens dropped. opIndex is the
-		// position reserved in ops for this slug's single merged op, so the
-		// final wire order still follows the order slugs first appeared in.
 		type caSelectGroup struct {
 			def     caAttrDef
 			values  []string
@@ -802,8 +701,6 @@ attribute accepts exactly one value.`,
 			}
 
 			if def.FieldType != "multiple" && def.FieldType != "single" {
-				// Scalar attribute: unchanged from pre-MIO-4124 behaviour — one
-				// "set" op per --attr pair, in order.
 				attrs := map[string]any{"definition_slug": p.key}
 				if err := setTypedAttrValue(attrs, p.key, def.FieldType, p.val); err != nil {
 					return err
@@ -818,7 +715,7 @@ attribute accepts exactly one value.`,
 			g, ok := selectGroups[p.key]
 			if !ok {
 				g = &caSelectGroup{def: def, seen: map[string]bool{}, opIndex: len(ops)}
-				ops = append(ops, nil) // reserved slot, filled once resolved below
+				ops = append(ops, nil)
 				selectGroups[p.key] = g
 				selectOrder = append(selectOrder, p.key)
 			}
@@ -835,12 +732,6 @@ attribute accepts exactly one value.`,
 			}
 		}
 
-		// Client-side validation happens entirely here, BEFORE any write
-		// request. Single-select cardinality is checked first — and without
-		// fetching that definition's options — so a call with an obviously
-		// wrong number of values never round-trips to fetch options it won't
-		// need: mirrors the backend's own "accepts exactly one option, not
-		// multiple" rule.
 		for _, slug := range selectOrder {
 			g := selectGroups[slug]
 			if g.def.FieldType == "single" && len(g.values) > 1 {
@@ -850,13 +741,6 @@ attribute accepts exactly one value.`,
 			}
 		}
 
-		// Resolve each select group's option values against its definition's
-		// options. selectOrder holds each distinct SLUG once, however many
-		// --attr occurrences (or comma-separated tokens) referenced it, and a
-		// slug maps to exactly one definition (fieldTypes is keyed by slug, and
-		// slugs are unique per team) — so this loop already calls
-		// caOptionsByDef at most once per definition, with no extra cache
-		// needed.
 		for _, slug := range selectOrder {
 			g := selectGroups[slug]
 			options, err := caOptionsByDef(c, teamID, g.def.ID)
@@ -864,12 +748,6 @@ attribute accepts exactly one value.`,
 				return err
 			}
 
-			// Two different raw tokens (e.g. a slug and a label, or a slug and
-			// an id) can resolve to the SAME option — "tier=pro --attr
-			// tier=Pro --attr tier=opt_pro" all name opt_pro. Raw-token dedup
-			// above only catches literal duplicates; dedupe by resolved id too
-			// so the wire list never repeats one option, preserving the order
-			// each id was first resolved in.
 			resolvedIDs := make([]string, 0, len(g.values))
 			seenIDs := map[string]bool{}
 			for _, raw := range g.values {
@@ -884,10 +762,6 @@ attribute accepts exactly one value.`,
 				resolvedIDs = append(resolvedIDs, id)
 			}
 
-			// The resolved ids are always sent as option_ids — never
-			// option_slugs, never a value_* key — so what goes on the wire is
-			// exactly what was resolved, regardless of whether the raw --attr
-			// value named an id, a slug, or a label.
 			ops[g.opIndex] = map[string]any{
 				"type": "set",
 				"attributes": map[string]any{
@@ -897,10 +771,6 @@ attribute accepts exactly one value.`,
 			}
 		}
 
-		// The backend binds a BulkValuePatchEnvelope whose `data` is a LIST of
-		// value operations (extra="forbid"); a JSON:API object at /data 400s
-		// with "Input should be a valid list (/data)". Send the raw {data:[...]}
-		// list and decode the ContactValueListResponse it returns.
 		col, err := c.client.ActionCollectionRaw(c.ctx, http.MethodPatch,
 			contactAttributesValuesPath(teamID, args[0]), map[string]any{"data": ops})
 		if err != nil {
@@ -914,7 +784,6 @@ func init() {
 	contactAttributesValuesSetCmd.Flags().StringArray("attr", nil, "Attribute key=value pair to set. May be repeated for multiple attributes. For a single/multiple-select attribute, value is an option id, slug, or label — comma-separated or repeated --attr to set more than one option on a multiple-select attribute.")
 }
 
-// splitKV splits a "key=value" string. Returns ok=false if no '=' is found.
 func splitKV(s string) (key, val string, ok bool) {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '=' {
@@ -924,30 +793,11 @@ func splitKV(s string) (key, val string, ok bool) {
 	return "", "", false
 }
 
-// caAttrDef carries one contact-attribute definition's id and field type, as
-// resolved by slug in caDefFieldTypesBySlug's returned map. `values set` needs
-// both: the field type routes a scalar value into its typed field (MIO-2553),
-// and the id is needed to fetch a select-type (single/multiple) definition's
-// options for option-value resolution (MIO-4124).
 type caAttrDef struct {
 	ID        string
-	FieldType string // the backend AttributeType: text/number/boolean/date/multiple/single
+	FieldType string
 }
 
-// caNextDefsPageAfter extracts the next page's page[after] cursor for the
-// team's contact-attribute definitions list, per the REAL pagination envelope
-// mio-backend's list_definitions emits (app/contact_attributes/router.py:
-// 155-168, verified against origin/main 2026-09-22) — which is NOT the
-// meta.page.{next_cursor,has_more} shape cmd/hubs_scaffold.go's shared
-// nextPageCursor reads for other endpoints that DO emit it correctly, so this
-// helper is deliberately local to this file and does not touch that one.
-// Here meta is TOP-LEVEL {"has_more": bool} (no nested "page" key), and the
-// next page is a full URL string at links.next
-// (".../contact-attributes?page[after]=<last row id>&page[size]=<size>",
-// page[size] capped at le=100). client.Collection has no Links field
-// (internal/client is intentionally link-unaware — Resource/Collection model
-// only id/type/attributes/meta), so this parses links.next out of the raw
-// envelope bytes (col.RawBody) instead.
 func caNextDefsPageAfter(col *client.Collection) string {
 	if hasMore, present := col.Meta["has_more"].(bool); present && !hasMore {
 		return ""
@@ -967,17 +817,6 @@ func caNextDefsPageAfter(col *client.Collection) string {
 	return u.Query().Get("page[after]")
 }
 
-// caDefFieldTypesBySlug lists the team's contact-attribute definitions and
-// returns a slug→caAttrDef map (id + the backend AttributeType: text/number/
-// boolean/date/multiple/single). `values set` uses it to route each --attr
-// value into the correct typed field, to resolve a select-type definition's
-// options (MIO-4124), and to reject unknown slugs before any write (MIO-2553).
-// It follows the backend's REAL pagination shape to exhaustion via
-// caNextDefsPageAfter (top-level meta.has_more + links.next — see that
-// function's doc comment) so every definition resolves even for teams with
-// more than one page of attributes; without that, a slug on a later page
-// would look unknown. The seen-cursor set + maxPages bound are a stall guard
-// against a buggy server returning a stable/looping cursor.
 func caDefFieldTypesBySlug(c *cmdContext, teamID string) (map[string]caAttrDef, error) {
 	out := map[string]caAttrDef{}
 	seen := map[string]bool{}
@@ -1008,22 +847,12 @@ func caDefFieldTypesBySlug(c *cmdContext, teamID string) (map[string]caAttrDef, 
 	return out, nil
 }
 
-// caAttrOption mirrors the fields of one option resource relevant to
-// option-value resolution: id, slug, and label (`values set`, MIO-4124).
 type caAttrOption struct {
 	ID    string
 	Slug  string
 	Label string
 }
 
-// caOptionsByDef lists ALL options for the given select-type (single/multiple)
-// definition with a SINGLE GET. GET .../contact-attributes/{definition_id}/
-// options (mio-backend app/contact_attributes/router.py's list_options) takes
-// no page params and returns every row in one response (meta={}) — verified
-// against mio-backend origin/main 2026-09-22, `git grep next_cursor` under
-// app/contact_attributes/ has zero hits. Unlike caDefFieldTypesBySlug's
-// definitions list, this endpoint is NOT paginated, so no cursor loop is
-// needed here.
 func caOptionsByDef(c *cmdContext, teamID, defID string) ([]caAttrOption, error) {
 	col, err := c.client.List(c.ctx, contactAttributesOptionsPath(teamID, defID, ""), url.Values{})
 	if err != nil {
@@ -1038,13 +867,6 @@ func caOptionsByDef(c *cmdContext, teamID, defID string) ([]caAttrOption, error)
 	return out, nil
 }
 
-// resolveCAOptionValue resolves one raw --attr value against a select-type
-// definition's option list, in the order the backend contract implies
-// (MIO-4124): exact option id, then exact option slug, then a
-// case-insensitive exact label match. A label match tying across more than
-// one option is reported as ambiguous rather than guessed; no match at all
-// names the definition and lists its options as "slug (label)" so the caller
-// can correct the value without a second round trip.
 func resolveCAOptionValue(defSlug string, options []caAttrOption, raw string) (string, error) {
 	for _, o := range options {
 		if o.ID == raw {
@@ -1076,8 +898,6 @@ func resolveCAOptionValue(defSlug string, options []caAttrOption, raw string) (s
 	}
 }
 
-// formatCAOptions renders a definition's options as "slug (label)" pairs,
-// comma-separated, for an unknown-option-value error message.
 func formatCAOptions(options []caAttrOption) string {
 	parts := make([]string, 0, len(options))
 	for _, o := range options {
@@ -1086,34 +906,14 @@ func formatCAOptions(options []caAttrOption) string {
 	return strings.Join(parts, ", ")
 }
 
-// caDateLayouts are the ISO-8601 shapes a date attribute value may take. A value
-// is validated client-side against these before the write so an obviously bad
-// date exits ExitUsage instead of round-tripping to a backend error; the original
-// string is passed through for the backend to parse canonically.
 var caDateLayouts = []string{
-	"2006-01-02",           // date only (the common case)
-	time.RFC3339,           // 2006-01-02T15:04:05Z07:00
-	time.RFC3339Nano,       // with sub-second precision
-	"2006-01-02T15:04:05",  // naive datetime (no zone)
-	"2006-01-02T15:04:05Z", // explicit UTC
+	"2006-01-02",
+	time.RFC3339,
+	time.RFC3339Nano,
+	"2006-01-02T15:04:05",
+	"2006-01-02T15:04:05Z",
 }
 
-// setTypedAttrValue writes val into attrs under the typed value field the
-// attribute's field type requires, mirroring the backend SetOperationAttributes
-// schema (MIO-2553):
-//
-//	number  → value_number  (parsed with strconv; finite JSON number)
-//	boolean → value_boolean (parsed with strconv; JSON bool)
-//	date    → value_date    (validated as ISO-8601, then the string is passed through)
-//	text    → value_text
-//
-// number/boolean/date parse failures exit ExitUsage (no round-trip). Non-finite
-// numbers (NaN/±Inf, which strconv.ParseFloat accepts but JSON cannot encode) are
-// rejected the same way rather than failing later as a generic marshal error.
-// Select-type (multiple/single) attributes are NOT routed through here: `values
-// set`'s RunE resolves their option value(s) to option_ids before building the
-// op (MIO-4124), so fieldType here is always a scalar backend type. The caller
-// has already rejected slugs the team has no definition for.
 func setTypedAttrValue(attrs map[string]any, slug, fieldType, val string) error {
 	switch fieldType {
 	case "number":
@@ -1138,15 +938,11 @@ func setTypedAttrValue(attrs map[string]any, slug, fieldType, val string) error 
 		}
 		attrs["value_date"] = val
 	default:
-		// "text" and any type the backend adds later that we do not specially
-		// route → value_text.
 		attrs["value_text"] = val
 	}
 	return nil
 }
 
-// isValidCADate reports whether val parses as one of the accepted ISO-8601 date
-// shapes (caDateLayouts).
 func isValidCADate(val string) bool {
 	for _, layout := range caDateLayouts {
 		if _, err := time.Parse(layout, val); err == nil {

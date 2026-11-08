@@ -1,11 +1,5 @@
 package catalog
 
-// catalog_test.go — loader + accessor invariants over the vendored catalog
-// (mio-page-catalog@5f35b09, catalogVersion 0.12.0). These accessors are what the CLI commands consume
-// instead of hardcoded lists: the writable section-type allow-list (imperative
-// door), template-id validation (tree door), and recommended templates per page
-// type.
-
 import (
 	"reflect"
 	"testing"
@@ -13,14 +7,10 @@ import (
 
 func TestParse_RejectsTrailingContent(t *testing.T) {
 	good := vendoredCatalogJSON
-	// A valid catalog followed by a stray JSON value must be rejected (TS
-	// JSON.parse would): otherwise a digest-consistent body with appended junk
-	// would be silently adopted.
 	bad := append(append([]byte{}, good...), []byte("\n{\"junk\":true}")...)
 	if _, err := Parse(bad); err == nil {
 		t.Error("Parse accepted trailing content after the catalog object")
 	}
-	// Trailing whitespace only is fine.
 	ws := append(append([]byte{}, good...), []byte("\n\n  \t")...)
 	if _, err := Parse(ws); err != nil {
 		t.Errorf("Parse rejected trailing whitespace: %v", err)
@@ -29,8 +19,6 @@ func TestParse_RejectsTrailingContent(t *testing.T) {
 
 func TestSectionType_KnownVsUnknown(t *testing.T) {
 	c := loadForTest(t)
-	// compact flipped writable false -> true in 0.10.0 (MIO-2681,
-	// imperative-door parity with grid).
 	if st, ok := c.SectionType("compact"); !ok || !st.Writable {
 		t.Errorf("SectionType(compact) = %+v, %v; want known + writable", st, ok)
 	}
@@ -44,11 +32,9 @@ func TestSectionType_KnownVsUnknown(t *testing.T) {
 
 func TestLoad_Counts(t *testing.T) {
 	c := loadForTest(t)
-	// Counts from the pinned 0.31.0 catalog.
 	if got := len(c.Templates); got != 14 {
 		t.Errorf("section templates = %d, want 14", got)
 	}
-	// The catalog declares 12 page templates and 13 page types.
 	if got := len(c.PageTemplates); got != 12 {
 		t.Errorf("page templates = %d, want 12", got)
 	}
@@ -62,10 +48,6 @@ func TestLoad_Counts(t *testing.T) {
 
 func TestWritableSectionTypes_MatchesCatalog(t *testing.T) {
 	c := loadForTest(t)
-	// The 8 writable=true section types (the imperative `sections create --type`
-	// allow-list), sorted for a stable help string. cta/text/video were removed
-	// entirely in 0.12.0 (mio-page-catalog#19). testimonials added (writable) in
-	// 0.13.0.
 	want := []string{"carousel", "compact", "content-grid", "feature", "grid", "row", "search", "testimonials"}
 	got := c.WritableSectionTypes()
 	if !reflect.DeepEqual(got, want) {
@@ -78,8 +60,8 @@ func TestIsWritableSectionType(t *testing.T) {
 	cases := map[string]bool{
 		"grid":    true,
 		"feature": true,
-		"compact": true,  // writable=true as of 0.10.0 (MIO-2681)
-		"video":   false, // removed entirely in 0.12.0 (mio-page-catalog#19)
+		"compact": true,
+		"video":   false,
 		"unknown": false,
 	}
 	for id, want := range cases {
@@ -102,11 +84,6 @@ func TestTemplateByID_SectionAndPage(t *testing.T) {
 	}
 }
 
-// TestTemplateByID_ScrollAlias covers the MIO-2681 CLI-side discoverability
-// alias: "scroll" resolves to the "compact" template (id is a stored contract,
-// unchanged since the picker-label rename at 0.9.1), a near-miss of the alias
-// still fails lookup like any other unknown id, and the alias itself never
-// leaks into TemplateIDs()/listings — only the real id does.
 func TestTemplateByID_ScrollAlias(t *testing.T) {
 	c := loadForTest(t)
 
@@ -149,9 +126,6 @@ func TestRecommendedTemplates_ForHomepage_OrderedByRecommendation(t *testing.T) 
 	for _, tmpl := range got {
 		ids = append(ids, tmpl.ID)
 	}
-	// Section templates whose applicablePageTypes include "homepage", ordered by
-	// recommendation.order. content-card (applicablePageTypes: []) is excluded.
-	// testimonials (order 90) added in 0.13.0.
 	want := []string{"hero", "carousel", "pinned-posts", "grid", "content-grid", "row", "search-bar", "compact", "testimonials"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Errorf("RecommendedTemplates(homepage) = %v, want %v", ids, want)

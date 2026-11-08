@@ -1,26 +1,5 @@
 package cmd
 
-// hubs_navigation_verbs.go — `mio hubs navigation` list/add/remove/reorder verbs
-// (MIO-2633). Ergonomic, item-by-item editing of the hub navigation menu without
-// hand-rebuilding the whole `--navigation-json` blob.
-//
-// Each mutating verb read-modify-writes the hub's `navigation` blob: retrieve the
-// hub, mutate ONE bucket (header|footer|mobile), validate the whole blob
-// (validateNavigationBlob + validateNavigationHrefs against the hub's slug), then
-// PATCH `navigation` as a whole-blob REPLACE — a partial update, so the hub's
-// other fields (branding/settings/…) are untouched. header/footer items carry no
-// stable id, so items are addressed by their zero-based INDEX as shown by
-// `navigation list`.
-//
-// Concurrency: this is a read-modify-write with no optimistic-lock guard (the hub
-// update route exposes none), so a racing edit can be lost — the same
-// last-write-wins window as the existing `--navigation-json` replace.
-//
-// The hub id positional is OPTIONAL on every verb (MIO-2732): omit it and the hub
-// comes from --hub / config current_hub like every other hub-scoped verb. Because
-// it shares the positional slot with the bucket, the two are told apart by value
-// — see splitNavArgs.
-
 import (
 	"strconv"
 	"strings"
@@ -30,9 +9,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// navBuckets are the navigation menu buckets the hub renderer understands. header
-// and footer carry {type,href,label} items (typed + hub-scoped hrefs); mobile
-// carries {id,label,route,icon} items (validated only as an array of objects).
 var navBuckets = []string{"header", "footer", "mobile"}
 
 func isNavBucket(b string) bool {
@@ -75,8 +51,6 @@ Each edit re-validates the whole menu (buckets well-formed; header/footer items
 carry a non-empty type; hub-relative hrefs stay within /{slug}) before writing.`,
 }
 
-// ── shared helpers ──────────────────────────────────────────────────────────
-
 func requireNavBucket(bucket string) error {
 	if !isNavBucket(bucket) {
 		return errs.New(errs.ExitUsage, "invalid bucket %q: must be header, footer, or mobile", bucket)
@@ -84,32 +58,6 @@ func requireNavBucket(bucket string) error {
 	return nil
 }
 
-// splitNavArgs separates the navigation verbs' positionals into the (optional)
-// hub id and the bucket, so these verbs honour --hub/current_hub like every
-// other hub-scoped verb (MIO-2732).
-//
-// The hub id shares the positional slot with the bucket, so the two are told
-// apart by VALUE: the buckets are a closed three-name set (header|footer|mobile)
-// and a hub id positional is passed through verbatim — it is never resolved from
-// a name or slug — so a bare "header" could never have addressed a hub before
-// this change either. There is therefore no invocation whose meaning shifts:
-//
-//	<hub_id> <bucket>   → explicit hub, explicit bucket   (unchanged)
-//	<bucket>            → ambient hub, explicit bucket    (new)
-//	<hub_id>            → explicit hub, no bucket         (unchanged; `list` only)
-//	(nothing)           → ambient hub, no bucket          (new; `list` only)
-//
-// An empty bucket return means "not supplied": `navigation list` reads it as all
-// buckets, while add/remove/reorder reject it via requireNavBucket.
-//
-// hubGiven reports whether a hub positional was SUPPLIED (even if blank), which
-// hubTargetID needs to keep a blank positional from silently falling through to
-// the ambient hub — see hubTargetID's contract.
-//
-// INVARIANT (test-enforced by TestNavBuckets_AreNeverIDShaped): no bucket name
-// may be id-shaped. The whole disambiguation rests on it — if a bucket were ever
-// named like a hub id, a one-positional invocation would become genuinely
-// ambiguous and could silently address the wrong hub.
 func splitNavArgs(args []string) (hubArg string, hubGiven bool, bucket string) {
 	switch len(args) {
 	case 0:
@@ -124,11 +72,6 @@ func splitNavArgs(args []string) (hubArg string, hubGiven bool, bucket string) {
 	}
 }
 
-// hubsNavArgs builds the Args validator for a navigation verb accepting between
-// minArgs and maxArgs positionals, rejecting a supplied-but-BLANK hub id in the
-// Args phase so it can never reach RunE and fire a resolution request — the same
-// no-request-on-usage-error guarantee hubsOptionalIDArgs gives the other hubs
-// verbs (Codex R2).
 func hubsNavArgs(minArgs, maxArgs int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		if len(args) < minArgs || len(args) > maxArgs {
@@ -143,9 +86,6 @@ func hubsNavArgs(minArgs, maxArgs int) cobra.PositionalArgs {
 	}
 }
 
-// fetchHubNav retrieves the hub and returns a shallow-copied, mutable navigation
-// blob plus the hub's slug (for hub-scoped href validation). A hub with no
-// navigation yields an empty map.
 func fetchHubNav(c *cmdContext, teamID, hubID string) (map[string]any, string, error) {
 	res, err := c.client.Retrieve(c.ctx, hubsPath(teamID, hubID))
 	if err != nil {
@@ -153,9 +93,6 @@ func fetchHubNav(c *cmdContext, teamID, hubID string) (map[string]any, string, e
 	}
 	slug, _ := res.Attributes["slug"].(string)
 	nav := map[string]any{}
-	// An absent or null navigation is a fresh menu (empty map). But a present,
-	// non-object navigation is malformed data — treating it as {} would let the
-	// next write REPLACE (destroy) it, so reject instead (MIO-2633, Codex R1).
 	if raw, ok := res.Attributes["navigation"]; ok && raw != nil {
 		cur, ok := raw.(map[string]any)
 		if !ok {
@@ -169,8 +106,6 @@ func fetchHubNav(c *cmdContext, teamID, hubID string) (map[string]any, string, e
 	return nav, slug, nil
 }
 
-// bucketItems returns a bucket's items (empty if the bucket is absent), erroring
-// if the stored bucket is present but not an array.
 func bucketItems(nav map[string]any, bucket string) ([]any, error) {
 	raw, ok := nav[bucket]
 	if !ok || raw == nil {
@@ -183,28 +118,10 @@ func bucketItems(nav map[string]any, bucket string) ([]any, error) {
 	return items, nil
 }
 
-// writeHubNav validates the whole blob (buckets well-formed + header/footer hrefs
-// hub-scoped) then PATCHes navigation as a whole-blob REPLACE.
 func writeHubNav(c *cmdContext, teamID, hubID string, nav map[string]any, slug string, editedBucket string) error {
 	if err := validateNavigationBlob(nav); err != nil {
 		return err
 	}
-	// `position` is REQUIRED on every strictly-validated nav item and the CLI
-	// never set it — add/remove/reorder all shipped items without it, so a typed
-	// add 422s with `NavItemPage.position Field required` (MIO-2990). Renumbering
-	// here rather than at the insert covers all three verbs at once, and keeps
-	// position consistent with array order after a mid-bucket insert or a remove,
-	// which a set-on-insert fix would not.
-	//
-	// ONLY the edited bucket. These verbs are documented as mutating ONE bucket
-	// (see this file's header, docs/internal/api-surface.md, llms.txt), and the
-	// write is a whole-blob read-modify-write, so renumbering everything would
-	// silently rewrite the siblings. That is not bookkeeping: mio-hub SORTS
-	// header/footer by `position` (src/lib/hub-shape/navigation.ts parseList,
-	// ties falling back to input index), so a footer stored out of array order —
-	// e.g. F(position 3), G(position 0), rendering G,F — would be re-flattened to
-	// F,G by a HEADER-only command, with the footer never appearing in the
-	// output. Measured before this was scoped.
 	renumberNavPositions(nav, editedBucket)
 	if err := validateNavigationHrefs(nav, slug); err != nil {
 		return err
@@ -213,39 +130,12 @@ func writeHubNav(c *cmdContext, teamID, hubID string, nav map[string]any, slug s
 	return err
 }
 
-// knownNavItemTypes are the item types the backend validates STRICTLY, each of
-// which declares a bare `position: int` with no default (app/hubs/validation.py
-// _KNOWN_NAV_ITEM_MODELS -> NavItemUrl / NavItemDiscussions / NavItemPage).
-//
-// Anything else — a "playlist" item, or the mobile {id,label,route,icon} shape
-// which carries no `type` at all — takes the backend's PASSTHROUGH branch and is
-// not schema-checked. Those are left untouched: stamping `position` onto a shape
-// the CLI does not own would be inventing a field, which the conduit rule cuts
-// against, and it is not what makes them fail (they do not fail).
-//
-// Matched case- and space-insensitively to mirror the backend's own dispatch
-// (_normalize_nav_item_type), so the CLI classifies an item the same way the
-// server will. NOT because it rescues such an item: a `" Page "` 422s WITH a
-// position too — normalization picks the model, then model_validate runs against
-// the ORIGINAL dict, whose type fails NavItemPage's Literal["page"]. Stamping
-// position on one changes nothing. Kept because agreeing with the server's
-// classification is the right default, not because it fixes anything.
 var knownNavItemTypes = map[string]bool{
 	"url":         true,
 	"discussions": true,
 	"page":        true,
 }
 
-// renumberNavPositions sets each strictly-validated item's `position` to its
-// zero-based index within the EDITED bucket. Sibling buckets are left byte-for-
-// byte as fetched — see writeHubNav for why touching them is a live-data bug.
-//
-// Index, not a counter over known items only: `position` addresses the item's
-// place in the rendered menu, and `navigation list` advertises the same array
-// index for remove/reorder. mio-hub's parseList gives an item WITHOUT a position
-// a fallback of its input index, so in a bucket mixing known and passthrough
-// items only the array index keeps the two schemes consistent — a counter would
-// make a url after two playlists claim position 0 and tie with the first.
 func renumberNavPositions(nav map[string]any, bucket string) {
 	{
 		items, ok := nav[bucket].([]any)
@@ -266,10 +156,6 @@ func renumberNavPositions(nav map[string]any, bucket string) {
 	}
 }
 
-// indexedBucket renders a bucket's items each prefixed with its zero-based index,
-// so the output doubles as the addressing scheme for remove/reorder. Returns
-// []any (not []map[string]any) so the value is a generic JSON tree that --jq
-// (gojq) can traverse — gojq rejects concrete Go slice types.
 func indexedBucket(nav map[string]any, bucket string) []any {
 	items, _ := bucketItems(nav, bucket)
 	out := make([]any, len(items))
@@ -280,16 +166,11 @@ func indexedBucket(nav map[string]any, bucket string) []any {
 				row[k] = v
 			}
 		}
-		// Assign the generated index LAST so an item that happens to carry its own
-		// "index" field can't shadow the real position (which addresses remove/
-		// reorder) — Codex R1.
 		row["index"] = i
 		out[i] = row
 	}
 	return out
 }
-
-// ── list ────────────────────────────────────────────────────────────────────
 
 var hubsNavListCmd = &cobra.Command{
 	Use:   "list [hub_id] [bucket]",
@@ -337,14 +218,6 @@ current_hub in config).`,
 	},
 }
 
-// ── add ─────────────────────────────────────────────────────────────────────
-
-// buildNavItem constructs the item to insert from either --item-json (any
-// bucket/type) or the url convenience flags. The two are mutually exclusive; one
-// is required. The url convenience builds a {type,href,label} item, which is the
-// header/footer shape — the mobile bucket uses {id,label,route,icon}, so mobile
-// items MUST come via --item-json. Runs before any HTTP so a bad invocation exits
-// 2 with no request.
 func buildNavItem(cmd *cobra.Command, bucket string) (map[string]any, error) {
 	item, err := parseJSONObjectFlag(cmd, "item-json")
 	if err != nil {
@@ -359,7 +232,6 @@ func buildNavItem(cmd *cobra.Command, bucket string) (map[string]any, error) {
 		}
 		return item, nil
 	}
-	// url-convenience path (no --item-json).
 	if bucket == "mobile" {
 		return nil, errs.New(errs.ExitUsage, "mobile items must be given as --item-json (the {id,label,route,icon} shape); the --type/--href/--label convenience flags build a header/footer url item")
 	}
@@ -428,7 +300,7 @@ ambient hub (--hub, or current_hub in config).`,
 			return err
 		}
 
-		at := len(items) // default: append
+		at := len(items)
 		if cmd.Flags().Changed("position") {
 			pos, _ := cmd.Flags().GetInt("position")
 			if pos < 0 || pos > len(items) {
@@ -448,8 +320,6 @@ ambient hub (--hub, or current_hub in config).`,
 		return c.render(cmd, map[string]any{bucket: indexedBucket(nav, bucket)})
 	},
 }
-
-// ── remove ──────────────────────────────────────────────────────────────────
 
 var hubsNavRemoveCmd = &cobra.Command{
 	Use:   "remove [hub_id] <bucket>",
@@ -502,9 +372,6 @@ ambient hub (--hub, or current_hub in config).`,
 	},
 }
 
-// ── reorder ─────────────────────────────────────────────────────────────────
-
-// parseIndexList parses "2,0,1" into []int{2,0,1}, erroring on a non-integer.
 func parseIndexList(s string) ([]int, error) {
 	parts := strings.Split(s, ",")
 	out := make([]int, 0, len(parts))
@@ -518,8 +385,6 @@ func parseIndexList(s string) ([]int, error) {
 	return out, nil
 }
 
-// applyPermutation returns items reordered by order, which MUST be a permutation
-// of [0,len(items)) — every index exactly once — so no item is dropped or dup'd.
 func applyPermutation(items []any, order []int) ([]any, error) {
 	if len(order) != len(items) {
 		return nil, errs.New(errs.ExitUsage, "--order has %d indices but the bucket has %d items; list every index exactly once", len(order), len(items))

@@ -1,9 +1,5 @@
 package cmd
 
-// resolve_wiring_test.go — exercises the P1 name-resolution + auto-default
-// wiring end-to-end through the real cobra tree, reusing the in-process driver
-// (runContract / newMockServer / baseEnv / withTeam) defined in contract_test.go.
-
 import (
 	"encoding/json"
 	"io"
@@ -17,10 +13,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// ─── global --hub name resolution ───────────────────────────────────────────────
-
-// TestWiring_HubFlagResolvesName: `--hub "My Community"` is resolved to its id
-// via a hubs list, and the resolved id is used in the downstream content path.
 func TestWiring_HubFlagResolvesName(t *testing.T) {
 	hubsBody := `{"data":[
 	  {"id":"hub_real","type":"hubs","attributes":{"name":"My Community","slug":"my-community"}}
@@ -51,8 +43,6 @@ func TestWiring_HubFlagResolvesName(t *testing.T) {
 	}
 }
 
-// TestWiring_HubFlagRawIDSkipsResolution: a raw hub id must NOT trigger a hubs
-// list — it goes straight through.
 func TestWiring_HubFlagRawIDSkipsResolution(t *testing.T) {
 	var hubsListed atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,8 +64,6 @@ func TestWiring_HubFlagRawIDSkipsResolution(t *testing.T) {
 	}
 }
 
-// TestWiring_HubFlagUnknownName: an unresolvable --hub name produces a friendly
-// not-found error and a usage exit code, with no stdout.
 func TestWiring_HubFlagUnknownName(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Method: "GET", PathPfx: "/api/v1/teams/", Status: 200, Body: `{"data":[]}`},
@@ -86,18 +74,11 @@ func TestWiring_HubFlagUnknownName(t *testing.T) {
 	if res.Code != errs.ExitUsage {
 		t.Errorf("unknown hub name exit code = %d, want %d (ExitUsage)", res.Code, errs.ExitUsage)
 	}
-	// The error envelope (carrying "no hub named …") is rendered by main.go's
-	// os.Exit path, which only a subprocess can capture — see
-	// TestWiring_HubFlagUnknownName_FriendlyError below. In-process we assert the
-	// exit code and stdout purity.
 	if strings.TrimSpace(res.Stdout) != "" {
 		t.Errorf("error path must produce no stdout; got %q", res.Stdout)
 	}
 }
 
-// TestWiring_HubFlagUnknownName_FriendlyError drives the real binary so the
-// friendly "no hub named …" message in the JSON:API error envelope can be
-// captured from stderr.
 func TestWiring_HubFlagUnknownName_FriendlyError(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Method: "GET", PathPfx: "/api/v1/teams/", Status: 200, Body: `{"data":[]}`},
@@ -115,11 +96,6 @@ func TestWiring_HubFlagUnknownName_FriendlyError(t *testing.T) {
 	}
 }
 
-// ─── single-team auto-default ───────────────────────────────────────────────────
-
-// TestWiring_SingleTeamAutoDefault: with NO --team and exactly one team, the
-// command auto-defaults to it. (Sandbox config via XDG_CONFIG_HOME so the
-// persist step never touches the developer's real config.)
 func TestWiring_SingleTeamAutoDefault(t *testing.T) {
 	var tagsPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +114,6 @@ func TestWiring_SingleTeamAutoDefault(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	env := append(baseEnv(srv.URL), "XDG_CONFIG_HOME="+t.TempDir())
-	// No --team flag at all.
 	res := runContract(t, env, "tags", "list")
 	if res.Code != errs.ExitOK {
 		t.Fatalf("command failed (code %d): %s", res.Code, res.Stderr)
@@ -148,8 +123,6 @@ func TestWiring_SingleTeamAutoDefault(t *testing.T) {
 	}
 }
 
-// TestWiring_MultiTeamNoDefault: with NO --team and MULTIPLE teams, the command
-// keeps the existing helpful error (no silent pick).
 func TestWiring_MultiTeamNoDefault(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
@@ -170,14 +143,8 @@ func TestWiring_MultiTeamNoDefault(t *testing.T) {
 	if res.Code != errs.ExitUsage {
 		t.Errorf("multi-team no-default exit code = %d, want %d (ExitUsage)", res.Code, errs.ExitUsage)
 	}
-	// (The "no team id in context" message lives in the error envelope rendered
-	// by main.go; in-process we assert the exit code, which is the contract.)
 }
 
-// ─── single-hub auto-default ────────────────────────────────────────────────────
-
-// TestWiring_SingleHubAutoDefault: with a team set but NO --hub and exactly one
-// hub, the command auto-defaults to it.
 func TestWiring_SingleHubAutoDefault(t *testing.T) {
 	var contentPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -205,11 +172,6 @@ func TestWiring_SingleHubAutoDefault(t *testing.T) {
 	}
 }
 
-// ─── tags assign / remove resolution ────────────────────────────────────────────
-
-// TestWiring_TagsAssignByEmailAndTagName resolves BOTH the contact (via the
-// server email filter) and the tag (via the tags list), then POSTs the assign
-// with the resolved tag_id to the resolved contact path.
 func TestWiring_TagsAssignByEmailAndTagName(t *testing.T) {
 	var assignPath string
 	var assignBody string
@@ -228,9 +190,6 @@ func TestWiring_TagsAssignByEmailAndTagName(t *testing.T) {
 			b := make([]byte, r.ContentLength)
 			_, _ = r.Body.Read(b)
 			assignBody = string(b)
-			// The assign endpoint returns the refreshed contact tag list as a
-			// JSON:API COLLECTION (`data: [...]`, HTTP 201), NOT a single
-			// resource — decoding it as a single resource is the MIO-2495 bug.
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"data":[{"id":"tag_vip","type":"tags","attributes":{"name":"VIP","slug":"vip"}}],"meta":{"count":1}}`))
 		default:
@@ -253,22 +212,19 @@ func TestWiring_TagsAssignByEmailAndTagName(t *testing.T) {
 	}
 }
 
-// TestWiring_TagsAssignRawIDsStillWork: the original raw-id form
-// (`assign <contact_id> --tag-id <id>`) keeps working and lists nothing.
 func TestWiring_TagsAssignRawIDsStillWork(t *testing.T) {
 	var listed atomic.Bool
 	var assignPath, assignBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		if r.Method == http.MethodGet {
-			listed.Store(true) // any GET here would be a resolution list
+			listed.Store(true)
 		}
 		if r.Method == http.MethodPost {
 			assignPath = r.URL.Path
 			b := make([]byte, r.ContentLength)
 			_, _ = r.Body.Read(b)
 			assignBody = string(b)
-			// Assign returns a JSON:API collection (refreshed tag list), 201.
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"data":[{"id":"tag_abc","type":"tags","attributes":{"name":"VIP","slug":"vip"}}],"meta":{"count":1}}`))
 			return
@@ -293,12 +249,6 @@ func TestWiring_TagsAssignRawIDsStillWork(t *testing.T) {
 	}
 }
 
-// TestWiring_TagsAssignBulkSendsArrayAndDecodesCollection: assign-bulk must
-// (1) send tag_ids as a JSON ARRAY (not a comma-joined string) — the backend
-// BulkAssign schema is tag_ids: list[str] — and (2) decode the refreshed tag
-// list, which comes back as a JSON:API COLLECTION (`data: [...]`), with the
-// collection decoder rather than the single-resource decoder (MIO-2552, same
-// array-into-singleDoc class as MIO-2495).
 func TestWiring_TagsAssignBulkSendsArrayAndDecodesCollection(t *testing.T) {
 	var bulkPath, bulkBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -307,10 +257,6 @@ func TestWiring_TagsAssignBulkSendsArrayAndDecodesCollection(t *testing.T) {
 			bulkPath = r.URL.Path
 			b, _ := io.ReadAll(r.Body)
 			bulkBody = string(b)
-			// Bulk-assign returns the refreshed contact tag list as a JSON:API
-			// COLLECTION (`data: [...]`), HTTP 201 — decoding it as a single
-			// resource fails with "cannot unmarshal array into Go struct field
-			// singleDoc.data".
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"data":[` +
 				`{"id":"tag_abc","type":"tags","attributes":{"name":"VIP","slug":"vip"}},` +
@@ -331,9 +277,6 @@ func TestWiring_TagsAssignBulkSendsArrayAndDecodesCollection(t *testing.T) {
 	if !strings.HasSuffix(bulkPath, "/contacts/ctt_xyz/tags/bulk") {
 		t.Errorf("bulk path = %q, want .../contacts/ctt_xyz/tags/bulk", bulkPath)
 	}
-	// Pin the exact JSON:API envelope: data.type derived from the path
-	// (contacts/tags/bulk -> tag_assignments) and attributes.tag_ids an ARRAY,
-	// not the broken comma-joined string.
 	var env struct {
 		Data struct {
 			Type       string `json:"type"`
@@ -355,9 +298,6 @@ func TestWiring_TagsAssignBulkSendsArrayAndDecodesCollection(t *testing.T) {
 	}
 }
 
-// TestWiring_TagsAssignBulkWhitespaceTagIDsIsUsageError: a --tag-ids value that is
-// present but resolves to zero ids after trimming (e.g. "  ,  ") is a usage error
-// and makes NO request — the split must not send an empty tag_ids array.
 func TestWiring_TagsAssignBulkWhitespaceTagIDsIsUsageError(t *testing.T) {
 	var called atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -378,8 +318,6 @@ func TestWiring_TagsAssignBulkWhitespaceTagIDsIsUsageError(t *testing.T) {
 	}
 }
 
-// TestWiring_TagsAssignBulkNoTagIDsIsUsageError: assign-bulk without --tag-ids
-// is a usage error and makes NO request (no-request-on-usage-error contract).
 func TestWiring_TagsAssignBulkNoTagIDsIsUsageError(t *testing.T) {
 	var called atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -400,8 +338,6 @@ func TestWiring_TagsAssignBulkNoTagIDsIsUsageError(t *testing.T) {
 	}
 }
 
-// TestWiring_TagsRemoveByNameRequiresYes: remove resolves contact+tag by
-// email/name, and the destructive guard still requires --yes off a TTY.
 func TestWiring_TagsRemoveByName(t *testing.T) {
 	var deletePath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -431,8 +367,6 @@ func TestWiring_TagsRemoveByName(t *testing.T) {
 	}
 }
 
-// TestWiring_TagsRemoveRawPositionalsStillWork: the legacy two-positional form
-// keeps working with no resolution.
 func TestWiring_TagsRemoveRawPositionalsStillWork(t *testing.T) {
 	var listed atomic.Bool
 	var deletePath string
@@ -463,8 +397,6 @@ func TestWiring_TagsRemoveRawPositionalsStillWork(t *testing.T) {
 	}
 }
 
-// TestWiring_TagsAssignAmbiguousFlags: supplying both --tag and --tag-id is a
-// usage error (no silent precedence).
 func TestWiring_TagsAssignAmbiguousFlags(t *testing.T) {
 	srv := newMockServer(t, nil)
 	res := runContract(t, baseEnv(srv.URL),

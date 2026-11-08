@@ -1,10 +1,5 @@
 package cmd
 
-// events_team_key_test.go — MIO-3610: events authoring (create/update/cancel)
-// with a team API key, no MIO_CONTACT_TOKEN. The oracle is the wire: method,
-// path, Authorization bearer, envelope type and body of every request, plus the
-// number of requests when something must be refused locally.
-
 import (
 	"encoding/json"
 	"io"
@@ -26,14 +21,14 @@ type recordingServer struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
 	seen   []seenReq
-	status int // status to answer (0 = 200)
+	status int
 }
 
 func newRecordingServer(t *testing.T, status int) *recordingServer {
 	t.Helper()
 	rs := &recordingServer{status: status}
 	rs.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isStrayProbe(r) { // the dev box's port prober, not a request the test sent
+		if isStrayProbe(r) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -97,7 +92,7 @@ func TestEventsAuthoring_TeamKey_UsesTheAdminRoute(t *testing.T) {
 		name         string
 		args         []string
 		method, path string
-		wantType     string // "" = no body expected
+		wantType     string
 	}{
 		{"create", createArgs, "POST", adminBase, "hub_events"},
 		{"update", []string{"--hub", "hub_123", "events", "update", "evt_1", "--title", "Renamed"}, "PATCH", adminBase + "/evt_1", "hub_events"},
@@ -190,14 +185,11 @@ func TestEventsAuthoring_Forbidden_ExplainsTheFlag(t *testing.T) {
 	if res.Code != errs.ExitAuth {
 		t.Fatalf("exit = %d, want 3 (a 403 keeps its exit code); err=%v", res.Code, err)
 	}
-	// The recovery command (api-keys update/create) is refused for an API key by
-	// the backend, so the hint must say what credential it needs (codex review).
 	for _, want := range []string{"can_author_events", "mio api-keys update", "--can-author-events", eventsContactTokenEnv, "USER access token", "/api/v1/auth/login", "--api-key"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("the 403 hint must mention %q; got %v", want, err)
 		}
 	}
-	// On the contact-token route the same 403 is NOT about the key flag.
 	t.Setenv(eventsContactTokenEnv, "member-token")
 	rs2 := newRecordingServer(t, http.StatusForbidden)
 	_, err = runResume(t, baseEnv(rs2.srv.URL), withTeam("t_team1", createArgs...)...)
@@ -221,8 +213,6 @@ func TestEventsAuthoring_ReadsAndRSVPStillNeedTheContactToken(t *testing.T) {
 		}
 	}
 }
-
-// ── api-keys: the verbs that make the 403 hint actionable ────────────────────
 
 func TestAPIKeys_PermissionFlags(t *testing.T) {
 	t.Run("create sends a flag only when it was passed", func(t *testing.T) {
@@ -273,8 +263,6 @@ func TestAPIKeys_PermissionFlags(t *testing.T) {
 	})
 }
 
-// With neither a contact token nor any API key there is nothing to author with:
-// exit 3 before a request (the admin route must not be tried unauthenticated).
 func TestEventsAuthoring_NoCredentialsAtAll_FailsBeforeAnyRequest(t *testing.T) {
 	t.Setenv(eventsContactTokenEnv, "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -285,10 +273,6 @@ func TestEventsAuthoring_NoCredentialsAtAll_FailsBeforeAnyRequest(t *testing.T) 
 	}
 }
 
-// The admin route must carry exactly the attributes the member route would for
-// the same flags: the oracle is the member-route body for identical args, not a
-// second hand-written list, so a flag dropped on the admin path (or added to
-// only one path) fails here.
 func TestEventsAuthoring_AdminRouteCarriesTheSameAttributesAsTheMemberRoute(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -322,8 +306,6 @@ func TestEventsAuthoring_AdminRouteCarriesTheSameAttributesAsTheMemberRoute(t *t
 	}
 }
 
-// A blank or whitespace-only MIO_CONTACT_TOKEN is "no token": it must select the
-// admin route; a non-blank one (even padded) must select the member route.
 func TestEventsAuthoring_ContactTokenBlankVersusSet(t *testing.T) {
 	for _, tc := range []struct {
 		token, wantPath, wantBearer string

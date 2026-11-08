@@ -1,9 +1,5 @@
 package cmd
 
-// media_upload_test.go — contract tests for the media ingest commands
-// (MIO-2267): `files upload` (create → S3 PUT → finalize orchestration),
-// `files finalize`, `files transcode`, and `files register-synthetic`.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -76,9 +72,6 @@ func TestFilesUpload_Orchestration(t *testing.T) {
 	}
 }
 
-// TestFilesUpload_FolderID verifies the post-upload move PATCHes the file with a
-// JSON:API envelope carrying data.id (FileUpdateData requires it, else 400
-// "Field required (/data/id)").
 func TestFilesUpload_FolderID(t *testing.T) {
 	var patchHit bool
 	var patchBody []byte
@@ -269,8 +262,6 @@ func TestFilesReplace_Orchestration(t *testing.T) {
 }
 
 func TestFilesReplace_Multipart(t *testing.T) {
-	// Note: replace-multipart `complete` is terminal (relinks + returns the file);
-	// there is NO separate finalize call, unlike upload-multipart.
 	var initHit, partHit, completeHit bool
 	var completeBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -401,10 +392,6 @@ func TestFilesRegisterSynthetic_Body(t *testing.T) {
 	}
 }
 
-// TestFilesRegisterSynthetic_MimeType: --mime-type reaches the request body
-// unchanged (MIO-3116). This is the flag `hub scaffold` relies on to declare
-// text/markdown for template placeholder lessons — a caller building the same
-// convention by hand needs it to actually reach the wire, not just parse.
 func TestFilesRegisterSynthetic_MimeType(t *testing.T) {
 	srv, _, _, _, body := captureAdminReq(t, http.StatusCreated,
 		`{"data":{"id":"file_syn","type":"files","attributes":{"status_upload":"READY"}}}`)

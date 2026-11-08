@@ -1,18 +1,5 @@
 package cmd
 
-// write_path_batch_a_test.go — regression tests for the four write-body bugs
-// fixed in Batch A (epic MIO-2665). All four are the same class as the earlier
-// write_path_drift bugs: the CLI builds a request the API cannot accept.
-//
-//   MIO-2564  media folders update  — PATCH body omitted data.id → 400 "Field required (/data/id)"
-//   MIO-2608  media playlists update — PATCH body omitted data.id → 400 "Field required (/data/id)"
-//   MIO-2640  email config set       — sent a FLAT body; backend reads data.attributes,
-//                                      so it saw {} and 400'd on every field ("Field required")
-//   MIO-2581  contact-attributes options create — sent `value`; backend OptionCreateAttributes
-//                                      (extra=forbid) requires `slug`
-//
-// Each test pins the CORRECT wire shape so the class cannot silently regress.
-
 import (
 	"encoding/json"
 	"net/http"
@@ -21,9 +8,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// decodeDataIDTypeAttrs decodes data.id / data.type / data.attributes from a
-// JSON:API write body. A flat (non-enveloped) body yields empty id/type and a
-// nil attrs map, which is exactly what the buggy code produced.
 func decodeDataIDTypeAttrs(t *testing.T, body []byte) (id, typ string, attrs map[string]any) {
 	t.Helper()
 	var doc struct {
@@ -39,7 +23,6 @@ func decodeDataIDTypeAttrs(t *testing.T, body []byte) (id, typ string, attrs map
 	return doc.Data.ID, doc.Data.Type, doc.Data.Attributes
 }
 
-// MIO-2564 — media folders update must carry data.id in the PATCH body.
 func TestBatchA_FoldersUpdate_IncludesDataID(t *testing.T) {
 	const resp = `{"data":{"id":"folder_x","type":"folders","attributes":{"name":"Renamed"}}}`
 	srv, method, path, _, body := captureAdminReq(t, http.StatusOK, resp)
@@ -67,7 +50,6 @@ func TestBatchA_FoldersUpdate_IncludesDataID(t *testing.T) {
 	}
 }
 
-// MIO-2608 — media playlists update must carry data.id in the PATCH body.
 func TestBatchA_PlaylistsUpdate_IncludesDataID(t *testing.T) {
 	const resp = `{"data":{"id":"pl_x","type":"playlists","attributes":{"title":"New"}}}`
 	srv, method, path, _, body := captureAdminReq(t, http.StatusOK, resp)
@@ -99,9 +81,6 @@ func TestBatchA_PlaylistsUpdate_IncludesDataID(t *testing.T) {
 	}
 }
 
-// MIO-2640 — email config set must wrap fields under data.attributes (JSON:API),
-// not send a flat body. The backend reads raw["data"]["attributes"]; a flat body
-// lands as {} and 400s "Field required" on every field.
 func TestBatchA_EmailConfigSet_WrapsAttributesInEnvelope(t *testing.T) {
 	const resp = `{"data":{"id":"ec_1","type":"email_configs","attributes":{}}}`
 	srv, method, path, _, body := captureAdminReq(t, http.StatusOK, resp)
@@ -136,8 +115,6 @@ func TestBatchA_EmailConfigSet_WrapsAttributesInEnvelope(t *testing.T) {
 	}
 }
 
-// MIO-2581 — contact-attributes options create must send `slug` (the backend
-// OptionCreateAttributes field), never `value` (rejected by extra=forbid).
 func TestBatchA_OptionsCreate_SendsSlugNotValue(t *testing.T) {
 	const resp = `{"data":{"id":"opt_1","type":"contact_attribute_options","attributes":{"slug":"vegetable","label":"Vegetable"}}}`
 	srv, method, path, _, body := captureAdminReq(t, http.StatusCreated, resp)
@@ -169,10 +146,6 @@ func TestBatchA_OptionsCreate_SendsSlugNotValue(t *testing.T) {
 	}
 }
 
-// MIO-2581 (sibling verb) — options update shares the renamed --slug flag and
-// must likewise send `slug`, never `value`. Pinned separately so a regression to
-// `value` on the update path alone cannot slip past (options update is a plain
-// envelope PATCH — OptionUpdateData has no id, so no UpdateWithID here).
 func TestBatchA_OptionsUpdate_SendsSlugNotValue(t *testing.T) {
 	const resp = `{"data":{"id":"opt_1","type":"contact_attribute_options","attributes":{"slug":"veggies","label":"Veggies"}}}`
 	srv, method, path, _, body := captureAdminReq(t, http.StatusOK, resp)
@@ -204,10 +177,6 @@ func TestBatchA_OptionsUpdate_SendsSlugNotValue(t *testing.T) {
 	}
 }
 
-// The pre-existing len(attrs)==0 usage guards on the batch's write commands must
-// fire ExitUsage (exit 2) BEFORE any HTTP request (repo convention: error paths
-// assert no request fired). Pinned so the serializer changes above cannot silently
-// drop a guard and start firing empty writes.
 func TestBatchA_UsageGuards_NoRequestOnEmptyWrite(t *testing.T) {
 	cases := []struct {
 		name string

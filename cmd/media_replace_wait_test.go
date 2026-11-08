@@ -1,20 +1,5 @@
 package cmd
 
-// media_replace_wait_test.go — `media files replace --wait` (MIO-4172).
-//
-// replace reuses upload's poller (media_upload_wait_test.go covers its
-// transcode/transcribe rules), plus ONE rule only replace needs: the backend
-// commits the relink AFTER it has answered — mio-backend's get_db commits in a
-// request-scoped yield dependency, which FastAPI exits only after the response
-// is sent — so a poll issued right after finalize can still read the OLD media.
-// That media is typically fully processed (READY/READY), so a poller that did not
-// check which media it was looking at would return on poll 1 with the file as it
-// was BEFORE the replace, exit 0.
-//
-// THE ORACLE IS THE POLL SEQUENCE AND THE MEDIA ID. Each stub serves the stale
-// pre-replace read first, exactly as the real race does, and the tests assert on
-// what the CLI did across the polls and which media it handed back.
-
 import (
 	"fmt"
 	"net/http"
@@ -33,12 +18,10 @@ import (
 const (
 	replFileID   = "file_x"
 	oldMediaID   = "media_old"
-	replMediaID  = "media_new" // the id the replace INIT answers with
+	replMediaID  = "media_new"
 	replTeamBase = "/api/v1/teams/t_team1/files/" + replFileID
 )
 
-// replState is one poll of the file: which media it points at, and that media's
-// statuses.
 func replState(mediaID, mime, up, tc string) string {
 	transcode := "null"
 	if tc != "" {
@@ -49,12 +32,6 @@ func replState(mediaID, mime, up, tc string) string {
 		replFileID, mediaID, mime, up, transcode)
 }
 
-// replaceStatusServer serves the replace handshake — single-part (init → PUT →
-// finalize) and multipart (init → part → terminal complete) — and answers each
-// file GET with the next entry of polls, repeating the last one. The relink
-// responses carry the NEW media, as the real ones do (they are built inside the
-// uncommitted transaction); only the GETs can see the stale state. Any request
-// the flow should not make fails the test.
 func replaceStatusServer(t *testing.T, polls []string) (*httptest.Server, *int32) {
 	t.Helper()
 	var gets int32
@@ -82,7 +59,7 @@ func replaceStatusServer(t *testing.T, polls []string) (*httptest.Server, *int32
 		case r.Method == http.MethodGet && p == replTeamBase:
 			i := int(atomic.AddInt32(&gets, 1)) - 1
 			if i >= len(polls) {
-				i = len(polls) - 1 // the terminal state repeats
+				i = len(polls) - 1
 			}
 			_, _ = w.Write([]byte(polls[i]))
 		default:
@@ -94,9 +71,6 @@ func replaceStatusServer(t *testing.T, polls []string) (*httptest.Server, *int32
 	return srv, &gets
 }
 
-// replacePaths runs a test once per relink path: the replacement id reaches the
-// wait from the single-part init response and from the multipart init response
-// by different code, and either could drop it.
 var replacePaths = []struct {
 	name  string
 	extra []string
@@ -112,16 +86,13 @@ func replaceArgs(t *testing.T, extra []string, flags ...string) []string {
 	return withTeam("t_team1", args...)
 }
 
-// THE RACE. The first poll after the relink still sees the OLD media, fully
-// processed. --wait must not take it for the replacement: it holds until the file
-// points at the replacement's media id, then follows THAT media's transcode.
 func TestReplaceWait_HoldsUntilTheFilePointsAtTheReplacement(t *testing.T) {
 	for _, path := range replacePaths {
 		t.Run(path.name, func(t *testing.T) {
 			fastPolling(t, time.Second)
 			srv, gets := replaceStatusServer(t, []string{
-				replState(oldMediaID, "video/mp4", "READY", "READY"), // stale: relink not committed yet
-				replState(replMediaID, "video/mp4", "READY", ""),     // relinked; transcode not enqueued yet
+				replState(oldMediaID, "video/mp4", "READY", "READY"),
+				replState(replMediaID, "video/mp4", "READY", ""),
 				replState(replMediaID, "video/mp4", "READY", "PROCESSING"),
 				replState(replMediaID, "video/mp4", "READY", "READY"),
 			})
@@ -146,13 +117,10 @@ func TestReplaceWait_HoldsUntilTheFilePointsAtTheReplacement(t *testing.T) {
 	}
 }
 
-// Replacing a video whose transcode FAILED is the ordinary way to fix it. The
-// stale read shows that old FAILED media; it says nothing about the replacement,
-// so it must not fail the command.
 func TestReplaceWait_StaleFailedOldMediaIsNotAFailure(t *testing.T) {
 	fastPolling(t, time.Second)
 	srv, gets := replaceStatusServer(t, []string{
-		replState(oldMediaID, "video/mp4", "READY", "FAILED"), // the broken video being replaced
+		replState(oldMediaID, "video/mp4", "READY", "FAILED"),
 		replState(replMediaID, "video/mp4", "READY", "READY"),
 	})
 
@@ -170,19 +138,15 @@ func TestReplaceWait_StaleFailedOldMediaIsNotAFailure(t *testing.T) {
 	}
 }
 
-// The 30s transcode-start window must open when the REPLACEMENT reads READY. A
-// stale read of the old media also says status_upload READY; opening the window
-// on it would spend the grace before the new transcode could be enqueued, then
-// give up with a misleading "had not started" and an untranscoded file.
 func TestReplaceWait_TranscodeWindowOpensOnTheReplacement(t *testing.T) {
 	fastPolling(t, 40*time.Millisecond)
 
 	polls := make([]string, 0, 64)
-	for i := 0; i < 60; i++ { // stale reads outlast the whole grace
+	for i := 0; i < 60; i++ {
 		polls = append(polls, replState(oldMediaID, "video/mp4", "READY", "READY"))
 	}
 	polls = append(polls,
-		replState(replMediaID, "video/mp4", "READY", ""), // window must open HERE
+		replState(replMediaID, "video/mp4", "READY", ""),
 		replState(replMediaID, "video/mp4", "READY", "PROCESSING"),
 		replState(replMediaID, "video/mp4", "READY", "READY"),
 	)
@@ -203,9 +167,6 @@ func TestReplaceWait_TranscodeWindowOpensOnTheReplacement(t *testing.T) {
 	}
 }
 
-// If the file never comes to point at the replacement (another replace won the
-// race, say), --timeout still bounds the wait, and the error must say WHICH wait
-// ran out: the statuses it would otherwise print are the old media's.
 func TestReplaceWait_TimeoutNamesTheMediaTheFileStillPointsAt(t *testing.T) {
 	fastPolling(t, time.Second)
 	srv, _ := replaceStatusServer(t, []string{replState(oldMediaID, "video/mp4", "READY", "READY")})
@@ -225,16 +186,9 @@ func TestReplaceWait_TimeoutNamesTheMediaTheFileStillPointsAt(t *testing.T) {
 	}
 }
 
-// Without --wait, replace is unchanged: it renders the relink response and makes
-// no status poll.
 func TestReplace_WithoutWaitDoesNotPoll(t *testing.T) {
 	for _, path := range replacePaths {
 		t.Run(path.name, func(t *testing.T) {
-			// A GET answers with a replacement that is already finished, so a replace
-			// that polled anyway returns after ONE poll and fails the count below by
-			// name. A stale or unfinished answer here would instead leave such a
-			// mutation polling for the 5m default --timeout, and the package would
-			// die on go test's own deadline with a panic that names nothing (seen).
 			srv, gets := replaceStatusServer(t, []string{replState(replMediaID, "image/png", "READY", "")})
 			res := runContract(t, baseEnv(srv.URL), replaceArgs(t, path.extra, "--output", "json")...)
 			if res.Code != errs.ExitOK {
@@ -247,9 +201,6 @@ func TestReplace_WithoutWaitDoesNotPoll(t *testing.T) {
 	}
 }
 
-// replace's --wait and --timeout are upload's, not a copy of them: same usage
-// text, same default. A copy drifts (MIO-4155 was upload's and replace's
-// multipart help drifting apart).
 func TestReplaceWait_FlagsAreUploads(t *testing.T) {
 	for _, name := range []string{"wait", "timeout"} {
 		up := mediaFilesUploadCmd.Flags().Lookup(name)
@@ -264,20 +215,6 @@ func TestReplaceWait_FlagsAreUploads(t *testing.T) {
 	}
 }
 
-// Every ingest step's help that says a transcode follows names the gate that
-// decides whether one does (MIO-4172 blind review). finalize (upload) and the
-// relink (replace) only EMIT MediaUploaded; the handler that turns that event
-// into a transcode job returns early unless FEATURE_MEDIA_VIDEO_ENABLED is on
-// (mio-backend app/media/handlers.py on_media_uploaded_dispatch_transcode), and
-// app/config.py declares it `FEATURE_MEDIA_VIDEO_ENABLED: bool = False`. Help
-// that says "the relink starts a new transcode" and stops there is false on a
-// backend left at the default, where status_transcode stays null for good.
-//
-// The probe set is every command whose Long help describes an ingest step that
-// hands the bytes to the transcoder: upload, replace and finalize. A command in
-// that set that no longer says a transcode follows at all fails too, so a
-// rewording that slips past the claim pattern cannot turn this green by
-// matching nothing.
 func TestIngestHelp_TranscodeClaimNamesTheVideoGate(t *testing.T) {
 	claim := regexp.MustCompile(`(?i)\b(trigger|start|enqueue|kick|begin|began|launch|dispatch|initiat)\w*\b.*\btranscod`)
 	split := regexp.MustCompile(`[.;] `)

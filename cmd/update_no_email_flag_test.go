@@ -9,12 +9,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// TestUpdateCommands_RejectEmailFlag (MIO-4930; also covers users update --avatar-url,
-// which PATCH /api/v1/users/{id} never accepted): neither API update contract
-// takes an email — PATCH team-contacts answers 422 and PATCH users answers 200
-// and silently ignores it. The flag must therefore not exist on the update
-// commands (create and register keep theirs): passing it is an unknown flag,
-// exit 2, with no request sent.
 func TestUpdateCommands_RejectEmailFlag(t *testing.T) {
 	cases := []struct {
 		name string
@@ -45,7 +39,6 @@ func TestUpdateCommands_RejectEmailFlag(t *testing.T) {
 	}
 }
 
-// create keeps --email: dropping it from update must not take it from create.
 func TestContactsCreate_StillAcceptsEmail(t *testing.T) {
 	if contactsCreateCmd.Flags().Lookup("email") == nil {
 		t.Fatal("contacts create must keep --email")
@@ -56,7 +49,6 @@ func TestContactsCreate_StillAcceptsEmail(t *testing.T) {
 	if usersUpdateCmd.Flags().Lookup("email") != nil {
 		t.Fatal("users update must not define --email")
 	}
-	// MIO-4930: UserUpdate takes first_name, last_name, is_active only.
 	if usersUpdateCmd.Flags().Lookup("avatar-url") != nil {
 		t.Fatal("users update must not define --avatar-url")
 	}

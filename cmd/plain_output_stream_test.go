@@ -1,18 +1,5 @@
 package cmd
 
-// plain_output_stream_test.go — MIO-4174 part 1, through the real command tree.
-//
-// `-o plain --jq '<a filter yielding strings>'` must print one bare value per
-// line whatever the count. Before the fix a 1-value stream printed bare, a
-// 2+-value stream printed "value=X" records separated by blank lines, and a
-// 0-value stream printed an empty line — so a capture loop that worked on a
-// team with one row broke on a team with two.
-//
-// The oracle is the JSON formatter, a separate code path: the plain lines must
-// equal, in order, the elements of the array that `-o json --jq '[<filter>]'`
-// returns for the same filter. The catalog commands run --offline against the
-// embedded catalog, so no server is involved.
-
 import (
 	"encoding/json"
 	"strings"
@@ -23,13 +10,10 @@ import (
 
 func TestPlainJQStream_OneBareValuePerLine_ThroughTheCLI(t *testing.T) {
 	cases := []struct {
-		name   string
-		filter string
-		// minimum count the embedded catalog is known to yield; guards against
-		// the case silently degenerating to the 0- or 1-value shape the old
-		// code already handled.
+		name    string
+		filter  string
 		atLeast int
-		exactly int // -1 = do not check
+		exactly int
 	}{
 		{"many page templates", `.[] | select(.kind=="page") | .id`, 2, -1},
 		{"exactly one", `.[] | select(.id=="page-login") | .id`, 1, 1},

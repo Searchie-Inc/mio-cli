@@ -9,23 +9,10 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// TestRequiredFlags_DeclaredToCobra pins every requirement MIO-4154 moved out
-// of a RunE body and into markFlagsRequired.
-//
-// The oracle is behaviour, read three ways: omitting the flag must exit 2
-// (ExitUsage), fire NO request, and fail with COBRA's own message naming the
-// flag. The message is what makes this test discriminating: several of these
-// commands still reject an EMPTY value inside RunE (`--contact-id must not be
-// empty`), so without the message check a deleted declaration would still exit
-// 2 with no request — and would silently vanish from the doc-example guard
-// (doc_examples_test.go), which can only see what cobra can see.
-//
-// Each case's base invocation supplies every required flag and positional, so
-// dropping exactly one flag makes that flag the only one cobra reports.
 func TestRequiredFlags_DeclaredToCobra(t *testing.T) {
 	cases := []struct {
-		base     []string // full invocation, every required flag present
-		required []string // flags declared with markFlagsRequired
+		base     []string
+		required []string
 	}{
 		{[]string{"products", "create", "--name", "N", "--type", "course"}, []string{"name", "type"}},
 		{[]string{"products", "prices", "create", "prod_1", "--amount", "100", "--currency", "usd", "--type", "one_time"}, []string{"amount", "currency", "type"}},
@@ -100,8 +87,6 @@ func TestRequiredFlags_DeclaredToCobra(t *testing.T) {
 	}
 }
 
-// withoutFlag returns base with `--flag value` removed. It fails the test when
-// the flag is not in base, so a case can never pass by dropping nothing.
 func withoutFlag(t *testing.T, base []string, flag string) []string {
 	t.Helper()
 	out := make([]string, 0, len(base))
@@ -109,7 +94,7 @@ func withoutFlag(t *testing.T, base []string, flag string) []string {
 	for i := 0; i < len(base); i++ {
 		if base[i] == "--"+flag {
 			found = true
-			i++ // skip the value
+			i++
 			continue
 		}
 		out = append(out, base[i])

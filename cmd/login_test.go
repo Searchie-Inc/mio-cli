@@ -1,21 +1,5 @@
 package cmd
 
-// login_test.go — regression coverage for MIO-3585.
-//
-// `mio login` used to trust the JWT's team_id claim unconditionally when
-// minting the API key. That claim tracks the account's last-active team
-// (mio-backend TeamService.resolve_default_team_id) and only requires
-// MEMBERSHIP — `teams switch` can point it at a team the caller belongs to
-// without owning, and minting an API key is owner-gated server-side
-// (require_team_owner). The backend then answered with its raw
-// "Caller is not the owner of this team." 403, and the CLI surfaced it
-// verbatim instead of recovering.
-//
-// The fix: mintAndStore retries once, against a team the caller actually
-// OWNS (verified via GET /api/teams + comparing owner_id to the JWT's own
-// `sub` claim), whenever the first mint attempt 403s and no explicit --team
-// was given. An explicit --team is never second-guessed this way.
-
 import (
 	"bytes"
 	"context"
@@ -34,17 +18,10 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// teamsListServer wires GET /api/v1/teams to answer with the given teams
-// (id, name, owner_id) and reports whether it was ever hit.
 type teamRow struct{ id, name, ownerID string }
 
-// mintServerConfig drives a single fake backend for the resolveTeamID/
-// mintAndStore flow: a 403-then-200 (or 200 outright) sequence on
-// /api-keys, plus a GET /api/v1/teams that answers with teams.
 type mintServerConfig struct {
-	teams []teamRow
-	// mintStatus maps team id -> HTTP status the mint endpoint answers for
-	// that team. Any team id absent here 404s (unexpected mint target).
+	teams      []teamRow
 	mintStatus map[string]int
 }
 
@@ -73,7 +50,6 @@ func newMintServer(t *testing.T, cfg mintServerConfig) (srv *httptest.Server, mi
 			_, _ = w.Write(body)
 		case strings.HasSuffix(r.URL.Path, "/api-keys") && r.Method == http.MethodPost:
 			paths = append(paths, r.URL.Path)
-			// Path shape: /api/v1/teams/{id}/api-keys
 			parts := strings.Split(r.URL.Path, "/")
 			teamID := ""
 			if len(parts) >= 5 {
@@ -101,9 +77,6 @@ func newMintServer(t *testing.T, cfg mintServerConfig) (srv *httptest.Server, mi
 	return srv, &paths, &listed
 }
 
-// testCmd returns a bare *cobra.Command wired the same way the interactive
-// prompt tests in register_test.go drive one directly (no Execute/runContract
-// round-trip), with a background context so cmd.Context() is non-nil.
 func testCmd(in string) (*cobra.Command, *bytes.Buffer) {
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
@@ -113,16 +86,11 @@ func testCmd(in string) (*cobra.Command, *bytes.Buffer) {
 	return cmd, &errBuf
 }
 
-// TestMintAndStore_ClaimedTeamNotOwned_RecoversToOwnedTeam is the core
-// MIO-3585 regression: the JWT names a team the caller belongs to but does
-// not own, the first mint attempt 403s, and mintAndStore must recover by
-// minting under the team the caller DOES own instead of surfacing the raw
-// "Caller is not the owner of this team." error.
 func TestMintAndStore_ClaimedTeamNotOwned_RecoversToOwnedTeam(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	resetGlobalFlags() // flags.team="" — the retry gate reads this global directly
+	resetGlobalFlags()
 
-	token := makeLoginJWT(t, "team_not_owned") // sub="user-test" (see makeLoginJWT)
+	token := makeLoginJWT(t, "team_not_owned")
 	srv, mintedPaths, teamsListed := newMintServer(t, mintServerConfig{
 		teams: []teamRow{
 			{id: "team_not_owned", name: "Shared Team", ownerID: "someone-else"},
@@ -163,10 +131,6 @@ func TestMintAndStore_ClaimedTeamNotOwned_RecoversToOwnedTeam(t *testing.T) {
 	}
 }
 
-// TestMintAndStore_ClaimedTeamNotOwned_NoOwnedTeamAtAll pins the case where
-// the caller owns NO team at all (only membership elsewhere): mintAndStore
-// must not retry blindly — it must surface a clear, actionable error instead
-// of a second doomed mint attempt.
 func TestMintAndStore_ClaimedTeamNotOwned_NoOwnedTeamAtAll(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	resetGlobalFlags()
@@ -203,14 +167,6 @@ func TestMintAndStore_ClaimedTeamNotOwned_NoOwnedTeamAtAll(t *testing.T) {
 	}
 }
 
-// TestMintAndStore_ExplicitTeamFlagNotOwned_DoesNotRetry pins that an
-// explicit --team is never second-guessed: a 403 against a caller-supplied
-// team must propagate as-is, with no GET /api/teams recovery attempt. The
-// retry gate reads the flags.team GLOBAL directly (not the flagTeamID
-// parameter, which login also feeds from a config-resolved value) — see
-// TestLogin_ConfiguredCurrentTeamNotOwned_StillRecovers for why that
-// distinction matters — so this test must set flags.team itself to exercise
-// a genuinely explicit flag.
 func TestMintAndStore_ExplicitTeamFlagNotOwned_DoesNotRetry(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	resetGlobalFlags()
@@ -252,13 +208,10 @@ func TestMintAndStore_ExplicitTeamFlagNotOwned_DoesNotRetry(t *testing.T) {
 	}
 }
 
-// TestResolveOwnedTeamID_FiltersToTeamsOwnedBySubject is a focused unit test
-// on the recovery helper itself: given a mix of owned and merely-member-of
-// teams, it must pick out only the one whose owner_id matches the JWT's sub.
 func TestResolveOwnedTeamID_FiltersToTeamsOwnedBySubject(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	token := makeLoginJWT(t, "irrelevant") // sub="user-test"
+	token := makeLoginJWT(t, "irrelevant")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		if r.URL.Path != "/api/v1/teams" {
@@ -289,20 +242,10 @@ func TestResolveOwnedTeamID_FiltersToTeamsOwnedBySubject(t *testing.T) {
 	}
 }
 
-// TestLogin_ConfiguredCurrentTeamNotOwned_StillRecovers pins the scenario
-// MIO-3585 actually names: a PRIOR `mio login`/`teams switch` left
-// current_team in config pointing at a team the caller belongs to but does
-// not own (the same shape as the JWT's stale team_id claim). Without an
-// explicit --team flag on THIS invocation, `login` must still recover via
-// resolveOwnedTeamID rather than silently disabling the fix — mintAndStore's
-// retry gate must key off the actual --team flag, not the config-resolved
-// team, or a stored current_team quietly reproduces the pre-fix 403.
 func TestLogin_ConfiguredCurrentTeamNotOwned_StillRecovers(t *testing.T) {
 	cfgDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfgDir)
 
-	// Seed a stale current_team pointing at a team the account does not own —
-	// exactly what `mio teams switch <shared-team>` would leave behind.
 	mioDir := filepath.Join(cfgDir, "mio")
 	if err := os.MkdirAll(mioDir, 0o755); err != nil {
 		t.Fatalf("mkdir config: %v", err)
@@ -311,7 +254,7 @@ func TestLogin_ConfiguredCurrentTeamNotOwned_StillRecovers(t *testing.T) {
 		t.Fatalf("seed config: %v", err)
 	}
 
-	token := makeLoginJWT(t, "team_not_owned") // sub="user-test"; claim agrees with the stale config
+	token := makeLoginJWT(t, "team_not_owned")
 	var mintedPaths []string
 	var teamsListed bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -346,8 +289,6 @@ func TestLogin_ConfiguredCurrentTeamNotOwned_StillRecovers(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	// No --team on this invocation: config's stale current_team must not be
-	// treated as an explicit choice that blocks recovery.
 	env := []string{
 		"MIO_API_BASE_URL=" + srv.URL,
 		"MIO_API_KEY=",
@@ -366,20 +307,6 @@ func TestLogin_ConfiguredCurrentTeamNotOwned_StillRecovers(t *testing.T) {
 	}
 }
 
-// TestMintAndStore_RecoveryWithMultipleOwnedTeams_DevNullStdinStaysNonInteractive
-// pins the review-round-2 finding: the ownership-403 recovery's "multiple
-// owned teams" branch must behave as NON-interactive when stdin is /dev/null
-// — the ordinary headless/CI/container stdin, and what cmd.InOrStdin()
-// defaults to in production when no one has called cmd.SetIn (e.g. every
-// real `mio login --email --password` invocation). /dev/null is a character
-// device, which root.go's isTTY incorrectly treats as a terminal; before the
-// isInteractiveStdin fix this branch would read /dev/null as if it were a
-// TTY, prompt, read immediate EOF, and fail with a bare "invalid choice"
-// instead of the documented "you own multiple teams — re-run with --team
-// <id>:" listing. A *strings.Reader (this file's other tests, via testCmd)
-// can't reproduce this: it isn't an *os.File at all, so it already fails
-// isTTY's type assertion regardless of which check is used — only a REAL
-// character-device file exposes the distinction.
 func TestMintAndStore_RecoveryWithMultipleOwnedTeams_DevNullStdinStaysNonInteractive(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	resetGlobalFlags()
@@ -390,7 +317,7 @@ func TestMintAndStore_RecoveryWithMultipleOwnedTeams_DevNullStdinStaysNonInterac
 	}
 	t.Cleanup(func() { _ = devNull.Close() })
 
-	token := makeLoginJWT(t, "team_not_owned") // sub="user-test"
+	token := makeLoginJWT(t, "team_not_owned")
 	srv, mintedPaths, teamsListed := newMintServer(t, mintServerConfig{
 		teams: []teamRow{
 			{id: "team_not_owned", name: "Shared Team", ownerID: "someone-else"},
@@ -403,7 +330,7 @@ func TestMintAndStore_RecoveryWithMultipleOwnedTeams_DevNullStdinStaysNonInterac
 	cli := client.New(srv.URL, "", client.WithHTTPClient(srv.Client()))
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
-	cmd.SetIn(devNull) // a REAL *os.File, char device, NOT a terminal
+	cmd.SetIn(devNull)
 	var errBuf bytes.Buffer
 	cmd.SetErr(&errBuf)
 	cfg, err := config.Load()

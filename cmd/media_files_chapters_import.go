@@ -44,8 +44,6 @@ var mediaFilesChaptersAutoCmd = &cobra.Command{Use: "auto <file_id>", Short: "Re
 	prompt := fmt.Sprintf("Rebuild chapters for file %s?", args[0])
 	if off {
 		method = http.MethodDelete
-		// The backend clears the stored transcript chapters (they can be the
-		// provider's own), and the local rebuild cannot restore them.
 		prompt = fmt.Sprintf("Turn off transcript chapters for file %s? The stored transcript chapters are cleared and cannot be restored by 'chapters auto'.", args[0])
 	}
 	if err := confirmDestructive(cmd, prompt); err != nil {

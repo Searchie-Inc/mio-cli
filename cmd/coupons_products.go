@@ -1,21 +1,5 @@
 package cmd
 
-// coupons_products.go — the `mio coupons products` sub-group (MIO-2268).
-//
-// Scopes a coupon to specific products (an M:N coupon_products join). An empty
-// scope means the coupon applies to EVERY product in the team; attaching one or
-// more products restricts it to those.
-//
-// Routes (app/products/router.py, prefix /api/teams/{team_id}):
-//
-//	list   GET    /coupons/{coupon_id}/products
-//	attach POST   /coupons/{coupon_id}/products
-//	detach DELETE /coupons/{coupon_id}/products/{product_id}
-//
-// The attach body derives JSON:API type "coupon_products" from the
-// coupons/products path tail (typeOverride already in internal/client) and
-// carries a single attribute: product_id.
-
 import (
 	"fmt"
 	"net/url"
@@ -36,7 +20,6 @@ func init() {
 	addPaginationFlags(couponsProductsListCmd)
 }
 
-// couponProductsPath returns /api/teams/{team}/coupons/{coupon}/products[/{product_id}].
 func couponProductsPath(teamID, couponID, productID string) string {
 	base := fmt.Sprintf("/api/teams/%s/coupons/%s/products", teamID, couponID)
 	if productID != "" {
@@ -100,8 +83,6 @@ any others already attached).`,
 		if err != nil {
 			return err
 		}
-		// POST .../coupons/{coupon}/products with
-		// {data:{type:coupon_products,attributes:{product_id}}}.
 		res, err := c.client.Create(c.ctx, couponProductsPath(teamID, couponID, ""), map[string]any{"product_id": productID})
 		if err != nil {
 			return err
@@ -141,7 +122,6 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 	},
 }
 
-// couponsProductsContext resolves context + team id for coupon-product commands.
 func couponsProductsContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {

@@ -1,24 +1,5 @@
 package cmd
 
-// automations.go implements the `mio automations` command group for managing
-// marketing automations nested under a hub. Every sub-command is hub-scoped:
-// both {team_id} and {hub_id} must be resolved from context.
-//
-// Routes (see docs/internal/api-surface.md "automations"):
-//
-//	create       POST   /api/teams/{team_id}/hubs/{hub_id}/automations
-//	list         GET    /api/teams/{team_id}/hubs/{hub_id}/automations
-//	retrieve     GET    /api/teams/{team_id}/hubs/{hub_id}/automations/{id}
-//	update       PATCH  /api/teams/{team_id}/hubs/{hub_id}/automations/{id}
-//	publish      POST   /api/teams/{team_id}/hubs/{hub_id}/automations/{id}/publish
-//	activate     POST   /api/teams/{team_id}/hubs/{hub_id}/automations/{id}/activate
-//	deactivate   POST   /api/teams/{team_id}/hubs/{hub_id}/automations/{id}/deactivate
-//	versions     GET    /api/teams/{team_id}/hubs/{hub_id}/automations/{id}/versions
-//	enrollments  GET    /api/teams/{team_id}/hubs/{hub_id}/automations/{id}/enrollments
-//	enroll       POST   /api/teams/{team_id}/hubs/{hub_id}/automations/{id}/enrollments
-//	fire-event   POST   /api/teams/{team_id}/hubs/{hub_id}/automations/events
-//	test         POST   /api/teams/{team_id}/hubs/{hub_id}/automations/{id}/test
-
 import (
 	"fmt"
 	"net/url"
@@ -31,7 +12,6 @@ import (
 )
 
 func init() {
-	// automations <action>
 	automationsCmd.AddCommand(
 		automationsCreateCmd,
 		automationsListCmd,
@@ -47,11 +27,8 @@ func init() {
 		automationsTestCmd,
 	)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(automationsCmd)
 }
-
-// ---- automations group -------------------------------------------------------
 
 var automationsCmd = &cobra.Command{
 	Use:   "automations",
@@ -59,13 +36,10 @@ var automationsCmd = &cobra.Command{
 	Long:  "Create, list, retrieve, update and trigger marketing automations within a hub. Hub-scoped: --hub is required.",
 }
 
-// automationsBase returns the collection path for automations within a hub.
-// /api/teams/{team_id}/hubs/{hub_id}/automations
 func automationsBase(teamID, hubID string) string {
 	return fmt.Sprintf("/api/teams/%s/hubs/%s/automations", teamID, hubID)
 }
 
-// automationsPath returns /api/teams/{team_id}/hubs/{hub_id}/automations[/{id}].
 func automationsPath(teamID, hubID, id string) string {
 	base := automationsBase(teamID, hubID)
 	if id != "" {
@@ -74,8 +48,6 @@ func automationsPath(teamID, hubID, id string) string {
 	return base
 }
 
-// automationsContext is the shared boilerplate for automations sub-commands:
-// builds the context, requires auth, and resolves both team id and hub id.
 func automationsContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -94,8 +66,6 @@ func automationsContext(cmd *cobra.Command) (*cmdContext, string, string, error)
 	}
 	return c, teamID, hubID, nil
 }
-
-// ---- create -----------------------------------------------------------------
 
 var automationsCreateCmd = &cobra.Command{
 	Use:   "create",
@@ -117,7 +87,6 @@ var automationsCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "re-entry-mode")
 
-		// --definition accepts JSON (inline or @file)
 		if cmd.Flags().Changed("definition") {
 			raw, ferr := cmd.Flags().GetString("definition")
 			if ferr == nil {
@@ -129,7 +98,6 @@ var automationsCreateCmd = &cobra.Command{
 			}
 		}
 
-		// --settings accepts JSON (inline or @file)
 		if cmd.Flags().Changed("settings") {
 			raw, ferr := cmd.Flags().GetString("settings")
 			if ferr == nil {
@@ -148,8 +116,6 @@ var automationsCreateCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- list -------------------------------------------------------------------
 
 var automationsListCmd = &cobra.Command{
 	Use:   "list",
@@ -181,8 +147,6 @@ var automationsListCmd = &cobra.Command{
 	},
 }
 
-// ---- retrieve ---------------------------------------------------------------
-
 var automationsRetrieveCmd = &cobra.Command{
 	Use:     "retrieve <id>",
 	Short:   "Retrieve an automation by id.",
@@ -202,8 +166,6 @@ var automationsRetrieveCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- update -----------------------------------------------------------------
 
 var automationsUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
@@ -256,8 +218,6 @@ var automationsUpdateCmd = &cobra.Command{
 	},
 }
 
-// ---- publish ----------------------------------------------------------------
-
 var automationsPublishCmd = &cobra.Command{
 	Use:     "publish <id>",
 	Short:   "Publish an automation (create a version snapshot).",
@@ -282,8 +242,6 @@ var automationsPublishCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- activate ---------------------------------------------------------------
 
 var automationsActivateCmd = &cobra.Command{
 	Use:     "activate <id>",
@@ -310,8 +268,6 @@ var automationsActivateCmd = &cobra.Command{
 	},
 }
 
-// ---- deactivate -------------------------------------------------------------
-
 var automationsDeactivateCmd = &cobra.Command{
 	Use:     "deactivate <id>",
 	Short:   "Deactivate an automation.",
@@ -337,8 +293,6 @@ var automationsDeactivateCmd = &cobra.Command{
 	},
 }
 
-// ---- versions ---------------------------------------------------------------
-
 var automationsVersionsCmd = &cobra.Command{
 	Use:     "versions <id>",
 	Short:   "List versions of an automation.",
@@ -362,8 +316,6 @@ var automationsVersionsCmd = &cobra.Command{
 		return c.render(cmd, col)
 	},
 }
-
-// ---- enrollments (list) -----------------------------------------------------
 
 var automationsEnrollmentsCmd = &cobra.Command{
 	Use:   "enrollments <id>",
@@ -396,8 +348,6 @@ var automationsEnrollmentsCmd = &cobra.Command{
 	},
 }
 
-// ---- enroll -----------------------------------------------------------------
-
 var automationsEnrollCmd = &cobra.Command{
 	Use:     "enroll <id>",
 	Short:   "Enroll a contact in an automation.",
@@ -426,8 +376,6 @@ var automationsEnrollCmd = &cobra.Command{
 	},
 }
 
-// ---- fire-event -------------------------------------------------------------
-
 var automationsFireEventCmd = &cobra.Command{
 	Use:   "fire-event",
 	Short: "Fire a custom event to trigger automations.",
@@ -441,9 +389,6 @@ var automationsFireEventCmd = &cobra.Command{
 			return err
 		}
 
-		// fire-event uses a flat body (not a JSON:API envelope): the backend
-		// binds a flat model with event_type, team_contact_id, idempotency_key,
-		// payload at the top level.
 		body := map[string]any{}
 		setStringFlag(cmd, body, "event-type")
 		setStringFlag(cmd, body, "team-contact-id")
@@ -470,13 +415,6 @@ var automationsFireEventCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "--idempotency-key is required")
 		}
 
-		// POST .../automations/events returns a META-ONLY JSON:API ack
-		// (CustomEventAcceptedResponse — 202 for a newly-accepted event, 200 for
-		// a duplicate) with a top-level `meta` object and NO `data` member —
-		// valid per JSON:API §7.1. It must be decoded as a raw document
-		// (ActionRaw), not a resource: the resource decoder used by ActionWith
-		// errors "response had no `data` member" on every SUCCESSFUL fire
-		// (MIO-2554, same class as MIO-2503). Render the meta directly.
 		path := automationsBase(teamID, hubID) + "/events"
 		ack, err := c.client.ActionRaw(c.ctx, client.StyleFlat, "POST", path, body)
 		if err != nil {
@@ -489,8 +427,6 @@ var automationsFireEventCmd = &cobra.Command{
 		return c.render(cmd, ack)
 	},
 }
-
-// ---- test -------------------------------------------------------------------
 
 var automationsTestCmd = &cobra.Command{
 	Use:     "test <id>",
@@ -511,11 +447,6 @@ var automationsTestCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "--team-contact-id is required for test")
 		}
 
-		// The dry-run endpoint returns a FLAT report {"meta":…,"trace":[…]} with
-		// no JSON:API `data` member, so it must be decoded as a raw document
-		// (ActionRaw) — the resource decoder used by ActionWith errors "response
-		// had no `data` member" on every successful run (MIO-2503). The trace is
-		// exactly what an operator wants to see, so render it directly.
 		path := automationsPath(teamID, hubID, args[0]) + "/test"
 		report, err := c.client.ActionRaw(c.ctx, client.StyleFlat, "POST", path, attrs)
 		if err != nil {
@@ -529,10 +460,7 @@ var automationsTestCmd = &cobra.Command{
 	},
 }
 
-// ---- flag registration -------------------------------------------------------
-
 func init() {
-	// Attribute flags for automations create/update.
 	for _, cmd := range []*cobra.Command{automationsCreateCmd, automationsUpdateCmd} {
 		cmd.Flags().String("name", "", "Automation name.")
 		cmd.Flags().String("re-entry-mode", "", "Re-entry mode: never, after_exit, or interval.")
@@ -541,24 +469,19 @@ func init() {
 	}
 	markFlagsRequired(automationsCreateCmd, "name", "definition")
 
-	// Pagination on list commands.
 	addPaginationFlags(automationsListCmd)
 	addPaginationFlags(automationsVersionsCmd)
 	addPaginationFlags(automationsEnrollmentsCmd)
 
-	// filter-status on list and enrollments.
 	automationsListCmd.Flags().String("filter-status", "", "Filter by status (e.g. draft, active, paused).")
 	automationsEnrollmentsCmd.Flags().String("filter-status", "", "Filter by enrollment status (e.g. active, stuck, completed).")
 
-	// enroll flags.
 	automationsEnrollCmd.Flags().String("team-contact-id", "", "Team contact id to enroll.")
 
-	// fire-event flags.
 	automationsFireEventCmd.Flags().String("event-type", "", "Event type name (required).")
 	automationsFireEventCmd.Flags().String("team-contact-id", "", "Team contact id to fire the event for (required).")
 	automationsFireEventCmd.Flags().String("idempotency-key", "", "Idempotency key to prevent duplicate event delivery.")
 	automationsFireEventCmd.Flags().String("payload", "", "Additional event payload as JSON (inline or @file).")
 
-	// test flags.
 	automationsTestCmd.Flags().String("team-contact-id", "", "Team contact id to use for the dry-run test.")
 }

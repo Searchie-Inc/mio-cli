@@ -1,11 +1,5 @@
 package cmd
 
-// hubs_navigation_test.go — contract tests for authoring the hub navigation
-// menu via `mio hubs update --navigation-json` and the shared typed-item
-// validation (MIO-2255). The mio-hub parser silently drops header/footer items
-// that lack a "type", so the CLI rejects untyped items up front rather than
-// letting a caller ship a menu that renders empty.
-
 import (
 	"fmt"
 	"io"
@@ -17,11 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// hubSlugRetrieveServer answers a GET retrieve with a hub whose slug is `slug`
-// and captures the subsequent PATCH's method, path and body. `hubs update
-// --navigation-json` now retrieves the hub for its slug before PATCHing so it
-// can validate hub-scoped navigation hrefs (MIO-2270), so nav-update tests must
-// capture the PATCH specifically rather than the first request.
 func hubSlugRetrieveServer(t *testing.T, slug string) (srv *httptest.Server, patchMethod, patchPath *string, patchBody *[]byte) {
 	t.Helper()
 	var m, p string
@@ -41,11 +30,6 @@ func hubSlugRetrieveServer(t *testing.T, slug string) (srv *httptest.Server, pat
 	return srv, &m, &p, &b
 }
 
-// TestHubsUpdate_NavigationJSONFlag verifies --navigation-json is sent as
-// data.attributes.navigation on the PATCH, with the typed header items intact.
-// The update first retrieves the hub for its slug (MIO-2270), so the hrefs are
-// scoped to the retrieved slug ("demo") and the PATCH — not the retrieve — is
-// captured.
 func TestHubsUpdate_NavigationJSONFlag(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := hubSlugRetrieveServer(t, "demo")
 
@@ -79,8 +63,6 @@ func TestHubsUpdate_NavigationJSONFlag(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_NavigationRejectsUntypedItem verifies a header/footer item
-// missing "type" is rejected with ExitUsage and fires NO HTTP request.
 func TestHubsUpdate_NavigationRejectsUntypedItem(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -93,7 +75,6 @@ func TestHubsUpdate_NavigationRejectsUntypedItem(t *testing.T) {
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1",
 			"hubs", "update", "hub_abc123",
-			// legacy untyped item {id,label,route} — dropped by the FE parser.
 			"--navigation-json", `{"header":[{"id":"n1","label":"Home","route":"/"}]}`,
 		)...)
 
@@ -105,8 +86,6 @@ func TestHubsUpdate_NavigationRejectsUntypedItem(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_NavigationBucketMustBeArray verifies a non-array header/footer
-// bucket is rejected with ExitUsage and no request.
 func TestHubsUpdate_NavigationBucketMustBeArray(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -130,10 +109,6 @@ func TestHubsUpdate_NavigationBucketMustBeArray(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_NavigationRejectBeforeTeamResolve verifies an invalid menu is
-// rejected with ExitUsage BEFORE team resolution — even when --team is a
-// name/slug that would otherwise trigger a ResolveTeam GET /api/teams. Guards
-// the validate-before-resolve ordering against regression (cf. MIO-2254).
 func TestHubsUpdate_NavigationRejectBeforeTeamResolve(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -146,7 +121,7 @@ func TestHubsUpdate_NavigationRejectBeforeTeamResolve(t *testing.T) {
 
 	res := runContract(t, baseEnv(srv.URL),
 		"hubs", "update", "hub_abc123",
-		"--team", "acme-name", // NOT id-shaped → would trigger ResolveTeam GET
+		"--team", "acme-name",
 		"--navigation-json", `{"header":[{"label":"Home","route":"/"}]}`,
 	)
 
@@ -158,8 +133,6 @@ func TestHubsUpdate_NavigationRejectBeforeTeamResolve(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_NavigationRejectsUntypedItem verifies the same typed-item
-// validation applies on `hubs create` (consistency with update).
 func TestHubsCreate_NavigationRejectsUntypedItem(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -184,11 +157,6 @@ func TestHubsCreate_NavigationRejectsUntypedItem(t *testing.T) {
 	}
 }
 
-// ─── MIO-2270: hub-scoped href validation ────────────────────────────────────
-
-// firedFlagHubServer starts a server that flips *fired to true on any request
-// and replies with the given status + minimalHubBody. Used to assert that an
-// href-scoping usage error fires NO HTTP request at all (create path).
 func firedFlagHubServer(t *testing.T, status int) (*httptest.Server, *bool) {
 	t.Helper()
 	fired := false
@@ -202,9 +170,6 @@ func firedFlagHubServer(t *testing.T, status int) (*httptest.Server, *bool) {
 	return srv, &fired
 }
 
-// TestHubsCreate_NavigationRejectsUnscopedRelativeHref verifies a header url
-// item whose href is a hub-relative path NOT scoped to the --slug is rejected
-// with ExitUsage before any HTTP request (create validates against --slug).
 func TestHubsCreate_NavigationRejectsUnscopedRelativeHref(t *testing.T) {
 	srv, fired := firedFlagHubServer(t, http.StatusCreated)
 
@@ -223,9 +188,6 @@ func TestHubsCreate_NavigationRejectsUnscopedRelativeHref(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_NavigationRejectsSiblingSlugPrefix verifies the scope check is
-// boundary-aware: a href that merely shares the slug as a string prefix
-// ("/support" vs slug "s") escapes the hub and is rejected.
 func TestHubsCreate_NavigationRejectsSiblingSlugPrefix(t *testing.T) {
 	srv, fired := firedFlagHubServer(t, http.StatusCreated)
 
@@ -244,9 +206,6 @@ func TestHubsCreate_NavigationRejectsSiblingSlugPrefix(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_NavigationRelativeHrefRequiresSlug verifies that a relative
-// href with NO --slug (so the hub scope is unknown) is rejected with ExitUsage
-// and no request, rather than shipping an unvalidatable link.
 func TestHubsCreate_NavigationRelativeHrefRequiresSlug(t *testing.T) {
 	srv, fired := firedFlagHubServer(t, http.StatusCreated)
 
@@ -265,8 +224,6 @@ func TestHubsCreate_NavigationRelativeHrefRequiresSlug(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_NavigationAllowsAbsoluteHref verifies an absolute http(s)://
-// href is passed through as-is (no scoping applied) and the POST fires.
 func TestHubsCreate_NavigationAllowsAbsoluteHref(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -294,8 +251,6 @@ func TestHubsCreate_NavigationAllowsAbsoluteHref(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_NavigationAllowsHubScopedHref verifies a href scoped to the
-// hub's own slug ("/s/about" for slug "s") is accepted and the POST fires.
 func TestHubsCreate_NavigationAllowsHubScopedHref(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -315,9 +270,6 @@ func TestHubsCreate_NavigationAllowsHubScopedHref(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_NavigationRejectsUnscopedRelativeHref verifies that on update
-// the hub is retrieved for its slug, and a relative href not scoped to that
-// slug is rejected with ExitUsage — the retrieve fires but NO PATCH does.
 func TestHubsUpdate_NavigationRejectsUnscopedRelativeHref(t *testing.T) {
 	getFired, patchFired := false, false
 	body := `{"data":{"id":"hub_abc123","type":"hubs","attributes":{"title":"H","slug":"demo","is_private":false}}}`
@@ -351,8 +303,6 @@ func TestHubsUpdate_NavigationRejectsUnscopedRelativeHref(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_NavigationAllowsHubScopedHref verifies that on update a href
-// scoped to the retrieved slug is accepted and PATCHed as navigation.
 func TestHubsUpdate_NavigationAllowsHubScopedHref(t *testing.T) {
 	srv, gotMethod, _, patchBody := hubSlugRetrieveServer(t, "demo")
 
@@ -382,10 +332,6 @@ func TestHubsUpdate_NavigationAllowsHubScopedHref(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_NavigationScopesToChangingSlug verifies that when --slug is
-// changed in the SAME update, hrefs are validated against the NEW slug (the
-// hub's final slug), not the retrieved old slug — and validation happens
-// pre-auth so a good link needs no retrieve (the first request is the PATCH).
 func TestHubsUpdate_NavigationScopesToChangingSlug(t *testing.T) {
 	srv, gotMethod, _, _ := captureHubRequest(t, http.StatusOK)
 
@@ -399,16 +345,11 @@ func TestHubsUpdate_NavigationScopesToChangingSlug(t *testing.T) {
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
-	// No retrieve is needed when --slug supplies the final slug: first request is
-	// the PATCH.
 	if *gotMethod != http.MethodPatch {
 		t.Errorf("first request method = %q, want PATCH (no retrieve needed when --slug is set)", *gotMethod)
 	}
 }
 
-// TestHubsUpdate_NavigationRejectsOldSlugWhenSlugChanges verifies the converse:
-// an href scoped to the OLD slug while --slug renames the hub is rejected —
-// against the NEW slug — with ExitUsage and NO request (validated pre-auth).
 func TestHubsUpdate_NavigationRejectsOldSlugWhenSlugChanges(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -434,9 +375,6 @@ func TestHubsUpdate_NavigationRejectsOldSlugWhenSlugChanges(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_NavigationRejectsDotSegmentEscape verifies that a dot-segment
-// escape ("/s/../outside", which a browser resolves to "/outside") is rejected
-// even though it shares the "/s/" prefix — including its percent-encoded form.
 func TestHubsCreate_NavigationRejectsDotSegmentEscape(t *testing.T) {
 	for _, href := range []string{"/s/../outside", "/s/%2e%2e/outside"} {
 		href := href
@@ -460,11 +398,6 @@ func TestHubsCreate_NavigationRejectsDotSegmentEscape(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_NavigationRejectsProtocolRelativeHref verifies origin-escaping
-// href forms whose PATH happens to match the slug are still rejected with
-// ExitUsage and no request: protocol-relative "//host/s", the empty-authority
-// "///s" (browsers resolve to https://s/), and the backslash variant "/\host/s"
-// (browsers fold "\" to "/").
 func TestHubsCreate_NavigationRejectsProtocolRelativeHref(t *testing.T) {
 	for _, href := range []string{"//evil.example/s", "//evil.example/s/about", "///s", `/\evil.example/s`, `\outside`, `\\evil.example\s`} {
 		href := href
@@ -488,8 +421,6 @@ func TestHubsCreate_NavigationRejectsProtocolRelativeHref(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_NavigationAllowsInnerDotSegment verifies dot-segments that
-// resolve back INSIDE the hub ("/s/a/../b" → "/s/b") are still accepted.
 func TestHubsCreate_NavigationAllowsInnerDotSegment(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 

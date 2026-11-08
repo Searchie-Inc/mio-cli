@@ -1,17 +1,5 @@
 package cmd
 
-// community_media_test.go — contract tests for the four new command groups:
-//   - mio community spaces
-//   - mio community discussions
-//   - mio community members (moderation)
-//   - mio hub-memberships
-//   - mio media files
-//   - mio media folders
-//   - mio media playlists
-//
-// Tests verify HTTP method, path construction, and body shape against a
-// mock server. Uses the in-process harness from contract_test.go.
-
 import (
 	"encoding/json"
 	"io"
@@ -22,8 +10,6 @@ import (
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
-
-// ── fixtures ──────────────────────────────────────────────────────────────────
 
 const spaceBody = `{
 	"data": {
@@ -65,10 +51,6 @@ const mediaPlaylistBody = `{
 	}
 }`
 
-// ── community spaces ──────────────────────────────────────────────────────────
-
-// TestCommunitySpacesList_PathAndMethod verifies that list hits the correct
-// admin path with GET and --hub is forwarded.
 func TestCommunitySpacesList_PathAndMethod(t *testing.T) {
 	var gotMethod, gotPath string
 
@@ -98,8 +80,6 @@ func TestCommunitySpacesList_PathAndMethod(t *testing.T) {
 	}
 }
 
-// TestCommunitySpacesCreate_BodyShape verifies that create sends a JSON:API
-// envelope with the correct path and attribute keys.
 func TestCommunitySpacesCreate_BodyShape(t *testing.T) {
 	var gotBody []byte
 	var gotPath string
@@ -148,8 +128,6 @@ func TestCommunitySpacesCreate_BodyShape(t *testing.T) {
 	}
 }
 
-// TestCommunitySpacesCreate_RequiresName verifies that --name is required and
-// providing only optional flags returns ExitUsage without hitting the network.
 func TestCommunitySpacesCreate_RequiresName(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{Status: 201, Body: spaceBody}})
 
@@ -157,7 +135,7 @@ func TestCommunitySpacesCreate_RequiresName(t *testing.T) {
 		withTeam("t_team1",
 			"--hub", "hub_abc123",
 			"community", "spaces", "create",
-			"--slug", "general", // no --name
+			"--slug", "general",
 		)...)
 
 	if res.Code != errs.ExitUsage {
@@ -165,8 +143,6 @@ func TestCommunitySpacesCreate_RequiresName(t *testing.T) {
 	}
 }
 
-// TestCommunitySpacesDelete_RequiresYes verifies that delete in a
-// non-interactive shell exits with ExitNeedsConfir when --yes is not passed.
 func TestCommunitySpacesDelete_RequiresYes(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{Status: 204, Body: ""}})
 
@@ -181,9 +157,6 @@ func TestCommunitySpacesDelete_RequiresYes(t *testing.T) {
 	}
 }
 
-// ── community discussions ─────────────────────────────────────────────────────
-
-// TestCommunityDiscussionsList_Path verifies the admin discussions list path.
 func TestCommunityDiscussionsList_Path(t *testing.T) {
 	var gotPath string
 
@@ -209,10 +182,6 @@ func TestCommunityDiscussionsList_Path(t *testing.T) {
 	}
 }
 
-// ── community members (moderation) ───────────────────────────────────────────
-
-// TestCommunityMembersBan_MethodAndPath verifies that ban issues a POST to the
-// correct moderation path and sends the flat body (no envelope).
 func TestCommunityMembersBan_MethodAndPath(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody []byte
@@ -245,7 +214,6 @@ func TestCommunityMembersBan_MethodAndPath(t *testing.T) {
 		t.Errorf("path = %q, want %q", gotPath, want)
 	}
 
-	// Flat body: notes is at top level, no "data" envelope.
 	var body map[string]any
 	if err := json.Unmarshal(gotBody, &body); err != nil {
 		t.Fatalf("body not valid JSON: %v", err)
@@ -258,7 +226,6 @@ func TestCommunityMembersBan_MethodAndPath(t *testing.T) {
 	}
 }
 
-// TestCommunityMembersUnban_Path verifies unban uses the correct path.
 func TestCommunityMembersUnban_Path(t *testing.T) {
 	var gotPath string
 
@@ -285,10 +252,6 @@ func TestCommunityMembersUnban_Path(t *testing.T) {
 	}
 }
 
-// ── hub-memberships ───────────────────────────────────────────────────────────
-
-// TestHubMembershipsBan_PathAndFlatBody verifies the hub-memberships ban
-// command hits the same admin moderation route with a flat body.
 func TestHubMembershipsBan_PathAndFlatBody(t *testing.T) {
 	var gotPath string
 	var gotBody []byte
@@ -324,7 +287,6 @@ func TestHubMembershipsBan_PathAndFlatBody(t *testing.T) {
 	}
 }
 
-// TestHubMembershipsWarn_Path verifies the warn path is correct.
 func TestHubMembershipsWarn_Path(t *testing.T) {
 	var gotPath string
 
@@ -351,9 +313,6 @@ func TestHubMembershipsWarn_Path(t *testing.T) {
 	}
 }
 
-// ── media files ───────────────────────────────────────────────────────────────
-
-// TestMediaFilesList_PathAndMethod verifies that list hits /api/teams/{id}/files with GET.
 func TestMediaFilesList_PathAndMethod(t *testing.T) {
 	var gotMethod, gotPath string
 
@@ -380,7 +339,6 @@ func TestMediaFilesList_PathAndMethod(t *testing.T) {
 	}
 }
 
-// TestMediaFilesUpdate_BodyShape verifies PATCH sends only the changed fields.
 func TestMediaFilesUpdate_BodyShape(t *testing.T) {
 	var gotBody []byte
 	var gotMethod string
@@ -420,8 +378,6 @@ func TestMediaFilesUpdate_BodyShape(t *testing.T) {
 	if doc.Data.Type != "files" {
 		t.Errorf("data.type = %q, want \"files\"", doc.Data.Type)
 	}
-	// FileUpdateData requires data.id in the body (backend 400s "Field required
-	// (/data/id)" otherwise).
 	if doc.Data.ID != "file_1" {
 		t.Errorf("data.id = %q, want file_1 (backend requires it in the body)", doc.Data.ID)
 	}
@@ -431,13 +387,11 @@ func TestMediaFilesUpdate_BodyShape(t *testing.T) {
 	if doc.Data.Attributes["visibility"] != "public" {
 		t.Errorf("attributes.visibility = %v, want 'public'", doc.Data.Attributes["visibility"])
 	}
-	// description was NOT set → must not appear
 	if _, ok := doc.Data.Attributes["description"]; ok {
 		t.Errorf("attributes unexpectedly contains 'description'")
 	}
 }
 
-// TestMediaFilesDelete_RequiresYes confirms the non-interactive guard fires.
 func TestMediaFilesDelete_RequiresYes(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{Status: 204, Body: ""}})
 
@@ -449,15 +403,12 @@ func TestMediaFilesDelete_RequiresYes(t *testing.T) {
 	}
 }
 
-// ── media folders ─────────────────────────────────────────────────────────────
-
-// TestMediaFoldersCreate_RequiresName verifies that --name is required for folder create.
 func TestMediaFoldersCreate_RequiresName(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{Status: 201, Body: mediaFolderBody}})
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "media", "folders", "create",
-			"--parent-id", "folder_root", // no --name
+			"--parent-id", "folder_root",
 		)...)
 
 	if res.Code != errs.ExitUsage {
@@ -465,13 +416,12 @@ func TestMediaFoldersCreate_RequiresName(t *testing.T) {
 	}
 }
 
-// TestMediaPlaylistsCreate_RequiresTitle verifies that --title is required for playlist create.
 func TestMediaPlaylistsCreate_RequiresTitle(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{Status: 201, Body: mediaPlaylistBody}})
 
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "media", "playlists", "create",
-			"--visibility", "public", // no --title
+			"--visibility", "public",
 		)...)
 
 	if res.Code != errs.ExitUsage {
@@ -479,7 +429,6 @@ func TestMediaPlaylistsCreate_RequiresTitle(t *testing.T) {
 	}
 }
 
-// TestMediaFoldersList_Path verifies the correct list path.
 func TestMediaFoldersList_Path(t *testing.T) {
 	var gotPath string
 
@@ -502,7 +451,6 @@ func TestMediaFoldersList_Path(t *testing.T) {
 	}
 }
 
-// TestMediaFoldersCreate_BodyShape verifies create sends name + parent_id.
 func TestMediaFoldersCreate_BodyShape(t *testing.T) {
 	var gotBody []byte
 
@@ -544,9 +492,6 @@ func TestMediaFoldersCreate_BodyShape(t *testing.T) {
 	}
 }
 
-// ── media playlists ───────────────────────────────────────────────────────────
-
-// TestMediaPlaylistsList_Path verifies the correct list path.
 func TestMediaPlaylistsList_Path(t *testing.T) {
 	var gotPath string
 
@@ -569,7 +514,6 @@ func TestMediaPlaylistsList_Path(t *testing.T) {
 	}
 }
 
-// TestMediaPlaylistsCreate_BodyShape verifies create sends title and other attrs.
 func TestMediaPlaylistsCreate_BodyShape(t *testing.T) {
 	var gotBody []byte
 
@@ -611,8 +555,6 @@ func TestMediaPlaylistsCreate_BodyShape(t *testing.T) {
 	}
 }
 
-// TestMediaPlaylistsUpdate_PodcastFlag verifies the podcast-feed-enabled bool
-// flag is correctly converted to snake_case attribute name.
 func TestMediaPlaylistsUpdate_PodcastFlag(t *testing.T) {
 	var gotBody []byte
 
@@ -650,10 +592,6 @@ func TestMediaPlaylistsUpdate_PodcastFlag(t *testing.T) {
 	}
 }
 
-// ── group guard (unknown subcommand → ExitUsage) ──────────────────────────────
-
-// TestCommunityGroupGuard_UnknownSubcommand confirms that the group guard fires
-// for `mio community frobnicate` with ExitUsage.
 func TestCommunityGroupGuard_UnknownSubcommand(t *testing.T) {
 	res := runContract(t, baseEnv("http://localhost"),
 		"--team", "t1", "community", "frobnicate",
@@ -663,8 +601,6 @@ func TestCommunityGroupGuard_UnknownSubcommand(t *testing.T) {
 	}
 }
 
-// TestMediaGroupGuard_UnknownSubcommand confirms that `mio media frobnicate`
-// fails with ExitUsage.
 func TestMediaGroupGuard_UnknownSubcommand(t *testing.T) {
 	res := runContract(t, baseEnv("http://localhost"),
 		"--team", "t1", "media", "frobnicate",
@@ -674,8 +610,6 @@ func TestMediaGroupGuard_UnknownSubcommand(t *testing.T) {
 	}
 }
 
-// TestHubMembershipsGroupGuard_UnknownSubcommand confirms that
-// `mio hub-memberships frobnicate` fails with ExitUsage.
 func TestHubMembershipsGroupGuard_UnknownSubcommand(t *testing.T) {
 	res := runContract(t, baseEnv("http://localhost"),
 		"--team", "t1", "hub-memberships", "frobnicate",

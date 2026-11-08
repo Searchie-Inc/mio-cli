@@ -16,63 +16,18 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// resolveTeamID determines the team id to use when minting an API key after a
-// successful email+password login. Precedence:
-//
-//  1. explicit --team flag (or config current_team already resolved).
-//  2. team_id embedded in the JWT access token.
-//  3. GET /api/teams with the JWT bearer, narrowed to the teams the caller
-//     OWNS (resolveOwnedTeamID):
-//     - exactly one owned team → use it automatically.
-//     - multiple owned teams   → prompt on TTY; error with list on non-TTY.
-//     - zero owned teams       → clear error.
-//
-// Neither (1) nor (2) is proof of OWNERSHIP — minting an API key is
-// owner-gated server-side (mio-backend require_team_owner), while both a
-// caller-supplied --team and the JWT's team_id claim (the account's
-// last-active team, see TeamIDFromAccessToken) only require membership:
-// `teams switch` can point the claim (and thus a STORED current_team, since
-// that is exactly what `teams switch` persists) at a team the caller
-// belongs to but does not own (MIO-3585, e.g. after switching into a shared
-// team, or a web signup landing the account in a team it doesn't own with no
-// owned team of its own). resolveTeamID does not itself check ownership for
-// (1) or (2) — mintAndStore catches the resulting 403 and retries via
-// resolveOwnedTeamID, which is where ownership is actually verified. Only a
-// --team flag TRULY PASSED ON THIS INVOCATION (flags.team, checked directly
-// in mintAndStore — never the config-resolved value threaded through here)
-// is never second-guessed that way; if it names a team the caller doesn't
-// own, MintAPIKey's error is left to speak for itself.
-//
-// Returns the resolved team id, its display name (may be empty if resolved
-// from the token claim), and any error.
 func resolveTeamID(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamID string) (id, name string, err error) {
-	// 1. Explicit flag / config.
 	if flagTeamID != "" {
 		return flagTeamID, "", nil
 	}
 
-	// 2. JWT claim.
 	if tokenTeam := client.TeamIDFromAccessToken(accessToken); tokenTeam != "" {
 		return tokenTeam, "", nil
 	}
 
-	// 3. List teams via API.
 	return resolveOwnedTeamID(cmd, cli, accessToken)
 }
 
-// resolveOwnedTeamID lists the teams visible to the JWT bearer and narrows
-// them to the ones the caller OWNS. Minting an API key is owner-gated
-// server-side, so a team the caller merely belongs to can never succeed here
-// (MIO-3585) — unlike resolveTeamID's claim/flag-based guesses, this is the
-// path that actually confirms ownership, via each team's owner_id attribute
-// compared against the JWT's own `sub` claim.
-//
-// This mirrors mio-backend's CURRENT require_team_owner check exactly
-// (owner_id == sub, full stop). That dependency's own docstring flags itself
-// as Phase 1 — a later Phase 1.5 is expected to widen it to consult
-// team_members.role_id for multi-admin support. If that lands, this filter
-// needs the same widening or it will start rejecting teams the API would
-// accept for an admin who isn't the literal owner.
 func resolveOwnedTeamID(cmd *cobra.Command, cli *client.Client, accessToken string) (id, name string, err error) {
 	teams, lerr := cli.ListTeams(cmd.Context(), accessToken)
 	if lerr != nil {
@@ -92,23 +47,11 @@ func resolveOwnedTeamID(cmd *cobra.Command, cli *client.Client, accessToken stri
 			return "", "", errs.New(errs.ExitGeneric,
 				"login succeeded but your account has no teams — contact support")
 		}
-		// ExitAuth, not ExitUsage: this is the same ownership rejection the
-		// backend would have returned as a 403 (which maps to ExitAuth) had we
-		// let the retry hit the wire against a team we already know isn't owned.
 		return "", "", errs.New(errs.ExitAuth,
 			"login succeeded but you don't own any team — minting an API key requires team ownership; ask the team owner to mint one for you, or re-run with --team <id> for a team you own")
 	case 1:
 		return owned[0].ID, owned[0].Name, nil
 	default:
-		// Multiple owned teams: prompt on TTY, error on non-TTY. Unlike the
-		// rest of this file, this branch is reached from mintAndStore's
-		// ownership-403 retry regardless of whether the ORIGINAL login was
-		// headless (MIO-3585) — so it needs isInteractiveStdin's real-TTY
-		// check, not isTTY's char-device one: isTTY treats /dev/null (the
-		// ordinary CI/headless stdin) as interactive, which would turn this
-		// documented non-interactive message into a hanging prompt that
-		// reads immediate EOF and fails with a bare "invalid choice"
-		// instead (verified in review round 2).
 		if !isInteractiveStdin(cmd) {
 			var sb strings.Builder
 			sb.WriteString("login succeeded but you own multiple teams — re-run with --team <id>:\n")
@@ -134,7 +77,6 @@ func resolveOwnedTeamID(cmd *cobra.Command, cli *client.Client, accessToken stri
 	}
 }
 
-// EnvEmail and EnvPassword are the environment variables for headless login.
 const (
 	envEmail    = "MIO_EMAIL"
 	envPassword = "MIO_PASSWORD"
@@ -205,30 +147,20 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		Profile: flags.profile,
 	})
 	if err != nil {
-		// A stored blob that exists but cannot be used — legacy (v0.1)
-		// encryption, or one that does not decode — is left in place by the
-		// read, and logging in replaces it (MIO-2995). resolved still carries
-		// APIBase/TeamID, so fall through as if no key was stored. An
-		// unreadable blob used to abort login with exit 1, leaving no way out
-		// but deleting the file by hand.
 		if !config.StoredKeyUnusable(err) {
 			return errs.Wrap(errs.ExitGeneric, err)
 		}
 		fmt.Fprintf(cmd.ErrOrStderr(), "Note: %v\nLogging in will replace it.\n", err)
 	}
 
-	// Path 1: env / flag key — validate and store.
 	if envKey := firstNonEmpty(flags.apiKey, os.Getenv(config.EnvAPIKey)); envKey != "" {
 		return validateAndStore(cmd, resolved.APIBase, envKey, cmd.InOrStdin())
 	}
 
-	// Path 2: headless email+password (--email/--password flags or MIO_EMAIL/MIO_PASSWORD env).
-	// Resolve email: flag > env.
 	headlessEmail := flagValue(cmd, "email")
 	if headlessEmail == "" {
 		headlessEmail = os.Getenv(envEmail)
 	}
-	// Resolve password: flag > env. Password is NEVER echoed or stored.
 	headlessPassword, _ := cmd.Flags().GetString("password")
 	if headlessPassword == "" {
 		headlessPassword = os.Getenv(envPassword)
@@ -237,7 +169,6 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		return loginPasswordHeadless(cmd, resolved.APIBase, resolved.TeamID, headlessEmail, headlessPassword, cfg, storedKeyGuardFor(cmd, resolved.APIBase, cmd.InOrStdin()))
 	}
 
-	// Interactive paths require a TTY. Off a TTY we cannot prompt → exit 3.
 	if !isTTY(os.Stdin) {
 		return errs.New(errs.ExitAuth,
 			"no API key available and not a TTY: set MIO_API_KEY, or provide --email and --password (or MIO_EMAIL/MIO_PASSWORD), or run `mio login` interactively")
@@ -260,9 +191,6 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 }
 
-// loginPasswordHeadless performs the email+password → mint flow without any TTY
-// prompts. Used when both --email/MIO_EMAIL and --password/MIO_PASSWORD are set.
-// The password is never echoed or stored.
 func loginPasswordHeadless(cmd *cobra.Command, apiBase, teamID, email, password string, cfg *config.Config, guard storedKeyGuard) error {
 	cli := client.New(apiBase, "", client.WithDebug(flags.debug))
 	loginRes, err := cli.Login(cmd.Context(), email, password)
@@ -278,7 +206,6 @@ func loginPasswordHeadless(cmd *cobra.Command, apiBase, teamID, email, password 
 	return nil
 }
 
-// loginPasteKey reads a pasted key, validates it, and stores it.
 func loginPasteKey(cmd *cobra.Command, reader *bufio.Reader, apiBase string) error {
 	fmt.Fprint(cmd.ErrOrStderr(), "Paste your API key: ")
 	line, _ := reader.ReadString('\n')
@@ -289,7 +216,6 @@ func loginPasteKey(cmd *cobra.Command, reader *bufio.Reader, apiBase string) err
 	return validateAndStore(cmd, apiBase, key, reader)
 }
 
-// loginPassword performs the email+password → mint flow.
 func loginPassword(cmd *cobra.Command, reader *bufio.Reader, apiBase, teamID string, cfg *config.Config) error {
 	fmt.Fprint(cmd.ErrOrStderr(), "Email: ")
 	emailLine, _ := reader.ReadString('\n')
@@ -316,46 +242,24 @@ func loginPassword(cmd *cobra.Command, reader *bufio.Reader, apiBase, teamID str
 	return nil
 }
 
-// mintAndStore resolves the team for the given JWT access token, mints a
-// "mio-cli@<host>" API key, stores it in the credential store, persists the resolved
-// team to config, and returns a human display string for the team ("Name (id)"
-// or the bare id when the name is unknown). It is the shared tail of every
-// password→key flow — `login` (interactive + headless) and `register` — which
-// differ only in their final confirmation wording.
 func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamID string, cfg *config.Config, guard storedKeyGuard) (displayTeam string, err error) {
 	resolvedTeam, teamName, err := resolveTeamID(cmd, cli, accessToken, flagTeamID)
 	if err != nil {
 		return "", err
 	}
-	// Before anything irreversible: minting creates a key server-side, so a
-	// refusal after it would leave an orphan (MIO-3572).
 	if err := guard(resolvedTeam); err != nil {
 		return "", err
 	}
 
 	keyName := fmt.Sprintf("mio-cli@%s", hostname())
 	minted, err := cli.MintAPIKey(cmd.Context(), accessToken, resolvedTeam, keyName)
-	// Gate the retry on the raw --team FLAG (flags.team), never on flagTeamID:
-	// flagTeamID is often the CONFIG-resolved team (login passes
-	// resolved.TeamID, which falls back to a stored current_team — exactly
-	// what `teams switch` persists), and that stored default is just as
-	// unproven a guess as the JWT claim itself. Only a --team truly passed on
-	// THIS invocation is a deliberate choice worth never second-guessing.
 	if err != nil && flags.team == "" && errs.HTTPStatusOf(err) == http.StatusForbidden {
-		// resolvedTeam came from a guess (the JWT's team_id claim, a stored
-		// current_team, or an unfiltered team list) that only proves
-		// MEMBERSHIP; minting is owner-gated, and this 403 means the guess
-		// wasn't owned (MIO-3585). Recover by asking explicitly which teams
-		// the caller OWNS rather than surfacing the backend's raw ownership
-		// rejection.
 		fmt.Fprintln(cmd.ErrOrStderr(), "Note: your active team isn't one you own — checking which team(s) you do own.")
 		var rerr error
 		resolvedTeam, teamName, rerr = resolveOwnedTeamID(cmd, cli, accessToken)
 		if rerr != nil {
 			return "", rerr
 		}
-		// Recovery moved the target to a team that was only a guess a moment
-		// ago: protect against the NEW team too (a no-op when it is unchanged).
 		if err := guard(resolvedTeam); err != nil {
 			return "", err
 		}
@@ -384,20 +288,11 @@ func mintAndStore(cmd *cobra.Command, cli *client.Client, accessToken, flagTeamI
 	return displayTeam, nil
 }
 
-// validateAndStore validates a key against /api/auth/me and, on success, stores
-// it in the credential store. It never reads the stored key first, which is
-// why `MIO_API_KEY=<key> mio login` can replace a blob mio cannot read.
 func validateAndStore(cmd *cobra.Command, apiBase, key string, in io.Reader) error {
 	cli := client.New(apiBase, key, client.WithDebug(flags.debug))
 	if _, err := cli.Me(cmd.Context()); err != nil {
 		return err
 	}
-	// Replacing a stored key needs confirmation (MIO-3572). The stored key is NOT
-	// sent to the API here: this login carries an explicit key, so an ordinary
-	// command would send THAT one, and --anonymous promises to ignore stored
-	// credentials — the prompt is generic for that reason. Storing the key that is
-	// already stored needs no question (and an unreadable store is handled inside
-	// the guard: the documented MIO-2995 recovery, announced).
 	if stored, serr := config.GetAPIKey(); serr != nil || stored != key {
 		if err := confirmReplaceStoredKey(cmd, apiBase, "", in, false); err != nil {
 			return err
@@ -410,18 +305,11 @@ func validateAndStore(cmd *cobra.Command, apiBase, key string, in io.Reader) err
 	return nil
 }
 
-// isInteractiveStdin reports whether cmd's input is a REAL terminal, using
-// the same term.IsTerminal check as readPassword below — unlike root.go's
-// isTTY, which treats ANY character device (including /dev/null, the
-// ordinary headless/CI stdin) as interactive. Use this, not isTTY, for any
-// branch that must stay silent/non-prompting under a headless invocation.
 func isInteractiveStdin(cmd *cobra.Command) bool {
 	f, ok := cmd.InOrStdin().(*os.File)
 	return ok && term.IsTerminal(int(f.Fd()))
 }
 
-// readPassword reads a password without echoing when stdin is a terminal,
-// falling back to a plain line read otherwise.
 func readPassword(cmd *cobra.Command) (string, error) {
 	if f, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		b, err := term.ReadPassword(int(f.Fd()))

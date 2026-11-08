@@ -1,12 +1,5 @@
 package cmd
 
-// hubs_redirect_origins_test.go — contract tests for
-// `mio hubs redirect-origins get|set` (MIO-2269 / MIO-616).
-//
-// set is a full-replace PUT whose JSON:API type is "hub_redirect_origin_allowlists"
-// (derived from the redirect-origins tail via a typeOverride) and whose
-// attributes carry an origins ARRAY.
-
 import (
 	"encoding/json"
 	"net/http"
@@ -18,7 +11,6 @@ import (
 
 const redirectOriginsBody = `{"data":{"id":"hub_x:redirect-origins","type":"hub_redirect_origin_allowlists","attributes":{"origins":["https://app.example.com"]}}}`
 
-// TestHubsRedirectOriginsGet pins the GET: method, team-scoped path suffix, exit 0.
 func TestHubsRedirectOriginsGet(t *testing.T) {
 	srv, gotMethod, gotPath, _, _ := captureAdminReq(t, http.StatusOK, redirectOriginsBody)
 
@@ -36,8 +28,6 @@ func TestHubsRedirectOriginsGet(t *testing.T) {
 	}
 }
 
-// TestHubsRedirectOriginsSet_Body pins the PUT: method, path, JSON:API type,
-// and the parsed origins array.
 func TestHubsRedirectOriginsSet_Body(t *testing.T) {
 	srv, gotMethod, gotPath, _, gotBody := captureAdminReq(t, http.StatusOK, redirectOriginsBody)
 
@@ -70,8 +60,6 @@ func TestHubsRedirectOriginsSet_Body(t *testing.T) {
 	}
 }
 
-// TestHubsRedirectOriginsSet_Clear pins that --clear sends origins: [] (present,
-// empty array — not absent, not null).
 func TestHubsRedirectOriginsSet_Clear(t *testing.T) {
 	srv, gotMethod, _, _, gotBody := captureAdminReq(t, http.StatusOK, redirectOriginsBody)
 
@@ -85,7 +73,6 @@ func TestHubsRedirectOriginsSet_Clear(t *testing.T) {
 		t.Errorf("HTTP method = %q, want PUT", *gotMethod)
 	}
 
-	// Distinguish an empty array from absent/null.
 	var doc struct {
 		Data struct {
 			Attributes map[string]json.RawMessage `json:"attributes"`
@@ -103,8 +90,6 @@ func TestHubsRedirectOriginsSet_Clear(t *testing.T) {
 	}
 }
 
-// TestHubsRedirectOriginsSet_Neither pins that neither --origins nor --clear
-// exits ExitUsage without firing any request.
 func TestHubsRedirectOriginsSet_Neither(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 
@@ -119,8 +104,6 @@ func TestHubsRedirectOriginsSet_Neither(t *testing.T) {
 	}
 }
 
-// TestHubsRedirectOriginsSet_Both pins that --origins together with --clear
-// exits ExitUsage without firing any request.
 func TestHubsRedirectOriginsSet_Both(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 

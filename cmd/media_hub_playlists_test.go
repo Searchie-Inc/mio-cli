@@ -1,11 +1,5 @@
 package cmd
 
-// media_hub_playlists_test.go — contract tests for `mio media hub-playlists`
-// {publish,list,unpublish} (MIO-2259). Publishing a playlist to a hub writes a
-// hub_media row — the load-bearing record the /content grid and homepage
-// content-grid join on. The write path derives the JSON:API type "hub_media"
-// (not "playlists") from the .../hubs/{hub}/playlists tail via a typeOverride.
-
 import (
 	"encoding/json"
 	"net/http"
@@ -17,11 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// decodeDataTypeAttrs returns data.type and data.attributes from a request body.
-// The two failure modes are reported SEPARATELY: unparseable bytes and a
-// well-formed body that simply is not a write envelope are different bugs, and a
-// single message covering both sent an earlier reader hunting for a JSON syntax
-// error in valid JSON.
 func decodeDataTypeAttrs(t *testing.T, body []byte) (string, map[string]any) {
 	t.Helper()
 	typ, attrs, ok := decodeDataTypeAttrsRaw(body)
@@ -34,15 +23,6 @@ func decodeDataTypeAttrs(t *testing.T, body []byte) (string, map[string]any) {
 	return typ, attrs
 }
 
-// decodeDataTypeAttrsRaw is decodeDataTypeAttrs without the *testing.T: a stub
-// HTTP handler runs on the server's own goroutine, where t.Fatalf is not allowed,
-// so a stateful stub that has to READ the request body needs a decoder that
-// cannot fail the test from the wrong goroutine.
-//
-// ok reports whether the body PARSED; a nil attrs on ok==true means it parsed but
-// carried no data.attributes. Reading from a nil map is legal in Go, so a stub
-// can ignore the distinction — the wrapper above is what turns each case into its
-// own message.
 func decodeDataTypeAttrsRaw(body []byte) (string, map[string]any, bool) {
 	var doc struct {
 		Data struct {
@@ -56,9 +36,6 @@ func decodeDataTypeAttrsRaw(body []byte) (string, map[string]any, bool) {
 	return doc.Data.Type, doc.Data.Attributes, true
 }
 
-// TestMediaHubPlaylistsPublish_Body verifies the publish POST hits
-// .../hubs/{hub}/playlists with JSON:API type "hub_media" and the mapped
-// attributes.
 func TestMediaHubPlaylistsPublish_Body(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -93,14 +70,11 @@ func TestMediaHubPlaylistsPublish_Body(t *testing.T) {
 	if attrs["position"] != float64(2) {
 		t.Errorf("position = %#v, want 2", attrs["position"])
 	}
-	// --playlist-id must NOT leak as the wrong key.
 	if _, ok := attrs["playlist-id"]; ok {
 		t.Errorf("attributes.playlist-id must not be present; got %v", attrs)
 	}
 }
 
-// TestMediaHubPlaylistsPublish_RequiresPlaylistID verifies a missing
-// --playlist-id exits ExitUsage with no request.
 func TestMediaHubPlaylistsPublish_RequiresPlaylistID(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -123,9 +97,6 @@ func TestMediaHubPlaylistsPublish_RequiresPlaylistID(t *testing.T) {
 	}
 }
 
-// TestMediaHubPlaylistsPublish_RejectsEmptyPlaylistID verifies an explicitly
-// empty --playlist-id (not just an absent flag) is rejected with ExitUsage and
-// fires no request (would otherwise POST playlist_id="").
 func TestMediaHubPlaylistsPublish_RejectsEmptyPlaylistID(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -148,8 +119,6 @@ func TestMediaHubPlaylistsPublish_RejectsEmptyPlaylistID(t *testing.T) {
 	}
 }
 
-// TestMediaHubPlaylistsPublish_RejectsInvalidVisibility verifies an
-// out-of-enum --visibility is rejected client-side with no request.
 func TestMediaHubPlaylistsPublish_RejectsInvalidVisibility(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -173,13 +142,6 @@ func TestMediaHubPlaylistsPublish_RejectsInvalidVisibility(t *testing.T) {
 	}
 }
 
-// TestMediaHubPublish_RejectsExplicitEmptyVisibility (MIO-2543) guards a
-// regression from the pure-builder extraction: --visibility defaults to "", so
-// cobra marks it Changed when a user passes --visibility "". The command path
-// must still reject that (empty is not a valid enum member) rather than silently
-// omitting it — the builder's empty=omit sentinel is only for the scaffold caller.
-// Covers BOTH publish commands (hub-media + hub-playlists) since both route
-// through applyHubMediaOptions.
 func TestMediaHubPublish_RejectsExplicitEmptyVisibility(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -217,14 +179,6 @@ func TestMediaHubPublish_RejectsExplicitEmptyVisibility(t *testing.T) {
 	}
 }
 
-// TestMediaHubPublish_DefaultsPublishedAtToNow (MIO-2536) pins the fix: omitting
-// --published-at defaults published_at to now (RFC3339) on the COMMAND path, so a
-// plain `publish` writes a hub_media row with a NON-NULL published_at and surfaces
-// a VISIBLE card. (A null published_at is treated as "draft" by the card-disclosure
-// policy, so the published playlist/file is silently invisible on /content — the
-// bug.) When --published-at IS given, the exact value is used unchanged. Covers
-// BOTH publish commands (hub-media + hub-playlists) since both route through
-// applyHubMediaOptions.
 func TestMediaHubPublish_DefaultsPublishedAtToNow(t *testing.T) {
 	subs := []struct {
 		name    string
@@ -320,8 +274,6 @@ func TestMediaHubPublish_DefaultsPublishedAtToNow(t *testing.T) {
 	})
 }
 
-// TestMediaHubPlaylistsUnpublish_DeletesPath verifies unpublish sends a DELETE
-// to .../hubs/{hub}/playlists/{playlist_id} (with --yes to skip the prompt).
 func TestMediaHubPlaylistsUnpublish_DeletesPath(t *testing.T) {
 	var gotMethod, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

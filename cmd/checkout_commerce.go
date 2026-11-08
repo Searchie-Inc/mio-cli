@@ -1,28 +1,5 @@
 package cmd
 
-// checkout_commerce.go — hub-scoped commerce DISPLAY rows (MIO-2268).
-//
-// A hub advertises products through two display resources managed here:
-//
-//	hub-products  hub_product_display rows — what a hub offers.
-//	              list   GET    /api/teams/{team}/hubs/{hub}/products
-//	              attach POST   /api/teams/{team}/hubs/{hub}/products
-//	              update PATCH  /api/teams/{team}/hubs/{hub}/products/{display_id}
-//	              detach DELETE /api/teams/{team}/hubs/{hub}/products/{display_id}
-//
-//	hub-prices    hub_price_display rows — auto-created when a product is
-//	              attached; only `visible` (--visible) and `position`
-//	              (--position) are editable.
-//	              list   GET    /api/teams/{team}/hubs/{hub}/prices
-//	              update PATCH  /api/teams/{team}/hubs/{hub}/prices/{display_id}
-//
-// The write bodies derive their JSON:API type from the request path:
-//	hubs/products → hub_product_displays, hubs/prices → hub_price_displays
-// (both typeOverrides already exist in internal/client/client.go).
-//
-// All routes require a team-owner JWT and a hub context (--hub). They register
-// on the shared checkoutCmd defined in checkout.go, reusing checkoutHubContext.
-
 import (
 	"fmt"
 	"net/url"
@@ -33,7 +10,6 @@ import (
 )
 
 func init() {
-	// checkout hub-products <action>
 	checkoutHubProductsCmd.AddCommand(
 		checkoutHubProductsListCmd,
 		checkoutHubProductsAttachCmd,
@@ -42,35 +18,27 @@ func init() {
 	)
 	checkoutCmd.AddCommand(checkoutHubProductsCmd)
 
-	// checkout hub-prices <action>
 	checkoutHubPricesCmd.AddCommand(
 		checkoutHubPricesListCmd,
 		checkoutHubPricesUpdateCmd,
 	)
 	checkoutCmd.AddCommand(checkoutHubPricesCmd)
 
-	// pagination
 	addPaginationFlags(checkoutHubProductsListCmd)
 	addPaginationFlags(checkoutHubPricesListCmd)
 
-	// hub-products attach flags (product_id is a positional arg).
 	checkoutHubProductsAttachCmd.Flags().Int("position", 0, "Display position within the hub (>= 0).")
 	checkoutHubProductsAttachCmd.Flags().Bool("visible", true, "Whether the product is visible on the hub's checkout surface.")
 	checkoutHubProductsAttachCmd.Flags().Bool("free-tier", false, "Mark this product as the hub's free tier.")
 
-	// hub-products update flags (all optional; at least one required).
 	checkoutHubProductsUpdateCmd.Flags().Int("position", 0, "New display position within the hub (>= 0).")
 	checkoutHubProductsUpdateCmd.Flags().Bool("visible", true, "Whether the product is visible on the hub's checkout surface.")
 	checkoutHubProductsUpdateCmd.Flags().Bool("free-tier", false, "Mark this product as the hub's free tier.")
 
-	// hub-prices update flags (all optional; at least one required).
 	checkoutHubPricesUpdateCmd.Flags().Int("position", 0, "New display position for the price (>= 0).")
 	checkoutHubPricesUpdateCmd.Flags().Bool("visible", true, "Whether the price is visible on the hub's checkout surface.")
 }
 
-// ---- path helpers -------------------------------------------------------------
-
-// hubProductsPath returns /api/teams/{team}/hubs/{hub}/products[/{display_id}].
 func hubProductsPath(teamID, hubID, displayID string) string {
 	base := fmt.Sprintf("/api/teams/%s/hubs/%s/products", teamID, hubID)
 	if displayID != "" {
@@ -79,7 +47,6 @@ func hubProductsPath(teamID, hubID, displayID string) string {
 	return base
 }
 
-// hubPricesPath returns /api/teams/{team}/hubs/{hub}/prices[/{display_id}].
 func hubPricesPath(teamID, hubID, displayID string) string {
 	base := fmt.Sprintf("/api/teams/%s/hubs/%s/prices", teamID, hubID)
 	if displayID != "" {
@@ -87,8 +54,6 @@ func hubPricesPath(teamID, hubID, displayID string) string {
 	}
 	return base
 }
-
-// ---- hub-products group -------------------------------------------------------
 
 var checkoutHubProductsCmd = &cobra.Command{
 	Use:   "hub-products",
@@ -137,7 +102,6 @@ Requires --hub. The positional argument is the PRODUCT id (not a display id).`,
   mio checkout hub-products attach prod_abc123 --hub hub_abc123 --position 1 --free-tier`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Validate before resolving context so a usage error fires no request.
 		productID := stringArg(args[0])
 		if productID == "" {
 			return errs.New(errs.ExitUsage, "product id must not be empty")
@@ -236,8 +200,6 @@ non-interactive environments.`,
 	},
 }
 
-// ---- hub-prices group ---------------------------------------------------------
-
 var checkoutHubPricesCmd = &cobra.Command{
 	Use:   "hub-prices",
 	Short: "Manage a hub's price display rows (hub_price_display rows).",
@@ -315,10 +277,6 @@ Requires --hub. The positional argument is the price DISPLAY id (from
 	},
 }
 
-// ---- shared helpers -----------------------------------------------------------
-
-// validateNonNegativePosition rejects a negative --position before any request
-// (backend constraint: position >= 0). No-op when --position is unset.
 func validateNonNegativePosition(cmd *cobra.Command) error {
 	if !cmd.Flags().Changed("position") {
 		return nil

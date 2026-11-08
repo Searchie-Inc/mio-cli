@@ -1,23 +1,5 @@
 package cmd
 
-// verifieddomains.go implements the `mio verified-domains` command group.
-//
-// Routes (team-owner admin surface, External Login v2 / verified-domain SSO):
-//
-//	create   POST   /api/teams/{team_id}/verified-domains
-//	list     GET    /api/teams/{team_id}/verified-domains
-//	retrieve GET    /api/teams/{team_id}/verified-domains/{id}
-//	delete   DELETE /api/teams/{team_id}/verified-domains/{id}
-//	verify   POST   /api/teams/{team_id}/verified-domains/{id}/verify
-//
-// JSON:API resource type: "verified_domains"
-//
-// A verified domain lets a hub trust users who authenticate with an email on
-// that domain. Creating one returns a verification_token and the DNS TXT record
-// (host + value) the admin must publish; the verify action then triggers the
-// backend DNS-TXT check (200 verified / 422 not-yet / 409 if another hub already
-// owns the domain).
-
 import (
 	"fmt"
 	"net/url"
@@ -40,9 +22,6 @@ func init() {
 	rootCmd.AddCommand(verifiedDomainsCmd)
 }
 
-// ── path helper ───────────────────────────────────────────────────────────────
-
-// verifiedDomainsPath returns /api/teams/{team_id}/verified-domains[/{id}].
 func verifiedDomainsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/verified-domains", teamID)
 	if id != "" {
@@ -50,8 +29,6 @@ func verifiedDomainsPath(teamID, id string) string {
 	}
 	return base
 }
-
-// ── group ─────────────────────────────────────────────────────────────────────
 
 var verifiedDomainsCmd = &cobra.Command{
 	Use:   "verified-domains",
@@ -65,8 +42,6 @@ a verification_token and a DNS TXT record (host + value) to publish; once the
 record is live, run 'mio verified-domains verify <id>' to trigger the backend
 DNS check and activate the domain.`,
 }
-
-// ── create ────────────────────────────────────────────────────────────────────
 
 var verifiedDomainsCreateCmd = &cobra.Command{
 	Use:   "create",
@@ -96,7 +71,6 @@ domain.`,
 		setStringFlag(cmd, attrs, "hub-id")
 		setStringFlag(cmd, attrs, "domain")
 
-		// --hub-id and --domain are required client-side.
 		if v, _ := attrs["hub_id"].(string); strings.TrimSpace(v) == "" {
 			return errs.New(errs.ExitUsage, "--hub-id is required")
 		}
@@ -109,16 +83,11 @@ domain.`,
 			return err
 		}
 
-		// Surface the verification token + DNS TXT record on STDERR (TTY only) so
-		// the admin knows exactly what to publish, while stdout stays machine-clean
-		// (the rendered resource is the sole stdout payload).
 		printVerifiedDomainSetupHint(cmd, res)
 
 		return c.render(cmd, res)
 	},
 }
-
-// ── list ──────────────────────────────────────────────────────────────────────
 
 var verifiedDomainsListCmd = &cobra.Command{
 	Use:   "list",
@@ -152,8 +121,6 @@ var verifiedDomainsListCmd = &cobra.Command{
 	},
 }
 
-// ── retrieve ──────────────────────────────────────────────────────────────────
-
 var verifiedDomainsRetrieveCmd = &cobra.Command{
 	Use:     "retrieve <id>",
 	Short:   "Retrieve a verified domain by id.",
@@ -180,8 +147,6 @@ var verifiedDomainsRetrieveCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ── delete ────────────────────────────────────────────────────────────────────
 
 var verifiedDomainsDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
@@ -223,8 +188,6 @@ non-interactive environments.`,
 	},
 }
 
-// ── verify ────────────────────────────────────────────────────────────────────
-
 var verifiedDomainsVerifyCmd = &cobra.Command{
 	Use:   "verify <id>",
 	Short: "Trigger the DNS-TXT ownership check for a verified domain.",
@@ -263,25 +226,13 @@ error (exit 2).`,
 	},
 }
 
-// ── flag registration ─────────────────────────────────────────────────────────
-
 func init() {
-	// create flags
 	verifiedDomainsCreateCmd.Flags().String("hub-id", "", "Hub id to claim the domain for. (required)")
 	verifiedDomainsCreateCmd.Flags().String("domain", "", "Domain to verify, e.g. example.com. (required)")
 
-	// list pagination
 	addPaginationFlags(verifiedDomainsListCmd)
 }
 
-// ── local helpers ─────────────────────────────────────────────────────────────
-
-// printVerifiedDomainSetupHint writes a TTY-only stderr hint after a successful
-// create, surfacing the verification token and the DNS TXT record (host + value)
-// the admin must publish. It is best-effort: only fields actually present in the
-// resource are printed, so it stays correct even if the backend renames a field.
-// Nothing is written when stderr is not a TTY, keeping stdout (the rendered
-// resource) the sole machine-readable channel.
 func printVerifiedDomainSetupHint(cmd *cobra.Command, res *client.Resource) {
 	if res == nil || !isTTY(cmd.ErrOrStderr()) {
 		return
@@ -296,8 +247,6 @@ func printVerifiedDomainSetupHint(cmd *cobra.Command, res *client.Resource) {
 	if tok := stringAttr(attrs, "verification_token"); tok != "" {
 		fmt.Fprintf(w, "  verification token: %s\n", tok)
 	}
-	// Print any TXT-record / DNS host + value fields the backend returned, so the
-	// admin sees the exact record regardless of the precise attribute names.
 	for _, k := range []string{
 		"txt_record_host", "txt_record_name", "dns_record_host", "dns_record_name",
 		"txt_record_value", "dns_record_value", "txt_record", "dns_txt_record",
@@ -309,8 +258,6 @@ func printVerifiedDomainSetupHint(cmd *cobra.Command, res *client.Resource) {
 	fmt.Fprintf(w, "Then run: mio verified-domains verify %s\n", res.ID)
 }
 
-// stringAttr returns attrs[key] as a trimmed string when it is a non-empty
-// string, else "".
 func stringAttr(attrs map[string]any, key string) string {
 	if v, ok := attrs[key].(string); ok {
 		return strings.TrimSpace(v)

@@ -7,9 +7,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 )
 
-// TestRenderProducesEveryDeclaredBlock guards the contract BlockNames states: the
-// drift test iterates BlockNames, so a block declared there but never rendered
-// would silently guard nothing.
 func TestRenderProducesEveryDeclaredBlock(t *testing.T) {
 	cat, err := catalog.Load()
 	if err != nil {
@@ -37,9 +34,6 @@ func TestRenderProducesEveryDeclaredBlock(t *testing.T) {
 	}
 }
 
-// TestApplyRejectsMarkerMistakes pins the failure modes that would otherwise let a
-// generated section quietly stop being generated: a renamed marker, a deleted one,
-// and a duplicated one.
 func TestApplyRejectsMarkerMistakes(t *testing.T) {
 	blocks := map[string]string{}
 	for _, name := range BlockNames {
@@ -82,9 +76,6 @@ func TestApplyRejectsMarkerMistakes(t *testing.T) {
 	})
 }
 
-// TestApplyPreservesProseByteForByte is the property that makes generation safe to
-// run on a doc that is mostly hand-written: everything outside the markers is
-// untouched.
 func TestApplyPreservesProseByteForByte(t *testing.T) {
 	blocks := map[string]string{}
 	for _, name := range BlockNames {
@@ -115,9 +106,6 @@ func TestApplyPreservesProseByteForByte(t *testing.T) {
 	}
 }
 
-// TestRenderRejectsAnEmptyVocabulary is the vacuous-pass guard at its source: a
-// catalog that stops declaring nodeKinds or settingsSchema must fail generation
-// rather than emit empty documentation that then byte-matches an empty doc.
 func TestRenderRejectsAnEmptyVocabulary(t *testing.T) {
 	for _, key := range []string{"nodeKinds", "settingsSchema"} {
 		t.Run(key, func(t *testing.T) {

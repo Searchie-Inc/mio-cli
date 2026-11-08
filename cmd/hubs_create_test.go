@@ -1,18 +1,5 @@
 package cmd
 
-// hubs_create_test.go — contract tests for `mio hubs create` and
-// `mio hubs update` flag-to-attribute mapping (MIO-844).
-//
-// The QA-confirmed bug: --name was sent as attributes.name (rejected by the
-// API's additionalProperties:false schema), and --published was sent as
-// attributes.published (schema requires is_private with inverted polarity).
-//
-// These tests pin the CORRECT behaviour:
-//   --name "X"          → data.attributes.title = "X"       (NOT name)
-//   --published=true    → data.attributes.is_private = false (NOT published, INVERTED)
-//   --published=false   → data.attributes.is_private = true
-//   --name / --published must NOT appear in data.attributes
-
 import (
 	"encoding/json"
 	"io"
@@ -24,7 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// minimalHubBody is a canned 201/200 hubs response used by all hubs create/update tests.
 const minimalHubBody = `{
 	"data": {
 		"id": "hub_new",
@@ -37,9 +23,6 @@ const minimalHubBody = `{
 	}
 }`
 
-// captureHubRequest starts a test server that records the first request's
-// method, path, and raw body, then replies with minimalHubBody at the given
-// HTTP status code.
 func captureHubRequest(t *testing.T, status int) (*httptest.Server, *string, *string, *[]byte) {
 	t.Helper()
 	var gotMethod, gotPath string
@@ -57,9 +40,6 @@ func captureHubRequest(t *testing.T, status int) (*httptest.Server, *string, *st
 	return srv, &gotMethod, &gotPath, &gotBody
 }
 
-// decodeHubAttrs unmarshals a captured request body and returns the
-// data.attributes map. It fails the test if the body is not valid JSON or
-// missing data.attributes.
 func decodeHubAttrs(t *testing.T, body []byte) map[string]any {
 	t.Helper()
 	var doc struct {
@@ -76,12 +56,6 @@ func decodeHubAttrs(t *testing.T, body []byte) map[string]any {
 	return doc.Data.Attributes
 }
 
-// ─── hubs create ─────────────────────────────────────────────────────────────
-
-// TestHubsCreate_NameMapsToTitle verifies that --name sends data.attributes.title,
-// NOT data.attributes.name (which the API rejects with additionalProperties:false).
-//
-// CONTRACT (MIO-844): --name "X" → data.attributes.title = "X"; no "name" key.
 func TestHubsCreate_NameMapsToTitle(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -104,20 +78,14 @@ func TestHubsCreate_NameMapsToTitle(t *testing.T) {
 
 	attrs := decodeHubAttrs(t, *gotBody)
 
-	// --name must arrive as attributes.title.
 	if attrs["title"] != "My Community" {
 		t.Errorf("data.attributes.title = %v, want \"My Community\"", attrs["title"])
 	}
-	// attributes.name must NOT be present (additionalProperties:false rejects it).
 	if _, hasName := attrs["name"]; hasName {
 		t.Errorf("data.attributes.name must NOT be present; got attrs=%v", attrs)
 	}
 }
 
-// TestHubsCreate_PublishedTrueSendsIsPrivateFalse verifies that
-// --published=true maps to data.attributes.is_private=false (inverted polarity).
-//
-// CONTRACT (MIO-844): --published=true → is_private=false; no "published" key.
 func TestHubsCreate_PublishedTrueSendsIsPrivateFalse(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -134,20 +102,14 @@ func TestHubsCreate_PublishedTrueSendsIsPrivateFalse(t *testing.T) {
 
 	attrs := decodeHubAttrs(t, *gotBody)
 
-	// --published=true → is_private=false
 	if attrs["is_private"] != false {
 		t.Errorf("data.attributes.is_private = %v, want false (published=true → is_private=false)", attrs["is_private"])
 	}
-	// attributes.published must NOT be present.
 	if _, hasPub := attrs["published"]; hasPub {
 		t.Errorf("data.attributes.published must NOT be present; got attrs=%v", attrs)
 	}
 }
 
-// TestHubsCreate_PublishedFalseSendsIsPrivateTrue verifies the opposite
-// inversion: --published=false → is_private=true.
-//
-// CONTRACT (MIO-844): --published=false → is_private=true; no "published" key.
 func TestHubsCreate_PublishedFalseSendsIsPrivateTrue(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -164,7 +126,6 @@ func TestHubsCreate_PublishedFalseSendsIsPrivateTrue(t *testing.T) {
 
 	attrs := decodeHubAttrs(t, *gotBody)
 
-	// --published=false → is_private=true
 	if attrs["is_private"] != true {
 		t.Errorf("data.attributes.is_private = %v, want true (published=false → is_private=true)", attrs["is_private"])
 	}
@@ -173,11 +134,6 @@ func TestHubsCreate_PublishedFalseSendsIsPrivateTrue(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_UnsetPublishedOmitsIsPrivate verifies that when --published is
-// NOT passed at all, is_private is NOT sent in the request body (partial-update
-// semantics: only changed flags are serialised).
-//
-// CONTRACT: no --published flag → is_private absent from request body.
 func TestHubsCreate_UnsetPublishedOmitsIsPrivate(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -201,12 +157,6 @@ func TestHubsCreate_UnsetPublishedOmitsIsPrivate(t *testing.T) {
 	}
 }
 
-// ─── hubs update ─────────────────────────────────────────────────────────────
-
-// TestHubsUpdate_NameMapsToTitle verifies the same name→title mapping for
-// `mio hubs update`.
-//
-// CONTRACT (MIO-844): hubs update --name "X" → data.attributes.title = "X"; no "name" key.
 func TestHubsUpdate_NameMapsToTitle(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureHubRequest(t, http.StatusOK)
 
@@ -236,10 +186,6 @@ func TestHubsUpdate_NameMapsToTitle(t *testing.T) {
 	}
 }
 
-// TestHubsUpdate_PublishedInversionBothDirections verifies the polarity
-// inversion in `mio hubs update` for both true and false.
-//
-// CONTRACT (MIO-844): hubs update --published=true → is_private=false (and vice versa).
 func TestHubsUpdate_PublishedInversionBothDirections(t *testing.T) {
 	for _, tc := range []struct {
 		flag        string
@@ -274,15 +220,6 @@ func TestHubsUpdate_PublishedInversionBothDirections(t *testing.T) {
 	}
 }
 
-// ─── logo-url nesting (MIO-844 third drift) ───────────────────────────────────
-
-// TestHubsCreate_LogoURLNested verifies that --logo-url maps to
-// data.attributes.branding.logo_url and that no top-level logo_url or
-// logo-url key appears in attributes. The backend schema (additionalProperties:
-// false) rejects a top-level logo_url with 422.
-//
-// CONTRACT (MIO-844): --logo-url X → attributes.branding.logo_url = X;
-// no top-level attributes.logo_url or attributes.logo-url key.
 func TestHubsCreate_LogoURLNested(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -299,7 +236,6 @@ func TestHubsCreate_LogoURLNested(t *testing.T) {
 
 	attrs := decodeHubAttrs(t, *gotBody)
 
-	// Must appear as attributes.branding.logo_url.
 	branding, ok := attrs["branding"].(map[string]any)
 	if !ok {
 		t.Fatalf("data.attributes.branding is absent or not an object; attrs=%v", attrs)
@@ -308,7 +244,6 @@ func TestHubsCreate_LogoURLNested(t *testing.T) {
 		t.Errorf("branding.logo_url = %v, want \"https://x/l.png\"", branding["logo_url"])
 	}
 
-	// Must NOT appear at the top level.
 	if _, hasTop := attrs["logo_url"]; hasTop {
 		t.Errorf("top-level attributes.logo_url must NOT be present (backend 422); attrs=%v", attrs)
 	}
@@ -317,11 +252,6 @@ func TestHubsCreate_LogoURLNested(t *testing.T) {
 	}
 }
 
-// TestHubsCreate_UnsetLogoURLOmitsBranding verifies that when --logo-url is
-// NOT passed, no branding key is emitted at all (PATCH partial-update
-// semantics: unchanged flags are never serialised).
-//
-// CONTRACT: no --logo-url flag → no attributes.branding key in request body.
 func TestHubsCreate_UnsetLogoURLOmitsBranding(t *testing.T) {
 	srv, _, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -344,7 +274,3 @@ func TestHubsCreate_UnsetLogoURLOmitsBranding(t *testing.T) {
 		t.Errorf("top-level logo_url must be absent; got attrs=%v", attrs)
 	}
 }
-
-// Note: `hubs update --logo-url` now MERGES into branding via read-modify-write
-// (MIO-2256) rather than erroring — see TestHubsUpdate_LogoURLMergesRMW in
-// hubs_update_blobs_test.go. The old fail-fast test (MIO-901) was removed.

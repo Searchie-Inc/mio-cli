@@ -1,24 +1,5 @@
 package cmd
 
-// mio3074_content_file_id_reconcile_test.go — contract tests for MIO-3074.
-//
-// Two gaps, one ticket:
-//
-//   1. `content create/update` accepted only --media-id (the Media PK). The id a
-//      creator actually holds after an upload is the FILE id, and the backend
-//      stores media_id WITHOUT validating it (MIO-3432) — so passing a file id
-//      produced a lesson silently pointing at nothing rather than an error.
-//      --file-id now resolves to the Media PK first, reusing the resolver
-//      MIO-2519 added for `media playlists set-cover`.
-//
-//   2. A file living only in a playlist has no content node, so progress, My
-//      List, comments and the page builder's single-file binding are all
-//      missing for it. The backend heal endpoint shipped in MIO-3258; nothing
-//      exposed it. `content reconcile` does.
-//
-// Harness follows media_playlist_cover_test.go (two-step resolve-then-write)
-// and write_path_drift_test.go (exact wire bodies).
-
 import (
 	"encoding/json"
 	"io"
@@ -29,8 +10,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// fileResolveServer serves the admin file resource used for id resolution and
-// captures the single write that follows it.
 func fileResolveServer(t *testing.T, filePath, writePath, mediaID, writeResponse string, writeStatus int) (*httptest.Server, *[]byte, *bool) {
 	t.Helper()
 	var body []byte
@@ -59,8 +38,6 @@ func fileResolveServer(t *testing.T, filePath, writePath, mediaID, writeResponse
 	return srv, &body, &wrote
 }
 
-// CONTRACT (MIO-3074): content create --file-id X → the RESOLVED media PK lands
-// on the wire as attributes.media_id. The file id itself must never be sent.
 func TestContentCreate_FileIDResolvesToMediaPK(t *testing.T) {
 	srv, body, wrote := fileResolveServer(t,
 		"/api/v1/teams/t_team1/files/file_x",
@@ -93,7 +70,6 @@ func TestContentCreate_FileIDResolvesToMediaPK(t *testing.T) {
 	}`)
 }
 
-// CONTRACT (MIO-3074): the same resolution applies to update's PATCH.
 func TestContentUpdate_FileIDResolvesToMediaPK(t *testing.T) {
 	srv, body, wrote := fileResolveServer(t,
 		"/api/v1/teams/t_team1/files/file_x",
@@ -120,9 +96,6 @@ func TestContentUpdate_FileIDResolvesToMediaPK(t *testing.T) {
 	}`)
 }
 
-// CONTRACT (MIO-3074): --media-id and --file-id are mutually exclusive, and the
-// guard fires BEFORE any HTTP request — otherwise the resolution GET would run
-// only to have its result discarded.
 func TestContentCreate_MediaIDAndFileIDAreMutuallyExclusive(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -141,9 +114,6 @@ func TestContentCreate_MediaIDAndFileIDAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
-// CONTRACT (MIO-3074): a file whose media has not finished processing carries no
-// media_id. Fail with a self-naming usage error rather than sending an empty
-// media_id the backend would store verbatim (MIO-3432).
 func TestContentCreate_FileWithoutMediaIsRejected(t *testing.T) {
 	srv, _, wrote := fileResolveServer(t,
 		"/api/v1/teams/t_team1/files/file_x",
@@ -164,14 +134,6 @@ func TestContentCreate_FileWithoutMediaIsRejected(t *testing.T) {
 		t.Error("no content node may be created for a file with no media")
 	}
 }
-
-// The guards above are exercised with id-shaped --team/--hub values, which
-// `isIDShaped` short-circuits with no API call (internal/client/resolve.go).
-// That is the ONE path where an after-the-fact guard would still look correct.
-// These use a hub NAME — a supported form that makes requireHub LIST over HTTP —
-// so they fail if flag validation ever slips back behind contentContext.
-//
-// Found by Codex review; the original tests passed while the ordering was wrong.
 
 func TestContentCreate_MutualExclusionFiresBeforeHubResolution(t *testing.T) {
 	srv, fired := firedGuardServer(t)
@@ -221,14 +183,6 @@ func TestContentReconcile_BlankPlaylistIDFiresBeforeHubResolution(t *testing.T) 
 	}
 }
 
-// Findings from a blind review lane on PR #112 (Jarius, 2026-08-26). Each of
-// these described a real defect that the first round of tests did not cover.
-
-// CONTRACT: --media-id "" (or whitespace) must NOT reach the wire. setStringFlag
-// neither trims nor rejects empty, and the backend stores media_id WITHOUT
-// validating it (MIO-3432) — so an empty value created a lesson pointing at
-// nothing, with a 201 and no error. That is the exact failure --file-id exists
-// to prevent, through the flag the original guard forgot.
 func TestContentCreate_EmptyMediaIDRejected(t *testing.T) {
 	for _, val := range []string{"", "   "} {
 		srv, fired := firedGuardServer(t)
@@ -248,19 +202,6 @@ func TestContentCreate_EmptyMediaIDRejected(t *testing.T) {
 	}
 }
 
-// CONTRACT: an empty --media-id is rejected on UPDATE too, and that reversal is
-// deliberate. Treating empty as "unlink" reads well until you write the shell
-// most people write:
-//
-//	mio content update $ID --media-id "$MEDIA"   # $MEDIA unset upstream
-//
-// cobra reports the flag as Changed with an empty value, so a Changed-based
-// guard does NOT catch it — a silent clear would destroy a working link and
-// exit 0. Verified: before this guard that call sent {"media_id":null} and
-// returned success. An empty value is far more often a broken variable than an
-// intent to unlink.
-//
-// Raised by a blind review lane on PR #112 (Jarius's successor, 2026-08-26).
 func TestContentUpdate_EmptyMediaIDRejectedNotTreatedAsClear(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -274,11 +215,6 @@ func TestContentUpdate_EmptyMediaIDRejectedNotTreatedAsClear(t *testing.T) {
 	}
 }
 
-// CONTRACT: unlinking is available, but only through a boolean no shell variable
-// can expand into — AND it is destructive, so it carries the same
-// confirmDestructive bar `content delete` uses. In a non-interactive shell that
-// means --yes. Being un-typo-able is not the same as being safe to run
-// unattended in a loop.
 func TestContentUpdate_UnsetMediaSendsNull(t *testing.T) {
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -302,12 +238,6 @@ func TestContentUpdate_UnsetMediaSendsNull(t *testing.T) {
 	}`)
 }
 
-// CONTRACT: --unset-media in a non-interactive shell WITHOUT --yes refuses with
-// the destructive-confirm exit code, and sends nothing. This is the guard that
-// stops an unattended CI loop unlinking many lessons in one pass.
-//
-// Suggested by a blind review lane on PR #112: confirmDestructive already exists
-// and `content delete` two commands over already uses it.
 func TestContentUpdate_UnsetMediaNeedsConfirmation(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -320,7 +250,6 @@ func TestContentUpdate_UnsetMediaNeedsConfirmation(t *testing.T) {
 	}
 }
 
-// CONTRACT: --unset-media and a relink flag together are contradictory.
 func TestContentUpdate_UnsetMediaConflictsWithRelink(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -334,9 +263,6 @@ func TestContentUpdate_UnsetMediaConflictsWithRelink(t *testing.T) {
 	}
 }
 
-// CONTRACT: a blank --playlist-id among good ones is an ERROR, not a silent
-// drop. Dropping it would reconcile a shorter set than the caller named and
-// still report success, with no way for them to notice.
 func TestContentReconcile_BlankAmongGoodIDsRejected(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -350,9 +276,6 @@ func TestContentReconcile_BlankAmongGoodIDsRejected(t *testing.T) {
 	}
 }
 
-// CONTRACT: the validate-before-resolve rule covers ALL of create's guards, not
-// only the media pair. --title/--node-type are required client-side; they must
-// fire before the hub-name resolution round trip too.
 func TestContentCreate_MissingRequiredFlagsFireBeforeHubResolution(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -365,15 +288,8 @@ func TestContentCreate_MissingRequiredFlagsFireBeforeHubResolution(t *testing.T)
 	}
 }
 
-// Mirrors the backend's HubContentReconcileResultAttributes: the entry list is
-// `results` (app/hub_scaffold/schemas.py), NOT "reconciliations". A stub that
-// renames a server field quietly documents a shape the server never sends.
 const reconcileResponse = `{"data":{"id":"hub_abc","type":"content_node_reconciliations","attributes":{"hub_id":"hub_abc","results":[]}}}`
 
-// CONTRACT (MIO-3074): with no --playlist-id the command sends a BODYLESS POST.
-// The backend derives the playlist set from scaffold provenance, and rejects an
-// explicitly empty list (min_length=1) — so sending `{"playlist_ids":[]}` would
-// turn the common case into a 422.
 func TestContentReconcile_NoPlaylistIDsSendsNoBody(t *testing.T) {
 	var body []byte
 	var hit bool
@@ -404,9 +320,6 @@ func TestContentReconcile_NoPlaylistIDsSendsNoBody(t *testing.T) {
 	}
 }
 
-// CONTRACT (MIO-3074): explicit ids are sent as attributes.playlist_ids under
-// the type `content_node_reconciliations`. Deriving the type from the path would
-// yield "content" and the backend (extra="forbid") would reject it.
 func TestContentReconcile_ExplicitPlaylistIDsWireShape(t *testing.T) {
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -431,8 +344,6 @@ func TestContentReconcile_ExplicitPlaylistIDsWireShape(t *testing.T) {
 	}`)
 }
 
-// CONTRACT (MIO-3074): --playlist-id set to only blanks is a usage error, not a
-// silently-empty list that the backend would 422.
 func TestContentReconcile_BlankPlaylistIDsRejectedLocally(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -446,10 +357,6 @@ func TestContentReconcile_BlankPlaylistIDsRejectedLocally(t *testing.T) {
 	}
 }
 
-// CONTRACT (MIO-3074): --playlist-id is a cobra StringSlice, so ONE flag
-// carrying a comma-separated list expands to several ids, and surrounding
-// whitespace is trimmed. llms.txt documents the flag as repeatable; this pins
-// the comma form too, since an agent may reach for either.
 func TestContentReconcile_CommaSeparatedAndTrimmed(t *testing.T) {
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -474,8 +381,6 @@ func TestContentReconcile_CommaSeparatedAndTrimmed(t *testing.T) {
 	}`)
 }
 
-// CONTRACT (MIO-3074): an empty-string --playlist-id is the same usage error as
-// an all-blank one — never a silently-empty list the backend would 422.
 func TestContentReconcile_EmptyStringPlaylistIDRejected(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -489,7 +394,6 @@ func TestContentReconcile_EmptyStringPlaylistIDRejected(t *testing.T) {
 	}
 }
 
-// Guard against the wire body silently drifting to a bare array/string shape.
 func TestContentReconcile_PlaylistIDsIsAStringArray(t *testing.T) {
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -521,22 +425,6 @@ func TestContentReconcile_PlaylistIDsIsAStringArray(t *testing.T) {
 	}
 }
 
-// CONTRACT (MIO-3074, Codex round 1 [Important]): .../content/reconcile is an
-// AMBIGUOUS path tail. The backend resolves a content node by slug or legacy
-// hash as well as by id (app/content get_by_identifier), so
-// PATCH .../content/reconcile is a legitimate update of a node whose identifier
-// happens to be "reconcile" — while POST to the same path is the heal op, whose
-// type Literal is content_node_reconciliations.
-//
-// JSON:API type derivation sees only the PATH, never the method, so no
-// path-keyed rule can serve both: a {"content/reconcile": …} typeOverride (plus
-// a "reconcile" knownCollections token) sends this PATCH the reconciliation
-// type and the backend's extra="forbid" schema 422s a valid update. The
-// reconcile command therefore names its type explicitly (ActionWithType) and
-// the override does NOT exist.
-//
-// This test is the guard on that: it fails the moment the override is
-// reintroduced.
 func TestContentUpdate_NodeAddressedAsReconcile_SendsNodeType(t *testing.T) {
 	var body []byte
 	var gotMethod, gotPath string
@@ -569,13 +457,6 @@ func TestContentUpdate_NodeAddressedAsReconcile_SendsNodeType(t *testing.T) {
 	}`)
 }
 
-// CONTRACT (MIO-3074, Codex round 2 [Important]): a bodyless reconcile against a
-// hub with no HubTemplateApplication provenance is REJECTED — backend
-// reconcile_service raises ValidationError code="no_playlist_provenance" (422),
-// and the service never falls back to "every playlist on the hub" (D4). The
-// agent-facing docs tell callers to branch on that, so pin it: 422 maps to
-// ExitUsage, and the backend's code reaches the user rather than being
-// swallowed. Documented in llms.txt, AGENTS.md, api-surface.md and the skill.
 func TestContentReconcile_NoProvenance422IsUsageExit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")

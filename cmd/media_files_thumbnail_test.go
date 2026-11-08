@@ -1,6 +1,5 @@
 package cmd
 
-// Wire contract for the team-scoped file thumbnail upsert and removal (MIO-5832).
 import (
 	"io"
 	"net/http"
@@ -110,8 +109,6 @@ func TestFileThumbnailRemove_Wire(t *testing.T) {
 					if r.URL.Query().Get("target_type") != "file" || r.URL.Query().Get("target_id") != "episode" {
 						t.Errorf("filters=%v", r.URL.Query())
 					}
-					// A thumbnail that belongs to ANOTHER file (a server that ignored the
-					// target_id filter) must never be the one deleted.
 					data := `{"type":"attachments","id":"foreign","attributes":{"role":"thumbnail","target_type":"file","target_id":"other_file"}},{"type":"attachments","id":"other","attributes":{"role":"main","target_type":"file","target_id":"episode"}}`
 					if tc.thumbnail {
 						data += `,{"type":"attachments","id":"thumb","attributes":{"role":"thumbnail","target_type":"file","target_id":"episode"}}`

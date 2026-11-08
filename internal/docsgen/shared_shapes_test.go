@@ -8,13 +8,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/catalog"
 )
 
-// TestSharedShapeBlocks_RenderEveryPropertyAndEnumValue gives the generated
-// shared-shape blocks an oracle that is NOT the generator: the catalog's own
-// settingsSchema. TestSkillDocIsGeneratedFromCatalog only proves the skill equals
-// what Render emits, so a Render that dropped every enum value (or a property)
-// still passed it (review of MIO-3519's re-pin). Here, for each block that
-// renders a shared:* shape, every property the catalog declares must be a row of
-// the block and every enum value the catalog declares must be on that row.
 func TestSharedShapeBlocks_RenderEveryPropertyAndEnumValue(t *testing.T) {
 	cat, err := catalog.Load()
 	if err != nil {
@@ -25,8 +18,6 @@ func TestSharedShapeBlocks_RenderEveryPropertyAndEnumValue(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	schema, _ := cat.Raw()["settingsSchema"].(map[string]any)
-	// block name -> the settingsSchema key it renders (the five blocks built by
-	// renderSharedShape).
 	for block, key := range map[string]string{
 		"node-action":        "shared:action",
 		"node-text-theme":    "shared:textTheme",

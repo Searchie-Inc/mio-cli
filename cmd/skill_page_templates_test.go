@@ -1,31 +1,5 @@
 package cmd
 
-// skill_page_templates_test.go — two claims the agent skill makes about what
-// `mio pages catalog scaffold` hands an agent, checked against the scaffold
-// output itself rather than against the generator or a second list.
-//
-//   - TestSkillPageTemplateKinds_MatchScaffoldOutput: the skill used to call
-//     EVERY page template "an outline, not finished sections" (skill and
-//     llms.txt), which is wrong for page-sales — 17 finished sections with
-//     placeholder copy. The split is now a generated block
-//     (catalog-gen:page-template-kinds). This test scaffolds every page
-//     template through the real command and requires each to sit in the list
-//     its OUTPUT puts it in: no non-empty `value` anywhere → Outlines,
-//     otherwise → Complete. It also pins the two templates the hand-written
-//     prose (skill and llms.txt) names as examples, and requires the block to
-//     name the catalog version it describes (the backend may serve another).
-//   - TestSkillPageTemplateKinds_ClassifyCommandAgrees: the skill's one-line
-//     command for classifying a template on whatever backend is live is RUN
-//     against every embedded page template and must print 0 for exactly the
-//     outlines.
-//   - TestSkillDataSourceIDs_CoverEveryBoundType: the skill's "Which id each
-//     `dataSource` takes" table must have exactly one row per dataSource type
-//     the scaffolded recipes bind (MIO-4176: a `file` binding given a playlist
-//     id publishes cleanly and 404s on every view), and each row must name the
-//     namespace mio-hub's renderer resolves (pinned in dataSourceIDNamespace).
-//     A catalog bump that ships a new bound type fails here until someone
-//     documents its id namespace.
-
 import (
 	"bytes"
 	"cmp"
@@ -49,8 +23,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// scaffoldOffline runs `mio pages catalog scaffold` against the embedded
-// catalog and returns the emitted tree.
 func scaffoldOffline(t *testing.T, template, variant string) map[string]any {
 	t.Helper()
 	args := []string{"pages", "catalog", "scaffold", "--template", template, "--offline"}
@@ -68,7 +40,6 @@ func scaffoldOffline(t *testing.T, template, variant string) map[string]any {
 	return tree
 }
 
-// catalogTemplateRow is one row of `mio pages catalog templates -o json`.
 type catalogTemplateRow struct {
 	ID       string `json:"id"`
 	Kind     string `json:"kind"`
@@ -88,8 +59,6 @@ func offlineTemplateRows(t *testing.T) []catalogTemplateRow {
 	return rows
 }
 
-// walkTree calls fn on every node of an emitted tree (the {"root":…} wrapper
-// of a page template, or the bare node of a section template).
 func walkTree(v any, fn func(map[string]any)) {
 	n, ok := v.(map[string]any)
 	if !ok {
@@ -107,8 +76,6 @@ func walkTree(v any, fn func(map[string]any)) {
 	}
 }
 
-// hasCopy reports whether a node's `value` is copy an author would edit: not
-// absent, null, "" or an empty object/array.
 func hasCopy(n map[string]any) bool {
 	switch v := n["value"].(type) {
 	case nil:
@@ -126,8 +93,6 @@ func hasCopy(n map[string]any) bool {
 
 var pageKindsBlockRE = regexp.MustCompile(`(?s)<!-- catalog-gen:page-template-kinds -->\n(.*?)<!-- /catalog-gen -->`)
 
-// pageKindHeaders opens each list of the generated block, keyed by the word the
-// skill's classify command prints for that kind.
 var pageKindHeaders = map[string]string{
 	"outline":  "Outlines —",
 	"complete": "Complete —",
@@ -136,8 +101,6 @@ var pageKindHeaders = map[string]string{
 
 var pageIDRE = regexp.MustCompile("`(page-[a-z0-9-]+)`")
 
-// skillPageKinds reads the skill's generated block: for each page template it
-// names, the kinds (outline, complete, system) whose list names it.
 func skillPageKinds(t *testing.T) map[string][]string {
 	t.Helper()
 	raw, err := os.ReadFile(skillDocPath)
@@ -148,8 +111,6 @@ func skillPageKinds(t *testing.T) map[string][]string {
 	if m == nil {
 		t.Fatalf("%s has no catalog-gen:page-template-kinds block", skillDocPath)
 	}
-	// The lists are only true of the catalog this binary embeds; the backend an
-	// agent talks to may serve another (Codex round 1). The block must say which.
 	cat, err := catalog.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -179,16 +140,6 @@ func skillPageKinds(t *testing.T) map[string][]string {
 	return kinds
 }
 
-// codeRoutedPageTemplates is mio-hub's own list of the page templates it
-// routes in code: "code-routed scaffolds … exempt from the 'every root child
-// carries a template' rule — they have fixed editable regions" (origin/main
-// 335bf971, src/lib/page-tree/README.md, "The section contract"; the same
-// list, plus the retired page-search, is in src/lib/page-tree/dev-warnings.ts).
-// The renderer lives in another repo, so this is a pinned reading of it, like
-// dataSourceIDNamespace below, and it is the oracle the generator's structural
-// rule is checked against: the blind review of #137 found page-file-detail —
-// three slot placeholders around a locked file-player — filed under "Complete
-// — finished sections", because the only rule was "carries a value".
 var codeRoutedPageTemplates = map[string]bool{
 	"page-login":             true,
 	"page-register":          true,
@@ -201,8 +152,6 @@ var codeRoutedPageTemplates = map[string]bool{
 	"page-search":            true,
 }
 
-// rootSections counts the root children of an emitted page tree that carry a
-// section `template`; the auth brand panel is a fixed system region.
 func rootSections(tree map[string]any) int {
 	root, _ := tree["root"].(map[string]any)
 	kids, _ := root["children"].([]any)
@@ -269,9 +218,6 @@ func TestSkillPageTemplateKinds_MatchScaffoldOutput(t *testing.T) {
 	if n := len(kinds); n != pages {
 		t.Errorf("the skill's lists name %d page templates, the catalog has %d", n, pages)
 	}
-	// The hand-written prose names these as its examples (the skill's
-	// "Composing sections" and the `pages catalog scaffold` line of llms.txt).
-	// If a catalog bump moves one, that prose must change with it.
 	for id, want := range map[string]string{
 		"page-homepage":    "outline",
 		"page-sales":       "complete",
@@ -284,8 +230,6 @@ func TestSkillPageTemplateKinds_MatchScaffoldOutput(t *testing.T) {
 	}
 }
 
-// skillClassifyCommand returns the words of the command the skill gives for
-// classifying a template the live backend serves, `<id>` still in place.
 func skillClassifyCommand(t *testing.T) []string {
 	t.Helper()
 	raw, err := os.ReadFile(skillDocPath)
@@ -302,7 +246,6 @@ func skillClassifyCommand(t *testing.T) []string {
 	return nil
 }
 
-// runClassify runs the skill's classify command for template id, plus extra.
 func runClassify(t *testing.T, words []string, id string, extra ...string) contractResult {
 	t.Helper()
 	args := make([]string, 0, len(words)+len(extra))
@@ -315,9 +258,6 @@ func runClassify(t *testing.T, words []string, id string, extra ...string) contr
 	return runContract(t, offlineEnv(), append(args, extra...)...)
 }
 
-// classifyProbe is a page template the embedded catalog does not have, built so
-// that ONE clause of the classify command decides it: a command missing that
-// clause prints another word.
 type classifyProbe struct {
 	id, desc, want string
 	starter        map[string]any
@@ -333,8 +273,6 @@ func probeNode(id, kind string, extra map[string]any) map[string]any {
 
 var classifyProbes = []classifyProbe{
 	{
-		// The non-empty filter. The review's mutation N3 dropped it and every
-		// embedded template kept its verdict, because none carries an empty value.
 		id: "page-probe-empty-values", want: "outline",
 		desc: "whose only values are null, \"\", {} and []",
 		starter: probeNode("root", "stack", map[string]any{"children": []any{
@@ -347,7 +285,6 @@ var classifyProbes = []classifyProbe{
 		}}),
 	},
 	{
-		// The recursion: the one value sits three levels under the section.
 		id: "page-probe-deep-copy", want: "complete",
 		desc: "whose one value sits three levels down a section",
 		starter: probeNode("root", "stack", map[string]any{"children": []any{
@@ -361,8 +298,6 @@ var classifyProbes = []classifyProbe{
 		}}),
 	},
 	{
-		// page-file-detail's shape: copy, but in regions rather than sections.
-		// "system" must win over "complete".
 		id: "page-probe-regions-with-copy", want: "system",
 		desc: "with copy in untemplated root regions",
 		starter: probeNode("root", "stack", map[string]any{"children": []any{
@@ -372,15 +307,11 @@ var classifyProbes = []classifyProbe{
 		}}),
 	},
 	{
-		// page-generic's shape: no children at all is a blank content page, not
-		// a system page with zero regions.
 		id: "page-probe-blank", want: "outline",
 		desc:    "with no root children",
 		starter: probeNode("root", "stack", map[string]any{"children": []any{}}),
 	},
 	{
-		// page-sales has untemplated banners among its sections: ONE root child
-		// without a template does not make a page a system page.
 		id: "page-probe-banner-and-section", want: "complete",
 		desc: "with an untemplated banner beside a filled section",
 		starter: probeNode("root", "stack", map[string]any{"children": []any{
@@ -392,8 +323,6 @@ var classifyProbes = []classifyProbe{
 	},
 }
 
-// writeProbeCatalog writes the embedded catalog plus the probes' page templates
-// to a file for --catalog (a read-only command warns on the digest and uses it).
 func writeProbeCatalog(t *testing.T, probes []classifyProbe) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "internal", "catalog", "catalog.json"))
@@ -426,19 +355,12 @@ func writeProbeCatalog(t *testing.T, probes []classifyProbe) string {
 	return path
 }
 
-// TestSkillPageTemplateKinds_ClassifyCommandAgrees RUNS the command the skill
-// hands an agent for classifying any template on any backend. Against every
-// embedded page template it must print the kind the generated block lists it
-// under. Against probe templates served through --catalog, each built so that
-// one clause of the command decides it, it must print the kind the skill's
-// prose defines — the embedded templates alone cannot tell a command that
-// ignores empty values from one that counts them (review finding, mutation N3).
 func TestSkillPageTemplateKinds_ClassifyCommandAgrees(t *testing.T) {
 	words := skillClassifyCommand(t)
 	checked := 0
 	for id, listed := range skillPageKinds(t) {
 		if len(listed) != 1 {
-			continue // MatchScaffoldOutput reports it
+			continue
 		}
 		res := runClassify(t, words, id, "--offline")
 		if res.Code != errs.ExitOK {
@@ -453,16 +375,12 @@ func TestSkillPageTemplateKinds_ClassifyCommandAgrees(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no page template was classified")
 	}
-	// The skill says the word keeps its quotes even with -o plain, because a
-	// scaffold always renders JSON. If scaffold starts honouring -o plain, that
-	// sentence (and the quoted words above it) must change.
 	if res := runClassify(t, words, "page-login", "--offline", "-o", "plain"); strings.TrimSpace(res.Stdout) != strconv.Quote("system") {
 		t.Errorf("with -o plain the skill's classify command printed %q for page-login; the skill says it prints %q even then", strings.TrimSpace(res.Stdout), strconv.Quote("system"))
 	}
 
 	catPath := writeProbeCatalog(t, classifyProbes)
 	for _, p := range classifyProbes {
-		// A probe proves nothing if the scaffold rewrites the shape it is about.
 		emitted := runContract(t, offlineEnv(), "pages", "catalog", "scaffold", "--template", p.id, "--catalog", catPath)
 		if emitted.Code != errs.ExitOK {
 			t.Fatalf("scaffold of probe %s exited %d: %s", p.id, emitted.Code, emitted.Stderr)
@@ -495,8 +413,6 @@ func TestSkillPageTemplateKinds_ClassifyCommandAgrees(t *testing.T) {
 
 var dataSourceRowRE = regexp.MustCompile("^\\| `([a-z_-]+)` \\| ([^|]*) \\|")
 
-// skillDataSourceRows returns, per dataSource type, the "`id` is" cell of each
-// row the skill's id table has for it.
 func skillDataSourceRows(t *testing.T) map[string][]string {
 	t.Helper()
 	raw, err := os.ReadFile(skillDocPath)
@@ -520,14 +436,6 @@ func skillDataSourceRows(t *testing.T) map[string][]string {
 	return rows
 }
 
-// dataSourceIDNamespace is the id each bound type takes, as mio-hub's renderer
-// resolves it (src/lib/page-tree/data-binding/
-// use-data-source.ts; types.ts documents `file` as "id = content_node UUID";
-// content queries use no id for recently-watched and query.playlist_id for in-progress).
-// The renderer lives in another repo, so this is a pinned reading of it, not
-// something the test can derive: it exists so the MIO-4176 answer cannot be
-// edited back to "media file id" unnoticed. A newly bound type needs an entry,
-// taken from the renderer, before the test passes.
 var dataSourceIDNamespace = map[string]string{
 	"playlist": "playlist",
 	"file":     "content-node",
@@ -537,7 +445,7 @@ var dataSourceIDNamespace = map[string]string{
 var boldRE = regexp.MustCompile(`\*\*([^*]+)\*\*`)
 
 func TestSkillDataSourceIDs_CoverEveryBoundType(t *testing.T) {
-	bound := map[string][]string{} // dataSource.type → where a recipe binds it
+	bound := map[string][]string{}
 	for _, row := range offlineTemplateRows(t) {
 		variants := []string{""}
 		if row.Variants != "" {
@@ -595,8 +503,6 @@ func TestSkillDataSourceIDs_CoverEveryBoundType(t *testing.T) {
 	}
 }
 
-// skillFileBindingRecipe returns the fenced bash block of the skill's "Which id
-// each `dataSource` takes" section: the recipe for a `file` binding's id.
 func skillFileBindingRecipe(t *testing.T) string {
 	t.Helper()
 	raw, err := os.ReadFile(skillDocPath)
@@ -631,14 +537,9 @@ func skillFileBindingRecipe(t *testing.T) string {
 	return ""
 }
 
-// contentPagingStub answers the file-binding recipe's requests the way
-// mio-backend does (origin/main 2dc04aab): `content reconcile` returns the
-// playlist's container, and `content children` pages like admin_list_children —
-// page[size] defaults to "20" and must be an integer 1..100 (422 otherwise,
-// ContentService.list_children), and page[after] is the last row's id.
 type contentPagingStub struct {
 	URL    string
-	target string // the content-node id of the lesson whose file is file_intro
+	target string
 }
 
 func newContentPagingStub(t *testing.T, lessons, at int) *contentPagingStub {
@@ -703,15 +604,6 @@ func newContentPagingStub(t *testing.T, lessons, at int) *contentPagingStub {
 	return &contentPagingStub{URL: srv.URL, target: ids[at-1]}
 }
 
-// TestSkillFileBindingRecipe_RunsAsWritten runs the skill's recipe for a
-// `file` binding's id — the bash block under "Which id each `dataSource`
-// takes", verbatim, through bash and a built mio — against a stub that pages
-// `content children` the way the backend does. The blind review of #137 found
-// that the recipe read one default page of 20: a lesson past #20 came back as
-// an EMPTY NODE_ID with exit 0, and an empty dataSource.id publishes and
-// renders an empty section, which is MIO-4176's own symptom. The recipe must
-// find a lesson past the default page, and when a lesson is out of its reach
-// it must fail rather than hand back "".
 func TestSkillFileBindingRecipe_RunsAsWritten(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the recipe is a bash script")
@@ -754,7 +646,6 @@ func TestSkillFileBindingRecipe_RunsAsWritten(t *testing.T) {
 			}
 			switch {
 			case got == stub.target && code == 0:
-				// found it, however far it had to page
 			case tc.reachable:
 				t.Errorf("the skill's file-binding recipe, run as written against %d lessons with file_intro at #%d: exit %d, NODE_ID=%q; want exit 0 and %q. stderr=%q",
 					tc.lessons, tc.at, code, got, stub.target, stderr.String())

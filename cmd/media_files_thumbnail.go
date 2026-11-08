@@ -1,9 +1,5 @@
 package cmd
 
-// media_files_thumbnail.go — `mio media files thumbnail` (MIO-5832).
-// The team-scoped file-thumbnail-attachments POST upserts an attachment with
-// target_type=file and role=thumbnail. Its media_id is a Media PK, not a file id.
-
 import (
 	"fmt"
 	"net/url"

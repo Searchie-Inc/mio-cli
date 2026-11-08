@@ -1,13 +1,5 @@
 package cmd
 
-// roles_permissions_test.go — contract tests for
-// `mio roles permissions assign|remove` (MIO-2269).
-//
-// assign: POST /api/roles/{id}/permissions with a FLAT body {"slug": ...}
-//         (the backend PermissionAssignRequest is a plain pydantic model, not a
-//         JSON:API envelope).
-// remove: DELETE /api/roles/{id}/permissions/{slug} — destructive (needs --yes).
-
 import (
 	"encoding/json"
 	"net/http"
@@ -19,8 +11,6 @@ import (
 
 const rolePermRoleBody = `{"data":{"id":"role_x","type":"roles","attributes":{"name":"Editor","slug":"editor"}}}`
 
-// TestRolesPermissionsAssign_FlatBody pins the assign POST: method, path suffix,
-// FLAT (non-enveloped) {"slug"} body, and exit 0.
 func TestRolesPermissionsAssign_FlatBody(t *testing.T) {
 	srv, gotMethod, gotPath, _, gotBody := captureAdminReq(t, http.StatusCreated, rolePermRoleBody)
 
@@ -40,7 +30,6 @@ func TestRolesPermissionsAssign_FlatBody(t *testing.T) {
 		t.Errorf("path %q does not end with /roles/role_x/permissions", *gotPath)
 	}
 
-	// FLAT body: slug at the top level, NO JSON:API "data" envelope.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(*gotBody, &raw); err != nil {
 		t.Fatalf("request body is not valid JSON: %v; body=%q", err, *gotBody)
@@ -57,8 +46,6 @@ func TestRolesPermissionsAssign_FlatBody(t *testing.T) {
 	}
 }
 
-// TestRolesPermissionsAssign_MissingSlug pins that a missing --slug exits
-// ExitUsage without firing any HTTP request.
 func TestRolesPermissionsAssign_MissingSlug(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 
@@ -73,8 +60,6 @@ func TestRolesPermissionsAssign_MissingSlug(t *testing.T) {
 	}
 }
 
-// TestRolesPermissionsRemove_WithYes pins the remove DELETE: method, path
-// suffix (including the slug), and exit 0.
 func TestRolesPermissionsRemove_WithYes(t *testing.T) {
 	srv, gotMethod, gotPath, _, _ := captureAdminReq(t, http.StatusNoContent, "")
 
@@ -94,8 +79,6 @@ func TestRolesPermissionsRemove_WithYes(t *testing.T) {
 	}
 }
 
-// TestRolesPermissionsRemove_NoYes pins that remove without --yes exits
-// ExitNeedsConfir (5) without firing any HTTP request.
 func TestRolesPermissionsRemove_NoYes(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 

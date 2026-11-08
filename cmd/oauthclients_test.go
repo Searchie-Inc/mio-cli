@@ -1,23 +1,11 @@
 package cmd
 
-// oauthclients_test.go — wire-body and contract tests for `mio oauth-clients`.
-//
-// Tests pin:
-//   - Correct JSON:API data.type values ("oauth_clients", "oauth_client_redirect_uris")
-//   - Exact wire bodies for create and redirect-uris add
-//   - Required-flag validation (--name on create, --uri on redirect-uris add)
-//   - Destructive-guard behaviour on delete and redirect-uris remove
-//   - That platform-admin-only fields (first_party, allowed_scopes) are NOT
-//     exposed as flags on the create command (unknown-flag → exit 2)
-
 import (
 	"net/http"
 	"testing"
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
-
-// ─── fixtures ─────────────────────────────────────────────────────────────────
 
 const minimalOAuthClientBody = `{
 	"data":{
@@ -42,12 +30,6 @@ const minimalRedirectURIBody = `{
 	}
 }`
 
-// ─── oauth-clients create ─────────────────────────────────────────────────────
-
-// TestOAuthClients_Create_ExactBody pins the EXACT wire body for
-// `mio oauth-clients create --name "My App"`.
-//
-// CONTRACT: data.type = "oauth_clients"; only changed attrs are sent.
 func TestOAuthClients_Create_ExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalOAuthClientBody)
 
@@ -69,7 +51,6 @@ func TestOAuthClients_Create_ExactBody(t *testing.T) {
 	}`)
 }
 
-// TestOAuthClients_Create_PublicClientBody pins that --public sends is_public=true.
 func TestOAuthClients_Create_PublicClientBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalOAuthClientBody)
 
@@ -93,9 +74,6 @@ func TestOAuthClients_Create_PublicClientBody(t *testing.T) {
 	}`)
 }
 
-// TestOAuthClients_Create_WithRedirectURI pins that --redirect-uri is serialized
-// as a single-element redirect_uris[] in attributes.
-// Additional URIs are added via `mio oauth-clients redirect-uris add`.
 func TestOAuthClients_Create_WithRedirectURI(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalOAuthClientBody)
 
@@ -119,8 +97,6 @@ func TestOAuthClients_Create_WithRedirectURI(t *testing.T) {
 	}`)
 }
 
-// TestOAuthClients_Create_WithBranding pins that --brand-label and --logo-url
-// map to their snake_case attribute keys.
 func TestOAuthClients_Create_WithBranding(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalOAuthClientBody)
 
@@ -146,7 +122,6 @@ func TestOAuthClients_Create_WithBranding(t *testing.T) {
 	}`)
 }
 
-// TestOAuthClients_Create_RequiredName pins that --name is required client-side.
 func TestOAuthClients_Create_RequiredName(t *testing.T) {
 	srv, fired := newNoRequestServer(t, minimalOAuthClientBody)
 
@@ -161,8 +136,6 @@ func TestOAuthClients_Create_RequiredName(t *testing.T) {
 	}
 }
 
-// TestOAuthClients_Create_PlatformAdminFieldsNotExposed pins that first_party
-// and allowed_scopes are NOT exposed as flags (unknown flag → exit 2).
 func TestOAuthClients_Create_PlatformAdminFieldsNotExposed(t *testing.T) {
 	for _, tc := range []struct {
 		flag string
@@ -189,10 +162,6 @@ func TestOAuthClients_Create_PlatformAdminFieldsNotExposed(t *testing.T) {
 	}
 }
 
-// ─── oauth-clients list / retrieve ───────────────────────────────────────────
-
-// TestOAuthClients_List_CallsCorrectPath verifies the list command hits the
-// right team-scoped collection URL and exits 0 on a 200 response.
 func TestOAuthClients_List_CallsCorrectPath(t *testing.T) {
 	const listBody = `{"data":[],"meta":{}}`
 	hitPath := ""
@@ -202,7 +171,6 @@ func TestOAuthClients_List_CallsCorrectPath(t *testing.T) {
 		Status:  200,
 		Body:    listBody,
 	}})
-	// Use a path-capturing server alongside the mock.
 	_ = hitPath
 
 	res := runContract(t, baseEnv(srv.URL),
@@ -212,8 +180,6 @@ func TestOAuthClients_List_CallsCorrectPath(t *testing.T) {
 	}
 }
 
-// TestOAuthClients_Retrieve_CallsCorrectPath verifies the retrieve command
-// appends the id to the collection path and exits 0 on a 200 response.
 func TestOAuthClients_Retrieve_CallsCorrectPath(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{
 		Method:  "GET",
@@ -229,11 +195,8 @@ func TestOAuthClients_Retrieve_CallsCorrectPath(t *testing.T) {
 	}
 }
 
-// ─── oauth-clients delete ─────────────────────────────────────────────────────
-
-// TestOAuthClients_Delete_NonTTYWithoutYes pins the non-TTY guard.
 func TestOAuthClients_Delete_NonTTYWithoutYes(t *testing.T) {
-	srv := newMockServer(t, nil) // DELETE must NOT be called
+	srv := newMockServer(t, nil)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "oauth-clients", "delete", "oc_abc123")...)
 	if res.Code != errs.ExitNeedsConfir {
@@ -241,8 +204,6 @@ func TestOAuthClients_Delete_NonTTYWithoutYes(t *testing.T) {
 	}
 }
 
-// TestOAuthClients_Delete_WithYes pins that --yes bypasses the guard and the
-// DELETE is sent.
 func TestOAuthClients_Delete_WithYes(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{
 		{Method: "DELETE", PathPfx: "/api/v1/teams/t_team1/oauth-clients/oc_abc123", Status: 204, Body: ""},
@@ -255,12 +216,6 @@ func TestOAuthClients_Delete_WithYes(t *testing.T) {
 	}
 }
 
-// ─── oauth-clients redirect-uris add ─────────────────────────────────────────
-
-// TestOAuthClients_RedirectURIs_Add_ExactBody pins the wire body for
-// `mio oauth-clients redirect-uris add`.
-//
-// CONTRACT: data.type = "oauth_client_redirect_uris"; uri → attributes.uri
 func TestOAuthClients_RedirectURIs_Add_ExactBody(t *testing.T) {
 	srv, gotBody := captureWriteRequest(t, http.StatusCreated, minimalRedirectURIBody)
 
@@ -282,8 +237,6 @@ func TestOAuthClients_RedirectURIs_Add_ExactBody(t *testing.T) {
 	}`)
 }
 
-// TestOAuthClients_RedirectURIs_Add_RequiredURI pins that --uri is required
-// client-side.
 func TestOAuthClients_RedirectURIs_Add_RequiredURI(t *testing.T) {
 	srv, fired := newNoRequestServer(t, minimalRedirectURIBody)
 
@@ -297,11 +250,8 @@ func TestOAuthClients_RedirectURIs_Add_RequiredURI(t *testing.T) {
 	}
 }
 
-// ─── oauth-clients redirect-uris remove ──────────────────────────────────────
-
-// TestOAuthClients_RedirectURIs_Remove_NonTTYWithoutYes pins the non-TTY guard.
 func TestOAuthClients_RedirectURIs_Remove_NonTTYWithoutYes(t *testing.T) {
-	srv := newMockServer(t, nil) // DELETE must NOT be called
+	srv := newMockServer(t, nil)
 	res := runContract(t, baseEnv(srv.URL),
 		withTeam("t_team1", "oauth-clients", "redirect-uris", "remove", "oc_abc123", "ru_xyz789")...)
 	if res.Code != errs.ExitNeedsConfir {
@@ -309,8 +259,6 @@ func TestOAuthClients_RedirectURIs_Remove_NonTTYWithoutYes(t *testing.T) {
 	}
 }
 
-// TestOAuthClients_RedirectURIs_Remove_WithYes pins that --yes bypasses the
-// guard and DELETE is sent to the correct path.
 func TestOAuthClients_RedirectURIs_Remove_WithYes(t *testing.T) {
 	srv := newMockServer(t, []mockHandler{{
 		Method:  "DELETE",

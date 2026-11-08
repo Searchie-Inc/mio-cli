@@ -1,9 +1,5 @@
 package cmd
 
-// checkout_commerce_test.go — contract tests for `mio checkout hub-products`
-// {list,attach,update,detach} and `mio checkout hub-prices` {list,update}
-// (MIO-2268). Pins method + path + JSON:API type + attrs + exit codes.
-
 import (
 	"io"
 	"net/http"
@@ -14,14 +10,10 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// commerceResourceBody is a canned single-resource 2xx body for write commands.
 const commerceResourceBody = `{"data":{"id":"row_1","type":"hub_product_displays","attributes":{"product_id":"prod_1"}}}`
 
-// commerceListBody is a canned empty-collection 2xx body for list commands.
 const commerceListBody = `{"data":[],"meta":{"count":0}}`
 
-// captureCommerceRequest records the first request's method, path, and body and
-// replies with the given status and body. Shared across the MIO-2268 test files.
 func captureCommerceRequest(t *testing.T, status int, body string) (*httptest.Server, *string, *string, *[]byte) {
 	t.Helper()
 	var gotMethod, gotPath string
@@ -38,8 +30,6 @@ func captureCommerceRequest(t *testing.T, status int, body string) (*httptest.Se
 	return srv, &gotMethod, &gotPath, &gotBody
 }
 
-// firedServer returns a server that flips *fired to true on any request. Used by
-// usage-error tests to prove no HTTP request was made.
 func firedServer(t *testing.T) (*httptest.Server, *bool) {
 	t.Helper()
 	fired := false
@@ -52,8 +42,6 @@ func firedServer(t *testing.T) (*httptest.Server, *bool) {
 	t.Cleanup(srv.Close)
 	return srv, &fired
 }
-
-// ─── hub-products list ─────────────────────────────────────────────────────────
 
 func TestCheckoutHubProductsList_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _ := captureCommerceRequest(t, http.StatusOK, commerceListBody)
@@ -71,8 +59,6 @@ func TestCheckoutHubProductsList_Path(t *testing.T) {
 		t.Errorf("path %q does not end with /hubs/hub_123/products", *gotPath)
 	}
 }
-
-// ─── hub-products attach ───────────────────────────────────────────────────────
 
 func TestCheckoutHubProductsAttach_Body(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureCommerceRequest(t, http.StatusCreated, commerceResourceBody)
@@ -108,7 +94,6 @@ func TestCheckoutHubProductsAttach_Body(t *testing.T) {
 	if attrs["visible"] != false {
 		t.Errorf("visible = %v, want false", attrs["visible"])
 	}
-	// --free-tier must map to is_free_tier, not free_tier.
 	if _, ok := attrs["free_tier"]; ok {
 		t.Errorf("attributes.free_tier must not be present; got %v", attrs)
 	}
@@ -141,8 +126,6 @@ func TestCheckoutHubProductsAttach_RejectsNegativePosition(t *testing.T) {
 		t.Error("negative --position must exit before any HTTP request")
 	}
 }
-
-// ─── hub-products update ───────────────────────────────────────────────────────
 
 func TestCheckoutHubProductsUpdate_Body(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureCommerceRequest(t, http.StatusOK, commerceResourceBody)
@@ -198,8 +181,6 @@ func TestCheckoutHubProductsUpdate_RejectsNegativePosition(t *testing.T) {
 	}
 }
 
-// ─── hub-products detach ───────────────────────────────────────────────────────
-
 func TestCheckoutHubProductsDetach_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _ := captureCommerceRequest(t, http.StatusNoContent, "")
 
@@ -233,8 +214,6 @@ func TestCheckoutHubProductsDetach_NoYesBlocks(t *testing.T) {
 	}
 }
 
-// ─── hub-prices list ───────────────────────────────────────────────────────────
-
 func TestCheckoutHubPricesList_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _ := captureCommerceRequest(t, http.StatusOK, commerceListBody)
 
@@ -251,8 +230,6 @@ func TestCheckoutHubPricesList_Path(t *testing.T) {
 		t.Errorf("path %q does not end with /hubs/hub_123/prices", *gotPath)
 	}
 }
-
-// ─── hub-prices update ─────────────────────────────────────────────────────────
 
 func TestCheckoutHubPricesUpdate_Body(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureCommerceRequest(t, http.StatusOK, commerceResourceBody)

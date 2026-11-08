@@ -1,10 +1,5 @@
 package cmd
 
-// auth_password_test.go — `mio auth forgot-password` / `mio auth
-// reset-password` (MIO-4286). Every wire assertion here reads what the
-// httptest server RECEIVED (method, path, body, headers), never a second copy
-// of the expected request.
-
 import (
 	"bufio"
 	"bytes"
@@ -22,17 +17,12 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// authPasswordCapture is what the mock backend saw on the one request the
-// command is expected to send.
 type authPasswordCapture struct {
 	Method, Path, Authorization, ContentType string
 	Body                                     map[string]any
 	Count                                    int
 }
 
-// authPasswordServer answers every request with status and body, recording
-// the request. A 429 carries Retry-After: 0 so the client's retries do not
-// sleep.
 func authPasswordServer(t *testing.T, status int, body string) (*httptest.Server, *authPasswordCapture) {
 	t.Helper()
 	cap := &authPasswordCapture{}
@@ -57,19 +47,12 @@ func authPasswordServer(t *testing.T, status int, body string) (*httptest.Server
 	return srv, cap
 }
 
-// runAuthPassword drives the command tree like runContract but also returns
-// the error itself: the hints these commands add live in the error's message,
-// which main.go renders after os.Exit, out of runContract's reach. It pins a
-// STALE stored/exported key in the environment so every test also proves the
-// request goes out without it.
 func runAuthPassword(t *testing.T, srvURL string, extraEnv []string, args ...string) (contractResult, error) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	return runAuthPasswordInStore(t, srvURL, extraEnv, args...)
 }
 
-// runAuthPasswordInStore is runAuthPassword against whatever store
-// XDG_CONFIG_HOME already points at (a test that seeds one sets it first).
 func runAuthPasswordInStore(t *testing.T, srvURL string, extraEnv []string, args ...string) (contractResult, error) {
 	t.Helper()
 	env := append([]string{
@@ -85,11 +68,6 @@ func runAuthPasswordInStore(t *testing.T, srvURL string, extraEnv []string, args
 	var stdout, stderr bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
-	// stdin is a PIPE with content, never a terminal: a command that decides
-	// to prompt anyway would read these lines and send them, which is what
-	// the off-a-terminal tests must be able to see. (With an empty stdin the
-	// prompt would read EOF and exit 2 on its own, and a missing TTY guard
-	// would pass unnoticed.)
 	root.SetIn(strings.NewReader("piped@test.member.dev\npiped-password\npiped-password\n"))
 	defer root.SetIn(nil)
 	root.SetArgs(args)
@@ -98,14 +76,6 @@ func runAuthPasswordInStore(t *testing.T, srvURL string, extraEnv []string, args
 	return contractResult{Stdout: stdout.String(), Stderr: stderr.String(), Code: codeForExecuteErr(err)}, err
 }
 
-// ─── forgot-password ─────────────────────────────────────────────────────────
-
-// TestAuthForgotPassword_PostsFlatBodyWithoutAKey pins the wire: one POST to
-// /api/v1/auth/forgot, a flat plain-JSON {email} body (no JSON:API envelope,
-// no other key), application/json, and NO Authorization header even though a
-// key is exported — the route is unauthenticated and the caller may hold
-// exactly the revoked key they are recovering from. The API's empty 202 is
-// success, and stdout is the neutral message naming the next command.
 func TestAuthForgotPassword_PostsFlatBodyWithoutAKey(t *testing.T) {
 	srv, cap := authPasswordServer(t, http.StatusAccepted, "")
 
@@ -137,8 +107,6 @@ func TestAuthForgotPassword_PostsFlatBodyWithoutAKey(t *testing.T) {
 	}
 }
 
-// TestAuthForgotPassword_RequiresEmailOffATerminal pins exit 2 with NO request
-// when --email is absent and there is no terminal to prompt on.
 func TestAuthForgotPassword_RequiresEmailOffATerminal(t *testing.T) {
 	for _, args := range [][]string{
 		{"auth", "forgot-password"},
@@ -157,11 +125,6 @@ func TestAuthForgotPassword_RequiresEmailOffATerminal(t *testing.T) {
 	}
 }
 
-// TestAuthForgotPassword_SurfacesTheAPIsVerdict pins the pass-throughs: a 429
-// is exit 6 with the API's document kept, a 422 exit 2, and the two answers a
-// user cannot act on from the status alone — a 404 from a backend without the
-// route, and the route's by-design 500 — carry the hint that says what they
-// mean. Each failure keeps the API's real status on the error.
 func TestAuthForgotPassword_SurfacesTheAPIsVerdict(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -208,13 +171,6 @@ func TestAuthForgotPassword_SurfacesTheAPIsVerdict(t *testing.T) {
 	}
 }
 
-// ─── reset-password ──────────────────────────────────────────────────────────
-
-// TestAuthResetPassword_PostsTokenAndPasswordFromEnvWithoutAKey pins the wire:
-// one POST to /api/v1/auth/reset with a flat {token, password} body, the
-// password taken from MIO_PASSWORD (never argv), application/json, and no
-// Authorization header. The API's empty 204 is success; stdout says nothing
-// was minted and names `mio login` as the next step.
 func TestAuthResetPassword_PostsTokenAndPasswordFromEnvWithoutAKey(t *testing.T) {
 	srv, cap := authPasswordServer(t, http.StatusNoContent, "")
 
@@ -244,9 +200,6 @@ func TestAuthResetPassword_PostsTokenAndPasswordFromEnvWithoutAKey(t *testing.T)
 	}
 }
 
-// TestAuthResetPassword_TakesTheWholeLink pins that --token accepts the
-// emailed link and sends only its fragment: the token after `#`, with a query
-// string before it left alone and surrounding whitespace dropped.
 func TestAuthResetPassword_TakesTheWholeLink(t *testing.T) {
 	for _, tc := range []struct{ arg, want string }{
 		{"https://admin.example.com/reset-password#tok_abc123", "tok_abc123"},
@@ -268,10 +221,6 @@ func TestAuthResetPassword_TakesTheWholeLink(t *testing.T) {
 	}
 }
 
-// TestAuthResetPassword_RejectsAnUnusableTokenBeforeAnyRequest pins exit 2
-// with no request for a missing token, a link whose fragment was stripped,
-// and a link with an empty fragment: sending those would earn the same 410 a
-// wrong token earns and send the user back to forgot-password for nothing.
 func TestAuthResetPassword_RejectsAnUnusableTokenBeforeAnyRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -297,11 +246,6 @@ func TestAuthResetPassword_RejectsAnUnusableTokenBeforeAnyRequest(t *testing.T) 
 	}
 }
 
-// TestAuthResetPassword_PasswordIsNeverOnArgv pins the ticket's contract
-// literally: there is no --password flag on reset-password (a stray one is
-// the usual `unknown flag` exit 2 with no request), and with neither a
-// terminal nor MIO_PASSWORD the command exits 2 naming MIO_PASSWORD, again
-// before any request.
 func TestAuthResetPassword_PasswordIsNeverOnArgv(t *testing.T) {
 	if f := authResetPasswordCmd.Flags().Lookup("password"); f != nil {
 		t.Fatalf("reset-password has a --password flag; the new password must never be taken on argv")
@@ -332,11 +276,6 @@ func TestAuthResetPassword_PasswordIsNeverOnArgv(t *testing.T) {
 	})
 }
 
-// TestAuthResetPassword_ExplainsTheAPIsVerdict pins the plain-words hints on
-// the answers the ticket names — 410 (expired/used/unknown → run
-// forgot-password again; envelope keeps code password_reset_expired), 422
-// (too short → exit 2) — and the missing-route 404, each with the API's real
-// status and document kept on the error.
 func TestAuthResetPassword_ExplainsTheAPIsVerdict(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -344,14 +283,14 @@ func TestAuthResetPassword_ExplainsTheAPIsVerdict(t *testing.T) {
 		body     string
 		wantCode int
 		wantHint string
-		wantAPI  string // a member of the API's document that must survive
+		wantAPI  string
 	}{
 		{"410 expired", http.StatusGone,
 			`{"errors":[{"status":"410","code":"password_reset_expired","title":"Gone","detail":"Password reset link expired.","meta":{"request_id":"req_1"}}]}`,
 			errs.ExitGeneric, "mio auth forgot-password", "password_reset_expired"},
 		{"422 too short", http.StatusUnprocessableEntity,
 			`{"errors":[{"status":"422","title":"Unprocessable Entity","detail":"String should have at least 8 characters","source":{"pointer":"/password"}}]}`,
-			errs.ExitUsage, "must be at least 8 characters", "/password"}, // the API says "should have"; only the hint says "must be"
+			errs.ExitUsage, "must be at least 8 characters", "/password"},
 		{"404 route absent", http.StatusNotFound, `{"detail":"Not Found"}`, errs.ExitNotFound, "MIO-3571", ""},
 		{"429 rate limited", http.StatusTooManyRequests,
 			`{"errors":[{"status":"429","title":"Too Many Requests","detail":"Too many requests. Try again later."}]}`,
@@ -384,10 +323,6 @@ func TestAuthResetPassword_ExplainsTheAPIsVerdict(t *testing.T) {
 	}
 }
 
-// TestAuthResetPassword_PromptReadsTwiceFromOneReader drives the terminal
-// prompt with a scripted stdin: both reads come from ONE shared reader (a
-// fresh bufio per read would buffer and lose the confirmation line), a match
-// is accepted, and a mismatch or an empty entry is exit 2.
 func TestAuthResetPassword_PromptReadsTwiceFromOneReader(t *testing.T) {
 	prompt := func(t *testing.T, input string) (string, error) {
 		t.Helper()
@@ -420,21 +355,12 @@ func errString(err error) string {
 	return err.Error()
 }
 
-// mapsEqualJSON compares two decoded JSON objects by their JSON encoding.
 func mapsEqualJSON(got, want map[string]any) bool {
 	g, _ := json.Marshal(got)
 	w, _ := json.Marshal(want)
 	return bytes.Equal(g, w)
 }
 
-// TestAuthPassword_NeverReadsTheCredentialStore pins the promise both
-// commands make — they work from the very session that is locked out — at
-// its hardest case: a stored blob the filesystem will not let mio read
-// (permission denied), which every ordinary command reports as exit 1 before
-// any request, and no MIO_API_KEY to shadow it. Neither command may touch the
-// store: the request must go out, keyless, and succeed. (Codex review round 1
-// of MIO-4286: the client was resolved without Anonymous, so the store was
-// read and this state exited 1 with no request.)
 func TestAuthPassword_NeverReadsTheCredentialStore(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs POSIX file modes that bind the current user")
@@ -462,7 +388,7 @@ func TestAuthPassword_NeverReadsTheCredentialStore(t *testing.T) {
 			}
 
 			srv, cap := authPasswordServer(t, tc.status, "")
-			env := append([]string{"MIO_API_KEY="}, tc.env...) // nothing shadows the store
+			env := append([]string{"MIO_API_KEY="}, tc.env...)
 			res, err := runAuthPasswordInStore(t, srv.URL, env, tc.args...)
 			if res.Code != errs.ExitOK {
 				t.Fatalf("exit code = %d, want 0 from a locked-out session; err=%v", res.Code, err)

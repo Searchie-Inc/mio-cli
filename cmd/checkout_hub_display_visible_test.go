@@ -1,35 +1,5 @@
 package cmd
 
-// checkout_hub_display_visible_test.go — MIO-4156.
-//
-// QA reported that `mio checkout hub-prices list` flattened the API's `visible`
-// attribute under the wrong key. It does not: the report's own filter asked for
-// `.visibility`, a key no hub display row has, and gojq answers null for any
-// missing key. What WAS wrong is the help, which called the attribute
-// "visibility" while the flag and the wire both say `visible`.
-//
-// Three guards follow, each with an oracle the implementation cannot fake:
-//
-//   - the list render guard feeds the real command the exact attributes the API
-//     returns and reads the RENDERED stdout (json, table, plain, --jq) — not the
-//     Flatten function — so a rename, drop or rewrite anywhere between the HTTP
-//     body and stdout fails by attribute name;
-//   - the help guard derives the editable attributes from the WIRE (the body the
-//     update command actually sends with every one of its flags set) and requires
-//     the help to name each one verbatim, so neither a reworded help nor a new
-//     flag documented under some other word can stay green;
-//   - the list example guard takes EVERY --jq on each list command's help (any
-//     line but the flag's own usage line, and one it cannot run fails),
-//     rejects any that reads a key the rows do not have by a literal name
-//     (from gojq's own parse tree) or that yields a null (rows carry no null,
-//     so a null was manufactured — a computed key name hidden behind a
-//     `// default` escapes both), RUNS each against 2, 1 and 0 rows (JSON
-//     output, whatever -o the line shows) and rejects any
-//     whose JSON type changes with the row count, and requires some example
-//     to return every editable attribute per row with its value — so the
-//     example cannot vanish, drift to a key the rows do not have, or hand an
-//     agent an array on one hub and a bare object on the next.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -48,19 +18,12 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// hubDisplayListCase is one list command plus the collection its route returns.
-// data is the JSON:API `data` array verbatim; the expected rendered values are
-// decoded from the same bytes, so the fixture is the only source of truth.
 type hubDisplayListCase struct {
 	name string
 	args []string
 	data string
 }
 
-// hubDisplayListCases: row 0 of hub-prices is the MIO-4156 report's `--raw`
-// attributes (`visible: true`); every case carries a second row with
-// `visible: false`, so a renderer that fakes the value (a constant, a default)
-// cannot satisfy both rows.
 var hubDisplayListCases = []hubDisplayListCase{
 	{
 		name: "hub-prices",
@@ -92,7 +55,6 @@ var hubDisplayListCases = []hubDisplayListCase{
 	},
 }
 
-// wireRow is one resource as the API sent it.
 type wireRow struct {
 	ID         string         `json:"id"`
 	Type       string         `json:"type"`
@@ -123,7 +85,6 @@ func (tc hubDisplayListCase) run(t *testing.T, srvURL string, extra ...string) s
 	return res.Stdout
 }
 
-// cellText is how the table and plain formatters print a JSON scalar.
 func cellText(v any) string {
 	switch x := v.(type) {
 	case bool:
@@ -138,10 +99,6 @@ func cellText(v any) string {
 	}
 }
 
-// requireRenderedRow checks one rendered row against the row the API sent:
-// every wire attribute must be present under its OWN name with its own value,
-// and nothing but id/type may be added. want/got are compared as text so the
-// same check serves json (via cellText), table and plain output.
 func requireRenderedRow(t *testing.T, where string, i int, wire wireRow, got map[string]string) {
 	t.Helper()
 	for k, v := range wire.Attributes {
@@ -174,9 +131,6 @@ func sortedKeysOf(m map[string]string) []string {
 	return keys
 }
 
-// TestCheckoutHubDisplayList_RendersVisibleUnderItsOwnName is the MIO-4156
-// premise check turned into a guard: the attribute the API calls `visible`
-// reaches stdout as `visible`, with its value, in every output mode.
 func TestCheckoutHubDisplayList_RendersVisibleUnderItsOwnName(t *testing.T) {
 	for _, tc := range hubDisplayListCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -197,7 +151,6 @@ func TestCheckoutHubDisplayList_RendersVisibleUnderItsOwnName(t *testing.T) {
 					for k, v := range row {
 						text[k] = cellText(v)
 					}
-					// JSON keeps types: a string "true" must not pass for the bool.
 					if v, ok := row["visible"]; ok && reflect.TypeOf(v) != reflect.TypeOf(true) {
 						t.Errorf("json row %d: visible is %T, want a JSON bool", i, v)
 					}
@@ -242,7 +195,6 @@ func TestCheckoutHubDisplayList_RendersVisibleUnderItsOwnName(t *testing.T) {
 				}
 			})
 
-			// The report's own filter shape, asking for the key the API sends.
 			t.Run("jq", func(t *testing.T) {
 				var got []any
 				out := tc.run(t, srv.URL, "--jq", "[.[] | .visible]")
@@ -258,9 +210,6 @@ func TestCheckoutHubDisplayList_RendersVisibleUnderItsOwnName(t *testing.T) {
 	}
 }
 
-// updateWireAttributes runs `<path> <display_id>` with EVERY local flag of cmd
-// set and returns the attribute keys the request body carried — the editable
-// attributes as the API sees them, not as anyone describes them.
 func updateWireAttributes(t *testing.T, cmd *cobra.Command, path []string) []string {
 	t.Helper()
 	srv, _, _, gotBody := captureCommerceRequest(t, http.StatusOK, commerceResourceBody)
@@ -296,16 +245,12 @@ func updateWireAttributes(t *testing.T, cmd *cobra.Command, path []string) []str
 	return keys
 }
 
-// TestCheckoutHubDisplayHelp_NamesEachEditableWireAttribute: the help that says
-// what is editable must name each editable attribute exactly as the API spells
-// it (backticked), and no hub display help page may use "visibility" — the word
-// that sent the MIO-4156 reporter to a key that does not exist.
 func TestCheckoutHubDisplayHelp_NamesEachEditableWireAttribute(t *testing.T) {
 	cases := []struct {
 		name  string
 		cmd   *cobra.Command
 		path  []string
-		pages [][]string // help pages that describe what update can change
+		pages [][]string
 	}{
 		{
 			name:  "hub-prices",
@@ -352,16 +297,8 @@ func TestCheckoutHubDisplayHelp_NamesEachEditableWireAttribute(t *testing.T) {
 	}
 }
 
-// jqExample pulls a single-quoted --jq program out of one help line.
 var jqExample = regexp.MustCompile(`--jq '([^']+)'`)
 
-// helpJQExamples returns the program of every --jq on a rendered help page.
-// No line is skipped for its shape: a `mio …` example, a capture like
-// `ID=$(mio … --jq '…')`, a `# or: --jq '…'` comment and prose all count. The
-// one exception is the flag's own usage line under Global Flags
-// (`--jq string   Filter …`). Any --jq that is not in the
-// `--jq '<program>'` form fails the test rather than being skipped, so every
-// --jq on the page is either run or rejected.
 func helpJQExamples(t *testing.T, page, help string) []string {
 	t.Helper()
 	var progs []string
@@ -381,13 +318,6 @@ func helpJQExamples(t *testing.T, page, help string) []string {
 	return progs
 }
 
-// jqFieldReads returns every field a jq program reads by a LITERAL name: `.k`,
-// `."k"`, `.["k"]`, the object shorthand `{k}` / `{"k"}` (which means
-// `{k: .k}`), and destructuring `as {k: $v}` / `as {$k}`. It walks gojq's own
-// parse tree, so what counts as a read is jq's grammar, not a regexp's guess.
-// A read by a computed name (`.[$k]`, `getpath(...)`) is invisible here; the
-// no-null output check below is the net for those, unless a default
-// (`.[$k] // false`) replaces the null — nothing here catches that.
 func jqFieldReads(t *testing.T, program string) []string {
 	t.Helper()
 	q, err := gojq.Parse(program)
@@ -433,7 +363,7 @@ func jqFieldReads(t *testing.T, program string) []string {
 				}
 			}
 		case *gojq.ObjectKeyVal:
-			if n.Val == nil { // shorthand: {k} reads .k; {$k} reads a variable
+			if n.Val == nil {
 				if n.Key != "" && !strings.HasPrefix(n.Key, "$") {
 					seen[n.Key] = true
 				}
@@ -464,9 +394,6 @@ func jqFieldReads(t *testing.T, program string) []string {
 	return reads
 }
 
-// TestJQFieldReads_SeesEachLiteralRead keeps the walker honest: every read
-// form jqFieldReads claims to see must be seen, and an output key or a
-// variable must not be mistaken for a read.
 func TestJQFieldReads_SeesEachLiteralRead(t *testing.T) {
 	program := `. as {p: $x, $q} | map({a, "b", out: .c, $x}) | .[0].d | ."e" | .["f"] | select(.g) | "\(.h)"`
 	want := []string{"a", "b", "c", "d", "e", "f", "g", "h", "p", "q"}
@@ -475,7 +402,6 @@ func TestJQFieldReads_SeesEachLiteralRead(t *testing.T) {
 	}
 }
 
-// jsonKind names a decoded JSON value's type.
 func jsonKind(v any) string {
 	switch v.(type) {
 	case nil:
@@ -513,8 +439,6 @@ func containsNull(v any) bool {
 	return false
 }
 
-// yieldsEachRow reports why out is not one object per wire row, in order,
-// carrying every editable key with that row's value ("" when it is).
 func yieldsEachRow(out any, wire []wireRow, editable []string) string {
 	arr, ok := out.([]any)
 	if !ok || len(arr) != len(wire) {
@@ -534,25 +458,6 @@ func yieldsEachRow(out any, wire []wireRow, editable []string) string {
 	return ""
 }
 
-// TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute checks EVERY
-// --jq on each list command's help, on any line (helpJQExamples), not just the
-// first example:
-//
-//   - reads: every field the example reads by a literal name (jqFieldReads)
-//     must be `id`, `type` or an attribute the API's rows carry — `.visibility`,
-//     `{price}`, `select(.is_visible)` and `hidden: .is_hidden` all fail here;
-//   - output: run against the API's rows (which hold no null), the example
-//     must not yield a null anywhere — a missing key answers null silently,
-//     however it was read, unless a `// default` replaces the null — and
-//     every object it yields may carry only `id`, `type` and the rows' own
-//     attribute names;
-//   - shape: run against 2, 1 and 0 rows (JSON output; an -o on the example
-//     line is not applied), its JSON type must not change —
-//     `.[] | {…}` yields an array, then a bare object, then null, so an agent
-//     that pipes it breaks on a hub with one row;
-//   - coverage: some example must yield one object per row carrying every
-//     editable attribute (taken from the update wire, as above) with the
-//     row's value, so deleting or narrowing the example fails.
 func TestCheckoutHubDisplayListExample_SelectsEachEditableAttribute(t *testing.T) {
 	cases := []struct {
 		list       hubDisplayListCase

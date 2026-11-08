@@ -10,12 +10,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// TestEmailTemplatesUpdate_ContentFlagsMapToBackendFields verifies the MIO-1238
-// fix: the backend email_templates write schema is mjml_source + plain_text, NOT
-// a "body" attribute. --body must therefore map to mjml_source (so it actually
-// sets the rendered content) and --plain-text to plain_text. Before the fix,
-// --body produced an attrs["body"] the backend silently dropped, so templates
-// never got content and drip sends failed with render_error.
 func TestEmailTemplatesUpdate_ContentFlagsMapToBackendFields(t *testing.T) {
 	var gotBody []byte
 
@@ -66,9 +60,6 @@ func TestEmailTemplatesUpdate_ContentFlagsMapToBackendFields(t *testing.T) {
 	}
 }
 
-// TestEmailTemplatesCreate_ContentFlagsMapToBackendFields covers the create path,
-// which shares the same --body -> mjml_source / --plain-text -> plain_text mapping
-// (MIO-1238).
 func TestEmailTemplatesCreate_ContentFlagsMapToBackendFields(t *testing.T) {
 	var gotBody []byte
 

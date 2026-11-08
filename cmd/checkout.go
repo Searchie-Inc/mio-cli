@@ -1,32 +1,5 @@
 package cmd
 
-// checkout.go implements the `mio checkout` command group.
-//
-// It covers all admin reads and actions in the checkout module:
-//
-//	orders:        list/retrieve     /api/teams/{team_id}/hubs/{hub_id}/orders[/{id}]
-//	subscriptions: list/retrieve     …/subscriptions[/{id}]
-//	               cancel            POST …/subscriptions/{id}/cancel
-//	payments:      list/retrieve     …/payments[/{id}]
-//	               refund            POST …/payments/{id}/refund
-//	webhooks:      list/retrieve     …/payment-webhooks[/{id}]
-//	               replay            POST …/payment-webhooks/{id}/replay
-//	accounts:      list/retrieve     /api/teams/{team_id}/payment-accounts[/{id}]
-//	               onboarding-link   POST …/payment-accounts/onboarding-link
-//	                                 (web/JWT-only — the backend rejects API-key
-//	                                 principals on this route, MIO-2655, and this
-//	                                 CLI is API-key-only, so the command always
-//	                                 fails fast with a clear error; MIO-2717)
-//	stripe-sync:   import            POST /api/teams/{team_id}/checkout/sync/import-from-stripe
-//	               import-status     GET  …/checkout/sync/import-runs/{run_id}
-//	               adopt-product     POST /api/teams/{team_id}/products/adopt-from-stripe
-//
-// Hub-scoped commands (orders, subscriptions, payments, webhooks) require --hub;
-// they return exit code 2 via requireHub if it is absent.
-//
-// Destructive / irreversible actions (cancel, refund, replay) honour --yes;
-// without it in a non-interactive shell they exit with code 5.
-
 import (
 	"fmt"
 	"net/url"
@@ -38,14 +11,12 @@ import (
 )
 
 func init() {
-	// orders sub-resource
 	checkoutOrdersCmd.AddCommand(
 		checkoutOrdersListCmd,
 		checkoutOrdersRetrieveCmd,
 	)
 	checkoutCmd.AddCommand(checkoutOrdersCmd)
 
-	// subscriptions sub-resource
 	checkoutSubscriptionsCmd.AddCommand(
 		checkoutSubscriptionsListCmd,
 		checkoutSubscriptionsRetrieveCmd,
@@ -53,7 +24,6 @@ func init() {
 	)
 	checkoutCmd.AddCommand(checkoutSubscriptionsCmd)
 
-	// payments sub-resource
 	checkoutPaymentsCmd.AddCommand(
 		checkoutPaymentsListCmd,
 		checkoutPaymentsRetrieveCmd,
@@ -61,7 +31,6 @@ func init() {
 	)
 	checkoutCmd.AddCommand(checkoutPaymentsCmd)
 
-	// payment-webhooks sub-resource
 	checkoutWebhooksCmd.AddCommand(
 		checkoutWebhooksListCmd,
 		checkoutWebhooksRetrieveCmd,
@@ -69,7 +38,6 @@ func init() {
 	)
 	checkoutCmd.AddCommand(checkoutWebhooksCmd)
 
-	// payment-accounts sub-resource
 	checkoutAccountsCmd.AddCommand(
 		checkoutAccountsListCmd,
 		checkoutAccountsRetrieveCmd,
@@ -77,7 +45,6 @@ func init() {
 	)
 	checkoutCmd.AddCommand(checkoutAccountsCmd)
 
-	// stripe-sync sub-resource
 	checkoutStripeSyncCmd.AddCommand(
 		checkoutStripeSyncImportCmd,
 		checkoutStripeSyncImportStatusCmd,
@@ -85,50 +52,34 @@ func init() {
 	)
 	checkoutCmd.AddCommand(checkoutStripeSyncCmd)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(checkoutCmd)
 }
 
 func init() {
-	// Pagination flags for list commands.
 	addPaginationFlags(checkoutOrdersListCmd)
 	addPaginationFlags(checkoutSubscriptionsListCmd)
 	addPaginationFlags(checkoutPaymentsListCmd)
 	addPaginationFlags(checkoutWebhooksListCmd)
 	addPaginationFlags(checkoutAccountsListCmd)
 
-	// These four routes page (page[size] default 20, `id > page[after]`
-	// ordered by id) but answer only {"data", "meta": {"total": <rows on this
-	// page>}}: no has_more, no cursor, no next link (mio-backend origin/main
-	// checkout/router.py list_orders, list_subscriptions, list_payments,
-	// list_webhook_events). A full page is the only hint that more exist
-	// (MIO-4174). accounts list is not paged at all, so it is not marked.
 	markUnsignalledPaging(checkoutOrdersListCmd, 20)
 	markUnsignalledPaging(checkoutSubscriptionsListCmd, 20)
 	markUnsignalledPaging(checkoutPaymentsListCmd, 20)
 	markUnsignalledPaging(checkoutWebhooksListCmd, 20)
 
-	// refund flags
 	checkoutPaymentsRefundCmd.Flags().Int("amount", 0, "Amount to refund in the payment's currency minor unit (e.g. cents). Omit to refund in full.")
 	checkoutPaymentsRefundCmd.Flags().String("reason", "", "Reason for the refund (e.g. duplicate, fraudulent, requested_by_customer). (required)")
 	_ = checkoutPaymentsRefundCmd.MarkFlagRequired("reason")
 
-	// onboarding-link flags (documented for reference — the backend requires
-	// all three — but this command always fails fast client-side; see the
-	// WEB/JWT-ONLY note on the command itself).
 	checkoutAccountsOnboardingLinkCmd.Flags().String("hub-id", "", "Hub ID the onboarding link is for — canonical UUID; slugs are not resolved. (required)")
 	checkoutAccountsOnboardingLinkCmd.Flags().String("return-url", "", "URL Stripe returns the user to after completing onboarding. (required)")
 	checkoutAccountsOnboardingLinkCmd.Flags().String("refresh-url", "", "URL Stripe sends the user to if the onboarding link expires. (required)")
 
-	// stripe-sync import flags
 	checkoutStripeSyncImportCmd.Flags().String("hub-id", "", "Hub ID whose Stripe data should be imported. (required)")
 
-	// adopt-product flags
 	checkoutStripeSyncAdoptProductCmd.Flags().String("stripe-product-id", "", "Stripe product ID to adopt into the mio catalogue. (required)")
 	checkoutStripeSyncAdoptProductCmd.Flags().String("hub-id", "", "Hub ID (UUID) the adopted product belongs to. (required)")
 }
-
-// ---- root group ---------------------------------------------------------------
 
 var checkoutCmd = &cobra.Command{
 	Use:   "checkout",
@@ -141,16 +92,10 @@ a hub context: pass --hub <id> or run 'mio config set current_hub <id>'.
 Team-scoped resources (payment-accounts, stripe-sync) need only a team context.`,
 }
 
-// ---- path helpers -------------------------------------------------------------
-
-// checkoutHubBase returns the hub-scoped base path used by most checkout resources.
-//
-//	/api/teams/{team_id}/hubs/{hub_id}
 func checkoutHubBase(teamID, hubID string) string {
 	return fmt.Sprintf("/api/teams/%s/hubs/%s", teamID, hubID)
 }
 
-// ordersPath returns the orders collection or single-resource path.
 func ordersPath(teamID, hubID, id string) string {
 	base := checkoutHubBase(teamID, hubID) + "/orders"
 	if id != "" {
@@ -159,7 +104,6 @@ func ordersPath(teamID, hubID, id string) string {
 	return base
 }
 
-// subscriptionsPath returns the subscriptions collection or single-resource path.
 func subscriptionsPath(teamID, hubID, id string) string {
 	base := checkoutHubBase(teamID, hubID) + "/subscriptions"
 	if id != "" {
@@ -168,7 +112,6 @@ func subscriptionsPath(teamID, hubID, id string) string {
 	return base
 }
 
-// paymentsPath returns the payments collection or single-resource path.
 func paymentsPath(teamID, hubID, id string) string {
 	base := checkoutHubBase(teamID, hubID) + "/payments"
 	if id != "" {
@@ -177,7 +120,6 @@ func paymentsPath(teamID, hubID, id string) string {
 	return base
 }
 
-// webhooksPath returns the payment-webhooks collection or single-resource path.
 func webhooksPath(teamID, hubID, id string) string {
 	base := checkoutHubBase(teamID, hubID) + "/payment-webhooks"
 	if id != "" {
@@ -186,9 +128,6 @@ func webhooksPath(teamID, hubID, id string) string {
 	return base
 }
 
-// accountsPath returns the payment-accounts collection or single-resource path.
-//
-//	/api/teams/{team_id}/payment-accounts[/{id}]
 func accountsPath(teamID, id string) string {
 	base := fmt.Sprintf("/api/teams/%s/payment-accounts", teamID)
 	if id != "" {
@@ -197,10 +136,6 @@ func accountsPath(teamID, id string) string {
 	return base
 }
 
-// ---- context helpers ----------------------------------------------------------
-
-// checkoutHubContext is the shared boilerplate for hub-scoped checkout sub-commands:
-// build the context, require auth, resolve team id and hub id.
 func checkoutHubContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -220,7 +155,6 @@ func checkoutHubContext(cmd *cobra.Command) (*cmdContext, string, string, error)
 	return c, teamID, hubID, nil
 }
 
-// checkoutTeamContext is the shared boilerplate for team-scoped checkout sub-commands.
 func checkoutTeamContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -235,8 +169,6 @@ func checkoutTeamContext(cmd *cobra.Command) (*cmdContext, string, error) {
 	}
 	return c, teamID, nil
 }
-
-// ---- orders -------------------------------------------------------------------
 
 var checkoutOrdersCmd = &cobra.Command{
 	Use:   "orders",
@@ -290,8 +222,6 @@ var checkoutOrdersRetrieveCmd = &cobra.Command{
 		return c.render(cmd, res)
 	},
 }
-
-// ---- subscriptions ------------------------------------------------------------
 
 var checkoutSubscriptionsCmd = &cobra.Command{
 	Use:   "subscriptions",
@@ -376,8 +306,6 @@ environments (scripts, CI, AI agents).`,
 	},
 }
 
-// ---- payments -----------------------------------------------------------------
-
 var checkoutPaymentsCmd = &cobra.Command{
 	Use:   "payments",
 	Short: "Read and refund payments for a hub.",
@@ -456,10 +384,6 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 			return err
 		}
 
-		// The backend RefundRequest body is REQUIRED: a refunds envelope whose
-		// attributes carry a mandatory `reason` (extra="forbid") and an optional
-		// `amount` (omit for a full refund). Always send the envelope with reason;
-		// add amount only when --amount was provided. Never send a nil body.
 		attrs := map[string]any{}
 		setStringFlag(cmd, attrs, "reason")
 		setIntFlag(cmd, attrs, "amount")
@@ -476,8 +400,6 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 		return c.render(cmd, res)
 	},
 }
-
-// ---- payment-webhooks ---------------------------------------------------------
 
 var checkoutWebhooksCmd = &cobra.Command{
 	Use:   "webhooks",
@@ -563,8 +485,6 @@ Pass --yes to skip the confirmation prompt in non-interactive environments.`,
 	},
 }
 
-// ---- payment-accounts ---------------------------------------------------------
-
 var checkoutAccountsCmd = &cobra.Command{
 	Use:   "accounts",
 	Short: "Manage payment accounts for a team.",
@@ -645,22 +565,12 @@ sent inside a JSON:API onboarding_links envelope.`,
   # dashboard to connect a Stripe account instead.`,
 	Args: cobra.NoArgs,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		// The backend requires a user JWT on this route (MIO-2655/MIO-2599
-		// posture): a leaked team API key must not be able to attach an
-		// attacker's Stripe payout account. The mio CLI is API-key-only (see
-		// login.go — any JWT minted during the email+password login flow is
-		// discarded immediately after minting the stored mio_sk_... key), so
-		// this command can never satisfy that requirement. Fail fast with a
-		// clear, actionable message instead of sending the request and
-		// surfacing a raw 403. (MIO-2717)
 		return errs.New(errs.ExitAuth,
 			"connecting a Stripe account is a web/JWT-only operation for security "+
 				"(a leaked API key must not be able to attach a payout account) — "+
 				"complete Stripe Connect onboarding in the member.dev dashboard, not the CLI")
 	},
 }
-
-// ---- stripe-sync --------------------------------------------------------------
 
 var checkoutStripeSyncCmd = &cobra.Command{
 	Use:   "stripe-sync",
@@ -686,7 +596,6 @@ Use 'mio checkout stripe-sync import-status <run_id>' to poll the import progres
 			return err
 		}
 
-		// Flat body: backend StartImportRequest is a plain {hub_id} model.
 		attrs := map[string]any{}
 		setMappedString(cmd, attrs, "hub-id", "hub_id")
 
@@ -744,8 +653,6 @@ during a staged migration.
 			return err
 		}
 
-		// Flat body: backend AdoptProductRequest is a plain
-		// {stripe_product_id, hub_id} model with extra="forbid".
 		attrs := map[string]any{}
 		setMappedString(cmd, attrs, "stripe-product-id", "stripe_product_id")
 		setMappedString(cmd, attrs, "hub-id", "hub_id")

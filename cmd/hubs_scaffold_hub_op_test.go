@@ -1,15 +1,5 @@
 package cmd
 
-// hubs_scaffold_hub_op_test.go — the whole-hub op branch (MIO-2976).
-//
-// THE ORACLE IS THE WIRE. Every test here decides which path ran by looking at
-// the requests the run actually emitted — specifically whether a client-side
-// `POST …/hubs` (the pipeline's step-1 hub create) fired — never at a flag, a
-// note, or a return value the implementation could set without doing the work.
-// That matters more than usual here because the rest of the scaffold suite now
-// stubs the op as absent, so a probe that was never wired in at all would leave
-// every one of those tests green.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -27,26 +17,18 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// hubOpCapture records the traffic that tells the two paths apart.
 type hubOpCapture struct {
-	opPosts     [][]byte // POST …/hubs/from-template — the probe itself
-	opKeys      []string // its Idempotency-Key header
-	clientPosts []string // every OTHER POST path (the client-side pipeline's writes)
-	hubCreates  int      // POST …/hubs — the pipeline's step-1 create
+	opPosts     [][]byte
+	opKeys      []string
+	clientPosts []string
+	hubCreates  int
 }
 
-// hubOpScaffoldServer stubs a backend whose whole-hub op answers with opStatus /
-// opBody. opStatus 405 (+ Allow: GET) is the ABSENT shape; 201 with a summary is
-// the live op. Everything else behaves like fullScaffoldServerAll so the
-// client-side fallback can complete a real run.
 func hubOpScaffoldServer(t *testing.T, opStatus int, opBody string) (*httptest.Server, *hubOpCapture) {
 	t.Helper()
 	return hubOpScaffoldServerWithCatalog(t, opStatus, opBody, catalog21Body(t))
 }
 
-// hubOpScaffoldServerWithCatalog is hubOpScaffoldServer over a caller-supplied
-// catalog artifact, for the tests that need the SERVED template to declare
-// something specific (MIO-3065's op gate).
 func hubOpScaffoldServerWithCatalog(t *testing.T, opStatus int, opBody string, catBody []byte) (*httptest.Server, *hubOpCapture) {
 	t.Helper()
 	rec := &hubOpCapture{}
@@ -75,7 +57,7 @@ func hubOpScaffoldServerWithCatalog(t *testing.T, opStatus int, opBody string, c
 
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/scaffold-from-template"):
-			w.WriteHeader(http.StatusNotFound) // the W2b PAGES op, absent here too
+			w.WriteHeader(http.StatusNotFound)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/hubs"):
 			rec.hubCreates++
 			w.WriteHeader(http.StatusCreated)
@@ -90,7 +72,6 @@ func hubOpScaffoldServerWithCatalog(t *testing.T, opStatus int, opBody string, c
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"pdt_1","type":"page_draft_trees","attributes":{"draft_version":1}}}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/hubs/hub_new"):
-			// The op path's identity read-back, and the client path's blob RMW.
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"id":"hub_new","type":"hubs","attributes":{"slug":"my-community","title":"Founders","is_private":false,"branding":{"primary":"#000"}}}}`))
 		case r.Method == http.MethodGet:
@@ -105,9 +86,6 @@ func hubOpScaffoldServerWithCatalog(t *testing.T, opStatus int, opBody string, c
 	return srv, rec
 }
 
-// hubOpOKResult is a 201 whose summary covers every id-bearing row kind the
-// community template can produce, with created_resource_ids in the matching
-// per-kind order.
 const hubOpLiveBody = `{"data":{"id":"hub_new","type":"hub_scaffolds","attributes":{
   "hub_id":"hub_new",
   "summary":[
@@ -140,11 +118,6 @@ func scaffoldArgs(extra ...string) []string {
 	return withTeam("t_team1", append(base, extra...)...)
 }
 
-// ─── §1 the probe and its fallback ───────────────────────────────────────────
-
-// A dormant/legacy backend answers the op with a bare 405 + Allow: GET. The run
-// must fall back and build the hub client-side — the probe fires, AND the
-// pipeline's own hub create fires after it.
 func TestScaffoldHubOp_AbsentOpFallsBackToClientPipeline(t *testing.T) {
 	srv, rec := hubOpScaffoldServer(t, http.StatusMethodNotAllowed, `{"detail":"Method Not Allowed"}`)
 
@@ -160,8 +133,6 @@ func TestScaffoldHubOp_AbsentOpFallsBackToClientPipeline(t *testing.T) {
 	}
 }
 
-// The op is live: it builds the whole hub, and the client-side pipeline must not
-// run at all. A single stray POST here is a double-apply.
 func TestScaffoldHubOp_LiveOpSkipsTheClientPipeline(t *testing.T) {
 	srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
@@ -180,9 +151,6 @@ func TestScaffoldHubOp_LiveOpSkipsTheClientPipeline(t *testing.T) {
 	}
 }
 
-// Everything that is NOT the 405 absence shape must surface. This is the
-// discipline that keeps a client-side apply from smearing state across a backend
-// that HAS the op — including the 404 that shares ExitNotFound with absence.
 func TestScaffoldHubOp_NonAbsenceNeverFallsBack(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -191,9 +159,6 @@ func TestScaffoldHubOp_NonAbsenceNeverFallsBack(t *testing.T) {
 		want   int
 	}{
 		{"server error", http.StatusInternalServerError, `{"errors":[{"detail":"boom"}]}`, errs.ExitServer},
-		// The trap: 404 derives the SAME ExitNotFound the dormant 405 does. A
-		// probe that branched on the exit code would fall back here and build a
-		// hub client-side while the backend is saying the template is unknown.
 		{"template not found", http.StatusNotFound, `{"errors":[{"code":"template_not_found","detail":"nope"}]}`, errs.ExitNotFound},
 		{"digest mismatch", http.StatusConflict, `{"errors":[{"code":"catalog_digest_mismatch","detail":"stale"}]}`, errs.ExitUsage},
 	} {
@@ -212,9 +177,6 @@ func TestScaffoldHubOp_NonAbsenceNeverFallsBack(t *testing.T) {
 	}
 }
 
-// A fingerprint mismatch is the one 409 an operator will actually hit, and
-// "re-run" is the wrong advice for it — the guidance must say nothing was
-// applied and name the way out.
 func TestScaffoldHubOp_FingerprintMismatchExplainsItself(t *testing.T) {
 	srv, rec := hubOpScaffoldServer(t, http.StatusConflict,
 		`{"errors":[{"code":"idempotency_fingerprint_mismatch","detail":"key reused with a different request"}]}`)
@@ -237,24 +199,14 @@ func TestScaffoldHubOp_FingerprintMismatchExplainsItself(t *testing.T) {
 	}
 }
 
-// ─── §2 flags the op cannot express force the client path ────────────────────
-
-// Each of these flags changes the hub in a way overrides{} cannot carry. Taking
-// the op anyway would silently drop what the operator asked for — so the op must
-// not even be probed, and the run must say why.
 func TestScaffoldHubOp_UnsupportedFlagsForceClientPath(t *testing.T) {
 	for _, tc := range []struct{ name, flag, value string }{
 		{"branding blob", "--branding-json", `{"primary":"#B91C1C"}`},
 		{"palette scalar", "--primary-color", "#B91C1C"},
 		{"social image", "--social-image-url", "https://cdn/og.png"},
-		// --catalog is unsupported for a different reason: the op applies from
-		// the SERVER's catalog and cannot read a local file at all.
 		{"local catalog", "--catalog", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// A LIVE op — so if the forcing fails, the op path is taken and the
-			// client create count drops to 0. A 405 stub could not tell the two
-			// apart: it falls back either way.
 			srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
 			value := tc.value
@@ -279,9 +231,6 @@ func TestScaffoldHubOp_UnsupportedFlagsForceClientPath(t *testing.T) {
 	}
 }
 
-// The four flags the op CAN express must reach overrides{} — and must not be
-// mistaken for unsupported ones (which would quietly disable the op path for the
-// most common branded invocation).
 func TestScaffoldHubOp_SupportedOverridesReachTheWire(t *testing.T) {
 	srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
@@ -309,10 +258,6 @@ func TestScaffoldHubOp_SupportedOverridesReachTheWire(t *testing.T) {
 	}
 }
 
-// An override the operator did not pass must be ABSENT from the block, not sent
-// as its zero value: the backend applies only truthy overrides, so a spurious
-// `registration_enabled:false` is both a lie about intent and a different
-// idempotency fingerprint.
 func TestScaffoldHubOp_UnsetOverridesAreOmitted(t *testing.T) {
 	srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
@@ -327,18 +272,9 @@ func TestScaffoldHubOp_UnsetOverridesAreOmitted(t *testing.T) {
 	}
 }
 
-// ─── §5/§6 modes that are always client-side ─────────────────────────────────
-
-// --hub applies onto an EXISTING hub; the op is create-only. Probing it would
-// create a second hub.
 func TestScaffoldHubOp_ResumeModeNeverProbesTheOp(t *testing.T) {
 	srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
-	// --name/--slug are passed DELIBERATELY. Without them the "op requires both
-	// --name and --slug" check would stop the probe first, and this test would
-	// pass whether or not the --hub guard exists at all — it would be satisfied
-	// by two different implementations. With them, --hub is the only thing left
-	// that can keep the op unprobed.
 	res := runContract(t, scaffoldEnv(t, srv.URL),
 		withTeam("t_team1", "hubs", "scaffold", "--template", "community",
 			"--hub", "hub_new", "--name", "Founders", "--slug", "founders",
@@ -351,8 +287,6 @@ func TestScaffoldHubOp_ResumeModeNeverProbesTheOp(t *testing.T) {
 	}
 }
 
-// --dry-run must stay write-free. The op has no plan mode: probing it would
-// create the hub the operator explicitly asked not to create.
 func TestScaffoldHubOp_DryRunNeverProbesTheOp(t *testing.T) {
 	srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
@@ -368,10 +302,6 @@ func TestScaffoldHubOp_DryRunNeverProbesTheOp(t *testing.T) {
 	}
 }
 
-// ─── §3 the deterministic idempotency key ────────────────────────────────────
-
-// Re-running the SAME command must reuse the key — that is what makes the
-// backend replay instead of creating a second hub (MIO-2565).
 func TestScaffoldHubOp_IdempotencyKeyIsDeterministicAcrossRuns(t *testing.T) {
 	srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
@@ -392,8 +322,6 @@ func TestScaffoldHubOp_IdempotencyKeyIsDeterministicAcrossRuns(t *testing.T) {
 	}
 }
 
-// ...but a DIFFERENT hub must get a different key, or the second scaffold from
-// one template would replay the first and silently create nothing.
 func TestScaffoldHubOp_IdempotencyKeyVariesWithIdentity(t *testing.T) {
 	base := catalog.CreateApplicationID("t_1", "community", "Founders", "founders")
 	for _, tc := range []struct{ name, team, tmpl, hubName, slug string }{
@@ -410,11 +338,6 @@ func TestScaffoldHubOp_IdempotencyKeyVariesWithIdentity(t *testing.T) {
 	}
 }
 
-// ─── §4 result parity across the two paths ───────────────────────────────────
-
-// The op reports ids per KIND with no slug attached; the CLI's result is keyed
-// by template slug. This pins the reconciliation — and that it lands on the
-// right slugs, not merely on some slug.
 func TestScaffoldHubOp_ResultCarriesPerSlugIDs(t *testing.T) {
 	srv, _ := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
@@ -427,8 +350,6 @@ func TestScaffoldHubOp_ResultCarriesPerSlugIDs(t *testing.T) {
 	if out["hub_id"] != "hub_new" {
 		t.Errorf("hub_id = %v, want hub_new", out["hub_id"])
 	}
-	// Read BACK from the server, not echoed from the flags: the backend mints a
-	// unique slug when the requested one is taken, and hub_path is built from it.
 	if out["hub_slug"] != "my-community" {
 		t.Errorf("hub_slug = %v, want my-community (the slug the server actually assigned)", out["hub_slug"])
 	}
@@ -442,8 +363,6 @@ func TestScaffoldHubOp_ResultCarriesPerSlugIDs(t *testing.T) {
 		t.Errorf("homepage_page_id = %v, want pg_home", out["homepage_page_id"])
 	}
 
-	// The ordering pairing is what could silently mis-attribute, so assert the
-	// mapping per slug rather than counting ids.
 	wantPages := map[string]any{"homepage": "pg_home", "about": "pg_about", "faq": "pg_faq"}
 	for _, raw := range out["pages"].([]any) {
 		p := raw.(map[string]any)
@@ -458,8 +377,6 @@ func TestScaffoldHubOp_ResultCarriesPerSlugIDs(t *testing.T) {
 			t.Errorf("spaces[%v].space_id = %v, want %v", s["slug"], got, want)
 		}
 	}
-	// `onboarding:role` was SKIPPED (reused), so it appended no id — the run must
-	// report null for it, not shift `def_company` onto it.
 	wantDefs := map[string]any{"company": "def_company", "role": nil}
 	for _, raw := range out["onboarding_attributes"].([]any) {
 		d := raw.(map[string]any)
@@ -470,8 +387,6 @@ func TestScaffoldHubOp_ResultCarriesPerSlugIDs(t *testing.T) {
 	}
 }
 
-// The op path and the client path must answer with the same SHAPE, or an agent
-// that parses one breaks on the other. This is the ticket's e2e parity gate.
 func TestScaffoldHubOp_JSONShapeMatchesTheClientPath(t *testing.T) {
 	opSrv, _ := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 	cliSrv, _ := hubOpScaffoldServer(t, http.StatusMethodNotAllowed, `{"detail":"Method Not Allowed"}`)
@@ -491,8 +406,6 @@ func TestScaffoldHubOp_JSONShapeMatchesTheClientPath(t *testing.T) {
 			t.Errorf("op path is missing result key %q — an agent parsing one path breaks on the other", k)
 		}
 	}
-	// The identity keys must not merely be present, they must agree: a path that
-	// reported hub_id null would satisfy a presence-only check.
 	for _, k := range []string{"hub_id", "hub_slug", "hub_path", "hub_name", "template_id"} {
 		if opOut[k] != cliOut[k] {
 			t.Errorf("%s: op=%v client=%v — the two paths built the same hub and must describe it identically",
@@ -501,12 +414,7 @@ func TestScaffoldHubOp_JSONShapeMatchesTheClientPath(t *testing.T) {
 	}
 }
 
-// If the row→kind mapping ever drifts from the backend's, the ordered pairing
-// would attribute ids to the WRONG slugs. The self-check must notice the count
-// mismatch and drop the kind entirely: a null id renders as null, a wrong id
-// gets acted on.
 func TestScaffoldHubOp_IDCountMismatchDropsIDsRatherThanMisattributing(t *testing.T) {
-	// Three created page rows, TWO page ids.
 	const skewed = `{"data":{"id":"hub_new","type":"hub_scaffolds","attributes":{
 	  "hub_id":"hub_new",
 	  "summary":[
@@ -536,8 +444,6 @@ func TestScaffoldHubOp_IDCountMismatchDropsIDsRatherThanMisattributing(t *testin
 	}
 }
 
-// A replay carries the summary but no created ids. It must not read as "created
-// nothing", and above all must not look like a second hub.
 func TestScaffoldHubOp_ReplayIsReportedNotReapplied(t *testing.T) {
 	const replay = `{"data":{"id":"hub_new","type":"hub_scaffolds","attributes":{
 	  "hub_id":"hub_new",
@@ -559,16 +465,11 @@ func TestScaffoldHubOp_ReplayIsReportedNotReapplied(t *testing.T) {
 	if !strings.Contains(res.Stderr, "already scaffolded") {
 		t.Errorf("a replay must be disclosed — it is how the operator knows no duplicate was made; stderr=%q", res.Stderr)
 	}
-	// A replay carries NO created ids by design, so every kind trips the
-	// count-vs-rows check. Reporting each as an anomaly would bury the one line
-	// that matters under warnings describing the documented normal.
 	if strings.Contains(res.Stderr, "not recorded") {
 		t.Errorf("a replay's empty created_resource_ids is by design and must not be reported as a backend anomaly; stderr=%q", res.Stderr)
 	}
 }
 
-// A skipped row is the op explaining what it did NOT do; those reasons are the
-// operator's only view into a server-side apply.
 func TestScaffoldHubOp_SkippedRowsBecomeOperatorNotes(t *testing.T) {
 	srv, _ := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
@@ -584,8 +485,6 @@ func TestScaffoldHubOp_SkippedRowsBecomeOperatorNotes(t *testing.T) {
 		t.Errorf("notes belong on stderr — stdout carries the rendered result only; stdout=%q", res.Stdout)
 	}
 }
-
-// ─── helpers ─────────────────────────────────────────────────────────────────
 
 func hubOpOverrides(t *testing.T, body []byte) map[string]any {
 	t.Helper()
@@ -620,10 +519,6 @@ func writeTempCatalog(t *testing.T, body []byte) string {
 	return p
 }
 
-// The publish row is the FALLBACK source for published state: on a healthy run
-// the identity read-back observes the hub directly and wins. This pins the
-// fallback, which is otherwise unobservable — and unobservable code is code that
-// can rot silently.
 func TestScaffoldHubOp_PublishStateFallsBackToTheSummaryRow(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -659,8 +554,6 @@ func TestScaffoldHubOp_PublishStateFallsBackToTheSummaryRow(t *testing.T) {
 	}
 }
 
-// hubOpScaffoldServerNoReadBack is hubOpScaffoldServer with the hub GET failing,
-// so the run must fall back to what the summary told it.
 func hubOpScaffoldServerNoReadBack(t *testing.T, opBody string) (*httptest.Server, *hubOpCapture) {
 	t.Helper()
 	rec := &hubOpCapture{}
@@ -692,14 +585,6 @@ func hubOpScaffoldServerNoReadBack(t *testing.T, opBody string) (*httptest.Serve
 	return srv, rec
 }
 
-// The op REQUIRES both identity attributes and rejects an empty one (name
-// min_length 1, slug pattern ^[a-z0-9-]+$). The client path is laxer — it lets
-// the backend mint a slug from the title — so an invocation giving only one of
-// the two must stay client-side.
-//
-// This branch shipped in the first cut of MIO-2976 with NO coverage: deleting it
-// left the whole cmd suite green, while an invocation that works today would
-// have started 422ing the moment the flag flipped.
 func TestScaffoldHubOp_PartialIdentityForcesClientPath(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -709,8 +594,6 @@ func TestScaffoldHubOp_PartialIdentityForcesClientPath(t *testing.T) {
 		{"no name", []string{"hubs", "scaffold", "--template", "community", "--slug", "founders", "--output", "json"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// A LIVE op, so a missing guard shows up as the op being taken. A 405
-			// stub could not discriminate — it falls back either way.
 			srv, rec := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
 			res := runContract(t, scaffoldEnv(t, srv.URL), withTeam("t_team1", tc.args...)...)
@@ -730,10 +613,6 @@ func TestScaffoldHubOp_PartialIdentityForcesClientPath(t *testing.T) {
 	}
 }
 
-// A 2xx the CLI cannot identify a hub from must NOT read as a successful build.
-// `HUB_ID=$(mio hubs scaffold … --jq .hub_id)` is the documented capture idiom,
-// so an empty hub_id at exit 0 is the silent-failure shape — and because the op
-// may well have built the hub, this must not fall back and build a second one.
 func TestScaffoldHubOp_UnidentifiableSuccessIsAnError(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
 		{"empty body", ""},
@@ -756,10 +635,6 @@ func TestScaffoldHubOp_UnidentifiableSuccessIsAnError(t *testing.T) {
 	}
 }
 
-// The resource id is the same value the attribute carries
-// (HubScaffoldResultResource(id=result.hub_id, …)), so a body that omits the
-// attribute but carries the envelope id is still usable — and must be used
-// rather than reported as "".
 func TestScaffoldHubOp_FallsBackToTheEnvelopeIDForTheHub(t *testing.T) {
 	const idOnly = `{"data":{"id":"hub_new","type":"hub_scaffolds","attributes":{
 	  "summary":[{"resource":"hub","action":"created"}],
@@ -776,23 +651,8 @@ func TestScaffoldHubOp_FallsBackToTheEnvelopeIDForTheHub(t *testing.T) {
 	}
 }
 
-// An empty branding *_url — in ANY spelling — must be refused BEFORE any request.
-//
-// The earlier reading — "the op rejects it, so take the client path, which can
-// honour it" — was wrong in its second half: mio-backend's validate_branding runs
-// the same _validate_absolute_https_url over branding *_url keys on BOTH
-// HubCreateAttributes and HubUpdateAttributes, and that rejects the empty string.
-// So the client path creates the hub and THEN 422s at the blobs PATCH, leaving a
-// half-built hub with no rollback and printing a resume command carrying the same
-// poisoned flag. Neither path can honour it, so nothing may be written at all.
 func TestScaffoldHubOp_EmptyURLOverrideIsAUsageErrorBeforeAnyRequest(t *testing.T) {
-	// The probe set is EVERY registered --*-url flag, not a list maintained beside
-	// the implementation's own. Round 4 fixed --logo-url and --favicon-url and
-	// missed --social-image-url; a hardcoded pair here could not have noticed,
-	// which is the "probe set smaller than the claim" shape. The oracle is the
-	// WIRE — no request may fire — so no edit to any list can green this.
-	// Every registered --*-url flag, discovered rather than listed...
-	var cases [][]string // arg pairs
+	var cases [][]string
 	hubsScaffoldCmd.Flags().VisitAll(func(f *pflag.Flag) {
 		if strings.HasSuffix(f.Name, "-url") {
 			cases = append(cases, []string{"--" + f.Name})
@@ -801,15 +661,11 @@ func TestScaffoldHubOp_EmptyURLOverrideIsAUsageErrorBeforeAnyRequest(t *testing.
 	if len(cases) < 3 {
 		t.Fatalf("expected at least 3 --*-url flags on `hubs scaffold`, found %v — has the flag surface changed?", cases)
 	}
-	// ...PLUS the other spelling of the same override. The backend's rule is about
-	// branding KEYS, not flag names, so a check that only knew about flags left
-	// --branding-json on the orphan-producing path.
 	cases = append(cases, []string{"--branding-json"})
 
 	for _, tc := range cases {
 		flag := tc[0]
 		t.Run(flag, func(t *testing.T) {
-			// --branding-json takes an object, not a bare value.
 			value := func(v string) string {
 				if flag == "--branding-json" {
 					return `{"logo_url":"` + v + `"}`
@@ -828,15 +684,11 @@ func TestScaffoldHubOp_EmptyURLOverrideIsAUsageErrorBeforeAnyRequest(t *testing.
 				t.Errorf("exit = %d, want %d (ExitUsage) — the API rejects an empty branding *_url on create AND "+
 					"update, so this can never succeed; stderr=%q", res.Code, errs.ExitUsage, res.Stderr)
 			}
-			// The oracle: NOTHING was written. A hub created here is orphaned.
 			if rec.hubCreates != 0 || len(rec.opPosts) != 0 || len(rec.clientPosts) != 0 {
 				t.Errorf("no request may fire — the old behaviour created a hub and then 422'd at the blobs "+
 					"PATCH; opPosts=%d hubCreates=%d otherPosts=%v",
 					len(rec.opPosts), rec.hubCreates, rec.clientPosts)
 			}
-			// An operator told only "no" is stuck: clearing a branding key has its
-			// own verb and the message must name it. The text comes back on the
-			// returned error, which runContract does not render.
 			err := executeCLI(t, scaffoldEnv(t, srv.URL), scaffoldArgs(flag, value(""))...)
 			if err == nil {
 				t.Fatal("an empty URL override must fail")
@@ -848,22 +700,12 @@ func TestScaffoldHubOp_EmptyURLOverrideIsAUsageErrorBeforeAnyRequest(t *testing.
 	}
 }
 
-// A flag in neither classification set is SILENTLY dropped when the op path is
-// taken: pflag's Changed() answers false for a name it does not know, so
-// hubOpUnsupportedFlags would never see it and the op would run without it.
-// This fails the moment a new scaffold flag is added and left unclassified.
 func TestScaffoldHubOp_EveryScaffoldFlagIsClassified(t *testing.T) {
 	unsupported := map[string]bool{"branding-json": true, "catalog": true}
 	for _, f := range scaffoldBrandingFlags {
 		unsupported[f.flag] = true
 	}
 
-	// The scaffold's own flags, PLUS any persistent flag the `hubs` group adds —
-	// those are usable on `hubs scaffold` and equally droppable, and scanning only
-	// LocalFlags would miss them (it did: adding a hubsCmd persistent flag left
-	// this guard green). The ROOT's persistent flags are excluded: --team/--output/
-	// --jq/--hub are context or rendering, not part of the op's request surface,
-	// and --hub has its own skip branch.
 	rootPersistent := RootCmd().PersistentFlags()
 	scan := func(f *pflag.Flag) {
 		if f.Name == "help" || rootPersistent.Lookup(f.Name) != nil {
@@ -883,14 +725,6 @@ func TestScaffoldHubOp_EveryScaffoldFlagIsClassified(t *testing.T) {
 	hubsCmd.PersistentFlags().VisitAll(scan)
 }
 
-// Four agent-facing docs tell agents to branch on the literal token
-// `idempotency_fingerprint_mismatch` in the error text. That is a behavioural
-// claim about runtime output and needs a guard, not a one-off measurement:
-// deleting the token from the message left the whole suite green.
-//
-// internal/client's TestHasAPIErrorCode_MatchesCodeNotMessage asserts the
-// OPPOSITE property (the code is absent from apiError.message()), so it cannot
-// cover this — that is exactly why the token has to be re-added deliberately.
 func TestScaffoldHubOp_FingerprintMismatchNamesTheMachineToken(t *testing.T) {
 	srv, _ := hubOpScaffoldServer(t, http.StatusConflict,
 		`{"errors":[{"code":"idempotency_fingerprint_mismatch","detail":"reused"}]}`)
@@ -906,23 +740,16 @@ func TestScaffoldHubOp_FingerprintMismatchNamesTheMachineToken(t *testing.T) {
 	}
 }
 
-// The same four docs state: "Every FLAG-forced skip is noted on stderr;
-// --dry-run is not." Both halves are behaviour, and inverting BOTH announce
-// booleans left the suite green — the existing skip tests assert only that no
-// POST fires. This pins the notes themselves.
 func TestScaffoldHubOp_SkipNotesMatchWhatTheDocsPromise(t *testing.T) {
 	const marker = "not using the server-side hub scaffold op"
 
 	for _, tc := range []struct {
 		name  string
 		extra []string
-		want  string // "" means: must say nothing at all
+		want  string
 	}{
 		{"branding flag is named", []string{"--primary-color", "#B91C1C"}, "--primary-color"},
 		{"local catalog is named", []string{"--catalog", "@CATALOG@"}, "--catalog"},
-		// The remaining two announce=true branches. Without these the table
-		// covered 2 of 4 while the docs promise EVERY flag-forced skip is noted —
-		// the "probe set smaller than the claim" shape.
 		{"resume mode is explained", []string{"--hub", "hub_new"}, "--hub"},
 		{"partial identity is explained", []string{"@DROP-SLUG@"}, "--name and --slug"},
 		{"structural --dry-run stays silent", []string{"--dry-run"}, ""},
@@ -930,7 +757,6 @@ func TestScaffoldHubOp_SkipNotesMatchWhatTheDocsPromise(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, _ := hubOpScaffoldServer(t, http.StatusCreated, hubOpLiveBody)
 
-			// Two cases cannot be expressed as an extra flag on the standard args.
 			args := scaffoldArgs(tc.extra...)
 			switch {
 			case len(tc.extra) == 1 && tc.extra[0] == "@DROP-SLUG@":
@@ -959,10 +785,6 @@ func TestScaffoldHubOp_SkipNotesMatchWhatTheDocsPromise(t *testing.T) {
 	}
 }
 
-// A 2xx carrying an id but a FOREIGN resource type is not this op's response and
-// must not be read as a finished hub. A generic `hubs` body is exactly what a
-// catch-all test stub answers with, which is how one pre-existing test silently
-// stopped exercising the client-side pipeline.
 func TestScaffoldHubOp_ForeignEnvelopeTypeIsNotAHub(t *testing.T) {
 	srv, rec := hubOpScaffoldServer(t, http.StatusCreated,
 		`{"data":{"id":"hub_created","type":"hubs","attributes":{"slug":"x","is_private":true}}}`)
@@ -977,19 +799,6 @@ func TestScaffoldHubOp_ForeignEnvelopeTypeIsNotAHub(t *testing.T) {
 	}
 }
 
-// The unusable-2xx path attaches the status the API ACTUALLY answered, so a 201
-// whose body names no hub reports `status: "201"` with `exit_code: 7` — not the
-// "500" that ExitServer would otherwise back-derive.
-//
-// This is the contract TestContract_ErrorEnvelope_RealHTTPStatus states in so
-// many words: PRECISE status, COARSE exit code. It reads oddly — a 2xx inside an
-// error object — and the alternative was considered: reporting 500 would tell an
-// agent the API failed when it returned 201, which is the exact relabelling that
-// contract exists to stop. The oddity is the honest answer; the exit code, not
-// the status, is what says "this failed".
-//
-// Guarded because it is behaviour: dropping the status assignment left the whole
-// suite green while the envelope silently went back to claiming 500.
 func TestScaffoldHubOp_UnusableSuccessReportsTheRealHTTPStatus(t *testing.T) {
 	bin := buildBinary(t)
 	srv, _ := hubOpScaffoldServer(t, http.StatusCreated,
@@ -1007,8 +816,6 @@ func TestScaffoldHubOp_UnusableSuccessReportsTheRealHTTPStatus(t *testing.T) {
 			Meta   map[string]any `json:"meta"`
 		} `json:"errors"`
 	}
-	// stderr also carries progress notes before the envelope, which is
-	// pretty-printed across several lines — so take everything from the first "{".
 	raw := stderr
 	if i := strings.Index(raw, "{"); i >= 0 {
 		raw = raw[i:]
@@ -1028,15 +835,7 @@ func TestScaffoldHubOp_UnusableSuccessReportsTheRealHTTPStatus(t *testing.T) {
 	}
 }
 
-// Recovery guidance that names a command which does not exist is worse than no
-// guidance: it fires exactly when an operator or agent is trying to recover, and
-// following it costs another failed invocation. `mio hubs get` was shipped in
-// this file's read-back note; the verb is `retrieve`.
-//
-// The oracle is the COBRA COMMAND TREE, not a list of known-good strings — a
-// second list would just be another thing to forget to update.
 func TestScaffoldHubOp_RecoveryGuidanceNamesRealCommands(t *testing.T) {
-	// A live op whose hub cannot be read back: emits the read-back guidance.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serveCatalogGET(w, r, catalog21Body(t)) {
 			return
@@ -1065,8 +864,6 @@ func TestScaffoldHubOp_RecoveryGuidanceNamesRealCommands(t *testing.T) {
 	if len(refs) == 0 {
 		t.Fatalf("expected the read-back failure to suggest a command; stderr=%q", res.Stderr)
 	}
-	// Keep only command-shaped tokens; ids and placeholders (hub_new, <id>, --flag)
-	// are arguments, not verbs.
 	cmdToken := regexp.MustCompile(`^[a-z][a-z-]*$`)
 	for _, m := range refs {
 		var path []string
@@ -1080,9 +877,6 @@ func TestScaffoldHubOp_RecoveryGuidanceNamesRealCommands(t *testing.T) {
 			continue
 		}
 		cmd, _, err := RootCmd().Find(path)
-		// Find returns the DEEPEST command it matched, leaving unmatched tokens as
-		// args — so an unknown verb resolves to its parent. Requiring the resolved
-		// path to consume every token is what catches `hubs get`.
 		if err != nil || len(strings.Fields(cmd.CommandPath())) != len(path)+1 {
 			t.Errorf("recovery guidance names `mio %s`, which is not a command (resolved to %q). "+
 				"Guidance is executed literally by agents; stderr=%q",

@@ -1,9 +1,5 @@
 package cmd
 
-// analytics_engagement_test.go — contract tests for `mio analytics engagement`
-// (MIO-2269). GET .../analytics/engagement with from/to/section/page[size]
-// query params.
-
 import (
 	"net/http"
 	"net/url"
@@ -15,9 +11,6 @@ import (
 
 const engagementBody = `{"data":{"id":"eng_1","type":"engagement","attributes":{"sections":[]}}}`
 
-// TestAnalyticsEngagement_PathAndQuery pins the GET: method, path suffix, and
-// that --from/--to/--section/--limit map to the from/to/section/page[size]
-// query params.
 func TestAnalyticsEngagement_PathAndQuery(t *testing.T) {
 	srv, gotMethod, gotPath, gotQuery, _ := captureAdminReq(t, http.StatusOK, engagementBody)
 
@@ -58,8 +51,6 @@ func TestAnalyticsEngagement_PathAndQuery(t *testing.T) {
 	}
 }
 
-// TestAnalyticsEngagement_NoFilters pins that with no filter flags the request
-// still fires as a bare GET (all query params optional).
 func TestAnalyticsEngagement_NoFilters(t *testing.T) {
 	srv, gotMethod, gotPath, gotQuery, _ := captureAdminReq(t, http.StatusOK, engagementBody)
 
@@ -80,8 +71,6 @@ func TestAnalyticsEngagement_NoFilters(t *testing.T) {
 	}
 }
 
-// TestAnalyticsEngagement_InvalidSection pins that an unrecognised --section
-// exits ExitUsage without firing any request.
 func TestAnalyticsEngagement_InvalidSection(t *testing.T) {
 	srv, fired := firedGuardServer(t)
 
@@ -97,8 +86,6 @@ func TestAnalyticsEngagement_InvalidSection(t *testing.T) {
 	}
 }
 
-// TestAnalyticsEngagement_InvalidLimit pins that a --limit outside 1–100 exits
-// ExitUsage without firing any request.
 func TestAnalyticsEngagement_InvalidLimit(t *testing.T) {
 	for _, lim := range []string{"0", "101"} {
 		srv, fired := firedGuardServer(t)

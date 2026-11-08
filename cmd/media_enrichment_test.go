@@ -1,17 +1,5 @@
 package cmd
 
-// media_enrichment_test.go — contract tests for the MIO-2266 media-enrichment
-// commands:
-//
-//	media files cards    get|set   (PUT full-replace, JSON:API type file_cards)
-//	media files chapters get|set   (PUT full-replace, JSON:API type file_chapters)
-//	media folders move              (POST, JSON:API type "folders" — NOT "move")
-//	media search                    (GET /search/media?q=…)
-//	media hub-media publish|list|unpublish (standalone files, type hub_media)
-//
-// Each write pins method + path suffix + JSON:API type + key attributes + exit
-// code; each required-flag/enum has a case asserting ExitUsage fires NO request.
-
 import (
 	"io"
 	"net/http"
@@ -23,12 +11,8 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// emptyCollectionBody is a minimal JSON:API collection the client can decode for
-// the cards/chapters/search/list read paths (which expect a `data: [...]`).
 const emptyCollectionBody = `{"data":[],"meta":{"count":0},"links":{"next":null}}`
 
-// captureMediaRequest starts a server recording the first request's method,
-// path, raw query, and body, replying with respBody at the given status.
 func captureMediaRequest(t *testing.T, status int, respBody string) (
 	srv *httptest.Server, method, path, rawQuery *string, body *[]byte,
 ) {
@@ -48,8 +32,6 @@ func captureMediaRequest(t *testing.T, status int, respBody string) (
 	return srv, &gotMethod, &gotPath, &gotQuery, &gotBody
 }
 
-// mediaFiredServer returns a server that flips *fired true on ANY request, used to
-// prove a client-side usage error fired NO HTTP request.
 func mediaFiredServer(t *testing.T, fired *bool, body string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -61,8 +43,6 @@ func mediaFiredServer(t *testing.T, fired *bool, body string) *httptest.Server {
 	t.Cleanup(srv.Close)
 	return srv
 }
-
-// ─── media files cards ─────────────────────────────────────────────────────────
 
 func TestMediaFilesCardsGet_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _, _ := captureMediaRequest(t, http.StatusOK, emptyCollectionBody)
@@ -169,8 +149,6 @@ func TestMediaFilesCardsSet_RejectsInvalidJSON(t *testing.T) {
 	}
 }
 
-// ─── media files chapters ────────────────────────────────────────────────────
-
 func TestMediaFilesChaptersGet_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _, _ := captureMediaRequest(t, http.StatusOK, emptyCollectionBody)
 
@@ -231,8 +209,6 @@ func TestMediaFilesChaptersSet_RequiresChapters(t *testing.T) {
 	}
 }
 
-// ─── media folders move ──────────────────────────────────────────────────────
-
 func TestMediaFoldersMove_ParentBody(t *testing.T) {
 	srv, gotMethod, gotPath, _, gotBody := captureMediaRequest(t, http.StatusOK, minimalHubBody)
 
@@ -267,7 +243,6 @@ func TestMediaFoldersMove_ToRootBody(t *testing.T) {
 		t.Fatalf("exit = %d, want ExitOK; stderr=%q", res.Code, res.Stderr)
 	}
 	_, attrs := decodeDataTypeAttrs(t, *gotBody)
-	// new_parent_id must be present AND explicitly null (move to root).
 	v, ok := attrs["new_parent_id"]
 	if !ok {
 		t.Errorf("new_parent_id key must be present (null); attrs=%v", attrs)
@@ -303,8 +278,6 @@ func TestMediaFoldersMove_RejectsBothTargets(t *testing.T) {
 		t.Error("both --parent-id and --to-root must exit before any HTTP request")
 	}
 }
-
-// ─── media search ────────────────────────────────────────────────────────────
 
 func TestMediaSearch_Query(t *testing.T) {
 	srv, gotMethod, gotPath, gotQuery, _ := captureMediaRequest(t, http.StatusOK, emptyCollectionBody)
@@ -366,8 +339,6 @@ func TestMediaSearch_RejectsOutOfRangeLimit(t *testing.T) {
 		})
 	}
 }
-
-// ─── media hub-media (standalone files) ──────────────────────────────────────
 
 func TestMediaHubMediaPublish_Body(t *testing.T) {
 	srv, gotMethod, gotPath, _, gotBody := captureMediaRequest(t, http.StatusCreated, minimalHubBody)

@@ -1,9 +1,5 @@
 package cmd
 
-// coupons_products_test.go — contract tests for `mio coupons products`
-// {list,attach,detach} (MIO-2268). Pins method + path + JSON:API type + attrs +
-// exit codes.
-
 import (
 	"net/http"
 	"strings"
@@ -11,8 +7,6 @@ import (
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
-
-// ─── coupons products list ─────────────────────────────────────────────────────
 
 func TestCouponsProductsList_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _ := captureCommerceRequest(t, http.StatusOK, commerceListBody)
@@ -30,8 +24,6 @@ func TestCouponsProductsList_Path(t *testing.T) {
 		t.Errorf("path %q does not end with /coupons/cpn_1/products", *gotPath)
 	}
 }
-
-// ─── coupons products attach ───────────────────────────────────────────────────
 
 func TestCouponsProductsAttach_Body(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureCommerceRequest(t, http.StatusCreated,
@@ -69,8 +61,6 @@ func TestCouponsProductsAttach_RejectsEmptyIDs(t *testing.T) {
 		t.Error("empty product id must exit before any HTTP request")
 	}
 }
-
-// ─── coupons products detach ───────────────────────────────────────────────────
 
 func TestCouponsProductsDetach_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _ := captureCommerceRequest(t, http.StatusNoContent, "")

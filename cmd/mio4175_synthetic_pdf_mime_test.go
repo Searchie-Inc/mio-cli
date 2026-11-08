@@ -1,16 +1,5 @@
 package cmd
 
-// mio4175_synthetic_pdf_mime_test.go — `media files register-synthetic` help
-// must not teach a pdf that is stored as a generic blob (MIO-4175).
-//
-// The CLI sends mime_type only when --mime-type is passed
-// (TestFilesRegisterSynthetic_Body pins that, and it stays: which layer owns a
-// kind-derived default was decided for the backend). The endpoint then stores
-// `mime_type or "application/octet-stream"` (mio-backend
-// app/media/service.py register_synthetic_file) and does not look at asset_kind.
-// So the help's own `--asset-kind pdf` example registered a pdf with mime
-// application/octet-stream, which mime-keyed viewers treat as an unknown file.
-
 import (
 	"io"
 	"net/http"
@@ -22,9 +11,6 @@ import (
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
 
-// storedSyntheticMime is what the endpoint stores for a register body: the
-// mime_type sent, else application/octet-stream whatever asset_kind says
-// (service.py: `mime_type=mime_type or "application/octet-stream"`).
 func storedSyntheticMime(attrs map[string]any) string {
 	if m, _ := attrs["mime_type"].(string); m != "" {
 		return m
@@ -32,11 +18,6 @@ func storedSyntheticMime(attrs map[string]any) string {
 	return "application/octet-stream"
 }
 
-// Every register-synthetic Example is RUN against a stub, and each one that
-// registers a pdf (asset_kind "pdf" on the wire) must leave the endpoint storing
-// application/pdf. The oracle is the request body the example produces, put
-// through the endpoint's own defaulting rule: no edit to the help prose alone
-// can satisfy it.
 func TestRegisterSyntheticExamples_APdfIsStoredAsAPdf(t *testing.T) {
 	res := docexamples.FromScript("register-synthetic Example", 1, mediaFilesRegisterSyntheticCmd.Example)
 	if len(res.Uncovered) > 0 {
@@ -79,8 +60,6 @@ func TestRegisterSyntheticExamples_APdfIsStoredAsAPdf(t *testing.T) {
 	}
 }
 
-// The --mime-type flag help must say what an omitted flag stores. It said only
-// "Optional mime type.", and the endpoint's default is the generic blob type.
 func TestRegisterSyntheticHelp_MimeTypeFlagNamesTheEndpointDefault(t *testing.T) {
 	f := mediaFilesRegisterSyntheticCmd.Flags().Lookup("mime-type")
 	if f == nil {

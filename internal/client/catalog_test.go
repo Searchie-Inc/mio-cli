@@ -1,11 +1,5 @@
 package client
 
-// catalog_test.go — the raw page-builder catalog fetch (MIO-2340). Unlike every
-// other client verb the catalog endpoint returns PLAIN JSON (not JSON:API) and
-// participates in HTTP caching: an If-None-Match echo of the ETag yields 304,
-// which must surface as NotModified (not an error) so the CLI can reuse its
-// on-disk cache.
-
 import (
 	"context"
 	"net/http"

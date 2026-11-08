@@ -1,17 +1,5 @@
 package cmd
 
-// pages.go implements the `mio pages` command group and its `sections`
-// sub-resource group. Both groups are hub-scoped: every command requires a
-// resolved hub id (--hub flag or config current_hub) in addition to a team id.
-//
-// Routes (see docs/internal/api-surface.md "pages"):
-//
-//	pages:    CRUD + home  /api/teams/{team_id}/hubs/{hub_id}/pages[/{id}]
-//	          home         /api/teams/{team_id}/hubs/{hub_id}/pages/home
-//	          publish      /api/teams/{team_id}/hubs/{hub_id}/pages/{id}/publish
-//	sections: create/list  /api/teams/{team_id}/hubs/{hub_id}/pages/{pid}/sections
-//	          update/delete/reorder  …/sections[/{sid}]
-
 import (
 	"fmt"
 	"net/http"
@@ -27,7 +15,6 @@ import (
 )
 
 func init() {
-	// pages <action>
 	pagesCmd.AddCommand(
 		pagesCreateCmd,
 		pagesListCmd,
@@ -38,7 +25,6 @@ func init() {
 		pagesPublishCmd,
 	)
 
-	// pages sections <action>  (nested sub-resource)
 	pagesSectionsCmd.AddCommand(
 		pagesSectionsCreateCmd,
 		pagesSectionsListCmd,
@@ -48,15 +34,11 @@ func init() {
 	)
 	pagesCmd.AddCommand(pagesSectionsCmd)
 
-	// pages tree <action>  (draft node-tree authoring, MIO-2258)
 	pagesTreeCmd.AddCommand(pagesTreeGetCmd, pagesTreeSetCmd)
 	pagesCmd.AddCommand(pagesTreeCmd)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(pagesCmd)
 }
-
-// ---- pages group ------------------------------------------------------------
 
 var pagesCmd = &cobra.Command{
 	Use:   "pages",
@@ -64,13 +46,10 @@ var pagesCmd = &cobra.Command{
 	Long:  "Create, list, retrieve, update and delete pages within a hub. Hub-scoped: --hub is required.",
 }
 
-// pagesBase returns the collection path for pages within a hub.
-// /api/teams/{team_id}/hubs/{hub_id}/pages
 func pagesBase(teamID, hubID string) string {
 	return fmt.Sprintf("/api/teams/%s/hubs/%s/pages", teamID, hubID)
 }
 
-// pagesPath returns /api/teams/{team_id}/hubs/{hub_id}/pages[/{id}].
 func pagesPath(teamID, hubID, id string) string {
 	base := pagesBase(teamID, hubID)
 	if id != "" {
@@ -148,9 +127,6 @@ var pagesRetrieveCmd = &cobra.Command{
 
 		path := pagesPath(teamID, hubID, args[0])
 
-		// --tree requests the raw published node tree (page-trees resource) instead
-		// of page metadata. The backend distinguishes the two responses via the
-		// resolve=false query parameter on the same GET route.
 		if cmd.Flags().Changed("tree") {
 			v, ferr := cmd.Flags().GetBool("tree")
 			if ferr == nil && v {
@@ -238,10 +214,6 @@ section_count, and gate_count.`,
 	Example: `  mio pages publish page_abc123 --hub hub_123 --if-match 7`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// --if-match is declared required (MarkFlagRequired) so cobra enforces it
-		// at parse time for normal CLI use. We also guard here explicitly so that
-		// the in-process test harness (which shares a singleton cobra command tree
-		// across tests) also gets the ExitUsage signal when the flag is absent.
 		if !cmd.Flags().Changed("if-match") {
 			return errs.New(errs.ExitUsage, "--if-match is required: supply the draft_version from a prior retrieve")
 		}
@@ -256,16 +228,13 @@ section_count, and gate_count.`,
 			return errs.New(errs.ExitUsage, "--if-match: %s", ferr.Error())
 		}
 
-		// POST …/pages/{id}/publish — no request body; optimistic lock via If-Match.
-		// client.StyleEnvelope is the zero value of BodyStyle; it is irrelevant here
-		// because the body is nil, but the named constant is clearer than a bare 0.
 		path := pagesPath(teamID, hubID, args[0]) + "/publish"
 		res, err := c.client.ActionWithHeaders(
 			c.ctx,
-			client.StyleEnvelope, // irrelevant; body is nil
+			client.StyleEnvelope,
 			"POST",
 			path,
-			nil, // no body
+			nil,
 			map[string]string{"If-Match": strconv.Itoa(ifMatch)},
 		)
 		if err != nil {
@@ -300,7 +269,6 @@ var pagesHomeCmd = &cobra.Command{
 }
 
 func init() {
-	// Attribute flags for pages create/update.
 	for _, cmd := range []*cobra.Command{pagesCreateCmd, pagesUpdateCmd} {
 		cmd.Flags().String("title", "", "Page title.")
 		cmd.Flags().String("slug", "", "URL slug for the page. Reserved slugs are rejected by the API with 422 page_slug_reserved: "+strings.Join(catalog.ReservedPageSlugs(), ", ")+". The API set is authoritative.")
@@ -311,32 +279,20 @@ func init() {
 		cmd.Flags().String("settings", "", "Page settings as a JSON object or @file path.")
 		cmd.Flags().String("meta", "", "Page metadata as a JSON object or @file path.")
 	}
-	// Only create has a default type (the API's) and a template to start from;
-	// on update an omitted --type leaves the page's type as it is.
 	pagesCreateCmd.Flags().Lookup("type").Usage = "Page type (default: generic). The hub renders a 'sales' page without its header and mobile navigation (the footer stays); scaffold it from the page-sales catalog template."
 	addPaginationFlags(pagesListCmd)
 
-	// --if-match is required on publish; cobra enforces the requirement at parse time.
 	pagesPublishCmd.Flags().Int("if-match", 0, "Draft version number from a prior retrieve (optimistic concurrency lock). Required.")
 	if err := pagesPublishCmd.MarkFlagRequired("if-match"); err != nil {
 		panic("MarkFlagRequired if-match: " + err.Error())
 	}
 
-	// --tree on retrieve: return the raw published node tree (page-trees) instead of page metadata.
 	pagesRetrieveCmd.Flags().Bool("tree", false, "Return the raw published node tree (page-trees) instead of page metadata.")
 
-	// pages tree set flags (MIO-2258).
-	// --if-match is OPTIONAL here (unlike publish): it defaults to 0, the
-	// first-set sentinel for a draft-less page whose 'pages tree get' 404s and so
-	// has no draft_version to echo back. The backend's atomic OCC guard still
-	// rejects a defaulted 0 against a page that already has a draft, so omitting
-	// the flag can never clobber an existing draft (MIO-2518).
 	pagesTreeSetCmd.Flags().String("file", "", "Path to the tree JSON file (optionally @-prefixed). Required.")
 	pagesTreeSetCmd.Flags().Int("if-match", 0, "draft_version from a prior 'pages tree get' (optimistic concurrency lock). Optional: omit for the first tree on a draft-less page (defaults to 0).")
 }
 
-// pagesContext is the shared boilerplate for page commands: build the context,
-// require auth, and resolve both the team id and the hub id.
 func pagesContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	c, err := newContext(cmd)
 	if err != nil {
@@ -356,21 +312,16 @@ func pagesContext(cmd *cobra.Command) (*cmdContext, string, string, error) {
 	return c, teamID, hubID, nil
 }
 
-// ---- pages sections sub-resource -------------------------------------------
-
 var pagesSectionsCmd = &cobra.Command{
 	Use:   "sections",
 	Short: "Manage a page's sections.",
 	Long:  "Create, list, update, delete and reorder sections nested under a page.",
 }
 
-// sectionsBase returns the collection path for sections within a page.
-// /api/teams/{team_id}/hubs/{hub_id}/pages/{pid}/sections
 func sectionsBase(teamID, hubID, pid string) string {
 	return fmt.Sprintf("/api/teams/%s/hubs/%s/pages/%s/sections", teamID, hubID, pid)
 }
 
-// sectionsPath returns …/sections[/{sid}].
 func sectionsPath(teamID, hubID, pid, sid string) string {
 	base := sectionsBase(teamID, hubID, pid)
 	if sid != "" {
@@ -397,10 +348,6 @@ section-type-specific.`,
   mio pages sections create page_abc123 --hub hub_123 --type grid --settings @section-settings.json`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// --type is required (cobra enforces its presence before RunE). Validate
-		// it against the catalog FIRST, before any HTTP or scope resolution. The
-		// check is read-tolerant: a KNOWN non-writable type fails fast here, while
-		// an unknown type is deferred to the backend (see validateSectionType).
 		if err := validateSectionType(getString(cmd, "type")); err != nil {
 			return err
 		}
@@ -563,9 +510,6 @@ var pagesSectionsReorderCmd = &cobra.Command{
 			data[i] = map[string]any{"id": id, "position": i}
 		}
 
-		// The backend reorder endpoint (PATCH .../sections) takes a bare
-		// SectionReorderEnvelope { data: [{id, position}] }, NOT the standard
-		// {data:{type,attributes}} envelope — send it raw. (MIO-2257)
 		col, err := c.client.ActionCollectionRaw(c.ctx, http.MethodPatch,
 			sectionsBase(teamID, hubID, args[0]), map[string]any{"data": data})
 		if err != nil {
@@ -576,14 +520,10 @@ var pagesSectionsReorderCmd = &cobra.Command{
 }
 
 func init() {
-	// Create-only flag: --type is required on create but immutable on update.
-	// The allowed values are derived from the catalog (no hardcoded list) so the
-	// help never drifts from the page-builder vocabulary (MIO-2340).
 	pagesSectionsCreateCmd.Flags().String("type", "",
 		"Section type — one of the catalog writable types ("+writableSectionTypesHelp+"). Required.")
 	markFlagsRequired(pagesSectionsCreateCmd, "type")
 
-	// Shared mutable flags for create and update.
 	for _, c := range []*cobra.Command{pagesSectionsCreateCmd, pagesSectionsUpdateCmd} {
 		c.Flags().String("title", "", "Human-readable section title.")
 		c.Flags().Int("position", 0, "Zero-based display position of the section within the page.")
@@ -596,11 +536,6 @@ func init() {
 	pagesSectionsReorderCmd.Flags().String("order", "", "Comma-separated list of section ids in the desired display order.")
 }
 
-// writableSectionTypesHelp is the catalog-derived, comma-joined list of writable
-// section types, computed once from the embedded vendored catalog for help text
-// — so the imperative-door help never drifts from the page-builder vocabulary
-// (MIO-2340, replacing the former hardcoded 9-type strings). Empty only if the
-// embedded catalog somehow fails to load (it is tested to always load).
 var writableSectionTypesHelp = func() string {
 	cat, err := catalog.Load()
 	if err != nil {
@@ -609,21 +544,9 @@ var writableSectionTypesHelp = func() string {
 	return strings.Join(cat.WritableSectionTypes(), ", ")
 }()
 
-// validateSectionType rejects a --type that the catalog KNOWS is not writable on
-// the imperative door (e.g. testimonials/calendar). It is deliberately
-// read-tolerant (charter §6.3: write-strict at the BACKEND, tolerant clients):
-// an UNKNOWN type is passed through to the backend rather than rejected, because
-// the embedded vendored catalog may simply predate a newly-added writable type —
-// blocking it here would be a false negative. It validates against the embedded
-// vendored catalog so the check is fast, offline, and adds no network to the
-// write path; the value is checked as-is (untrimmed), matching exactly what is
-// sent to the backend.
 func validateSectionType(typ string) error {
 	cat, err := catalog.Load()
 	if err != nil {
-		// The vendored catalog is embedded + tested; a load failure here is
-		// unexpected. Don't block the write on a client-side defect — defer to
-		// the backend's own validation.
 		return nil
 	}
 	if st, known := cat.SectionType(typ); known && !st.Writable {

@@ -1,9 +1,5 @@
 package cmd
 
-// pages_schema_test.go — contract tests for `mio pages create/update` flag
-// alignment to the backend PageCreate/PageUpdateAttributes schema (extra=forbid)
-// and for the `sections reorder` request-body shape (MIO-2257).
-
 import (
 	"encoding/json"
 	"io"
@@ -16,10 +12,6 @@ import (
 
 const minimalSectionListBody = `{"data":[{"id":"sec_1","type":"sections","attributes":{"type":"text","position":0}}]}`
 
-// TestPagesCreate_SchemaFields verifies the create body carries the real schema
-// keys (title, slug, type, privacy, is_homepage, position) and NONE of the
-// removed non-schema flags (published, description, layout) or the wrong
-// is_home key.
 func TestPagesCreate_SchemaFields(t *testing.T) {
 	srv, gotMethod, _, gotBody := captureHubRequest(t, http.StatusCreated)
 
@@ -61,8 +53,6 @@ func TestPagesCreate_SchemaFields(t *testing.T) {
 	}
 }
 
-// TestPagesCreate_RejectsInvalidPrivacy verifies an out-of-enum --privacy is
-// rejected client-side with ExitUsage and fires no request.
 func TestPagesCreate_RejectsInvalidPrivacy(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -85,9 +75,6 @@ func TestPagesCreate_RejectsInvalidPrivacy(t *testing.T) {
 	}
 }
 
-// TestPagesCreate_RemovedFlagsRejected verifies the dropped non-schema flags
-// (--published/--description/--layout) are rejected as unknown flags (ExitUsage)
-// and fire no request, rather than 422ing at the backend.
 func TestPagesCreate_RemovedFlagsRejected(t *testing.T) {
 	for _, flag := range []string{"--published", "--description", "--layout"} {
 		flag := flag
@@ -115,8 +102,6 @@ func TestPagesCreate_RemovedFlagsRejected(t *testing.T) {
 	}
 }
 
-// TestPagesCreate_RejectsNegativePosition verifies --position < 0 is rejected
-// client-side (schema requires position >= 0) with ExitUsage and no request.
 func TestPagesCreate_RejectsNegativePosition(t *testing.T) {
 	fired := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -139,8 +124,6 @@ func TestPagesCreate_RejectsNegativePosition(t *testing.T) {
 	}
 }
 
-// TestPagesUpdate_IsHomeMapsToIsHomepage verifies --is-home maps to
-// data.attributes.is_homepage (not is_home) on update.
 func TestPagesUpdate_IsHomeMapsToIsHomepage(t *testing.T) {
 	srv, gotMethod, _, gotBody := captureHubRequest(t, http.StatusOK)
 
@@ -164,9 +147,6 @@ func TestPagesUpdate_IsHomeMapsToIsHomepage(t *testing.T) {
 	}
 }
 
-// TestPagesSectionsReorder_SendsDataList verifies `sections reorder --order a,b`
-// sends a bare `{"data":[{"id","position"}]}` list (SectionReorderEnvelope),
-// NOT the standard {data:{type,attributes:{order}}} envelope.
 func TestPagesSectionsReorder_SendsDataList(t *testing.T) {
 	var gotMethod string
 	var gotBody []byte

@@ -62,8 +62,6 @@ func TestResourceFlatten(t *testing.T) {
 }
 
 func TestResourceFlatten_IDWinsOverAttributes(t *testing.T) {
-	// The envelope id is the resource identity — it always wins over a same-named
-	// attribute (JSON:API forbids `id` in attributes anyway).
 	r := Resource{
 		ID:         "real_id",
 		Type:       "products",
@@ -76,9 +74,6 @@ func TestResourceFlatten_IDWinsOverAttributes(t *testing.T) {
 }
 
 func TestResourceFlatten_BusinessTypeSurvives(t *testing.T) {
-	// MIO-2647: a business-level `type` attribute (products.type=course,
-	// contact-attributes.type=text) must survive flattening and win over the
-	// JSON:API document type ("products"), which is only a transport discriminator.
 	r := Resource{
 		ID:         "prod_1",
 		Type:       "products",
@@ -91,7 +86,6 @@ func TestResourceFlatten_BusinessTypeSurvives(t *testing.T) {
 }
 
 func TestResourceFlatten_EnvelopeTypeWhenNoAttributeType(t *testing.T) {
-	// When the schema has no business `type`, the JSON:API document type fills in.
 	r := Resource{
 		ID:         "con_1",
 		Type:       "team_contacts",
@@ -139,8 +133,6 @@ func TestDecodeCollection_Empty(t *testing.T) {
 }
 
 func TestDecodeCollection_SingleObjectPromoted(t *testing.T) {
-	// An endpoint that returns a single object where a list is expected should
-	// be tolerated as a one-element collection.
 	body := []byte(`{"data":{"id":"1","type":"products","attributes":{"name":"Solo"}}}`)
 	col, err := DecodeCollection(body)
 	if err != nil {

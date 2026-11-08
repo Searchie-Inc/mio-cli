@@ -1,9 +1,5 @@
 package cmd
 
-// products_deliverables_test.go — contract tests for `mio products deliverables`
-// {list,create,delete} (MIO-2268). Pins method + path + JSON:API type + attrs +
-// exit codes; every required flag / enum has a no-request usage-error case.
-
 import (
 	"net/http"
 	"strings"
@@ -11,8 +7,6 @@ import (
 
 	"github.com/Searchie-Inc/mio-cli/internal/errs"
 )
-
-// ─── deliverables list ─────────────────────────────────────────────────────────
 
 func TestProductsDeliverablesList_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _ := captureCommerceRequest(t, http.StatusOK, commerceListBody)
@@ -30,8 +24,6 @@ func TestProductsDeliverablesList_Path(t *testing.T) {
 		t.Errorf("path %q does not end with /products/prod_1/deliverables", *gotPath)
 	}
 }
-
-// ─── deliverables create ───────────────────────────────────────────────────────
 
 func TestProductsDeliverablesCreate_Body(t *testing.T) {
 	srv, gotMethod, gotPath, gotBody := captureCommerceRequest(t, http.StatusCreated, commerceResourceBody)
@@ -78,7 +70,6 @@ func TestProductsDeliverablesCreate_Body(t *testing.T) {
 	if meta["note"] != "vip" {
 		t.Errorf("resource_meta.note = %v, want vip", meta["note"])
 	}
-	// --type must NOT leak as a bare "type" attribute (that is the JSON:API type).
 	if _, ok := attrs["type"]; ok {
 		t.Errorf("attributes.type must not be present; got %v", attrs)
 	}
@@ -154,8 +145,6 @@ func TestProductsDeliverablesCreate_RejectsNegativePosition(t *testing.T) {
 		t.Error("negative --position must exit before any HTTP request")
 	}
 }
-
-// ─── deliverables delete ───────────────────────────────────────────────────────
 
 func TestProductsDeliverablesDelete_Path(t *testing.T) {
 	srv, gotMethod, gotPath, _ := captureCommerceRequest(t, http.StatusNoContent, "")

@@ -1,14 +1,5 @@
 package cmd
 
-// roles.go implements the `mio roles` command group.
-//
-// Routes (see docs/internal/api-surface.md "roles"):
-//
-//	roles:                CRUD /api/roles[/{id}]
-//	permissions list:     GET  /api/permissions
-//	permissions assign:   POST /api/roles/{role_id}/permissions            (flat {slug})
-//	permissions remove:   DELETE /api/roles/{role_id}/permissions/{slug}
-
 import (
 	"fmt"
 	"net/url"
@@ -20,7 +11,6 @@ import (
 )
 
 func init() {
-	// roles <action>
 	rolesCmd.AddCommand(
 		rolesCreateCmd,
 		rolesListCmd,
@@ -29,7 +19,6 @@ func init() {
 		rolesDeleteCmd,
 	)
 
-	// roles permissions <action>
 	rolesPermissionsCmd.AddCommand(
 		rolesPermissionsListCmd,
 		rolesPermissionsAssignCmd,
@@ -37,11 +26,8 @@ func init() {
 	)
 	rolesCmd.AddCommand(rolesPermissionsCmd)
 
-	// Self-register the whole tree on root.
 	rootCmd.AddCommand(rolesCmd)
 }
-
-// ---- roles group ------------------------------------------------------------
 
 var rolesCmd = &cobra.Command{
 	Use:   "roles",
@@ -49,7 +35,6 @@ var rolesCmd = &cobra.Command{
 	Long:  "Create, list, retrieve, update and delete roles.",
 }
 
-// rolesPath returns /api/roles[/{id}].
 func rolesPath(id string) string {
 	if id != "" {
 		return "/api/roles/" + id
@@ -80,8 +65,6 @@ var rolesCreateCmd = &cobra.Command{
 		setStringFlag(cmd, attrs, "name")
 		setStringFlag(cmd, attrs, "slug")
 
-		// Flat body: the backend RoleCreate schema is a plain pydantic model,
-		// not a JSON:API envelope.
 		res, err := c.client.CreateWith(c.ctx, client.StyleFlat, rolesPath(""), attrs)
 		if err != nil {
 			return err
@@ -162,8 +145,6 @@ var rolesUpdateCmd = &cobra.Command{
 			return errs.New(errs.ExitUsage, "nothing to update: set at least one field flag")
 		}
 
-		// Flat body: the backend RoleUpdate schema is a plain pydantic model,
-		// not a JSON:API envelope.
 		res, err := c.client.UpdateWith(c.ctx, client.StyleFlat, rolesPath(args[0]), attrs)
 		if err != nil {
 			return err
@@ -201,18 +182,14 @@ var rolesDeleteCmd = &cobra.Command{
 }
 
 func init() {
-	// create: name + slug are both required; slug is immutable after creation.
 	rolesCreateCmd.Flags().String("name", "", "Role name. Required.")
 	rolesCreateCmd.Flags().String("slug", "", "Role slug (unique identifier). Required.")
 	markFlagsRequired(rolesCreateCmd, "name", "slug")
 
-	// update: only name is mutable per the backend RoleUpdate schema.
 	rolesUpdateCmd.Flags().String("name", "", "Role name.")
 
 	addPaginationFlags(rolesListCmd)
 }
-
-// ---- roles permissions sub-resource ----------------------------------------
 
 var rolesPermissionsCmd = &cobra.Command{
 	Use:   "permissions",
@@ -220,7 +197,6 @@ var rolesPermissionsCmd = &cobra.Command{
 	Long:  "List available permissions and assign or remove them on a role.",
 }
 
-// rolesPermissionsPath returns /api/roles/{role_id}/permissions[/{slug}].
 func rolesPermissionsPath(roleID, slug string) string {
 	base := "/api/roles/" + roleID + "/permissions"
 	if slug != "" {
@@ -268,8 +244,6 @@ operation is not available to API keys.`,
 	Example: `  mio roles permissions assign role_abc123 --slug content.publish`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// --slug is required (cobra enforces it before RunE); an EMPTY value is
-		// rejected here, before auth, so a usage error fires no HTTP request.
 		slug := flagValue(cmd, "slug")
 		if slug == "" {
 			return errs.New(errs.ExitUsage, "--slug must not be empty")
@@ -283,8 +257,6 @@ operation is not available to API keys.`,
 			return err
 		}
 
-		// Flat body: the backend PermissionAssignRequest is a plain pydantic
-		// model {"slug": ...} with extra="forbid", NOT a JSON:API envelope.
 		res, err := c.client.ActionWith(c.ctx, client.StyleFlat, "POST",
 			rolesPermissionsPath(args[0], ""), map[string]any{"slug": slug})
 		if err != nil {
