@@ -331,6 +331,8 @@ mio hubs update <hub-id> --registration-enabled=false
 mio hubs update <hub-id> --favicon-url https://cdn.example.com/favicon.ico
 # Set the hub's homepage: custom (a page you name), discussions_index, or content_index
 # (the Content grid). custom needs --homepage-page-id; the system kinds take none.
+# VERSION GATE: --homepage and --homepage-page-id land in the release after v0.30.0;
+# on v0.30.0 and earlier they exit 2 with "unknown flag".
 mio hubs update <hub-id> --homepage content_index
 mio hubs update <hub-id> --homepage custom --homepage-page-id <page-uuid>
 # DELETE a key from a blob. The *-json flags are merge-only (a null persists as

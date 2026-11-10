@@ -15,6 +15,8 @@ import (
 
 const homepagePageID = "0197a1b2-c3d4-7e5f-8a6b-1c2d3e4f5a6b"
 
+var homepagePatchPath = "/api/v1" + strings.TrimPrefix(hubsPath("t_team1", "hub_abc123"), "/api")
+
 const hubWithHomepageBody = `{
 	"data": {
 		"id": "hub_abc123",
@@ -38,6 +40,21 @@ func (h *homepageServer) requests() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.methods)
+}
+
+func (h *homepageServer) assertSinglePatchTo(t *testing.T, wantPath string) {
+	t.Helper()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var patches []string
+	for i, m := range h.methods {
+		if m == http.MethodPatch {
+			patches = append(patches, h.paths[i])
+		}
+	}
+	if len(patches) != 1 || patches[0] != wantPath {
+		t.Errorf("PATCH requests = %v, want exactly one to %q", patches, wantPath)
+	}
 }
 
 func (h *homepageServer) patchBody() []byte {
@@ -107,6 +124,7 @@ func TestHubsUpdate_HomepageKinds(t *testing.T) {
 			if h.requests() != 1 {
 				t.Fatalf("requests = %d, want exactly 1 PATCH (homepage is a plain attribute, no read-modify-write)", h.requests())
 			}
+			h.assertSinglePatchTo(t, homepagePatchPath)
 			got := homepageAttr(t, h.patchBody())
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("homepage = %v, want %v", got, tc.want)
@@ -124,6 +142,7 @@ func TestHubsUpdate_HomepageAloneCountsAsSomethingToUpdate(t *testing.T) {
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit code = %d, want %d; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
+	h.assertSinglePatchTo(t, homepagePatchPath)
 	attrs := decodeHubAttrs(t, h.patchBody())
 	if len(attrs) != 1 {
 		t.Errorf("PATCH attributes = %v, want only homepage", attrs)
@@ -192,6 +211,7 @@ func TestHubsUpdate_HomepageUsageErrors(t *testing.T) {
 			if h.requests() != 1 {
 				t.Errorf("positive control: requests = %d, want 1", h.requests())
 			}
+			h.assertSinglePatchTo(t, homepagePatchPath)
 		})
 	}
 }
@@ -209,6 +229,7 @@ func TestHubsUpdate_HomepageUnknownKindPassesThroughAnd422Surfaces(t *testing.T)
 	if h.requests() != 1 {
 		t.Fatalf("requests = %d, want 1: the CLI must not pre-empt the API's kind validation", h.requests())
 	}
+	h.assertSinglePatchTo(t, homepagePatchPath)
 	got := homepageAttr(t, h.patchBody())
 	if want := map[string]any{"kind": "carousel"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("homepage = %v, want %v", got, want)
@@ -231,6 +252,7 @@ func TestHubsUpdate_HomepageComposesWithOtherFlags(t *testing.T) {
 	if h.requests() != 1 {
 		t.Fatalf("requests = %d, want one PATCH carrying both", h.requests())
 	}
+	h.assertSinglePatchTo(t, homepagePatchPath)
 	attrs := decodeHubAttrs(t, h.patchBody())
 	if attrs["title"] != "Renamed" {
 		t.Errorf("title = %v, want Renamed", attrs["title"])
@@ -250,6 +272,7 @@ func TestHubsUpdate_HomepageSurvivesReadModifyWrite(t *testing.T) {
 	if res.Code != errs.ExitOK {
 		t.Fatalf("exit code = %d, want %d; stderr=%q", res.Code, errs.ExitOK, res.Stderr)
 	}
+	h.assertSinglePatchTo(t, homepagePatchPath)
 	attrs := decodeHubAttrs(t, h.patchBody())
 	if !reflect.DeepEqual(attrs["homepage"], map[string]any{"kind": "discussions_index"}) {
 		t.Errorf("homepage = %v, want discussions_index after read-modify-write", attrs["homepage"])
@@ -261,14 +284,14 @@ func TestHubsUpdate_HomepageSurvivesReadModifyWrite(t *testing.T) {
 }
 
 func TestHubsUpdate_HomepageShownInOutput(t *testing.T) {
-	h := newHomepageServer(t, http.StatusOK, hubWithHomepageBody)
-	env := baseEnv(h.srv.URL)
 	args := withTeam("t_team1", "hubs", "update", "hub_abc123", "--homepage", "content_index")
 
-	js := runContract(t, env, append(args, "--output", "json")...)
+	jsServer := newHomepageServer(t, http.StatusOK, hubWithHomepageBody)
+	js := runContract(t, baseEnv(jsServer.srv.URL), append(args, "--output", "json")...)
 	if js.Code != errs.ExitOK {
 		t.Fatalf("json: exit code = %d; stderr=%q", js.Code, js.Stderr)
 	}
+	jsServer.assertSinglePatchTo(t, homepagePatchPath)
 	var out map[string]any
 	if err := json.Unmarshal([]byte(js.Stdout), &out); err != nil {
 		t.Fatalf("json output is not an object: %v; stdout=%q", err, js.Stdout)
@@ -277,10 +300,12 @@ func TestHubsUpdate_HomepageShownInOutput(t *testing.T) {
 		t.Errorf("json homepage = %v, want {kind: content_index}", out["homepage"])
 	}
 
-	plain := runContract(t, env, append(args, "--output", "plain")...)
+	plainServer := newHomepageServer(t, http.StatusOK, hubWithHomepageBody)
+	plain := runContract(t, baseEnv(plainServer.srv.URL), append(args, "--output", "plain")...)
 	if plain.Code != errs.ExitOK {
 		t.Fatalf("plain: exit code = %d; stderr=%q", plain.Code, plain.Stderr)
 	}
+	plainServer.assertSinglePatchTo(t, homepagePatchPath)
 	if !strings.Contains(plain.Stdout, `homepage={"kind":"content_index"}`) {
 		t.Errorf("plain output does not show homepage; stdout=%q", plain.Stdout)
 	}
