@@ -329,6 +329,10 @@ mio hubs update <hub-id> --registration-enabled
 mio hubs update <hub-id> --registration-enabled=false
 # Set the favicon on an existing hub (branding.favicon_url; RMW-merges into branding).
 mio hubs update <hub-id> --favicon-url https://cdn.example.com/favicon.ico
+# Set the hub's homepage: custom (a page you name), discussions_index, or content_index
+# (the Content grid). custom needs --homepage-page-id; the system kinds take none.
+mio hubs update <hub-id> --homepage content_index
+mio hubs update <hub-id> --homepage custom --homepage-page-id <page-uuid>
 # DELETE a key from a blob. The *-json flags are merge-only (a null persists as
 # literal null, {} is a no-op); --unset is the only real delete. The first dotted
 # segment selects the blob (branding/settings/meta); nested paths and comma-lists

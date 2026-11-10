@@ -413,6 +413,8 @@ The hub id may be given positionally; when it is omitted the hub is taken from
 the ambient context (--hub, or current_hub in config).`,
 	Example: `  mio hubs update hub_abc123 --name "New Name"
   mio hubs update hub_abc123 --published=true
+  mio hubs update hub_abc123 --homepage content_index
+  mio hubs update hub_abc123 --homepage custom --homepage-page-id <page_id>
   mio hubs update --hub hub_abc123 --name "New Name"`,
 	Args: hubsOptionalIDArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -429,6 +431,13 @@ the ambient context (--hub, or current_hub in config).`,
 		}
 		setNullableMappedString(cmd, attrs, "discussions-default-title", "discussions_default_title")
 		setNullableMappedString(cmd, attrs, "discussions-default-description", "discussions_default_description")
+		homepage, err := hubHomepageFromFlags(cmd)
+		if err != nil {
+			return err
+		}
+		if homepage != nil {
+			attrs["homepage"] = homepage
+		}
 
 		nav, err := parseJSONObjectFlag(cmd, "navigation-json")
 		if err != nil {
@@ -523,6 +532,38 @@ the ambient context (--hub, or current_hub in config).`,
 		injectHubDerivedState(res)
 		return c.render(cmd, res)
 	},
+}
+
+func hubHomepageFromFlags(cmd *cobra.Command) (map[string]any, error) {
+	kindSet := cmd.Flags().Changed("homepage")
+	pageIDSet := cmd.Flags().Changed("homepage-page-id")
+	if !kindSet && !pageIDSet {
+		return nil, nil
+	}
+	if !kindSet {
+		return nil, errs.New(errs.ExitUsage,
+			"--homepage-page-id needs --homepage custom: it names the page for a custom homepage")
+	}
+	kind, err := cmd.Flags().GetString("homepage")
+	if err != nil {
+		return nil, errs.New(errs.ExitUsage, "--homepage: %s", err)
+	}
+	homepage := map[string]any{"kind": kind}
+	switch {
+	case kind == "custom" && !pageIDSet:
+		return nil, errs.New(errs.ExitUsage,
+			"--homepage custom needs --homepage-page-id <uuid>: the page to show as the hub's homepage")
+	case kind != "custom" && pageIDSet:
+		return nil, errs.New(errs.ExitUsage,
+			"--homepage-page-id only goes with --homepage custom; --homepage %s takes no page id", kind)
+	case kind == "custom":
+		pageID, err := cmd.Flags().GetString("homepage-page-id")
+		if err != nil {
+			return nil, errs.New(errs.ExitUsage, "--homepage-page-id: %s", err)
+		}
+		homepage["page_id"] = pageID
+	}
+	return homepage, nil
 }
 
 func publishedStateAttrs(published bool) map[string]any {
@@ -715,6 +756,9 @@ func init() {
 		"", "Hub settings keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. "+settingsKeysUpdateHelpText)
 	hubsUpdateCmd.Flags().String("meta-json",
 		"", "Hub meta keys to merge (read-modify-write) as a JSON object. Inline JSON or @file. Accepted keys: "+metaKeysHelp+". Unknown keys warn (error with --strict-keys).")
+
+	hubsUpdateCmd.Flags().String("homepage", "", "Set the hub's homepage: one of custom, discussions_index, content_index. custom needs --homepage-page-id; the API validates the kind.")
+	hubsUpdateCmd.Flags().String("homepage-page-id", "", "Page id (uuid) to use as the homepage with --homepage custom.")
 
 	hubsUpdateCmd.Flags().Bool("registration-enabled", false, "Enable (--registration-enabled) or disable (--registration-enabled=false) member self-registration (settings.registration.enabled). Read-modify-write: sibling settings/registration keys are preserved.")
 
