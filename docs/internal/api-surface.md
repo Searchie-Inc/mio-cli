@@ -282,6 +282,8 @@ plain JSON.
   (CLI `mio products deliverables`; type `product_deliverables`; `--type` enum: hub_access, content_enrollment, tag, file_download, community_access) (MIO-2268)
 - hub-products: `attach/list/update/detach` `/api/teams/{team_id}/hubs/{hid}/products[/{did}]`
   (CLI `mio checkout hub-products`; type `hub_product_displays`; attach takes a PRODUCT id, update/detach take a display id) (MIO-2268)
+- checkouts:    `create/list/retrieve/update` `/api/teams/{team_id}/hubs/{hid}/checkouts[/{cid}]`
+  (CLI `mio checkouts`; type `checkouts`; slug fixed at creation; `--price-id` replaces the price set on update; no delete command) (MIO-7431)
 - hub-prices:   `list/update` `/api/teams/{team_id}/hubs/{hid}/prices[/{did}]`
   (CLI `mio checkout hub-prices`; type `hub_price_displays`; no create/delete — auto-managed on product attach/detach) (MIO-2268)
 - coupons:      `create/list/retrieve/update/delete` `/api/teams/{team_id}/coupons[/{id}]`

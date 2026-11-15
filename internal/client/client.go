@@ -194,7 +194,7 @@ var knownCollections = map[string]bool{
 	"users":                  true, "access-rules": true, "access-overrides": true,
 	"drip-campaigns": true, "steps": true, "email-templates": true,
 	"enrollments": true, "orders": true, "subscriptions": true,
-	"payments": true, "refund": true, "attributes": true,
+	"payments": true, "checkouts": true, "refund": true, "attributes": true,
 	"payment-accounts": true, "onboarding-link": true,
 	"policies":       true,
 	"email-settings": true,
