@@ -339,6 +339,7 @@ var realAfterShapes = map[string]string{
 	"automations enrollments":            "tags",
 	"automations list":                   "tags",
 	"automations versions":               "tags",
+	"checkouts list":                     "products",
 	"checkout accounts list":             "unpaged_total",
 	"checkout hub-prices list":           "unpaged_count",
 	"checkout hub-products list":         "unpaged_count",

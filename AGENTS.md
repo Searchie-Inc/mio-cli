@@ -208,6 +208,7 @@ Every implemented resource and its verbs.
 | `community discussions` | `list` `create` `retrieve` `update` `delete` — hub-scoped admin verbs. **`create`** (`--space-id` `--title` required; `--body`; `--is-published=false` for a draft — omit it and the post publishes, the API's default) posts into a hub space; the AUTHOR is derived server-side from your credentials, so there is deliberately **no author flag** and the API 422s a smuggled one. **Version gate: `create` lands in the release AFTER `v0.13.0`** — on `v0.13.0` and earlier it exits 2 with `unknown command`. `update` sets moderation state only — `--is-pinned`/`--is-locked`/`--is-broadcast`; title and body belong to the author and are not admin-editable, so they exist on `create` and not on `update` |
 | `products` | `create` `list` `retrieve` `update` `delete` |
 | `products prices` | `create` `list` `retrieve` `update` `delete` |
+| `checkouts` | `list` `retrieve` `create` `update` (hub checkouts; `--hub`; output carries the buyer `url`) |
 | `checkout orders` | `list` `retrieve` |
 | `checkout subscriptions` | `list` `retrieve` `cancel` |
 | `checkout payments` | `list` `retrieve` `refund` |
