@@ -131,3 +131,18 @@ func TestCheckoutsUpdate_NothingToUpdate(t *testing.T) {
 		t.Errorf("exit %d fired=%v", res.Code, *fired)
 	}
 }
+
+func TestCheckoutsUpdate_EmptyClosedMessageAndDescriptionSendNull(t *testing.T) {
+	srv, _, _, body := captureCommerceRequest(t, http.StatusOK, checkoutBody)
+	res := runContract(t, baseEnv(srv.URL), withTeam("t_team1", "--hub", "hub_123",
+		"checkouts", "update", "chk_1", "--status", "open", "--closed-message", "", "--description", "")...)
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit %d stderr=%q", res.Code, res.Stderr)
+	}
+	a := attrsOf(t, *body)
+	for _, k := range []string{"closed_message", "description"} {
+		if v, ok := a[k]; !ok || v != nil {
+			t.Errorf("%s should be explicit null, got %v (present=%v)", k, v, ok)
+		}
+	}
+}

@@ -70,10 +70,10 @@ func checkoutWriteAttrs(cmd *cobra.Command) map[string]any {
 	attrs := map[string]any{}
 	setStringFlag(cmd, attrs, "name")
 	setStringFlag(cmd, attrs, "title")
-	setStringFlag(cmd, attrs, "description")
+	setNullableMappedString(cmd, attrs, "description", "description")
 	setStringFlag(cmd, attrs, "slug")
 	setStringFlag(cmd, attrs, "status")
-	setMappedString(cmd, attrs, "closed-message", "closed_message")
+	setNullableMappedString(cmd, attrs, "closed-message", "closed_message")
 	setMappedBool(cmd, attrs, "default", "is_default")
 	setMappedBool(cmd, attrs, "allow-promo-codes", "allow_promotion_codes")
 	setMappedString(cmd, attrs, "after-action", "after_action")
@@ -177,7 +177,7 @@ var checkoutsUpdateCmd = &cobra.Command{
 	Short: "Update a checkout.",
 	Long: `Change a checkout. Only the flags you supply change (PATCH semantics).
 The slug is fixed at creation. --price-id replaces the whole set of prices.
-Pass an empty --after-page-id or --after-url to clear it.`,
+Pass an empty --description, --closed-message, --after-page-id or --after-url to clear it.`,
 	Example: `  mio checkouts update chk_abc123 --hub hub_abc123 --status closed --closed-message "Back soon"
   mio checkouts update chk_abc123 --hub hub_abc123 --default`,
 	Args: cobra.ExactArgs(1),
