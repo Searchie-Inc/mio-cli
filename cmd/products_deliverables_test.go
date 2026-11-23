@@ -76,6 +76,49 @@ func TestProductsDeliverablesCreate_Body(t *testing.T) {
 	}
 }
 
+func TestProductsDeliverablesCreate_ContentEnrollmentBody(t *testing.T) {
+	srv, gotMethod, gotPath, gotBody := captureCommerceRequest(t, http.StatusCreated, commerceResourceBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"products", "deliverables", "create", "prod_1",
+			"--type", "content_enrollment",
+			"--resource-id", "content_abc",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if *gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", *gotMethod)
+	}
+	if !strings.HasSuffix(*gotPath, "/products/prod_1/deliverables") {
+		t.Errorf("path %q does not end with /products/prod_1/deliverables", *gotPath)
+	}
+	_, attrs := decodeDataTypeAttrs(t, *gotBody)
+	if attrs["deliverable_type"] != "content_enrollment" {
+		t.Errorf("deliverable_type = %v, want content_enrollment", attrs["deliverable_type"])
+	}
+	if attrs["resource_id"] != "content_abc" {
+		t.Errorf("resource_id = %v, want content_abc", attrs["resource_id"])
+	}
+}
+
+func TestProductsDeliverablesCreate_HelpSaysResourceIDRequired(t *testing.T) {
+	res := runContract(t, nil, "products", "deliverables", "create", "--help")
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	for _, want := range []string{
+		"--resource-id is required for both types: the hub ID for hub_access, the\ncontent ID for content_enrollment.",
+		"Required. Id of the resource this deliverable grants: the hub ID for hub_access, the content ID for content_enrollment.",
+	} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Errorf("help does not contain %q\n%s", want, res.Stdout)
+		}
+	}
+}
+
 func TestProductsDeliverablesCreate_RequiresType(t *testing.T) {
 	srv, fired := firedServer(t)
 	res := runContract(t, baseEnv(srv.URL),

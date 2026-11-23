@@ -28,7 +28,7 @@ func init() {
 
 	productsDeliverablesCreateCmd.Flags().String("type", "", "Deliverable type: hub_access or content_enrollment. Required.")
 	markFlagsRequired(productsDeliverablesCreateCmd, "type")
-	productsDeliverablesCreateCmd.Flags().String("resource-id", "", "Id of the resource this deliverable grants (e.g. hub id or content id). Max 255 chars.")
+	productsDeliverablesCreateCmd.Flags().String("resource-id", "", "Required. Id of the resource this deliverable grants: the hub ID for hub_access, the content ID for content_enrollment. Max 255 chars.")
 	productsDeliverablesCreateCmd.Flags().String("resource-meta", "", "Optional JSON object of extra metadata for the deliverable (or @file.json).")
 	productsDeliverablesCreateCmd.Flags().Int("duration-days", 0, "Access duration in days (>= 1). Omit for permanent access.")
 	productsDeliverablesCreateCmd.Flags().Int("position", 0, "Ordering position among the product's deliverables (>= 0).")
@@ -87,9 +87,9 @@ var productsDeliverablesCreateCmd = &cobra.Command{
 --type is required. Allowed values:
   hub_access, content_enrollment
 
---resource-id names the resource the deliverable grants (e.g. the hub id for
-hub_access). --duration-days sets a time-limited grant; omit it for permanent
-access.`,
+--resource-id is required for both types: the hub ID for hub_access, the
+content ID for content_enrollment. --duration-days sets a time-limited grant;
+omit it for permanent access.`,
 	Example: `  mio products deliverables create prod_abc123 --type hub_access --resource-id hub_xyz
   mio products deliverables create prod_abc123 --type content_enrollment --resource-id content_abc --duration-days 30`,
 	Args: cobra.ExactArgs(1),
