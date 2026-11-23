@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -75,6 +76,49 @@ func TestProductsDeliverablesCreate_Body(t *testing.T) {
 	}
 }
 
+func TestProductsDeliverablesCreate_ContentEnrollmentBody(t *testing.T) {
+	srv, gotMethod, gotPath, gotBody := captureCommerceRequest(t, http.StatusCreated, commerceResourceBody)
+
+	res := runContract(t, baseEnv(srv.URL),
+		withTeam("t_team1",
+			"products", "deliverables", "create", "prod_1",
+			"--type", "content_enrollment",
+			"--resource-id", "content_abc",
+		)...)
+
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	if *gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", *gotMethod)
+	}
+	if !strings.HasSuffix(*gotPath, "/products/prod_1/deliverables") {
+		t.Errorf("path %q does not end with /products/prod_1/deliverables", *gotPath)
+	}
+	_, attrs := decodeDataTypeAttrs(t, *gotBody)
+	if attrs["deliverable_type"] != "content_enrollment" {
+		t.Errorf("deliverable_type = %v, want content_enrollment", attrs["deliverable_type"])
+	}
+	if attrs["resource_id"] != "content_abc" {
+		t.Errorf("resource_id = %v, want content_abc", attrs["resource_id"])
+	}
+}
+
+func TestProductsDeliverablesCreate_HelpSaysResourceIDRequired(t *testing.T) {
+	res := runContract(t, nil, "products", "deliverables", "create", "--help")
+	if res.Code != errs.ExitOK {
+		t.Fatalf("exit code = %d, want %d (ExitOK); stderr=%q", res.Code, errs.ExitOK, res.Stderr)
+	}
+	for _, want := range []string{
+		"--resource-id is required for both types: the hub ID for hub_access, the\ncontent ID for content_enrollment.",
+		"Required. Id of the resource this deliverable grants: the hub ID for hub_access, the content ID for content_enrollment.",
+	} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Errorf("help does not contain %q\n%s", want, res.Stdout)
+		}
+	}
+}
+
 func TestProductsDeliverablesCreate_RequiresType(t *testing.T) {
 	srv, fired := firedServer(t)
 	res := runContract(t, baseEnv(srv.URL),
@@ -98,6 +142,44 @@ func TestProductsDeliverablesCreate_RejectsInvalidType(t *testing.T) {
 	}
 	if *fired {
 		t.Error("invalid --type must exit before any HTTP request")
+	}
+}
+
+func TestProductsDeliverablesCreate_RejectsRemovedTypes(t *testing.T) {
+	for _, typ := range []string{"tag", "file_download", "community_access"} {
+		t.Run(typ, func(t *testing.T) {
+			srv, fired := firedServer(t)
+			restore := overlayEnv(t, baseEnv(srv.URL))
+			defer restore()
+			resetGlobalFlags()
+
+			root := RootCmd()
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			root.SetArgs(withTeam("t_team1",
+				"products", "deliverables", "create", "prod_1", "--type", typ,
+			))
+			defer root.SetArgs(nil)
+
+			err := root.Execute()
+			if code := codeForExecuteErr(err); code != errs.ExitUsage {
+				t.Fatalf("exit code = %d, want %d (ExitUsage); err=%v", code, errs.ExitUsage, err)
+			}
+			if *fired {
+				t.Error("rejected --type must exit before any HTTP request")
+			}
+			msg := err.Error()
+			for _, want := range []string{"invalid --type", typ, "hub_access", "content_enrollment"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("error %q does not contain %q", msg, want)
+				}
+			}
+			for _, banned := range []string{"tag", "file_download", "community_access"} {
+				if banned != typ && strings.Contains(msg, banned) {
+					t.Errorf("error %q still advertises %q", msg, banned)
+				}
+			}
+		})
 	}
 }
 
