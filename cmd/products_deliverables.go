@@ -14,9 +14,6 @@ import (
 var deliverableTypes = map[string]bool{
 	"hub_access":         true,
 	"content_enrollment": true,
-	"tag":                true,
-	"file_download":      true,
-	"community_access":   true,
 }
 
 func init() {
@@ -29,9 +26,9 @@ func init() {
 
 	addPaginationFlags(productsDeliverablesListCmd)
 
-	productsDeliverablesCreateCmd.Flags().String("type", "", "Deliverable type: hub_access, content_enrollment, tag, file_download, or community_access. Required.")
+	productsDeliverablesCreateCmd.Flags().String("type", "", "Deliverable type: hub_access or content_enrollment. Required.")
 	markFlagsRequired(productsDeliverablesCreateCmd, "type")
-	productsDeliverablesCreateCmd.Flags().String("resource-id", "", "Id of the resource this deliverable grants (e.g. hub id, content id, tag id). Max 255 chars.")
+	productsDeliverablesCreateCmd.Flags().String("resource-id", "", "Id of the resource this deliverable grants (e.g. hub id or content id). Max 255 chars.")
 	productsDeliverablesCreateCmd.Flags().String("resource-meta", "", "Optional JSON object of extra metadata for the deliverable (or @file.json).")
 	productsDeliverablesCreateCmd.Flags().Int("duration-days", 0, "Access duration in days (>= 1). Omit for permanent access.")
 	productsDeliverablesCreateCmd.Flags().Int("position", 0, "Ordering position among the product's deliverables (>= 0).")
@@ -50,8 +47,8 @@ var productsDeliverablesCmd = &cobra.Command{
 	Short: "Manage a product's deliverables (what a purchase grants).",
 	Long: `List, create, and delete the deliverables attached to a product.
 
-A deliverable is the grant a buyer receives on purchase — hub access, a content
-enrollment, a tag, a file download, or community access.`,
+A deliverable is the grant a buyer receives on purchase — hub access or a content
+enrollment.`,
 }
 
 var productsDeliverablesListCmd = &cobra.Command{
@@ -88,13 +85,13 @@ var productsDeliverablesCreateCmd = &cobra.Command{
 	Long: `Attach a deliverable to a product.
 
 --type is required. Allowed values:
-  hub_access, content_enrollment, tag, file_download, community_access
+  hub_access, content_enrollment
 
 --resource-id names the resource the deliverable grants (e.g. the hub id for
 hub_access). --duration-days sets a time-limited grant; omit it for permanent
 access.`,
 	Example: `  mio products deliverables create prod_abc123 --type hub_access --resource-id hub_xyz
-  mio products deliverables create prod_abc123 --type tag --resource-id tag_vip --duration-days 30`,
+  mio products deliverables create prod_abc123 --type content_enrollment --resource-id content_abc --duration-days 30`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		productID := stringArg(args[0])

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -98,6 +99,44 @@ func TestProductsDeliverablesCreate_RejectsInvalidType(t *testing.T) {
 	}
 	if *fired {
 		t.Error("invalid --type must exit before any HTTP request")
+	}
+}
+
+func TestProductsDeliverablesCreate_RejectsRemovedTypes(t *testing.T) {
+	for _, typ := range []string{"tag", "file_download", "community_access"} {
+		t.Run(typ, func(t *testing.T) {
+			srv, fired := firedServer(t)
+			restore := overlayEnv(t, baseEnv(srv.URL))
+			defer restore()
+			resetGlobalFlags()
+
+			root := RootCmd()
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			root.SetArgs(withTeam("t_team1",
+				"products", "deliverables", "create", "prod_1", "--type", typ,
+			))
+			defer root.SetArgs(nil)
+
+			err := root.Execute()
+			if code := codeForExecuteErr(err); code != errs.ExitUsage {
+				t.Fatalf("exit code = %d, want %d (ExitUsage); err=%v", code, errs.ExitUsage, err)
+			}
+			if *fired {
+				t.Error("rejected --type must exit before any HTTP request")
+			}
+			msg := err.Error()
+			for _, want := range []string{"invalid --type", typ, "hub_access", "content_enrollment"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("error %q does not contain %q", msg, want)
+				}
+			}
+			for _, banned := range []string{"tag", "file_download", "community_access"} {
+				if banned != typ && strings.Contains(msg, banned) {
+					t.Errorf("error %q still advertises %q", msg, banned)
+				}
+			}
+		})
 	}
 }
 
